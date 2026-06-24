@@ -14,7 +14,6 @@ WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy code into a package directory so relative imports work
 COPY . /app/backend/
 
 RUN useradd --create-home --shell /bin/bash tono \
@@ -23,4 +22,4 @@ USER tono
 
 EXPOSE 8765
 
-CMD ["uvicorn", "backend.server:app", "--host", "0.0.0.0", "--port", "8765", "--workers", "2"]
+CMD uvicorn backend.server:app --host 0.0.0.0 --port ${PORT:-8765} --workers 2
