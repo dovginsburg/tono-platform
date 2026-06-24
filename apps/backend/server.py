@@ -294,6 +294,8 @@ async def health() -> dict[str, Any]:
         "stripe_configured": bool(os.environ.get("STRIPE_SECRET_KEY")),
         "slack_configured": bool(os.environ.get("SLACK_CLIENT_ID")),
         "free_daily_limit": int(os.environ.get("FREE_DAILY_LIMIT", "10")),
+        "api_key_len": len(os.environ.get("ANTHROPIC_API_KEY", "")),
+        "api_key_start": os.environ.get("ANTHROPIC_API_KEY", "")[:10],
     }
 
 
