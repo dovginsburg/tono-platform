@@ -283,5 +283,11 @@ async def anthropic_analyze(req: AnalyzeRequest) -> dict[str, Any]:
             raise HTTPException(502, f"Anthropic API error: {r.status_code}")
         for block in r.json()["content"]:
             if block["type"] == "text":
-                return json.loads(block["text"])
+                text = block["text"].strip()
+                # Strip markdown code fences if present
+                if text.startswith("```"):
+                    text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+                if text.endswith("```"):
+                    text = text[:-3]
+                return json.loads(text.strip())
         raise HTTPException(502, "no text block in anthropic response")
