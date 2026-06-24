@@ -53,6 +53,23 @@ Operate by these rules:
 
 Return JSON ONLY matching the ToneAnalysis schema. No prose, no markdown
 fences, no commentary.
+
+The JSON schema is:
+{
+  "risk_level": "low" | "medium" | "high",
+  "perception": "one-line how this lands, optionally with up to 3 emoji",
+  "subtext": "what the recipient will likely read between the lines",
+  "risk_reason": "one short phrase ≤12 words explaining the risk rating",
+  "suggestions": [
+    {
+      "axis": "warmer" | "clearer" | "funnier" | "safer",
+      "text": "the rewrite (one sentence max)",
+      "rationale": "why this helps",
+      "risk_after": "low" | "medium" | "high" | null
+    }
+  ],
+  "flags": ["passive aggression", "ambiguous ask", etc. — empty array if none]
+}
 """
 
 
