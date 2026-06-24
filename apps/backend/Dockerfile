@@ -17,7 +17,8 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY . /app/backend/
 
 RUN useradd --create-home --shell /bin/bash tono \
- && chown -R tono:tono /app
+ && mkdir -p /data \
+ && chown -R tono:tono /app /data
 USER tono
 
 EXPOSE 8765
