@@ -1,0 +1,35 @@
+# Fly.io config — cheapest single-VM option for MVP. Swap to Railway.toml
+# if you prefer GitHub-deploys + managed Postgres later.
+app = "tono-backend"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Backend/Dockerfile"
+
+[env]
+  TONO_DB_PATH = "/data/tono.db"
+  TONO_PROVIDER = "mock"
+
+[http_service]
+  internal_port = 8765
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/health"
+
+[[mounts]]
+  source = "tono_data"
+  destination = "/data"
