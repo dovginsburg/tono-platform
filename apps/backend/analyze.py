@@ -7,6 +7,7 @@ both call the provider dispatch without a circular import.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from typing import Any, Literal, Optional
@@ -14,6 +15,8 @@ from typing import Any, Literal, Optional
 import httpx
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 
 SYSTEM_PROMPT = """\
@@ -275,7 +278,9 @@ async def anthropic_analyze(req: AnalyzeRequest) -> dict[str, Any]:
             headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
             json=body,
         )
-        r.raise_for_status()
+        if r.status_code != 200:
+            logger.error("Anthropic API error %s: %s", r.status_code, r.text[:500])
+            raise HTTPException(502, f"Anthropic API error: {r.status_code}")
         for block in r.json()["content"]:
             if block["type"] == "text":
                 return json.loads(block["text"])
