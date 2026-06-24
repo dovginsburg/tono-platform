@@ -1,19 +1,14 @@
 [build]
 builder = "DOCKERFILE"
-dockerfilePath = "Backend/Dockerfile"
+dockerfilePath = "Dockerfile"
 
 [deploy]
-# Use the qualified `Backend.server:app` module path: the package uses
-# relative imports, so a bare `server:app` fails at startup.
-startCommand = "uvicorn Backend.server:app --host 0.0.0.0 --port $PORT --workers 2"
+startCommand = "uvicorn server:app --host 0.0.0.0 --port $PORT --workers 2"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
 
-# Persistent volume for tono.db so device tokens + Stripe linkages survive
-# redeploys. The volume is created via the Railway dashboard; mount path is
-# arbitrary but stable.
 [[volumes]]
 mountPath = "/data"
 
