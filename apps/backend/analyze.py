@@ -284,7 +284,7 @@ async def anthropic_analyze(req: AnalyzeRequest) -> dict[str, Any]:
     if not api_key:
         raise HTTPException(500, "ANTHROPIC_API_KEY not set")
     body = {
-        "model": os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5"),
+        "model": get_model_for_user(req.device_id or "anonymous"),
         "max_tokens": 800,
         "system": build_system_prompt(req),
         "messages": [{"role": "user", "content": build_user_prompt(req)}],
@@ -308,3 +308,34 @@ async def anthropic_analyze(req: AnalyzeRequest) -> dict[str, Any]:
                     text = text[:-3]
                 return json.loads(text.strip())
         raise HTTPException(502, "no text block in anthropic response")
+
+# Model tier logic: Sonnet for first week, then Haiku for free users
+import datetime
+
+def get_model_for_user(user_id: str) -> str:
+    """Determine which model to use based on user status."""
+    # Check if user is Pro
+    if is_pro_user(user_id):
+        return "claude-sonnet-4-5"
+    
+    # Free users: Sonnet for first 7 days, then Haiku
+    signup_date = get_user_signup_date(user_id)
+    if signup_date:
+        days_since_signup = (datetime.datetime.now() - signup_date).days
+        if days_since_signup <= 7:
+            return "claude-sonnet-4-5"  # Free trial period
+        else:
+            return "claude-haiku-4-5"  # Downgrade after 7 days
+    
+    # Default to Haiku for unknown users
+    return "claude-haiku-4-5"
+
+def is_pro_user(user_id: str) -> bool:
+    """Check if user has active subscription."""
+    # TODO: Check Stripe subscription status
+    return False
+
+def get_user_signup_date(user_id: str) -> datetime.datetime:
+    """Get user signup date from database."""
+    # TODO: Query database for signup date
+    return None
