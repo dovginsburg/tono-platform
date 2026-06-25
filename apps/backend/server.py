@@ -313,6 +313,19 @@ async def health() -> dict[str, Any]:
     }
 
 
+@app.options("/v1/analyze")
+async def analyze_options():
+    from starlette.responses import Response
+    return Response(
+        status_code=204,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+            "Access-Control-Max-Age": "86400",
+        }
+    )
+
 @app.post("/v1/analyze", response_model=ToneAnalysis)
 async def v1_analyze(req: AnalyzeRequest) -> dict[str, Any]:
     """Unauthenticated passthrough kept for backward compatibility with
