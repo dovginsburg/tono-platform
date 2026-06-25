@@ -1,0 +1,67 @@
+App Review Notes — Tono: Social Tone Coach
+==========================================
+
+KEYBOARD SETUP (required to test the core feature)
+---------------------------------------------------
+1. Install the app and open it. The onboarding screen walks through setup.
+2. Go to Settings → General → Keyboard → Keyboards → Add New Keyboard → Tono
+3. Tap "Tono" in the keyboard list → toggle "Allow Full Access" ON
+   (Full Access is required for network calls to the analysis backend;
+    the app explains this clearly and shows instructions if it's off.)
+4. Open any text field (e.g. Notes, Messages)
+5. Long-press the 🌐 globe icon → select Tono
+6. Type a message (try: "As per my last email, please respond.")
+7. Tap the purple "Coach" button
+
+Expected result: risk badge + 4 rewrite chips appear. Tap any chip to insert
+the rewrite. Tap ✕ to return to the keyboard.
+
+TESTING WITHOUT A LIVE BACKEND
+-------------------------------
+The keyboard uses a local mock analyzer when offline or when the backend is
+unavailable. No API key is required to test basic functionality. The mock
+analyzer flags passive-aggressive phrases, vague asks, and cold/terse messages
+with deterministic heuristics.
+
+ACCOUNTS / PRIVACY
+------------------
+No sign-up is required. The app registers an anonymous device ID on first
+launch. No name, email, or phone number is collected or stored. Drafts are
+analyzed server-side and immediately discarded — they are never persisted.
+
+IN-APP PURCHASES
+----------------
+Two auto-renewable subscription products:
+  • com.tonocoach.app.pro.monthly ($2.99/month)
+  • com.tonocoach.app.pro.yearly ($28.99/year)
+
+Both are configured in App Store Connect and use StoreKit 2 natively. No
+web payment flow or Stripe redirect is present on iOS. Subscribers can
+manage or cancel via Settings → Apple ID → Subscriptions.
+
+PROMO CODE FLOW
+---------------
+The Settings → Plan section includes a "Promo code" field for free users.
+Enter a valid code (for testing: ask the developer) and tap Apply.
+Successful redemption unlocks Pro access for the code's duration.
+
+SHARE EXTENSION
+---------------
+From any app: select text → Share → Tono
+The extension shows a tone analysis sheet without leaving the source app.
+
+SIRI SHORTCUTS
+--------------
+"Hey Siri, coach my draft with Tono"
+The Shortcut accepts a text parameter and returns the best rewrite suggestion.
+
+NOTIFICATIONS (opt-in)
+-----------------------
+After onboarding, the app offers to enable a daily 9pm nudge on days the
+user hasn't coached a message. This is opt-in via the system permission
+dialog and can be disabled in iOS Settings → Notifications → Tono.
+
+WIDGET
+------
+A WidgetKit widget (small and medium) shows daily rewrite usage.
+Add via the long-press widget picker → search "Tono".
