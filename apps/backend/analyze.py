@@ -284,7 +284,7 @@ async def anthropic_analyze(req: AnalyzeRequest) -> dict[str, Any]:
     if not api_key:
         raise HTTPException(500, "ANTHROPIC_API_KEY not set")
     body = {
-        "model": get_model_for_user(req.device_id or "anonymous"),
+        "model": get_model_for_user("anonymous"),
         "max_tokens": 800,
         "system": build_system_prompt(req),
         "messages": [{"role": "user", "content": build_user_prompt(req)}],
