@@ -175,6 +175,25 @@ async def _lifespan(_: "FastAPI"):
         get_store().close()
 
 
+
+# CORS preflight handler
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
+
+class CORSPreflightMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.method == "OPTIONS":
+            response = Response(status_code=204)
+            response.headers["Access-Control-Allow-Origin"] = "https://tonoit.com"
+            response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+            response.headers["Access-Control-Max-Age"] = "86400"
+            return response
+        return await call_next(request)
+
+app.add_middleware(CORSPreflightMiddleware)
+
 app = FastAPI(
     title="Tono backend",
     middleware=[CORSMiddleware(allow_origins=["https://tonoit.com", "http://tonoit.com", "*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])],
