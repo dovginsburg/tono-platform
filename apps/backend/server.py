@@ -42,6 +42,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated, Any, Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -312,19 +313,6 @@ async def health() -> dict[str, Any]:
         "api_key_start": os.environ.get("ANTHROPIC_API_KEY", "")[:10],
     }
 
-
-@app.options("/v1/analyze")
-async def analyze_options():
-    from starlette.responses import Response
-    return Response(
-        status_code=204,
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type",
-            "Access-Control-Max-Age": "86400",
-        }
-    )
 
 @app.post("/v1/analyze", response_model=ToneAnalysis)
 async def v1_analyze(req: AnalyzeRequest) -> dict[str, Any]:
