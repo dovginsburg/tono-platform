@@ -177,6 +177,7 @@ async def _lifespan(_: "FastAPI"):
 
 app = FastAPI(
     title="Tono backend",
+    middleware=[CORSMiddleware(allow_origins=["https://tonoit.com", "http://tonoit.com", "*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])],
     version="0.3.0",
     description=(
         "Proxy + auth + billing for the Social Tone Coach keyboard. "
@@ -185,13 +186,7 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://tonoit.com", "http://tonoit.com"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
 
 
 # ---------------------------------------------------------------------------
