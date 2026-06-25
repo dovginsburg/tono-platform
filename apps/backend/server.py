@@ -217,18 +217,6 @@ async def http_exc_handler(_: Request, exc: HTTPException) -> JSONResponse:
 
 
 
-@app.options("/v1/analyze")
-async def analyze_options():
-    from starlette.responses import Response
-    return Response(
-        status_code=204,
-        headers={
-            "Access-Control-Allow-Origin": "https://tonoit.com",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type",
-            "Access-Control-Max-Age": "86400",
-        }
-    )
 
 # ---------------------------------------------------------------------------
 # Public endpoints
@@ -968,3 +956,36 @@ def _today_utc() -> str:
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("Backend.server:app", host="127.0.0.1", port=8765, reload=True)
+
+
+# CORS ASGI wrapper
+class CORSMiddleware:
+    def __init__(self, app):
+        self.app = app
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["method"] == "OPTIONS":
+            from starlette.responses import Response
+            response = Response(
+                status_code=204,
+                headers={
+                    "Access-Control-Allow-Origin": "https://tonoit.com",
+                    "Access-Control-Allow-Methods": "POST, OPTIONS",
+                    "Access-Control-Allow-Headers": "Content-Type",
+                    "Access-Control-Max-Age": "86400",
+                }
+            )
+            await response(scope, receive, send)
+            return
+        # Add CORS headers to all responses
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                headers.append([b"access-control-allow-origin", b"https://tonoit.com"])
+                headers.append([b"access-control-allow-methods", b"POST, OPTIONS"])
+                headers.append([b"access-control-allow-headers", b"Content-Type"])
+                message["headers"] = headers
+            await send(message)
+        await self.app(scope, receive, send_wrapper)
+
+# Wrap the app
+app = CORSMiddleware(app)
