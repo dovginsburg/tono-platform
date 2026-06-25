@@ -176,6 +176,7 @@ async def _lifespan(_: "FastAPI"):
 
 
 app = FastAPI(
+    middleware=[CORSMiddleware(allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])]
     title="Tono backend",
     version="0.3.0",
     description=(
