@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Tono Privacy Policy — how we handle your text, device data, and payments. Plain English, no surprises." />
   <title>Privacy Policy — tono</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -16,80 +17,146 @@
   <main>
     <div class="legal">
       <h1>Privacy Policy</h1>
-      <p class="updated">Last updated: June 24, 2026</p>
+      <p class="updated">Last updated: June 25, 2026</p>
 
-      <p>Tono ("we", "our", or "us") operates the Tono mobile application. This page informs you of our policies regarding the collection, use, and disclosure of personal information when you use our Service.</p>
+      <p><strong>The short version:</strong> Tono analyzes the text you draft in our keyboard to give you tone feedback in real time. We send that text to Anthropic (the makers of Claude) for the analysis, then throw it away. We never store the contents of your messages on our servers. We do store a device identifier, basic usage stats, and — if you subscribe to Tono Pro — billing info handled by Stripe.</p>
 
-      <h2>Information We Collect</h2>
+      <p>This is the long version. It explains what we collect, why, who we share it with, and the choices you have. We've tried to write it in plain English. If anything is unclear, email us at <a href="mailto:support@tonoit.com">support@tonoit.com</a> and we'll explain.</p>
 
-      <h3>Text Analysis</h3>
-      <p>When you use the Tono keyboard, your drafted text is sent to our servers for tone analysis. We do <strong>not</strong> store your messages after analysis. Text is processed in real-time and immediately discarded.</p>
+      <h2>1. Who we are</h2>
+      <p>Tono ("Tono", "we", "our", or "us") is an iOS keyboard application that helps you draft text with the right tone. The Service is operated by Tono Inc., a Delaware corporation, with a mailing address available on request at <a href="mailto:support@tonoit.com">support@tonoit.com</a>.</p>
+      <p>If you are in the European Economic Area (EEA), the United Kingdom, or Switzerland, Tono Inc. is the data controller for your personal data. If you are in California, Tono Inc. is the "business" under the CCPA/CPRA.</p>
 
-      <h3>Account Information</h3>
-      <p>If you create an account, we collect:</p>
+      <h2>2. Information we collect</h2>
+      <p>We collect the minimum information needed to operate the Service. Here's exactly what that is:</p>
+
+      <h3>2.1 Text you draft in the keyboard</h3>
+      <p>When you tap "Analyze" or request a rewrite in the Tono keyboard, the text you've drafted is transmitted over HTTPS from your device to our backend, and then forwarded to Anthropic's API for tone analysis. The text is processed in memory, a response is returned to your device, and the text is then <strong>discarded</strong>. We do not write your message contents to disk on our servers, we do not log them, and we do not use them to train any AI models.</p>
+      <p>What we do <em>not</em> see: any text you type in apps where the Tono keyboard is not active, any text you type but choose not to analyze, and any text you send before reviewing the rewrite.</p>
+
+      <h3>2.2 Device identifier</h3>
+      <p>When you first install Tono, we generate a random, opaque device identifier (a UUIDv4) on our servers. This identifier is used to:</p>
       <ul>
-        <li>Email address (for authentication)</li>
-        <li>Device identifier (for rate limiting)</li>
+        <li>Enforce daily analysis limits on the free tier</li>
+        <li>Associate your subscription with a single device family</li>
+        <li>Detect and prevent abuse of the Service</li>
+      </ul>
+      <p>We do not collect the Apple-provided IDFA, your Apple ID, your phone number, your contacts, your location, or your advertising identifiers.</p>
+
+      <h3>2.3 Usage and analytics data</h3>
+      <p>We collect anonymous, aggregated usage data such as:</p>
+      <ul>
+        <li>Number of analyses performed per day/week/month</li>
+        <li>Which tone axes you select (e.g., "more direct", "less formal")</li>
+        <li>App version and device OS version</li>
+        <li>Crash reports (which contain no message content)</li>
+      </ul>
+      <p>This data is used to improve the product, fix bugs, and plan new features. It is not linked to your name or email.</p>
+
+      <h3>2.4 Account information (if you create an account)</h3>
+      <p>You can use Tono without creating an account. If you choose to create one (for example to sync across devices or to manage a subscription), we collect:</p>
+      <ul>
+        <li>Your email address (used for login and important service notifications)</li>
+        <li>A hashed password (we never store passwords in plain text)</li>
       </ul>
 
-      <h3>Usage Data</h3>
-      <p>We collect anonymous usage statistics:</p>
+      <h3>2.5 Payment information</h3>
+      <p>If you subscribe to Tono Pro, payment is handled by <strong>Stripe</strong>. We do not see, store, or have access to your full credit card number, CVV, or expiration date. Stripe shares with us only the last four digits of your card, your card brand (Visa, Mastercard, etc.), your billing zip/postal code, and your subscription status. Stripe's handling of your data is governed by the <a href="https://stripe.com/privacy" target="_blank" rel="noopener">Stripe Privacy Policy</a>.</p>
+
+      <h2>3. How we use your information</h2>
+      <p>We use the information we collect to:</p>
       <ul>
-        <li>Number of rewrites used per day</li>
-        <li>Feature usage patterns (which axes you select)</li>
-        <li>Crash reports (no personal content)</li>
+        <li>Provide real-time tone analysis via Anthropic's Claude API</li>
+        <li>Enforce fair-use limits on the free tier</li>
+        <li>Process and manage Tono Pro subscriptions</li>
+        <li>Detect, prevent, and respond to fraud, abuse, and security incidents</li>
+        <li>Diagnose crashes and improve app performance</li>
+        <li>Communicate with you about service changes, security alerts, and (with your consent) product updates</li>
+        <li>Comply with legal obligations</li>
+      </ul>
+      <p>We do <strong>not</strong> sell your personal information. We do <strong>not</strong> use your message content for advertising. We do <strong>not</strong> profile you across other apps or websites.</p>
+
+      <h2>4. Third-party services we share data with</h2>
+      <p>We rely on a small number of trusted vendors to operate Tono. Each is bound by their own privacy practices and, where applicable, by data processing agreements with us.</p>
+
+      <h3>4.1 Anthropic (Claude API) — AI tone analysis</h3>
+      <p>The text you submit for analysis is sent to Anthropic's Claude API. Anthropic processes the text solely to return the tone analysis to us and discards it according to their API data retention policy. Anthropic does not use API inputs or outputs to train their models. See <a href="https://www.anthropic.com/privacy" target="_blank" rel="noopener">Anthropic's Privacy Policy</a>.</p>
+
+      <h3>4.2 Railway — hosting</h3>
+      <p>Our backend services run on Railway, a cloud hosting platform with infrastructure in the United States. Railway stores the data needed to operate the Service (your device identifier, account record if any, and aggregated usage stats). See <a href="https://railway.com/legal/privacy" target="_blank" rel="noopener">Railway's Privacy Policy</a>.</p>
+
+      <h3>4.3 Stripe — payments</h3>
+      <p>Stripe processes subscription payments for Tono Pro. Stripe may collect and store your full payment card details on their infrastructure. See <a href="https://stripe.com/privacy" target="_blank" rel="noopener">Stripe's Privacy Policy</a>.</p>
+
+      <h3>4.4 Apple — App Store and in-app purchases</h3>
+      <p>If you subscribe through Apple's in-app purchase system (on iOS), Apple acts as the merchant of record and processes your payment under Apple's privacy terms. See <a href="https://www.apple.com/legal/privacy/" target="_blank" rel="noopener">Apple's Privacy Policy</a>.</p>
+
+      <p>We do not share your data with any other third parties except: (a) as required by law, (b) to respond to valid legal process, (c) to protect our rights or the safety of users, or (d) in connection with a merger, acquisition, or sale of assets, with notice to you.</p>
+
+      <h2>5. Data retention</h2>
+      <ul>
+        <li><strong>Text you analyze:</strong> Processed in memory, returned to your device, and discarded. Not retained on our servers or by Anthropic beyond the time needed to fulfill the request.</li>
+        <li><strong>Device identifier:</strong> Retained for as long as you use Tono, plus 30 days after you delete the app or request deletion.</li>
+        <li><strong>Account data (email, password hash):</strong> Retained while your account is active. Deleted within 30 days of account deletion.</li>
+        <li><strong>Aggregated usage analytics:</strong> Retained for up to 24 months in identifiable form, then aggregated further or deleted.</li>
+        <li><strong>Subscription records:</strong> Retained for at least 7 years to comply with tax and accounting obligations.</li>
+        <li><strong>Support emails:</strong> Retained for as long as needed to resolve your request, typically no more than 2 years.</li>
       </ul>
 
-      <h3>Payment Information</h3>
-      <p>Subscription payments are handled by Apple (App Store) or Google (Google Play). We do <strong>not</strong> have access to your credit card information.</p>
-
-      <h2>How We Use Information</h2>
+      <h2>6. Security</h2>
+      <p>We take reasonable steps to protect your information:</p>
       <ul>
-        <li>To provide and maintain our Service</li>
-        <li>To analyze text tone and provide rewrites (real-time only, not stored)</li>
-        <li>To track usage for free tier limits</li>
-        <li>To improve the app through anonymous analytics</li>
+        <li>All data in transit is encrypted using TLS 1.2 or higher.</li>
+        <li>Account passwords are hashed using a modern algorithm (bcrypt or argon2).</li>
+        <li>Access to production systems is restricted to a small number of authorized personnel and requires multi-factor authentication.</li>
+        <li>We monitor for unusual activity and security incidents.</li>
+        <li>We retain service providers who meet industry-standard security certifications.</li>
+      </ul>
+      <p>No system is perfectly secure. If you believe your account has been compromised, contact us immediately at <a href="mailto:support@tonoit.com">support@tonoit.com</a>.</p>
+
+      <h2>7. Your rights and choices</h2>
+
+      <h3>7.1 For everyone</h3>
+      <ul>
+        <li><strong>Access:</strong> Request a copy of the personal data we hold about you.</li>
+        <li><strong>Deletion:</strong> Request that we delete your account and associated data.</li>
+        <li><strong>Correction:</strong> Ask us to correct inaccurate information.</li>
+        <li><strong>Opt out of analytics:</strong> You can disable non-essential analytics collection by contacting us at <a href="mailto:support@tonoit.com">support@tonoit.com</a>.</li>
+      </ul>
+      <p>To exercise any of these rights, email <a href="mailto:support@tonoit.com">support@tonoit.com</a>. We respond within 30 days.</p>
+
+      <h3>7.2 If you are in the EEA, UK, or Switzerland (GDPR)</h3>
+      <p>You have the right to: access your personal data, correct it, have it deleted, restrict or object to its processing, receive it in a portable format (data portability), and withdraw consent at any time without affecting prior lawful processing. You also have the right to lodge a complaint with your local data protection authority.</p>
+      <p>Our legal bases for processing under GDPR are: <strong>performance of a contract</strong> (to provide the Service you signed up for), <strong>legitimate interests</strong> (to secure and improve the Service), <strong>consent</strong> (for optional communications), and <strong>legal obligation</strong> (for tax and accounting records).</p>
+
+      <h3>7.3 If you are in California (CCPA/CPRA)</h3>
+      <p>You have the right to know what personal information we collect and how we use it (covered in Sections 2–4 above), the right to delete personal information we have collected, the right to correct inaccurate information, the right to limit the use of sensitive personal information, and the right to non-discrimination for exercising your privacy rights.</p>
+      <p>We do not sell or share your personal information for cross-context behavioral advertising. We do not collect "sensitive personal information" as defined under the CPRA in any meaningful way beyond payment data handled by Stripe.</p>
+      <p>To submit a verifiable consumer request, email <a href="mailto:support@tonoit.com">support@tonoit.com</a> from the email address associated with your account. You may designate an authorized agent to make a request on your behalf.</p>
+
+      <h3>7.4 International data transfers</h3>
+      <p>Tono is operated from the United States. If you use the Service from outside the U.S., your information will be transferred to and processed in the U.S. We rely on Standard Contractual Clauses for transfers from the EEA, UK, and Switzerland to the U.S.</p>
+
+      <h2>8. Children's privacy</h2>
+      <p>Tono is not directed to children under 13, and we do not knowingly collect personal information from children under 13. We do not knowingly collect information from children under 16 in the EEA without verifiable parental consent, as required by GDPR. If we learn that we have collected information from a child in violation of these requirements, we will delete it as soon as possible. If you believe a child has provided us with personal information, please contact us at <a href="mailto:support@tonoit.com">support@tonoit.com</a>.</p>
+
+      <h2>9. The Tono keyboard and other apps</h2>
+      <p>Because Tono is a keyboard extension, it has the technical capability to see text typed in any app where it is the active keyboard. We have designed the Service so that <strong>we never receive or analyze text unless you explicitly tap the Analyze button</strong>. Text you type but do not submit for analysis stays on your device.</p>
+      <p>You should not use the Tono keyboard to draft highly sensitive content (for example, passwords, medical information, or financial account credentials) and then tap Analyze. While we do not retain analyzed text, the data still transits third-party infrastructure (ours and Anthropic's) during the request.</p>
+      <p>Tono does not have access to text you type in password fields, and Apple's iOS does not allow the keyboard extension to access such fields.</p>
+
+      <h2>10. Changes to this policy</h2>
+      <p>We may update this Privacy Policy from time to time. When we do, we will revise the "Last updated" date at the top of this page. If the changes are material, we will give you notice through the app or by email before the changes take effect. We encourage you to review this page periodically.</p>
+
+      <h2>11. Contact us</h2>
+      <p>If you have any questions about this Privacy Policy or our practices, please contact us:</p>
+      <ul>
+        <li>Email: <a href="mailto:support@tonoit.com">support@tonoit.com</a></li>
+        <li>Website: <a href="https://tonoit.com">tonoit.com</a></li>
+        <li>Privacy requests: <a href="mailto:support@tonoit.com">support@tonoit.com</a> (subject line starting with "Privacy")</li>
       </ul>
 
-      <h2>Data Storage</h2>
-      <ul>
-        <li>Text sent for analysis is processed in real-time and <strong>not persisted</strong></li>
-        <li>Account data is stored securely on our servers</li>
-        <li>Usage statistics are anonymized and aggregated</li>
-      </ul>
-
-      <h2>Third-Party Services</h2>
-      <ul>
-        <li><strong>Anthropic</strong> — Used for AI-powered tone analysis. <a href="https://www.anthropic.com/privacy">Their privacy policy</a> applies to data sent during analysis.</li>
-        <li><strong>Apple App Store</strong> / <strong>Google Play Store</strong> — Handle payments and subscription management</li>
-      </ul>
-
-      <h2>Data Retention</h2>
-      <ul>
-        <li>Analysis text: Discarded immediately after processing</li>
-        <li>Account data: Retained while account is active</li>
-        <li>Usage data: Retained for 12 months, then deleted</li>
-      </ul>
-
-      <h2>Your Rights</h2>
-      <ul>
-        <li><strong>Delete your account:</strong> Contact us at privacy@tonoit.com</li>
-        <li><strong>Export your data:</strong> Contact us at privacy@tonoit.com</li>
-        <li><strong>Opt out of analytics:</strong> Disable in Settings → Privacy</li>
-      </ul>
-
-      <h2>Children's Privacy</h2>
-      <p>Our Service does not address anyone under the age of 13. We do not knowingly collect personal information from children under 13.</p>
-
-      <h2>Changes to This Policy</h2>
-      <p>We may update our Privacy Policy from time to time. We will notify you of any changes by posting the new Privacy Policy on this page and updating the "last updated" date.</p>
-
-      <h2>Contact Us</h2>
-      <p>If you have any questions about this Privacy Policy, please contact us:</p>
-      <ul>
-        <li>Email: <a href="mailto:privacy@tonoit.com">privacy@tonoit.com</a></li>
-        <li>Website: <a href="index.html">tonoit.com</a></li>
-      </ul>
+      <p style="margin-top: 40px; color: var(--muted); font-size: 0.88rem;">This Privacy Policy is provided in English. Translations may be made available for convenience; in case of any conflict, the English version controls.</p>
     </div>
   </main>
 
