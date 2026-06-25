@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>tono — try it now</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; color: #fff; font-family: 'Inter', sans-serif; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 40px 20px; }
+    h1 { font-size: 2rem; margin-bottom: 8px; }
+    .subtitle { color: #c9c9d1; margin-bottom: 32px; font-size: 1.1rem; }
+    .demo-box { background: #111; border: 1px solid #1f1f23; border-radius: 18px; padding: 32px; max-width: 600px; width: 100%; }
+    textarea { width: 100%; height: 120px; background: #1a1a1f; border: 1px solid #333; border-radius: 12px; color: #fff; font-family: 'Inter', sans-serif; font-size: 1rem; padding: 16px; resize: none; outline: none; }
+    textarea:focus { border-color: #A855F7; }
+    textarea::placeholder { color: #666; }
+    .btn { display: block; width: 100%; margin-top: 16px; padding: 16px; background: #A855F7; color: #fff; border: none; border-radius: 12px; font-size: 1.1rem; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+    .btn:hover { background: #9333EA; transform: translateY(-2px); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .result { margin-top: 24px; display: none; }
+    .result.show { display: block; }
+    .risk-badge { display: inline-block; padding: 6px 16px; border-radius: 20px; font-weight: 600; font-size: 0.9rem; margin-bottom: 16px; }
+    .risk-low { background: #065F46; color: #6EE7B7; }
+    .risk-medium { background: #78350F; color: #FCD34D; }
+    .risk-high { background: #7F1D1D; color: #FCA5A5; }
+    .perception { color: #c9c9d1; margin-bottom: 20px; font-size: 1rem; line-height: 1.5; }
+    .suggestion { background: #1a1a1f; border: 1px solid #333; border-radius: 12px; padding: 16px; margin-bottom: 12px; transition: border-color 0.2s; }
+    .suggestion:hover { border-color: #A855F7; }
+    .axis { color: #A855F7; font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+    .rewrite { color: #fff; font-size: 1.05rem; line-height: 1.5; margin-bottom: 6px; }
+    .rationale { color: #666; font-size: 0.85rem; }
+    .loading { text-align: center; padding: 20px; color: #666; }
+    .cta { margin-top: 32px; text-align: center; color: #666; font-size: 0.95rem; }
+    .cta a { color: #A855F7; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <h1>try tono</h1>
+  <p class="subtitle">Type a message and see how tono coaches your tone</p>
+  
+  <div class="demo-box">
+    <textarea id="draft" placeholder="Type a message you're about to send...&#10;&#10;e.g. 'I hate this meeting, what a waste of time'"></textarea>
+    <button class="btn" id="coachBtn" onclick="coach()">Coach my tone</button>
+    
+    <div class="result" id="result">
+      <div class="risk-badge" id="riskBadge"></div>
+      <p class="perception" id="perception"></p>
+      <div id="suggestions"></div>
+    </div>
+    
+    <div class="loading" id="loading" style="display:none">
+      ✨ Coaching your tone...
+    </div>
+  </div>
+  
+  <p class="cta">Love it? <a href="/">Get tono on your phone →</a></p>
+
+  <script>
+    const API = 'https://tono-backend-production.up.railway.app';
+    
+    async function coach() {
+      const draft = document.getElementById('draft').value.trim();
+      if (!draft) return;
+      
+      document.getElementById('coachBtn').disabled = true;
+      document.getElementById('result').classList.remove('show');
+      document.getElementById('loading').style.display = 'block';
+      
+      try {
+        const res = await fetch(`${API}/v1/analyze`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ draft, mode: 'coach' })
+        });
+        
+        const data = await res.json();
+        
+        document.getElementById('loading').style.display = 'none';
+        
+        if (data.risk_level) {
+          const badge = document.getElementById('riskBadge');
+          badge.textContent = data.risk_level.toUpperCase();
+          badge.className = `risk-badge risk-${data.risk_level}`;
+          
+          document.getElementById('perception').textContent = data.perception;
+          
+          const sugDiv = document.getElementById('suggestions');
+          sugDiv.innerHTML = '';
+          (data.suggestions || []).forEach(s => {
+            sugDiv.innerHTML += `
+              <div class="suggestion">
+                <div class="axis">${s.axis}</div>
+                <div class="rewrite">${s.text}</div>
+                <div class="rationale">${s.rationale}</div>
+              </div>
+            `;
+          });
+          
+          document.getElementById('result').classList.add('show');
+        }
+      } catch (e) {
+        document.getElementById('loading').innerHTML = '⚠️ Something went wrong. Try again.';
+      }
+      
+      document.getElementById('coachBtn').disabled = false;
+    }
+    
+    document.getElementById('draft').addEventListener('keydown', e => {
+      if (e.key === 'Enter' && e.metaKey) coach();
+    });
+  </script>
+</body>
+</html>
