@@ -1,0 +1,36 @@
+# Local development stack.
+#
+# Usage:
+#   cp Backend/.env.example Backend/.env
+#   # Fill in TONO_PROVIDER, OPENAI_API_KEY, etc. in Backend/.env
+#   docker compose up --build
+#
+# The API will be available at http://localhost:8765
+# SQLite data persists in the `tono_data` named volume between runs.
+
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Backend/Dockerfile
+    ports:
+      - "8765:8765"
+    volumes:
+      - tono_data:/data
+    env_file:
+      - Backend/.env
+    environment:
+      TONO_DB_PATH: /data/tono.db
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8765/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  tono_data:
+    driver: local

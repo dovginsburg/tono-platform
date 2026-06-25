@@ -1,0 +1,9 @@
+# Local artifacts that should never go to git.
+tono.db
+tono.db-journal
+tono.db-wal
+tono.db-shm
+.env
+__pycache__/
+*.pyc
+.pytest_cache/

@@ -1,0 +1,17 @@
+Version 1.0 — Launch
+
+The Tono keyboard is here.
+
+Type any message, tap Coach, and instantly see whether it might land the wrong way — plus four alternatives that fix it.
+
+• Risk analysis (Low / Medium / High) with a one-line perception read
+• Four axis rewrites: Warmer, Clearer, Funnier, Safer — one tap to insert
+• Coach history: last 5 analyses available in the keyboard
+• Recipient memory: save people with voice hints so rewrites adapt
+• Import contacts to build your recipient list in seconds
+• Style memory: your most-tapped axes move to the top automatically
+• Offline mode: local analysis when there's no connection
+• Widget: track your daily rewrite count from the home screen
+• Share Extension: analyze any text from the share sheet
+• Siri Shortcuts: "Coach my draft with Tono"
+• Daily nudge (opt-in): gentle reminder on days you haven't coached
