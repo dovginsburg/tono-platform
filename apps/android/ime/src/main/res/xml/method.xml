@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Keyboard metadata required by InputMethodService -->
+<input-method xmlns:android="http://schemas.android.com/apk/res/android"
+    android:settingsActivity="com.tono.app.MainActivity">
+    <subtype
+        android:label="Tono"
+        android:imeSubtypeMode="keyboard"
+        android:imeSubtypeLocale="en_US" />
+</input-method>
