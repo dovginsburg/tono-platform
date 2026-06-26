@@ -37,6 +37,18 @@
     .rationale { color: #666; font-size: .85rem; }
     .loading { text-align: center; padding: 20px; color: #666; }
     .demo-cta { margin-top: 32px; text-align: center; color: var(--muted); font-size: .95rem; }
+
+    @keyframes shimmer { 0% { background-position: -200px 0; } 100% { background-position: 200px 0; } }
+    .skeleton { display: none; }
+    .skeleton.active { display: block; }
+    .skel-badge { width: 80px; height: 28px; border-radius: 20px; background: linear-gradient(90deg, #1a1a1f 25%, #2a2a2f 50%, #1a1a1f 75%); background-size: 400px 100%; animation: shimmer 1.5s infinite linear; margin-bottom: 16px; }
+    .skel-text { height: 18px; border-radius: 8px; background: linear-gradient(90deg, #1a1a1f 25%, #2a2a2f 50%, #1a1a1f 75%); background-size: 400px 100%; animation: shimmer 1.5s infinite linear; margin-bottom: 12px; }
+    .skel-text.short { width: 70%; }
+    .skel-card { background: #1a1a1f; border: 1px solid #333; border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+    .skel-card .skel-axis { width: 60px; height: 14px; border-radius: 4px; background: linear-gradient(90deg, #1a1a1f 25%, #2a2a2f 50%, #1a1a1f 75%); background-size: 400px 100%; animation: shimmer 1.5s infinite linear; margin-bottom: 8px; }
+    .skel-card .skel-line { height: 16px; border-radius: 6px; background: linear-gradient(90deg, #1a1a1f 25%, #2a2a2f 50%, #1a1a1f 75%); background-size: 400px 100%; animation: shimmer 1.5s infinite linear; margin-bottom: 6px; }
+    .skel-card .skel-line:nth-child(2) { width: 90%; }
+    .skel-card .skel-line:nth-child(3) { width: 60%; height: 12px; }
     .demo-cta a { color: var(--accent); text-decoration: none; }
   </style>
 </head>
@@ -53,7 +65,15 @@
           <p class="perception" id="perception"></p>
           <div id="suggestions"></div>
         </div>
-        <div class="loading" id="loading" style="display:none">✨ Coaching your tone...</div>
+        <div class="skeleton" id="loading">
+          <div class="skel-badge"></div>
+          <div class="skel-text"></div>
+          <div class="skel-text short"></div>
+          <div class="skel-card"><div class="skel-axis"></div><div class="skel-line"></div><div class="skel-line"></div></div>
+          <div class="skel-card"><div class="skel-axis"></div><div class="skel-line"></div><div class="skel-line"></div></div>
+          <div class="skel-card"><div class="skel-axis"></div><div class="skel-line"></div><div class="skel-line"></div></div>
+          <div class="skel-card"><div class="skel-axis"></div><div class="skel-line"></div><div class="skel-line"></div></div>
+        </div>
       </div>
       <p class="demo-cta">Love it? <a href="index.html#download">Get tono on your phone →</a></p>
 
@@ -91,7 +111,7 @@
       if (!draft) return;
       document.getElementById('coachBtn').disabled = true;
       document.getElementById('result').classList.remove('show');
-      document.getElementById('loading').style.display = 'block';
+      document.getElementById('loading').classList.add('active');
       const sugDiv = document.getElementById('suggestions');
       sugDiv.innerHTML = '';
       const badge = document.getElementById('riskBadge');
@@ -121,7 +141,7 @@
             try {
               const evt = JSON.parse(payload);
               if (evt.type === 'perception') {
-                document.getElementById('loading').style.display = 'none';
+                document.getElementById('loading').classList.remove('active');
                 percEl.textContent = evt.text;
                 document.getElementById('result').classList.add('show');
               } else if (evt.type === 'suggestion') {
@@ -130,13 +150,15 @@
                 badge.textContent = evt.risk_level.toUpperCase();
                 badge.className = 'risk-badge risk-' + evt.risk_level;
               } else if (evt.type === 'error') {
-                document.getElementById('loading').innerHTML = '⚠️ ' + evt.message;
+                document.getElementById('loading').classList.remove('active');
+document.getElementById('loading').insertAdjacentHTML('afterend', '<div class=\'loading\'>⚠️ ' + evt.message + '</div>');
               }
             } catch (e) {}
           }
         }
       } catch (e) {
-        document.getElementById('loading').innerHTML = '⚠️ Something went wrong. Try again.';
+        document.getElementById('loading').classList.remove('active');
+document.getElementById('loading').insertAdjacentHTML('afterend', '<div class=\'loading\'>⚠️ Something went wrong. Try again.</div>');
       }
       document.getElementById('coachBtn').disabled = false;
     }
