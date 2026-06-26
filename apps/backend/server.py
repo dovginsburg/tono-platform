@@ -43,7 +43,7 @@ from typing import Annotated, Any, Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import payments, slack
@@ -53,7 +53,9 @@ from .analyze import (
     ToneAnalysis,
     mock_analyze,
     openai_analyze,
+    stream_openai_analyze,
     anthropic_analyze,
+    stream_anthropic_analyze,
     build_user_prompt,
 )
 from .auth import CurrentUser, StoreDep, current_user
@@ -74,6 +76,16 @@ _DRAFT_MAX_CHARS = int(os.environ.get("DRAFT_MAX_CHARS", "2000"))
 _IP_RATE_LIMIT = int(os.environ.get("IP_RATE_LIMIT_PER_MIN", "20"))
 _ip_windows: dict[str, collections.deque] = {}
 _ip_lock = threading.Lock()
+
+
+def _sse_headers():
+    """Headers for Server-Sent Events."""
+    return {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
 
 
 def _get_client_ip(request: Request) -> str:
@@ -314,13 +326,25 @@ async def health() -> dict[str, Any]:
     }
 
 
-@app.post("/v1/analyze", response_model=ToneAnalysis)
-async def v1_analyze(req: AnalyzeRequest) -> dict[str, Any]:
+@app.post("/v1/analyze", response_model=None)
+async def v1_analyze(req: AnalyzeRequest, request: Request):
     """Unauthenticated passthrough kept for backward compatibility with
     the iOS Playground tab and integration tests. No rate limit, no
     billing — the caller pays the LLM cost directly.
+
+    Supports SSE streaming when client sends Accept: text/event-stream.
     """
     provider = os.environ.get("TONO_PROVIDER", "mock")
+    wants_stream = (request.headers.get("accept", "")).lower().find("text/event-stream") >= 0
+
+    if wants_stream and provider in ("anthropic", "openai"):
+        stream_fn = stream_anthropic_analyze if provider == "anthropic" else stream_openai_analyze
+
+        async def _stream():
+            async for event in stream_fn(req):
+                yield event
+        return StreamingResponse(_stream(), media_type="text/event-stream", headers=_sse_headers())
+
     if provider == "mock":
         return mock_analyze(req)
     if provider == "openai":
@@ -385,13 +409,13 @@ def me(user: CurrentUser, store: StoreDep) -> MeResponse:
     )
 
 
-@app.post("/api/analyze", response_model=ApiAnalyzeResponse)
+@app.post("/api/analyze", response_model=None)
 async def api_analyze(
     body: ApiAnalyzeRequest,
     request: Request,
     user: CurrentUser,
     store: StoreDep,
-) -> ApiAnalyzeResponse:
+):
     """The keyboard's primary endpoint. Authenticated, rate-limited,
     server holds the LLM API key.
     """
@@ -455,6 +479,29 @@ async def api_analyze(
         thread_context=body.thread_context,
         mode=body.mode,
     )
+
+    # Streaming path: if client accepts SSE and provider supports it, stream
+    wants_stream = (request.headers.get("accept", "")).lower().find("text/event-stream") >= 0
+    if wants_stream and provider in ("anthropic", "openai"):
+        # Increment the counter now (we'll log usage after stream completes)
+        # For streaming, we already consumed the rewrite above, so used/limit are set
+        stream_fn = stream_anthropic_analyze if provider == "anthropic" else stream_openai_analyze
+
+        async def _stream_and_log():
+            """Wrapper that yields SSE events and logs usage at the end."""
+            async for event in stream_fn(internal):
+                yield event
+            # Log successful usage after stream completes
+            store.log_usage(
+                user.device_id, "/api/analyze", 200, provider=provider,
+                drafts_chars=len(body.text),
+            )
+
+        return StreamingResponse(
+            _stream_and_log(),
+            media_type="text/event-stream",
+            headers=_sse_headers(),
+        )
 
     try:
         if provider == "mock":

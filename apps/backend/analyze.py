@@ -279,6 +279,90 @@ async def openai_analyze(req: AnalyzeRequest) -> dict[str, Any]:
         return json.loads(content)
 
 
+async def stream_openai_analyze(req: AnalyzeRequest):
+    """Yields SSE events as the OpenAI response streams in."""
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        yield f'data: {json.dumps({"type": "error", "message": "AI coach is not configured"})}\n\n'
+        yield "data: [DONE]\n\n"
+        return
+
+    body = {
+        "model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+        "temperature": 0.4,
+        "stream": True,
+        "messages": [
+            {"role": "system", "content": build_system_prompt(req)},
+            {"role": "user", "content": build_user_prompt(req)},
+        ],
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json=body,
+            )
+            if r.status_code != 200:
+                err_text = (await r.aread()).decode()[:200]
+                logger.error("OpenAI stream error %s: %s", r.status_code, err_text)
+                yield f'data: {json.dumps({"type": "error", "message": f"AI service error ({r.status_code})"})}\n\n'
+                yield "data: [DONE]\n\n"
+                return
+
+            # Read SSE stream from OpenAI
+            sse_buffer = ""
+            full_text = ""
+            async for raw_chunk in r.aiter_text():
+                sse_buffer += raw_chunk
+                lines = sse_buffer.split("\n")
+                sse_buffer = lines.pop() or ""
+                for line in lines:
+                    if not line.startswith("data: "):
+                        continue
+                    payload = line[6:].strip()
+                    if payload == "[DONE]":
+                        continue
+                    try:
+                        evt = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    delta = evt.get("choices", [{}])[0].get("delta", {})
+                    if "content" in delta:
+                        full_text += delta["content"]
+
+        # Parse the accumulated JSON
+        text = full_text.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+
+        result = json.loads(text)
+
+        # Stream perception first
+        if "perception" in result:
+            yield f'data: {json.dumps({"type": "perception", "text": result["perception"]})}\n\n'
+
+        # Stream each suggestion
+        for s in result.get("suggestions", []):
+            yield f'data: {json.dumps({"type": "suggestion", "axis": s.get("axis"), "text": s.get("text"), "rationale": s.get("rationale", ""), "risk_after": s.get("risk_after")})}\n\n'
+
+        # Stream completion
+        yield f'data: {json.dumps({"type": "complete", "risk_level": result.get("risk_level", "low"), "subtext": result.get("subtext", ""), "risk_reason": result.get("risk_reason", ""), "flags": result.get("flags", [])})}\n\n'
+
+    except json.JSONDecodeError as e:
+        logger.error("Failed to parse OpenAI stream as JSON: %s", e)
+        yield f'data: {json.dumps({"type": "error", "message": "Could not parse AI response"})}\n\n'
+    except Exception as e:
+        logger.exception("stream_openai_analyze failed")
+        yield f'data: {json.dumps({"type": "error", "message": str(e)})}\n\n'
+
+    yield "data: [DONE]\n\n"
+
+
 async def anthropic_analyze(req: AnalyzeRequest) -> dict[str, Any]:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -308,6 +392,97 @@ async def anthropic_analyze(req: AnalyzeRequest) -> dict[str, Any]:
                     text = text[:-3]
                 return json.loads(text.strip())
         raise HTTPException(502, "no text block in anthropic response")
+
+
+async def stream_anthropic_analyze(req: AnalyzeRequest):
+    """Yields SSE events as the Anthropic response streams in.
+
+    Event types:
+      data: {"type":"perception","text":"..."}
+      data: {"type":"suggestion","axis":"warmer","text":"...","rationale":"..."}
+      data: {"type":"complete","risk_level":"low","flags":[],"used_today":N,"daily_limit":N,"plan":"free"}
+      data: {"type":"error","message":"..."}
+      data: [DONE]
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        yield f'data: {json.dumps({"type": "error", "message": "AI coach is not configured"})}\n\n'
+        yield "data: [DONE]\n\n"
+        return
+
+    body = {
+        "model": get_model_for_user("anonymous"),
+        "max_tokens": 800,
+        "stream": True,
+        "system": build_system_prompt(req),
+        "messages": [{"role": "user", "content": build_user_prompt(req)}],
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+                json=body,
+            )
+            if r.status_code != 200:
+                err_text = (await r.aread()).decode()[:200]
+                logger.error("Anthropic stream error %s: %s", r.status_code, err_text)
+                yield f'data: {json.dumps({"type": "error", "message": f"AI service error ({r.status_code})"})}\n\n'
+                yield "data: [DONE]\n\n"
+                return
+
+            # Read SSE stream from Anthropic, buffer into complete JSON
+            sse_buffer = ""
+            full_text = ""
+            async for raw_chunk in r.aiter_text():
+                sse_buffer += raw_chunk
+                lines = sse_buffer.split("\n")
+                sse_buffer = lines.pop() or ""
+                for line in lines:
+                    if not line.startswith("data: "):
+                        continue
+                    payload = line[6:].strip()
+                    if payload == "[DONE]":
+                        continue
+                    try:
+                        evt = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    if evt.get("type") == "content_block_delta":
+                        delta = evt.get("delta", {})
+                        if delta.get("type") == "text_delta":
+                            full_text += delta.get("text", "")
+
+        # Parse the accumulated JSON
+        text = full_text.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+
+        result = json.loads(text)
+
+        # Stream perception first (the user sees this immediately)
+        if "perception" in result:
+            yield f'data: {json.dumps({"type": "perception", "text": result["perception"]})}\n\n'
+
+        # Stream each suggestion
+        for s in result.get("suggestions", []):
+            yield f'data: {json.dumps({"type": "suggestion", "axis": s.get("axis"), "text": s.get("text"), "rationale": s.get("rationale", ""), "risk_after": s.get("risk_after")})}\n\n'
+
+        # Stream completion with metadata
+        yield f'data: {json.dumps({"type": "complete", "risk_level": result.get("risk_level", "low"), "subtext": result.get("subtext", ""), "risk_reason": result.get("risk_reason", ""), "flags": result.get("flags", [])})}\n\n'
+
+    except json.JSONDecodeError as e:
+        logger.error("Failed to parse Anthropic stream as JSON: %s", e)
+        yield f'data: {json.dumps({"type": "error", "message": "Could not parse AI response"})}\n\n'
+    except Exception as e:
+        logger.exception("stream_anthropic_analyze failed")
+        yield f'data: {json.dumps({"type": "error", "message": str(e)})}\n\n'
+
+    yield "data: [DONE]\n\n"
 
 # Model tier logic: Sonnet for first week, then Haiku for free users
 import datetime
