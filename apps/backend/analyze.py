@@ -500,10 +500,10 @@ def get_model_for_user(user_id: str) -> str:
         if days_since_signup <= 7:
             return "claude-sonnet-4-5"  # Free trial period
         else:
-            return "claude-haiku-4-5"  # Downgrade after 7 days
+            return os.environ.get("TONO_MODEL", "claude-sonnet-4-5")  # Downgrade after 7 days
     
     # Default to Haiku for unknown users
-    return "claude-haiku-4-5"
+    return os.environ.get("TONO_MODEL", "claude-sonnet-4-5")
 
 def is_pro_user(user_id: str) -> bool:
     """Check if user has active subscription."""
