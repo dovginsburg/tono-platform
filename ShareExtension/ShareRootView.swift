@@ -55,7 +55,32 @@ struct ShareAnalysisView: View {
                     preferredVoice: prefs.preferredVoice,
                     axes: prefs.axes.isEmpty ? RewriteAxis.allCases : prefs.axes
                 )
-                let result = try await ToneEngine.backend().analyze(req)
+                let result: ToneAnalysis = try await {
+                    var perception = ""
+                    var suggestions: [RewriteSuggestion] = []
+                    var riskLevel: RiskLevel = .medium
+                    var reason: String?
+                    var flags: [String] = []
+                    var subtext = ""
+
+                    for await event in ToneEngine.backend().analyzeStream(req) {
+                        switch event {
+                        case .perception(let text): perception = text
+                        case .suggestion(let axis, let text, let rationale, let riskAfter):
+                            if let a = RewriteAxis(rawValue: axis) {
+                                suggestions.append(RewriteSuggestion(
+                                    axis: a, text: text, rationale: rationale,
+                                    riskAfter: riskAfter.flatMap { RiskLevel(rawValue: $0) }
+                                ))
+                            }
+                        case .complete(let level, let st, let rr, let f):
+                            riskLevel = RiskLevel(rawValue: level) ?? .medium
+                            subtext = st; reason = rr; flags = f
+                        case .error(let msg): throw ToneEngineError.backend(msg)
+                        }
+                    }
+                    return ToneAnalysis(riskLevel: riskLevel, perception: perception, subtext: subtext, reason: reason, suggestions: suggestions, flags: flags)
+                }()
                 await MainActor.run {
                     analysis = result
                     isLoading = false
