@@ -6,14 +6,15 @@
 //   1. Find your 10-character Apple Developer Team ID in Xcode → Signing
 //      & Capabilities → Team, or at developer.apple.com/account.
 //   2. Replace "XXXXXXXXXX" in `teamID` below with that value.
-//   Both targets' entitlements already declare the shared access group;
-//   this constant must match.
+//   3. Both targets' `.entitlements` files declare App Group
+//      `group.com.tonoit.shared`; `accessGroup` below MUST match
+//      `<TeamID>.group.com.tonoit.shared`.
 
 import Foundation
 import Security
 
 // ─── Configure this once ───────────────────────────────────────────────
-private let teamID = "XXXXXXXXXX"
+private let teamID = "4938S9TTBM"
 // ───────────────────────────────────────────────────────────────────────
 
 public enum SharedKeychain {
@@ -21,8 +22,10 @@ public enum SharedKeychain {
     // main app can use its own Keychain (keyboard extension won't share
     // until the real Team ID is configured).
     private static let hasTeam: Bool = teamID != "XXXXXXXXXX"
-    private static let accessGroup = "\(teamID).group.com.tonocoach.shared"
-    private static let service     = "com.tonocoach.app"
+    // Must match `com.apple.security.application-groups` in
+    // App/Tono.entitlements and KeyboardExtension/TonoKeyboard.entitlements.
+    private static let accessGroup = "\(teamID).group.com.tonoit.shared"
+    private static let service     = "com.tonoit.app"
 
     public static func set(_ value: String, forKey key: String) {
         guard let data = value.data(using: .utf8) else { return }
