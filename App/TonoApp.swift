@@ -31,7 +31,9 @@ struct RootView: View {
 
     var body: some View {
         TabView {
-            HomeView(prefs: $prefs)
+            // v0: single-screen "Coach this" is the home tab. Settings
+            // is also reachable from a gear in CoachView's toolbar.
+            CoachView()
                 .tabItem { Label("Coach", systemImage: "sparkles") }
 
             PlaygroundView()

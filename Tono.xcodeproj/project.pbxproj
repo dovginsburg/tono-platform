@@ -15,6 +15,7 @@
 		26A32AFB6BA4EE68D7300F89 /* PlaygroundView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 217A3D33DCC3DE654CA907C5 /* PlaygroundView.swift */; };
 		2F986D1C30D60DF7044A1827 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FCE9DA4E023C12BADC4BC12 /* HomeView.swift */; };
 		3445E8532232C012E7274043 /* CoachDraftIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3861F3AF2390477CF4D567E /* CoachDraftIntent.swift */; };
+		51381AED82774B5C91E484A7 /* CoachView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B88FDB62F52944069CC31478 /* CoachView.swift */; };
 		43690A23F2E1A83FE74F3466 /* TonoBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80AB8E621E4EDC9A59A7258D /* TonoBackend.swift */; };
 		4C8023DED2667EAE03930F5B /* TonoAnalytics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92219FEC38B911DE3D75FC8F /* TonoAnalytics.swift */; };
 		511B5CB9D0506AE3B0B7BA9A /* RecipientMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58D322318012F6E3758FBE16 /* RecipientMemory.swift */; };
@@ -99,6 +100,7 @@
 		772DD67FA1CD9CF09D426AF5 /* SharedUserDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedUserDefaults.swift; sourceTree = "<group>"; };
 		78AA6203719949C25622DA78 /* StyleMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StyleMemory.swift; sourceTree = "<group>"; };
 		7FCE9DA4E023C12BADC4BC12 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		B88FDB62F52944069CC31478 /* CoachView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachView.swift; sourceTree = "<group>"; };
 		80AB8E621E4EDC9A59A7258D /* TonoBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoBackend.swift; sourceTree = "<group>"; };
 		822A94BEAD307E044D2E1547 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		92219FEC38B911DE3D75FC8F /* TonoAnalytics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoAnalytics.swift; sourceTree = "<group>"; };
@@ -168,6 +170,7 @@
 			isa = PBXGroup;
 			children = (
 				B3861F3AF2390477CF4D567E /* CoachDraftIntent.swift */,
+				B88FDB62F52944069CC31478 /* CoachView.swift */,
 				6EDBB4F550AF48643771E5BF /* DigestView.swift */,
 				7FCE9DA4E023C12BADC4BC12 /* HomeView.swift */,
 				A834BA4FC850457268EEDDD3 /* Info.plist */,
@@ -320,6 +323,7 @@
 				A3D6E3007ACDF66C3251C56E /* OnboardingCalibrationView.swift in Sources */,
 				09855EF291E1E11F38AA72AC /* OpenAIToneAnalyzer.swift in Sources */,
 				26A32AFB6BA4EE68D7300F89 /* PlaygroundView.swift in Sources */,
+				51381AED82774B5C91E484A7 /* CoachView.swift in Sources */,
 				511B5CB9D0506AE3B0B7BA9A /* RecipientMemory.swift in Sources */,
 				C89EABB2DBA692A1FF5AC255 /* SettingsView.swift in Sources */,
 				BD9E5A023D82845158A938D9 /* SharedKeychain.swift in Sources */,
@@ -504,7 +508,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.tonoit.app;
 				PRODUCT_NAME = "Tono it";
-				PROVISIONING_PROFILE_SPECIFIER = "";
+				PROVISIONING_PROFILE_SPECIFIER = "ASC AppStore com.tonoit.app";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -525,7 +529,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.tonoit.app.keyboard;
-				PROVISIONING_PROFILE_SPECIFIER = "";
+				PROVISIONING_PROFILE_SPECIFIER = "ASC AppStore com.tonoit.app.keyboard";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";

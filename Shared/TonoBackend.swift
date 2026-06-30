@@ -248,6 +248,32 @@ public final class TonoBackend: @unchecked Sendable {
         try await get(path: "/v1/me")
     }
 
+    /// Lightweight health check used by Settings to confirm reachability.
+    /// Returns `true` when the backend responds 2xx to GET /health. Throws
+    /// `TonoBackendError` for transport / non-2xx failures so the caller
+    /// can surface a real error string instead of a generic "unreachable".
+    public func health() async throws -> Bool {
+        guard let url = URL(string: "/health", relativeTo: baseURL) else {
+            throw TonoBackendError.network("invalid url: /health")
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.timeoutInterval = 8
+        do {
+            let (_, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse else {
+                throw TonoBackendError.network("no http response")
+            }
+            return (200...299).contains(http.statusCode)
+        } catch let urlErr as URLError where urlErr.code == .notConnectedToInternet {
+            throw TonoBackendError.offline
+        } catch let e as TonoBackendError {
+            throw e
+        } catch {
+            throw TonoBackendError.network(error.localizedDescription)
+        }
+    }
+
     public func analyze(
         text: String,
         preferredVoice: String?,
