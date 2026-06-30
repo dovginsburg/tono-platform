@@ -9,6 +9,10 @@ struct SettingsView: View {
     @Binding var prefs: TonePreferences
     @ObservedObject private var store = StoreKitManager.shared
 
+    // Runtime backend URL override (read by TonoBackend.baseURL resolution).
+    // Default empty → uses TonoBackend.baseURL fallback (https://api.tonoit.com in Release).
+    @AppStorage("tc.backendURL") private var customBackendURL: String = ""
+
     @State private var voiceField:        String     = ""
     @State private var showPaywall:       Bool       = false
     @State private var usage:             TonoUsage?
@@ -21,6 +25,16 @@ struct SettingsView: View {
     @State private var promoSuccess:      String?
     @State private var isRedeemingCode:   Bool       = false
     @State private var featureToggles:    [FeatureFlag: Bool] = [:]
+    @State private var healthState:       HealthState = .unknown
+    @State private var isSettingUp:        Bool       = false
+    @State private var showWhySetup:       Bool       = false
+
+    enum HealthState: Equatable {
+        case unknown
+        case checking
+        case ok
+        case failed(String)
+    }
 
     var body: some View {
         NavigationStack {
@@ -39,7 +53,10 @@ struct SettingsView: View {
                 voiceField = prefs.preferredVoice ?? ""
                 recipients = RecipientMemory.all()
                 loadFeatureToggles()
-                Task { await refreshUsage() }
+                Task {
+                    await runHealthCheck()
+                    await refreshUsage()
+                }
             }
             .task {
                 try? await TonoBackend.shared.registerIfNeeded(
@@ -56,13 +73,61 @@ struct SettingsView: View {
 
     // MARK: - Sections
 
+    @ViewBuilder
     private var backendSection: some View {
         Section("Account") {
-            HStack {
-                Text("Status")
+            // Status row with health dot.
+            HStack(spacing: 8) {
+                healthDot
+                Text(healthLabel)
+                    .foregroundColor(healthLabelColor)
+                    .font(.subheadline)
                 Spacer()
-                Text(TonoBackend.shared.isRegistered() ? "Connected" : "Tap to connect")
+            }
+            // Resolved URL — shows Dov what the app is actually hitting.
+            HStack {
+                Text("Endpoint")
+                Spacer()
+                Text(resolvedBackendLabel)
+                    .font(.system(.caption, design: .monospaced))
                     .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            if TonoBackend.shared.isRegistered() {
+                HStack {
+                    Text("Status")
+                    Spacer()
+                    Text("Connected").foregroundColor(.secondary)
+                }
+            } else {
+                // CTA: replaces the old dead-end "opens automatically on next
+                // Coach tap" hint with a button the user can tap right now.
+                Button {
+                    Task { await runSetup() }
+                } label: {
+                    HStack(spacing: 8) {
+                        if isSettingUp {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "sparkles")
+                        }
+                        Text(isSettingUp ? "Setting up…" : "Set up Tono in one tap →")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .disabled(isSettingUp)
+                DisclosureGroup(isExpanded: $showWhySetup) {
+                    Text("Tono needs to register your device with our server before rewrites work. Takes 2 seconds.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.top, 2)
+                } label: {
+                    Text("Why do I need this?")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
             if let u = usage {
                 HStack {
@@ -82,6 +147,151 @@ struct SettingsView: View {
             }
             Text("Rewrites run on the Tono backend — your API key never leaves the server.")
                 .font(.caption).foregroundColor(.secondary)
+        }
+        Section("Backend") {
+            TextField("Custom backend URL (leave blank for default)", text: $customBackendURL)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled(true)
+                .keyboardType(.URL)
+                .font(.system(.body, design: .monospaced))
+                .onSubmit { Task { await runHealthCheck() } }
+            HStack {
+                Button {
+                    Task { await runHealthCheck() }
+                } label: {
+                    HStack(spacing: 6) {
+                        if case .checking = healthState {
+                            ProgressView().controlSize(.small)
+                        }
+                        Text(testButtonLabel)
+                    }
+                }
+                .disabled({
+                    if case .checking = healthState { return true }
+                    return false
+                }())
+                Spacer()
+                if case .failed(let msg) = healthState {
+                    Text(msg)
+                        .font(.caption2)
+                        .foregroundColor(.red)
+                        .lineLimit(2)
+                } else if case .ok = healthState {
+                    Text("Healthy")
+                        .font(.caption)
+                        .foregroundColor(.green)
+                }
+            }
+            Text("Default: https://api.tonoit.com")
+                .font(.caption2).foregroundColor(.secondary)
+            Text("Paste a URL here to override (e.g. for staging). Changes take effect immediately on the next request.")
+                .font(.caption2).foregroundColor(.secondary)
+        }
+    }
+
+    // MARK: - Backend helpers
+
+    private var resolvedBackendLabel: String {
+        let trimmed = customBackendURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+        return TonoBackend.shared.baseURL.absoluteString
+    }
+
+    private var healthDot: some View {
+        Group {
+            switch healthState {
+            case .unknown:
+                Circle().fill(Color.gray).frame(width: 10, height: 10)
+            case .checking:
+                Circle().fill(Color.gray.opacity(0.5)).frame(width: 10, height: 10)
+            case .ok:
+                Circle().fill(Color.green).frame(width: 10, height: 10)
+            case .failed:
+                Circle().fill(Color.red).frame(width: 10, height: 10)
+            }
+        }
+    }
+
+    private var healthLabel: String {
+        switch healthState {
+        case .unknown:  return "Backend status unknown"
+        case .checking: return "Checking…"
+        case .ok:       return "Backend reachable"
+        case .failed(let m): return "Backend unreachable: \(m)"
+        }
+    }
+
+    private var healthLabelColor: Color {
+        switch healthState {
+        case .ok:    return .green
+        case .failed: return .red
+        default:     return .secondary
+        }
+    }
+
+    private var testButtonLabel: String {
+        switch healthState {
+        case .checking: return "Testing…"
+        default:        return "Test Connection"
+        }
+    }
+
+    private func runHealthCheck() async {
+        await MainActor.run { healthState = .checking }
+        do {
+            let ok = try await TonoBackend.shared.health()
+            await MainActor.run {
+                healthState = ok ? .ok : .failed("non-2xx response")
+            }
+        } catch let e as TonoBackendError {
+            await MainActor.run {
+                healthState = .failed(prettyError(e))
+            }
+        } catch {
+            await MainActor.run {
+                healthState = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    /// CTA target: tap "Set up Tono in one tap" → triggers /v1/register
+    /// directly. Used in place of the old auto-register-on-Coach dead-end.
+    private func runSetup() async {
+        isSettingUp = true
+        defer { isSettingUp = false }
+        do {
+            _ = try await TonoBackend.shared.registerIfNeeded(
+                platform: "ios",
+                appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0"
+            )
+            await refreshUsage()
+            await runHealthCheck()
+        } catch let e as TonoBackendError {
+            await MainActor.run {
+                usageError = prettyError(e)
+            }
+        } catch {
+            await MainActor.run {
+                usageError = error.localizedDescription
+            }
+        }
+    }
+
+    private func prettyError(_ e: TonoBackendError) -> String {
+        switch e {
+        case .offline:
+            return "No internet connection"
+        case .network(let m):
+            return "Network error: \(m)"
+        case .http(let code, let msg):
+            let trimmed = msg.count > 200 ? String(msg.prefix(200)) + "…" : msg
+            return trimmed.isEmpty
+                ? "Server error \(code)"
+                : "Server error \(code): \(trimmed)"
+        case .notRegistered:
+            return "Account not set up yet. Tap ‘Set up Tono’ in Settings → Account."
+        case .decoding(let m):
+            return "Bad response: \(m)"
         }
     }
 
@@ -288,9 +498,13 @@ struct SettingsView: View {
                                   plan: me.plan, isPro: me.isPro)
                 usageError = nil
             }
+        } catch let e as TonoBackendError {
+            await MainActor.run {
+                usageError = prettyError(e)
+            }
         } catch {
             await MainActor.run {
-                usageError = "Could not reach the Tono backend. Check your connection."
+                usageError = error.localizedDescription
             }
         }
     }
