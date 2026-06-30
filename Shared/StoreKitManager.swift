@@ -1,9 +1,15 @@
 // StoreKitManager.swift
 // StoreKit 2 purchase manager for Tono Pro.
 //
-// Product IDs must match exactly what you register in App Store Connect:
-//   com.tonocoach.pro.monthly  — $3 / month auto-renewing subscription
-//   com.tonocoach.pro.yearly   — $29 / year auto-renewing subscription
+// Product IDs must match exactly what you register in App Store Connect.
+// CURRENT CODE values (used at runtime by ProductID enum below):
+//   com.tonoit.pro.monthly  — auto-renewing subscription
+//   com.tonoit.pro.yearly   — auto-renewing subscription
+// NOTE: App/Tono.storekit still references `com.tono.pro.*` (no `it`),
+// and the header docs in this file historically used `com.tonocoach.pro.*`.
+// Product IDs in App Store Connect are immutable once created — verify
+// what's registered in ASC before changing the .storekit or this enum,
+// or StoreKit will throw "product not available" at loadProducts time.
 //
 // To test in the Simulator: File → New → StoreKit Configuration File in
 // Xcode, add both product IDs, then select it under
@@ -17,8 +23,8 @@ public final class StoreKitManager: ObservableObject {
     public static let shared = StoreKitManager()
 
     public enum ProductID {
-        public static let monthly = "com.tono.pro.monthly"
-        public static let yearly  = "com.tono.pro.yearly"
+        public static let monthly = "com.tonoit.pro.monthly"
+        public static let yearly  = "com.tonoit.pro.yearly"
         public static var all: [String] { [monthly, yearly] }
     }
 
@@ -129,3 +135,4 @@ public final class StoreKitManager: ObservableObject {
         }
     }
 }
+
