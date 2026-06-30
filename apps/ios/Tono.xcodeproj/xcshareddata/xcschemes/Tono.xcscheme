@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "EBE86B011C11AB11A09CEBA7"
-               BuildableName = "Tono.app"
+               BuildableName = "Tono it.app"
                BlueprintName = "Tono"
                ReferencedContainer = "container:Tono.xcodeproj">
             </BuildableReference>
@@ -62,7 +62,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "EBE86B011C11AB11A09CEBA7"
-            BuildableName = "Tono.app"
+            BuildableName = "Tono it.app"
             BlueprintName = "Tono"
             ReferencedContainer = "container:Tono.xcodeproj">
          </BuildableReference>
@@ -81,7 +81,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "EBE86B011C11AB11A09CEBA7"
-            BuildableName = "Tono.app"
+            BuildableName = "Tono it.app"
             BlueprintName = "Tono"
             ReferencedContainer = "container:Tono.xcodeproj">
          </BuildableReference>
