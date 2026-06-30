@@ -1,6 +1,6 @@
 name: Tono
 options:
-  bundleIdPrefix: com.tono
+  bundleIdPrefix: com.tonoit
   deploymentTarget:
     iOS: "16.0"
   xcodeVersion: "26.5"
@@ -26,9 +26,10 @@ targets:
       path: App/Tono.entitlements
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.tono.app
+        PRODUCT_BUNDLE_IDENTIFIER: com.tonoit.app
         INFOPLIST_FILE: App/Info.plist
         CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 4938S9TTBM
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         COMPILER_INDEX_STORE_ENABLE: NO
     dependencies:
@@ -49,8 +50,9 @@ targets:
       path: KeyboardExtension/TonoKeyboard.entitlements
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.tono.app.keyboard
+        PRODUCT_BUNDLE_IDENTIFIER: com.tonoit.app.keyboard
         INFOPLIST_FILE: KeyboardExtension/Info.plist
         CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 4938S9TTBM
         SKIP_INSTALL: YES
         COMPILER_INDEX_STORE_ENABLE: NO

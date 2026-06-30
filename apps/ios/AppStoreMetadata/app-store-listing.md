@@ -1,11 +1,11 @@
-# App Store Listing — Tono
+# App Store Listing — Tono it
 
-App name: **Tono — Social Tone Coach**
+App name: **Tono it**
 Subtitle (≤30 chars): **Say it. Land it.**
 Category: Productivity
 Secondary: Social Networking
 Age rating: 12+ (Infrequent/Mild Medical/Treatment Information — keyboard shows example text in onboarding)
-Price: Free (with Pro in-app subscription, $3/mo or $99/yr)
+Price: Free (with Pro in-app subscription)
 
 ---
 
@@ -54,7 +54,7 @@ Tono is built on top of a tone-discipline system originally developed for AI age
 
 **B2B — $25/seat/month**
 
-For teams on Slack, Teams, and Outlook. Org-wide tone guide, admin console, audit log. Contact tono.app/teams.
+For teams on Slack, Teams, and Outlook. Org-wide tone guide, admin console, audit log. Contact teams@tonoit.com.
 
 **Privacy**
 
@@ -80,12 +80,12 @@ Initial release. Custom iOS keyboard with the Coach flow, four rewrite axes, ris
 
 ## Support URL
 
-https://tono.app/support
+mailto:support@tonoit.com
 
 ## Marketing URL
 
-https://tono.app
+https://tonoit.com
 
 ## Privacy Policy URL
 
-https://tono.app/privacy
+https://tonoit.com/privacy.html
