@@ -118,6 +118,15 @@ public struct TonoSuggestion: Codable {
     }
 }
 
+// MARK: - Streaming analysis events
+
+public enum AnalysisEvent {
+    case perception(String)
+    case suggestion(axis: String, text: String, rationale: String, riskAfter: String?)
+    case complete(riskLevel: String, subtext: String, riskReason: String, flags: [String])
+    case error(String)
+}
+
 public struct WeeklyDigestResponse: Codable {
     public let rewrites: Int
     public let daysActive: Int
@@ -272,6 +281,161 @@ public final class TonoBackend: @unchecked Sendable {
             mode: mode.rawValue
         )
         return try await post(path: "/api/analyze", body: req, authorize: true)
+    }
+
+    /// Streaming version of analyze — returns an AsyncStream of AnalysisEvents.
+    /// The caller sees perception → suggestions → complete progressively.
+    public func analyzeStream(
+        text: String,
+        preferredVoice: String?,
+        axes: [RewriteAxis]?,
+        recipientHint: String? = nil,
+        contextHints: [String]? = nil,
+        threadContext: String? = nil,
+        mode: AnalysisMode = .coach
+    ) -> AsyncStream<AnalysisEvent> {
+        struct Req: Encodable {
+            let text: String
+            let provider: String?
+            let preferred_voice: String?
+            let axes: [String]?
+            let recipient_hint: String?
+            let context_hints: [String]?
+            let thread_context: String?
+            let mode: String
+        }
+        let req = Req(
+            text: text,
+            provider: nil,
+            preferred_voice: preferredVoice,
+            axes: axes?.map(\.rawValue),
+            recipient_hint: recipientHint,
+            context_hints: contextHints,
+            thread_context: threadContext,
+            mode: mode.rawValue
+        )
+
+        return AsyncStream { continuation in
+            Task {
+                do {
+                    guard let url = URL(string: "/api/analyze", relativeTo: baseURL) else {
+                        continuation.yield(.error("Invalid URL"))
+                        continuation.finish()
+                        return
+                    }
+                    var urlReq = URLRequest(url: url)
+                    urlReq.httpMethod = "POST"
+                    urlReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    urlReq.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                    urlReq.timeoutInterval = 30
+                    if let token = SharedKeychain.get(KeychainKeys.apiToken), !token.isEmpty {
+                        urlReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                    }
+                    urlReq.httpBody = try JSONEncoder().encode(req)
+
+                    let (bytes, response) = try await URLSession.shared.bytes(for: urlReq)
+                    guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                        let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+                        continuation.yield(.error("Server error (\(code))"))
+                        continuation.finish()
+                        return
+                    }
+
+                    // Detect response shape: SSE ("text/event-stream") vs single JSON object.
+                    // Fallback path matters because the current /api/analyze endpoint is
+                    // `return ApiAnalyzeResponse(...)` — a single JSON object — and our iOS
+                    // SSE parser would otherwise produce zero events and a blank UI.
+                    let contentType = (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
+                    let isJSON = contentType.contains("application/json")
+
+                    var eventsYielded = false
+                    var rawLines: [String] = []
+
+                    for try await line in bytes.lines {
+                        rawLines.append(line)
+                        let trimmed = line.trimmingCharacters(in: .whitespaces)
+                        guard trimmed.hasPrefix("data: ") else { continue }
+                        let payload = String(trimmed.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+                        if payload == "[DONE]" { break }
+                        if let data = payload.data(using: .utf8),
+                           let evt = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                           let type = evt["type"] as? String {
+                            switch type {
+                            case "perception":
+                                if let text = evt["text"] as? String {
+                                    continuation.yield(.perception(text))
+                                    eventsYielded = true
+                                }
+                            case "suggestion":
+                                continuation.yield(.suggestion(
+                                    axis: evt["axis"] as? String ?? "",
+                                    text: evt["text"] as? String ?? "",
+                                    rationale: evt["rationale"] as? String ?? "",
+                                    riskAfter: evt["risk_after"] as? String
+                                ))
+                                eventsYielded = true
+                            case "complete":
+                                continuation.yield(.complete(
+                                    riskLevel: evt["risk_level"] as? String ?? "low",
+                                    subtext: evt["subtext"] as? String ?? "",
+                                    riskReason: evt["risk_reason"] as? String ?? "",
+                                    flags: evt["flags"] as? [String] ?? []
+                                ))
+                                eventsYielded = true
+                            case "error":
+                                continuation.yield(.error(evt["message"] as? String ?? "Unknown error"))
+                                eventsYielded = true
+                            default:
+                                break
+                            }
+                        }
+                    }
+
+                    // Fallback: server returned a non-SSE response (today this means a
+                    // single JSON `ToneAnalysis`). Parse the buffered body and synthesize
+                    // events so the UI still gets a result.
+                    if !eventsYielded && isJSON {
+                        let body = rawLines.joined(separator: "\n")
+                        if let data = body.data(using: .utf8),
+                           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                            // Match the backend ApiAnalyzeResponse / ToneAnalysis wire shape:
+                            // { risk_level, perception, subtext, reason, suggestions: [...], flags: [...] }
+                            // (also tolerate empty body — just send a low-risk complete)
+                            let perception = obj["perception"] as? String ?? ""
+                            if !perception.isEmpty {
+                                continuation.yield(.perception(perception))
+                            }
+                            if let suggestions = obj["suggestions"] as? [[String: Any]] {
+                                for s in suggestions {
+                                    continuation.yield(.suggestion(
+                                        axis: s["axis"] as? String ?? "",
+                                        text: s["text"] as? String ?? "",
+                                        rationale: s["rationale"] as? String ?? "",
+                                        riskAfter: s["risk_after"] as? String
+                                    ))
+                                }
+                            }
+                            continuation.yield(.complete(
+                                riskLevel: obj["risk_level"] as? String ?? "low",
+                                subtext: obj["subtext"] as? String ?? "",
+                                riskReason: obj["reason"] as? String ?? "",
+                                flags: obj["flags"] as? [String] ?? []
+                            ))
+                        } else {
+                            // Body wasn't parseable — surface as error so caller can show toast
+                            continuation.yield(.error("Unexpected response from server"))
+                        }
+                    }
+
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish()
+                } catch {
+                    continuation.yield(.error(error.localizedDescription))
+                    continuation.finish()
+                }
+            }
+        }
     }
 
     /// Fetch resolved feature flags for this device from the backend.
