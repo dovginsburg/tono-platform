@@ -1,0 +1,86 @@
+# Tono it (Tono) iOS — root .gitignore
+#
+# Backend/ has its own .gitignore (SQLite db, .env, __pycache__).
+# Anything under Tono.xcodeproj/ is per-Xcode / per-user and goes
+# in subdirectories whose names already start with a dot.
+
+# ─────────────────────────────────────────────────────────────────
+# Sensitive / signing material — never commit
+# ─────────────────────────────────────────────────────────────────
+*.p8
+*.p12
+*.cer
+*.key
+*.csr
+*.mobileprovision
+Provisioning\ Profiles/
+
+# Local signing-cert exchange artifacts created by the developer when
+# importing/exporting from the Apple Developer portal. The actual
+# signing identity lives in the local keychain, not the repo.
+tono_dev.key
+tono_dev.csr
+
+# ─────────────────────────────────────────────────────────────────
+# Build output
+# ─────────────────────────────────────────────────────────────────
+build/
+DerivedData/
+*.ipa
+*.app
+*.appex
+*.dSYM/
+
+# ─────────────────────────────────────────────────────────────────
+# Per-user / per-machine state (Xcode, fastlane)
+# ─────────────────────────────────────────────────────────────────
+xcuserdata/
+*.xcuserstate
+*.xcuserdatamodel/
+WorkspaceSettings.xcsettings
+Tono.xcodeproj/xcuserdata/
+Tono.xcodeproj/project.xcworkspace/xcuserdata/
+Tono.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+# (only swiftpm cache inside xcshareddata/ is per-user; the directory
+# itself can hold committed shared settings)
+
+# fastlane runtime artifacts
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/
+fastlane/test_output/
+.fleet
+.last_build_id
+
+# ─────────────────────────────────────────────────────────────────
+# Scratch / notes
+# ─────────────────────────────────────────────────────────────────
+execution/
+# (keep .md notes files tracked; only the dir-level scratch notes
+# session logs are excluded)
+
+# ─────────────────────────────────────────────────────────────────
+# Backend ad-hoc venv / cache (Backend/ has its own .gitignore for
+# Python; this catches anything that escapes into the project root)
+# ─────────────────────────────────────────────────────────────────
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# SQLite DBs from local backend testing — never commit
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+tono.db
+
+# ─────────────────────────────────────────────────────────────────
+# OS / editor noise
+# ─────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
