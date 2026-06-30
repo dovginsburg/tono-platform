@@ -84,7 +84,7 @@
 /* Begin PBXFileReference section */
 		1B3DE7D6D3E9558EBAB94A9A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		217A3D33DCC3DE654CA907C5 /* PlaygroundView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaygroundView.swift; sourceTree = "<group>"; };
-		3BEE71892FA8D9333320C272 /* Tono.storekit */ = {isa = PBXFileReference; path = Tono.storekit; sourceTree = "<group>"; };
+		3BEE71892FA8D9333320C272 /* Tono.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = Tono.storekit; sourceTree = "<group>"; };
 		3C69903847843E133412E1E5 /* MockToneAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockToneAnalyzer.swift; sourceTree = "<group>"; };
 		3C73FA31B4F44D8110957849 /* MemoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryView.swift; sourceTree = "<group>"; };
 		424F033D1993931EF9CFEF4D /* SharedKeychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedKeychain.swift; sourceTree = "<group>"; };
@@ -109,10 +109,10 @@
 		AA287EC754705B7065C31935 /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
 		B3861F3AF2390477CF4D567E /* CoachDraftIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachDraftIntent.swift; sourceTree = "<group>"; };
 		B92542DA54DA284DBFA670F3 /* Tono.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Tono.entitlements; sourceTree = "<group>"; };
-		C8209946856E4958F336751B /* TonoKeyboard.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = TonoKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		C8209946856E4958F336751B /* TonoKeyboard.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TonoKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		D8F4E5BEB850F3FDD9485F10 /* FeatureFlags.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeatureFlags.swift; sourceTree = "<group>"; };
 		DF0A4C99BE251A2D39F2EAC6 /* TonoApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoApp.swift; sourceTree = "<group>"; };
-		F56F7614BF83D1438A50A811 /* Tono.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Tono.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F56F7614BF83D1438A50A811 /* Tono it.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Tono it.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		F6B4784B7C394FD81347488C /* DraftHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftHistory.swift; sourceTree = "<group>"; };
 		F77E6FE218D103FFC22A1D7C /* OpenAIToneAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAIToneAnalyzer.swift; sourceTree = "<group>"; };
 		FF0B5EB3DADDC595EEDC1B0B /* TonoKeyboard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TonoKeyboard.entitlements; sourceTree = "<group>"; };
@@ -123,7 +123,7 @@
 		85162E95710B256C36998CB0 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				F56F7614BF83D1438A50A811 /* Tono.app */,
+				F56F7614BF83D1438A50A811 /* Tono it.app */,
 				C8209946856E4958F336751B /* TonoKeyboard.appex */,
 			);
 			name = Products;
@@ -230,7 +230,7 @@
 			packageProductDependencies = (
 			);
 			productName = Tono;
-			productReference = F56F7614BF83D1438A50A811 /* Tono.app */;
+			productReference = F56F7614BF83D1438A50A811 /* Tono it.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -241,14 +241,6 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 2650;
-				TargetAttributes = {
-					222A4BB5BC4EFDC252F76C97 = {
-						ProvisioningStyle = Automatic;
-					};
-					EBE86B011C11AB11A09CEBA7 = {
-						ProvisioningStyle = Automatic;
-					};
-				};
 			};
 			buildConfigurationList = BFD2AB0D0932FE828387F141 /* Build configuration list for PBXProject "Tono" */;
 			developmentRegion = en;
@@ -358,15 +350,18 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/Tono.entitlements;
-				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMPILER_INDEX_STORE_ENABLE = NO;
+				DEVELOPMENT_TEAM = 4938S9TTBM;
 				INFOPLIST_FILE = App/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.tono.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tonoit.app;
+				PRODUCT_NAME = "Tono it";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -498,15 +493,18 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/Tono.entitlements;
-				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMPILER_INDEX_STORE_ENABLE = NO;
+				DEVELOPMENT_TEAM = 4938S9TTBM;
 				INFOPLIST_FILE = App/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.tono.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tonoit.app;
+				PRODUCT_NAME = "Tono it";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -516,15 +514,18 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = KeyboardExtension/TonoKeyboard.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMPILER_INDEX_STORE_ENABLE = NO;
+				DEVELOPMENT_TEAM = 4938S9TTBM;
 				INFOPLIST_FILE = KeyboardExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.tono.app.keyboard;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tonoit.app.keyboard;
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -535,15 +536,18 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = KeyboardExtension/TonoKeyboard.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMPILER_INDEX_STORE_ENABLE = NO;
+				DEVELOPMENT_TEAM = 4938S9TTBM;
 				INFOPLIST_FILE = KeyboardExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.tono.app.keyboard;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tonoit.app.keyboard;
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";
