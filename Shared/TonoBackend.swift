@@ -399,8 +399,10 @@ public final class TonoBackend: @unchecked Sendable {
                         if let data = body.data(using: .utf8),
                            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                             // Match the backend ApiAnalyzeResponse / ToneAnalysis wire shape:
-                            // { risk_level, perception, subtext, reason, suggestions: [...], flags: [...] }
-                            // (also tolerate empty body — just send a low-risk complete)
+                            // { risk_level, perception, subtext, risk_reason, suggestions: [...], flags: [...] }
+                            // (also tolerate empty body — just send a low-risk complete).
+                            // NOTE: the wire key is `risk_reason`, NOT `reason` — server-side
+                            // snake_case matches the Pydantic alias in Backend/analyze.py.
                             let perception = obj["perception"] as? String ?? ""
                             if !perception.isEmpty {
                                 continuation.yield(.perception(perception))
@@ -418,7 +420,7 @@ public final class TonoBackend: @unchecked Sendable {
                             continuation.yield(.complete(
                                 riskLevel: obj["risk_level"] as? String ?? "low",
                                 subtext: obj["subtext"] as? String ?? "",
-                                riskReason: obj["reason"] as? String ?? "",
+                                riskReason: obj["risk_reason"] as? String ?? "",
                                 flags: obj["flags"] as? [String] ?? []
                             ))
                         } else {
