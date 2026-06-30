@@ -1,0 +1,32 @@
+Tono is an AI-powered keyboard coach that helps you say what you mean and land how you intend.
+
+Before you hit send, Tono analyzes your message and offers four rewrites:
+• Warmer – soften your tone without losing your point
+• Clearer – cut confusion and say it plainly  
+• Funnier – add levity when the moment calls for it
+• Safer – avoid unintended offense
+
+HOW IT WORKS
+1. Enable the Tono keyboard in Settings
+2. Type your message in any app
+3. Tap "Coach" to get instant tone analysis
+4. Choose a rewrite or keep your original
+
+FREE TIER
+• 10 rewrites per day
+• All four rewrite axes
+• Basic keyboard with Coach mode
+• Practice playground
+
+PRO ($5.99/month or $39.99/year)
+• Unlimited rewrites
+• Style memory – Tono learns your voice over time
+• Per-recipient coaching
+• Weekly digest with trends and streaks
+• Widgets and Siri integration
+
+WHO IT'S FOR
+Tono is designed for anyone who's ever sent a message and thought "that came out wrong." Whether you're navigating workplace communication, managing relationships, or just want to be more intentional with your words – Tono helps you pause, reflect, and choose better.
+
+PRIVACY
+Your messages are analyzed in real-time and never stored on our servers. Tono processes text through secure AI services and discards it immediately after generating suggestions.
