@@ -232,6 +232,48 @@ public struct ToneEngine: ToneAnalyzing {
             return try await AnthropicToneAnalyzer(model: model, apiKey: apiKey).analyze(req)
         }
     }
+
+    /// Streaming path — returns events as they arrive from the backend.
+    /// Falls back to non-streaming (emits all events at once) for mock/direct providers.
+    public func analyzeStream(_ req: AnalysisRequest) -> AsyncStream<AnalysisEvent> {
+        if model == "backend" {
+            return TonoBackend.shared.analyzeStream(
+                text: req.draft,
+                preferredVoice: req.preferredVoice,
+                axes: req.axes.isEmpty ? nil : req.axes,
+                recipientHint: req.recipientHint,
+                contextHints: req.contextHints.isEmpty ? nil : req.contextHints,
+                threadContext: req.threadContext,
+                mode: req.mode
+            )
+        }
+        // Fallback: run non-streaming analyze and emit all events at once
+        return AsyncStream { continuation in
+            Task {
+                do {
+                    let result = try await self.analyze(req)
+                    continuation.yield(.perception(result.perception))
+                    for s in result.suggestions {
+                        continuation.yield(.suggestion(
+                            axis: s.axis.rawValue,
+                            text: s.text,
+                            rationale: s.rationale ?? "",
+                            riskAfter: s.riskAfter?.rawValue
+                        ))
+                    }
+                    continuation.yield(.complete(
+                        riskLevel: result.riskLevel.rawValue,
+                        subtext: result.subtext,
+                        riskReason: result.reason ?? "",
+                        flags: result.flags
+                    ))
+                } catch {
+                    continuation.yield(.error(error.localizedDescription))
+                }
+                continuation.finish()
+            }
+        }
+    }
 }
 
 // MARK: - System prompt
