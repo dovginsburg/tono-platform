@@ -108,7 +108,7 @@ nuance — highest pain-per-dollar, strong organic community, low sales friction
 ## Architecture decisions worth reviewing
 
 **Server-side LLM keys.** The app has no API key on device. Every analysis goes through
-`https://tono-backend-production.railway.app/api/analyze`. This keeps keys safe and lets
+`https://api.tonoit.com/api/analyze`. This keeps keys safe and lets
 us enforce rate limits and track usage per device.
 
 **Pro detection dual-path.** The keyboard extension is a separate process and can't use

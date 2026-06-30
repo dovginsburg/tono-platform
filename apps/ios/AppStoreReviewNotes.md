@@ -26,7 +26,7 @@ friendly prompt directing the user to Settings).
 
 | Data | When sent | Destination |
 |---|---|---|
-| Draft text (the message the user typed) | Only on explicit "Coach" or "Read" tap | Tono backend (tono-backend-production.railway.app) |
+| Draft text (the message the user typed) | Only on explicit "Coach" or "Read" tap | Tono backend (api.tonoit.com) |
 | Thread context text | Only when user taps "Paste" explicitly | Included in the same Coach/Read request |
 | Bearer token (auth) | Every API request | Tono backend |
 | Device ID (UUID) | On first launch registration only | Tono backend |
