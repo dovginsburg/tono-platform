@@ -81,7 +81,7 @@ data per their policies; Tono does not control this.
 
 ## Contact
 
-privacy@tono.app
+privacy@tonoit.com
 
 ---
 

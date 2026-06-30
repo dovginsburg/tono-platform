@@ -15,14 +15,14 @@ display_information:
 features:
   slash_commands:
     - command: /tono
-      url: https://YOUR_HOST/slack/command
+      url: https://api.tonoit.com/slack/command
       description: Analyze tone and get rewrite suggestions for a draft message
       usage_hint: "<your draft> or reply: <prior message> // <your draft>"
       should_escape: false
 
 oauth_config:
   redirect_urls:
-    - https://YOUR_HOST/slack/oauth
+    - https://api.tonoit.com/slack/oauth
   scopes:
     bot:
       - commands
