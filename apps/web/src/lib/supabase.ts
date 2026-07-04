@@ -1,34 +1,25 @@
-// Supabase client wiring for the same project as Tono iOS + ParentScript.
-// Users have ONE account across all three surfaces.
-//
-// Auth strategy: Supabase auth.js cookies via @supabase/ssr.
-// Identity providers (Apple / Google) configured in Supabase dashboard;
-// signInWithOAuth redirects to provider, then back to /auth/callback.
-//
-// Lint cleanups pending — TS noise from supabase-js/dist/module/lib/types
-// import path which is fine at runtime. Cast as any for now to ship tonight.
+// Server-only Supabase client. Must be imported from a Server Component
+// or Route Handler — it uses `next/headers`. For the browser, import
+// `@/lib/supabase-client` instead.
 
-import { createBrowserClient } from '@supabase/ssr';
+import 'server-only';
 import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
-export function createClient(): any {
-  return createBrowserClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-}
-
-export async function createServerSupabase(): Promise<any> {
+export async function createServerSupabase(): Promise<SupabaseClient> {
   const cookieStore = cookies();
   return createServerClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     cookies: {
       getAll() {
         return cookieStore.getAll();
       },
-      setAll(cookiesToSet: any) {
+      setAll(cookiesToSet: { name: string; value: string; options?: Record<string, unknown> }[]) {
         try {
-          cookiesToSet.forEach(({ name, value, options }: any) =>
+          cookiesToSet.forEach(({ name, value, options }) =>
             cookieStore.set(name, value, options)
           );
         } catch {

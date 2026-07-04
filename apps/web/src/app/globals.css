@@ -1,0 +1,100 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   Tono design tokens — raw CSS variables for non-Tailwind use.
+   Source: /Users/Ezra/Projects/team/mark-deliverables/design-tokens.json
+   (products.tono). Mirrored in tailwind.config.ts.
+   ============================================================ */
+
+:root {
+  --bg: #000000;
+  --bg-soft: #0A0A0A;
+  --bg-card: #111113;
+  --bg-elev: #16161A;
+  --border: #1F1F23;
+  --border-strong: #2A2A30;
+  --text: #FFFFFF;
+  --text-soft: #C9C9D1;
+  --text-softer: #9CA3AF;
+  --muted: #6B7280;
+
+  --accent: #A855F7;
+  --accent-hover: #9333EA;
+  --accent-soft: rgba(168,85,247,0.12);
+  --accent-softer: rgba(168,85,247,0.06);
+  --accent-light: #D8B4FE;
+  --accent-glow: rgba(168,85,247,0.35);
+
+  --tone-warmer: #F472B6;
+  --tone-clearer: #38BDF8;
+  --tone-funnier: #FBBF24;
+  --tone-safer: #34D399;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --duration: 240ms;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    Helvetica, Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100%;
+}
+
+body {
+  /* subtle ambient backdrop, no glossy gradient slop */
+  background:
+    radial-gradient(800px 400px at 75% 0%, rgba(168, 85, 247, 0.08), transparent 60%),
+    radial-gradient(600px 300px at 10% 100%, rgba(56, 189, 248, 0.04), transparent 60%),
+    var(--bg);
+  background-attachment: fixed;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+}
+
+/* Focus rings — use Mark's focus shadow */
+*:focus-visible {
+  outline: none;
+  box-shadow: var(--accent-glow) 0 0 0 3px;
+  border-radius: var(--radius-sm);
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 1ms !important;
+    animation: none !important;
+  }
+}
