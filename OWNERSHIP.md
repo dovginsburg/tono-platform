@@ -4,6 +4,21 @@
 this repo. Until the final-excellence gate passes, the legacy source repos remain
 the working canonical and continue to receive new work.
 
+## Sync direction
+
+`dovginsburg/tono-platform` is the **destination** for cherry-picks, not a
+push target back into the legacy repos. The 5 source repos stay open and
+keep receiving new work; we pull from them via `git subtree`. See
+`README.md` §Sync direction for the full diagram.
+
+```
+dovginsburg/tono-ios         ─┐
+dovginsburg/Tono-            ─┤
+dovginsburg/tonoit.com       ─┼──>  dovginsburg/tono-platform  (this repo)
+dovginsburg/tono-backend     ─┤
+dovginsburg/tono-android     ─┘
+```
+
 ## Canonical-per-platform
 
 | Platform | Canonical home | Source-of-truth (during build-out) | Cherry-picked from |
