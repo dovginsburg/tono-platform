@@ -1,0 +1,29 @@
+default_platform(:ios)
+
+platform :ios do
+  desc "Build and upload to App Store Connect (TestFlight)"
+  lane :deploy_testflight do
+    build_app(
+      scheme: "Tono",
+      export_method: "app-store",
+      output_directory: "./build"
+    )
+    upload_to_testflight(
+      skip_waiting_for_build_processing: true
+    )
+  end
+
+  desc "Upload to App Store Connect (production)"
+  lane :deploy_appstore do
+    build_app(
+      scheme: "Tono",
+      export_method: "app-store",
+      output_directory: "./build"
+    )
+    upload_to_app_store(
+      force: true,
+      skip_screenshots: true,
+      skip_metadata: false
+    )
+  end
+end

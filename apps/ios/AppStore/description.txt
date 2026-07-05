@@ -1,0 +1,54 @@
+Say what you mean. Land how you intend.
+
+Tono is an iOS keyboard that reads your message before you send it — and instantly offers four rewrites: warmer, clearer, funnier, or safer. No more wondering whether your email sounds passive-aggressive or your text reads as cold.
+
+─────────────────────────
+HOW IT WORKS
+─────────────────────────
+Type your message in any app, switch to the Tono keyboard, tap Coach, and get:
+
+• A risk badge (Low / Medium / High) with a plain-English read of how your message lands
+• One-tap rewrite chips — swap in the best version with a single tap
+• Your original message stays intact until you choose to replace it
+
+─────────────────────────
+FOUR REWRITE AXES
+─────────────────────────
+Warmer — adds validation and warmth without changing your ask
+Clearer — names the deadline or action item so the reader knows what to do
+Funnier — lightens the tone without losing the point
+Safer — removes phrases that read as passive, cold, or aggressive
+
+─────────────────────────
+BUILT FOR REAL CONVERSATIONS
+─────────────────────────
+Works in any app that shows a keyboard: Mail, Messages, Gmail, Slack, WhatsApp, LinkedIn, Notion — everywhere.
+
+Recipient memory lets you save people with a voice hint ("boss — formal, no humor") so rewrites adapt to who you're talking to. Import from Contacts or add them manually.
+
+Style memory learns which axes you tap most and surfaces those first.
+
+─────────────────────────
+WORKS OFFLINE
+─────────────────────────
+No signal? The keyboard falls back to a local analyzer so you still get a risk read and basic rewrites.
+
+─────────────────────────
+PRIVACY BY DESIGN
+─────────────────────────
+Your drafts are analyzed and immediately discarded. Tono never stores message content. Your account is an anonymous device ID — no email, no phone number, no sign-up.
+
+─────────────────────────
+FREE & PRO
+─────────────────────────
+Free: 10 rewrites per day across all four axes
+
+Pro ($2.99/month or $28.99/year):
+• Unlimited daily rewrites
+• Style memory — your favorite axes surface first
+• Recipient memory with voice hints
+• Widget to track usage at a glance
+• Share Extension — analyze any text from the share sheet
+• Siri Shortcuts support ("Coach my draft with Tono")
+
+Cancel any time in Settings → Apple ID → Subscriptions.
