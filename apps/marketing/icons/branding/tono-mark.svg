@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  tono — mark only  1024×1024
+  Same plate as the square icon; useful for splash backgrounds and dense UI.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="tono mark">
+  <defs>
+    <linearGradient id="tonoMarkBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#D7B3FD"/>
+      <stop offset="50%" stop-color="#A855F7"/>
+      <stop offset="100%" stop-color="#4E1A9E"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#tonoMarkBg)"/>
+  <g fill="#FFFFFF">
+    <rect x="466" y="216" width="92" height="592" rx="46"/>
+    <rect x="304" y="216" width="416" height="92" rx="46"/>
+    <path d="M558 672
+             a128 128 0 0 1 -128 128
+             v-92
+             a36 36 0 0 0 36 -36
+             z"/>
+  </g>
+</svg>

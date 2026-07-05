@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  tono — square app icon  1024×1024
+  Source of truth for every PNG variant.
+  Brand: lowercase, dark/violet, dry-witty.
+  Tokens (design-tokens.json → tono):
+    accent       #A855F7
+    accent-hover #9333EA
+    accent-light #D8B4FE
+    bg           #000000
+    text         #FFFFFF
+  Gradient anchored to brand stickers:  #D7B3FD  →  #A855F7  →  #4E1A9E
+  Glyph: lowercase "t", geometric humanist sans, sized to ~62% of icon height (per
+  ios/App/Assets.xcassets/AppIcon.appiconset/_preview/README.md from the previous
+  icon refresh) so it survives 40-px home-screen downscale.
+  iOS applies its own rounded-mask; do NOT bake corners into the source PNG.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="tono">
+  <defs>
+    <linearGradient id="tonoBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#D7B3FD"/>
+      <stop offset="50%" stop-color="#A855F7"/>
+      <stop offset="100%" stop-color="#4E1A9E"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#tonoBg)"/>
+
+  <!-- subtle inner glow to lift the glyph off the violet bottom -->
+  <circle cx="512" cy="512" r="368" fill="#FFFFFF" fill-opacity="0.04"/>
+
+  <!--
+    lowercase "t"
+    - vertical stem: 92 px wide, 632 px tall, rounded ends
+    - crossbar: near the top of the x-height (~220 from top of glyph), ~360 wide
+    - positioned so the ascender caps at ~12% from top, baseline at ~88% from top
+    Net visual size: 62% of icon height — matches the readability target from the
+    icon-refresh README.
+  -->
+  <g fill="#FFFFFF">
+    <rect x="466" y="216" width="92" height="592" rx="46"/>
+    <rect x="304" y="216" width="416" height="92" rx="46"/>
+    <!-- foot curl — a single bend at the baseline that gives the "t" character, not a "1" -->
+    <path d="M558 672
+             a128 128 0 0 1 -128 128
+             v-92
+             a36 36 0 0 0 36 -36
+             z"/>
+  </g>
+</svg>

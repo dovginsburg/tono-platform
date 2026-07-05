@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta name="description" content="Try tono now — type a message and see how tono coaches your tone in real time." />
+  <title>tono — try it now</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="assets/styles.css" />
+  <style>
+    .demo-page { max-width: 600px; margin: 0 auto; padding: 60px 24px 40px; }
+    .demo-page h1 { font-size: 2.4rem; font-weight: 800; letter-spacing: -1.5px; margin-bottom: 8px; text-align: center; }
+    .demo-page .subtitle { color: var(--muted); margin-bottom: 32px; font-size: 1.1rem; text-align: center; }
+    .demo-box { background: #111; border: 1px solid var(--border); border-radius: 18px; padding: 32px; }
+    .demo-box textarea { width: 100%; height: 120px; background: #1a1a1f; border: 1px solid #333; border-radius: 12px; color: #fff; font-family: 'Inter', sans-serif; font-size: 1rem; padding: 16px; resize: none; outline: none; }
+    .demo-box textarea:focus { border-color: var(--accent); }
+    .demo-box textarea::placeholder { color: #666; }
+    .demo-box .btn { display: block; width: 100%; margin-top: 16px; padding: 16px; background: var(--accent); color: #fff; border: none; border-radius: 12px; font-size: 1.1rem; font-weight: 600; cursor: pointer; transition: all .2s; }
+    .demo-box .btn:hover { background: #9333EA; transform: translateY(-2px); }
+    .demo-box .btn:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+    .result { margin-top: 24px; display: none; }
+    .result.show { display: block; }
+    .risk-badge { display: inline-block; padding: 6px 16px; border-radius: 20px; font-weight: 600; font-size: .9rem; margin-bottom: 16px; }
+    .risk-low { background: #065F46; color: #6EE7B7; }
+    .risk-medium { background: #78350F; color: #FCD34D; }
+    .risk-high { background: #7F1D1D; color: #FCA5A5; }
+    .perception { color: var(--muted); margin-bottom: 20px; font-size: 1rem; line-height: 1.5; }
+    .suggestion { background: #1a1a1f; border: 1px solid #333; border-radius: 12px; padding: 16px; margin-bottom: 12px; transition: border-color .2s; }
+    .suggestion:hover { border-color: var(--accent); }
+    .axis { color: var(--accent); font-weight: 600; font-size: .85rem; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 6px; }
+    .rewrite { color: #fff; font-size: 1.05rem; line-height: 1.5; margin-bottom: 6px; }
+    .rationale { color: #666; font-size: .85rem; }
+    .loading { text-align: center; padding: 20px; color: #666; }
+    .demo-cta { margin-top: 32px; text-align: center; color: var(--muted); font-size: .95rem; }
+
+    @keyframes shimmer { 0% { background-position: -200px 0; } 100% { background-position: 200px 0; } }
+    .skeleton { display: none; }
+    .skeleton.active { display: block; }
+    .skel-badge { width: 80px; height: 28px; border-radius: 20px; background: linear-gradient(90deg, #1a1a1f 25%, #2a2a2f 50%, #1a1a1f 75%); background-size: 400px 100%; animation: shimmer 1.5s infinite linear; margin-bottom: 16px; }
+    .skel-text { height: 18px; border-radius: 8px; background: linear-gradient(90deg, #1a1a1f 25%, #2a2a2f 50%, #1a1a1f 75%); background-size: 400px 100%; animation: shimmer 1.5s infinite linear; margin-bottom: 12px; }
+    .skel-text.short { width: 70%; }
+    .skel-card { background: #1a1a1f; border: 1px solid #333; border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+    .skel-card .skel-axis { width: 60px; height: 14px; border-radius: 4px; background: linear-gradient(90deg, #1a1a1f 25%, #2a2a2f 50%, #1a1a1f 75%); background-size: 400px 100%; animation: shimmer 1.5s infinite linear; margin-bottom: 8px; }
+    .skel-card .skel-line { height: 16px; border-radius: 6px; background: linear-gradient(90deg, #1a1a1f 25%, #2a2a2f 50%, #1a1a1f 75%); background-size: 400px 100%; animation: shimmer 1.5s infinite linear; margin-bottom: 6px; }
+    .skel-card .skel-line:nth-child(2) { width: 90%; }
+    .skel-card .skel-line:nth-child(3) { width: 60%; height: 12px; }
+    .demo-cta a { color: var(--accent); text-decoration: none; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="demo-page">
+      <h1>try tono</h1>
+      <p class="subtitle">Type a message and see how tono coaches your tone</p>
+      <div class="demo-box">
+        <textarea id="draft" placeholder="Type a message you're about to send...&#10;&#10;e.g. 'I hate this meeting, what a waste of time'"></textarea>
+        <button class="btn" id="coachBtn" onclick="coach()">Coach my tone</button>
+        <div class="result" id="result">
+          <div class="risk-badge" id="riskBadge"></div>
+          <p class="perception" id="perception"></p>
+          <div id="suggestions"></div>
+        </div>
+        <div class="skeleton" id="loading">
+          <div class="skel-badge"></div>
+          <div class="skel-text"></div>
+          <div class="skel-text short"></div>
+          <div class="skel-card"><div class="skel-axis"></div><div class="skel-line"></div><div class="skel-line"></div></div>
+          <div class="skel-card"><div class="skel-axis"></div><div class="skel-line"></div><div class="skel-line"></div></div>
+          <div class="skel-card"><div class="skel-axis"></div><div class="skel-line"></div><div class="skel-line"></div></div>
+          <div class="skel-card"><div class="skel-axis"></div><div class="skel-line"></div><div class="skel-line"></div></div>
+        </div>
+      </div>
+      <p class="demo-cta">Love it? <a href="index.html#download">Get tono on your phone →</a></p>
+
+      <!-- DOWNLOAD CTA -->
+      <section id="download" style="margin-top: 48px;">
+        <div class="cta-block reveal">
+          <h2>ready to land how you intend?</h2>
+          <p>free to start. ten rewrites a day, forever. upgrade when you want more.</p>
+          <div class="store-buttons">
+            <a href="https://play.google.com/store/apps/details?id=com.tono.app" target="_blank" rel="noopener" class="store-btn">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.08zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg>
+              <div class="store-btn-text">
+                <span class="small">download on the</span>
+                <span class="big">app store</span>
+              </div>
+            </a>
+            <a href="https://play.google.com/store/apps/details?id=com.tono.app" target="_blank" rel="noopener" class="store-btn">
+              <svg class="google-play-logo" viewBox="0 0 24 24" fill="currentColor"><path d="M3.609 1.814 13.792 12 3.609 22.186a1.5 1.5 0 0 1-.609-1.2V3.014a1.5 1.5 0 0 1 .609-1.2zm10.89 10.893 2.302 2.302-10.937 6.333 8.635-8.635zm3.199-3.198 2.807 1.626a1.5 1.5 0 0 1 0 2.59l-2.807 1.626L15.397 12l2.301-2.491zM5.864 2.658 16.802 8.99l-2.303 2.303L5.864 2.658z"/></svg>
+              <div class="store-btn-text">
+                <span class="small">get it on</span>
+                <span class="big">google play</span>
+              </div>
+            </a>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script src="assets/nav-footer.js"></script>
+  <script>
+    const API = 'https://tono-backend-production.up.railway.app';
+    async function coach() {
+      const draft = document.getElementById('draft').value.trim();
+      if (!draft) return;
+      document.getElementById('coachBtn').disabled = true;
+      document.getElementById('result').classList.remove('show');
+      document.getElementById('loading').classList.add('active');
+      const sugDiv = document.getElementById('suggestions');
+      sugDiv.innerHTML = '';
+      const badge = document.getElementById('riskBadge');
+      const percEl = document.getElementById('perception');
+      try {
+        const res = await fetch(API + '/v1/analyze', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'text/event-stream'
+          },
+          body: JSON.stringify({ draft: draft, mode: 'coach' })
+        });
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const payload = line.slice(6).trim();
+            if (payload === '[DONE]') continue;
+            try {
+              const evt = JSON.parse(payload);
+              if (evt.type === 'perception') {
+                document.getElementById('loading').classList.remove('active');
+                percEl.textContent = evt.text;
+                document.getElementById('result').classList.add('show');
+              } else if (evt.type === 'suggestion') {
+                sugDiv.innerHTML += '<div class="suggestion"><div class="axis">' + evt.axis + '</div><div class="rewrite">' + evt.text + '</div><div class="rationale">' + (evt.rationale || '') + '</div></div>';
+              } else if (evt.type === 'complete') {
+                badge.textContent = evt.risk_level.toUpperCase();
+                badge.className = 'risk-badge risk-' + evt.risk_level;
+              } else if (evt.type === 'error') {
+                document.getElementById('loading').classList.remove('active');
+document.getElementById('loading').insertAdjacentHTML('afterend', '<div class=\'loading\'>⚠️ ' + evt.message + '</div>');
+              }
+            } catch (e) {}
+          }
+        }
+      } catch (e) {
+        document.getElementById('loading').classList.remove('active');
+document.getElementById('loading').insertAdjacentHTML('afterend', '<div class=\'loading\'>⚠️ Something went wrong. Try again.</div>');
+      }
+      document.getElementById('coachBtn').disabled = false;
+    }
+    document.getElementById('draft').addEventListener('keydown', function(e) { if (e.key === 'Enter' && e.metaKey) coach(); });
+  </script>
+</body>
+</html>
