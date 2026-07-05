@@ -50,6 +50,12 @@ class KeyboardViewController: UIInputViewController {
            !SharedStore.defaults.bool(forKey: SharedKeys.fullAccessExplained) {
             keyboardModel?.mode = .fullAccessOnboarding
         }
+
+        // Recompute shift state against wherever the cursor now sits. The
+        // field being edited (and its auto-cap-relevant surrounding text)
+        // can be completely different each time the keyboard shows — same
+        // logic as Tono Android's TonoInputMethodService.onStartInputView.
+        keyboardModel?.applyAutoCapitalizationIfNeeded()
     }
 
     override func viewWillLayoutSubviews() {
