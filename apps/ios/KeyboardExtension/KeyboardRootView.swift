@@ -49,6 +49,14 @@ extension EnvironmentValues {
     }
 }
 
+/// Keyboard layout + shift state, lifted from the
+/// `dovginsburg/Tono-/claude/tono-globalization-rzoqc7` scaffold's
+/// `KeyboardRootView.swift` so v28 (which shipped without caps-lock,
+/// 123/ABC layer, or auto-cap) matches Tono Android's
+/// `TonoInputMethodService` behavior. See kanban t_32ab0bb0.
+enum KeyboardLayoutMode { case letters, symbols }
+enum ShiftState { case none, shiftOnce, capsLock }
+
 @MainActor
 final class KeyboardModel: ObservableObject {
     @Published var mode: KeyboardMode = .keyboard
@@ -61,6 +69,12 @@ final class KeyboardModel: ObservableObject {
     @Published var isRefinementLoading: Bool = false  // true while LLM refines the mock preview
     @Published var threadContext: String? = nil
     @Published var selectedRecipient: Recipient? = nil
+    @Published var layoutMode: KeyboardLayoutMode = .letters
+    @Published var shiftState: ShiftState = .none
+
+    /// Timestamp of the most recent shift-key tap, used to detect
+    /// double-tap-to-caps-lock. Mirrors the scaffold's pattern.
+    private var lastShiftTapAt = Date.distantPast
 
     /// Inline suggestion strip (3 words). Recomputed whenever `draft` changes.
     /// Computed off the main thread by `SuggestionEngine`; this array is
@@ -499,9 +513,70 @@ final class KeyboardModel: ObservableObject {
     }
 
     func insertCharacter(_ s: String) {
+        // Letter insertion honors shift state: a lowercase key produces an
+        // uppercase letter when shift is engaged, and `shiftOnce` collapses
+        // back to `.none` after the single character is typed — except in
+        // caps-lock mode where it persists. Symbols and whitespace insert
+        // verbatim. This mirrors the scaffold's `commitLetter` so users on
+        // iOS get the same shift/caps behavior as Tono Android.
+        let isLetter = s.count == 1 && s.first?.isLetter == true
+        if isLetter, layoutMode == .letters {
+            let cased = (shiftState == .none) ? s.lowercased() : s.uppercased()
+            proxyProvider()?.insertText(cased)
+            if shiftState == .shiftOnce {
+                shiftState = .none
+            }
+            // Keep suggestions in sync with typing. Cheap; runs in <1ms.
+            loadDraft()
+            return
+        }
         proxyProvider()?.insertText(s)
         // Keep suggestions in sync with typing. Cheap; runs in <1ms.
         loadDraft()
+    }
+
+    /// Toggle the keyboard between letters and the 123/symbols layer.
+    /// Layout-mode flip does NOT touch shift state: returning to letters
+    /// from symbols should preserve the user's caps-lock intent, not
+    /// silently flip to lowercase.
+    func toggleLayoutMode() {
+        layoutMode = layoutMode == .letters ? .symbols : .letters
+    }
+
+    /// Shift-key tap: a single tap engages one-shot shift; a second tap
+    /// within 400ms promotes it to caps-lock; another tap from caps-lock
+    /// releases it. Mirrors `TonoInputMethodService.onShiftTapped` so iOS
+    /// and Android stay in lockstep.
+    func onShiftTapped() {
+        let now = Date()
+        let isDoubleTap = now.timeIntervalSince(lastShiftTapAt) < 0.4
+        lastShiftTapAt = now
+        switch shiftState {
+        case .shiftOnce where isDoubleTap:
+            shiftState = .capsLock
+        case .capsLock:
+            shiftState = .none
+        case .none:
+            shiftState = .shiftOnce
+        default:
+            shiftState = .none
+        }
+    }
+
+    /// Sentence-start / field-start auto-capitalization: if the cursor
+    /// sits at the very beginning of the field, or right after
+    /// `. `/`! `/`? ` (or a newline), the next letter should come out
+    /// capitalized without reaching for shift. Skipped while the user
+    /// has explicitly locked caps.
+    func applyAutoCapitalizationIfNeeded() {
+        guard shiftState != .capsLock else { return }
+        guard let proxy = proxyProvider() else { return }
+        let before = proxy.documentContextBeforeInput ?? ""
+        let lastTwo = String(before.suffix(2))
+        let shouldCapitalize = lastTwo.isEmpty
+            || lastTwo.hasSuffix("\n")
+            || lastTwo.range(of: #"[.!?]\s$"#, options: .regularExpression) != nil
+        shiftState = shouldCapitalize ? .shiftOnce : .none
     }
 
     func backspace() {
@@ -578,11 +653,36 @@ struct KeyboardRootView: View {
 private struct KeyboardLayout: View {
     @ObservedObject var model: KeyboardModel
 
-    private let rows: [[String]] = [
+    private let letterRows: [[String]] = [
         ["q","w","e","r","t","y","u","i","o","p"],
         ["a","s","d","f","g","h","j","k","l"],
         ["z","x","c","v","b","n","m"],
     ]
+    private let symbolRows: [[String]] = [
+        ["1","2","3","4","5","6","7","8","9","0"],
+        ["-","/",":",";","(",")","$","&","@","\""],
+        [".",",","?","!","'"],
+    ]
+
+    private var shiftGlyph: String {
+        switch model.shiftState {
+        case .none:      return "⇧"
+        case .shiftOnce: return "⬆"
+        case .capsLock:  return "⇪"
+        }
+    }
+
+    /// Letters-mode labels are uppercase when shift is engaged; symbols-mode
+    /// labels ignore shift entirely (they're already display-form).
+    private func display(_ key: String) -> String {
+        guard model.layoutMode == .letters, key.count == 1, key.first?.isLetter == true else {
+            return key
+        }
+        return model.shiftState == .none ? key : key.uppercased()
+    }
+
+    private var rows: [[String]] { model.layoutMode == .letters ? letterRows : symbolRows }
+    private var isLettersMode: Bool { model.layoutMode == .letters }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -604,13 +704,34 @@ private struct KeyboardLayout: View {
 
             ForEach(0..<rows.count, id: \.self) { r in
                 HStack(spacing: 6) {
+                    // Bottom letter row gets a shift key on the left so the
+                    // user can flip to uppercase / caps-lock from anywhere
+                    // on the keyboard; the symbol layer skips it.
+                    if r == rows.count - 1, isLettersMode {
+                        ActionKey(label: shiftGlyph, action: model.onShiftTapped)
+                            .accessibilityLabel(accessibilityShiftLabel())
+                    }
                     ForEach(rows[r], id: \.self) { key in
-                        Key(label: key) { model.insertCharacter(key) }
+                        Key(label: display(key)) { model.insertCharacter(key) }
+                    }
+                    // Pad the right side of the bottom letter row so the
+                    // shift key balances the row's visual weight.
+                    if r == rows.count - 1, isLettersMode {
+                        ActionKey(label: "  ", action: {})
+                            .disabled(true)
+                            .opacity(0)
+                            .accessibilityHidden(true)
                     }
                 }
             }
 
             HStack(spacing: 8) {
+                // 123/ABC layer toggle — letters ↔ symbols.
+                ActionKey(
+                    label: isLettersMode ? "123" : "ABC",
+                    action: model.toggleLayoutMode
+                )
+                .accessibilityLabel(isLettersMode ? "Numbers and symbols" : "Letters")
                 ActionKey(label: "🌐", action: model.globe)
                     .accessibilityLabel("Switch keyboard")
                 ActionKey(label: "⏱", action: model.showHistory)
@@ -633,6 +754,14 @@ private struct KeyboardLayout: View {
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 8)
+    }
+
+    private func accessibilityShiftLabel() -> String {
+        switch model.shiftState {
+        case .none:      return "Shift"
+        case .shiftOnce: return "Shift on, one capital letter"
+        case .capsLock:  return "Caps lock on, tap to release"
+        }
     }
 }
 
