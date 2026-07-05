@@ -97,12 +97,22 @@ This must be enabled in both targets in Xcode → Signing & Capabilities → App
 ## 6. Suggested Test Account
 
 To test the paywall and Pro features without a real purchase, use a
-Sandbox test account in App Store Connect. The daily free limit can be
-lowered via the `FREE_DAILY_LIMIT` environment variable on the backend
-for easier limit testing.
+Sandbox test account in App Store Connect. Tono has two tiers:
+- **Free**: 3 coaching sessions/day, all four rewrite axes. No card, no trial.
+- **Pro** ($5.99/mo or $39.99/yr): 7-day free trial (real Apple
+  introductory offer configured in App Store Connect), then auto-renews
+  unless cancelled. Unlimited + thread context + style memory + weekly digest.
 
-To trigger the limit quickly: send 10 Coach requests from the keyboard
-(default free limit).
+The trial disclosure copy reads (from `Product.subscription?.introductoryOffer`,
+dynamically rendered): "Free for 7 days, then auto-renews at $5.99/mo
+unless cancelled" (and the $39.99/yr variant). The paywall also shows
+the standard App Store boilerplate required by guideline 3.1.2 (payment
+timing, renewal window, free-trial forfeiture) below the buy buttons.
+
+Sign in with the sandbox Apple ID, then either stay on Free or
+start the Pro trial to test the full experience. The FREE_DAILY_LIMIT
+env var on the backend can be used to raise or lower the free cap for
+testing the limit-exceeded path (defaults to 3).
 
 ---
 

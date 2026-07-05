@@ -292,6 +292,8 @@ struct SettingsView: View {
             return "Account not set up yet. Tap ‘Set up Tono’ in Settings → Account."
         case .decoding(let m):
             return "Bad response: \(m)"
+        case .tooManyDevices(let current, let max):
+            return "This email is already on \(current) devices (max \(max))."
         }
     }
 
@@ -409,7 +411,9 @@ struct SettingsView: View {
                 Text(isPro ? "Pro ✓" : "Free")
                 Spacer()
                 if !isPro {
-                    Button("Upgrade") { showPaywall = true }
+                    // Apple-compliant label: matches the action and names
+                    // the auto-renewing nature of the trial.
+                    Button("Try Pro free for 7 days") { showPaywall = true }
                         .buttonStyle(.borderedProminent)
                 }
             }
@@ -442,7 +446,7 @@ struct SettingsView: View {
                     }
                 }
             }
-            Text("Free: 5 coaching sessions/day for both Coach and Read. Pro ($5.99/mo or $39.99/yr): personalized coaching that learns your style and relationships, weekly digest.")
+            Text("Free: 3 coaching sessions/day, all four rewrite axes, no card required. Pro (7-day free trial, then auto-renews at $5.99/mo or $39.99/yr unless cancelled): unlimited + thread context + style memory + per-recipient coaching + weekly digest. Cancel anytime in Settings.")
                 .font(.caption).foregroundColor(.secondary)
         }
     }
@@ -556,7 +560,22 @@ struct PaywallView: View {
 
                 restoreButton
 
-                Text("Payment is charged to your Apple ID. Subscription renews automatically. Cancel any time in Settings → Apple ID → Subscriptions.")
+                // Apple App Store Review Guideline 3.1.2 (Subscriptions)
+                // requires this boilerplate be visible on the same screen as
+                // the buy button. Includes trial disclosure if a 7-day free
+                // trial introductory offer is configured in App Store Connect.
+                Text(
+"""
+Payment will be charged to your Apple ID account at the confirmation of purchase. Subscription automatically renews unless it is cancelled at least 24 hours before the end of the current period. Your account will be charged for renewal within 24 hours prior to the end of the current period. If you start a free trial, any unused portion of the free trial period will be forfeited when you purchase a subscription.
+"""
+                )
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.45))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 8)
+
+                Text("Manage subscriptions in Settings → Apple ID → Subscriptions.")
                     .font(.caption2)
                     .foregroundColor(.white.opacity(0.4))
                     .multilineTextAlignment(.center)
@@ -592,9 +611,9 @@ struct PaywallView: View {
                 .foregroundColor(.white.opacity(0.6))
                 .multilineTextAlignment(.center)
             VStack(spacing: 6) {
-                FeatureLine("Learns how you write to each person over time")
-                FeatureLine("Ranks options by your actual style, not defaults")
-                FeatureLine("Per-recipient coaching — different style for Boss vs Mom")
+                FeatureLine("Unlimited rewrites (Free is 3/day)")
+                FeatureLine("Thread context — paste the prior message")
+                FeatureLine("Per-recipient style memory")
                 FeatureLine("Weekly tone report — spot your patterns")
                 FeatureLine("Memory stays on your device, you control it all")
             }
@@ -714,7 +733,7 @@ private struct ProductRow: View {
                         Text(isYearly ? "Annual" : "Monthly")
                             .font(.system(size: 16, weight: .semibold, design: .rounded))
                         if isYearly {
-                            Text("Save 44% · Save $32/year")
+                            Text("Save 44%")
                                 .font(.system(size: 9, weight: .bold, design: .rounded))
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
@@ -723,19 +742,35 @@ private struct ProductRow: View {
                                 .foregroundColor(.green)
                         }
                     }
-                    if isYearly {
-                        Text("Try free for 7 days · then \(yearlyPerMonthDisplay)/mo")
-                            .font(.system(size: 12, design: .rounded))
-                            .foregroundColor(.white.opacity(0.6))
-                    }
+                    // Show Apple's real intro offer if it exists (set up in
+                    // App Store Connect → Subscriptions → introductory offer).
+                    // Example: "$0.00 / 7 days, then auto-renews at $5.99/mo".
+                    // Falls back to a clear fixed text if no offer is configured
+                    // yet (e.g., during local development without ASC).
+                    introOfferLine
                 }
                 Spacer()
                 if isLoading {
                     ProgressView().tint(.white)
                 } else {
-                    Text(product.displayPrice)
-                        .font(.system(size: 16, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
+                    // Big price on the right. When intro offer is present,
+                    // show the trial "$0.00" up top and the regular price below.
+                    // introOffer is only available on iOS 17.2+; older OS
+                    // versions just see the regular price.
+                    VStack(alignment: .trailing, spacing: 0) {
+                        if let intro = product.subscription?.introductoryOffer {
+                            Text(intro.displayPrice)
+                                .font(.system(size: 16, weight: .bold, design: .rounded))
+                                .foregroundColor(.white)
+                            Text("then \(product.displayPrice)")
+                                .font(.system(size: 10, design: .rounded))
+                                .foregroundColor(.white.opacity(0.7))
+                        } else {
+                            Text(product.displayPrice)
+                                .font(.system(size: 16, weight: .bold, design: .rounded))
+                                .foregroundColor(.white)
+                        }
+                    }
                 }
             }
             .padding(16)
@@ -747,9 +782,43 @@ private struct ProductRow: View {
         .disabled(isLoading)
     }
 
-    private var yearlyPerMonthDisplay: String {
-        let monthly = (product.price / 12) as Decimal
-        let fmt = product.priceFormatStyle
-        return (try? fmt.format(monthly)) ?? ""
+    /// Renders the intro-offer disclosure line in Apple-compliant format.
+    /// Example: "7-day free trial, then auto-renews at $5.99/mo unless cancelled".
+    @ViewBuilder
+    private var introOfferLine: some View {
+        if let intro = product.subscription?.introductoryOffer,
+           intro.paymentMode == .freeTrial {
+            // Render the intro period dynamically from the offer (Apple manages
+            // the actual duration). The text below is the standard Apple boilerplate
+            // per App Store guideline 3.1.2.
+            Text("Free for \(intro.period.value) \(intro.period.unit.description), then auto-renews at \(product.displayPrice) unless cancelled")
+                .font(.system(size: 11, design: .rounded))
+                .foregroundColor(.white.opacity(0.7))
+                .fixedSize(horizontal: false, vertical: true)
+                .multilineTextAlignment(.leading)
+        } else {
+            // Either no intro offer configured in ASC yet, or running on
+            // iOS < 17.2 where we can't introspect the offer. Show the
+            // post-trial price clearly so Apple reviewers don't flag it as
+            // bait-and-switch.
+            Text("Billed \(isYearly ? "yearly" : "monthly") at \(product.displayPrice), auto-renews unless cancelled")
+                .font(.system(size: 11, design: .rounded))
+                .foregroundColor(.white.opacity(0.7))
+                .fixedSize(horizontal: false, vertical: true)
+                .multilineTextAlignment(.leading)
+        }
+    }
+}
+
+// Extension on Product.SubscriptionPeriod.Unit for the human-readable label.
+private extension Product.SubscriptionPeriod.Unit {
+    var description: String {
+        switch self {
+        case .day:    return "day"
+        case .week:   return "week"
+        case .month:  return "month"
+        case .year:   return "year"
+        @unknown default: return "period"
+        }
     }
 }

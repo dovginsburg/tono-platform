@@ -16,6 +16,9 @@ public enum SharedKeys {
     public static let freeTierLimit = "tc.freeTierLimit"
     public static let proUnlocked = "tc.proUnlocked"
     public static let lastRewriteVoice = "tc.lastRewriteVoice"
+    // Apple-managed 7-day free trial state (set by StoreKit 2 from
+    // currentEntitlements; read by both host app and keyboard extension).
+    public static let inFreeTrial = "tc.inFreeTrial"
 
     // Backend-proxy auth (v0.2). The server holds the LLM keys; the
     // client just carries a bearer token + the device id it registered
@@ -73,8 +76,25 @@ public enum SharedKeys {
     // Onboarding state (OnboardingCalibrationView.swift).
     public static let onboardingDone   = "tc.onboardingDone"
 
+    // v1.0 entry-points onboarding (OnboardingEntryPointsView.swift).
+    // Tracks whether the user has seen/dismissed the three-tile
+    // "Set as keyboard / Use from any app / Quick setup" flow.
+    // Distinct from `onboardingDone` because the calibration flow
+    // (data seeding) and the entry-points flow (UX) are independent.
+    public static let entryPointsOnboardingDone = "tc.entryPointsOnboardingDone"
+
     // ISO date of last weekly digest notification sent ("yyyy-MM-dd").
     public static let lastWeeklyDigest = "tc.lastWeeklyDigest"
+
+    // Set true once the user has dismissed the keyboard's first-launch Full
+    // Access onboarding card. Avoids nagging them on every keyboard open.
+    public static let fullAccessExplained = "tc.fullAccessExplained"
+
+    // Ring buffer of the user's last few rewrite texts, used by
+    // SuggestionEngine to bias the inline suggestion strip toward phrases
+    // the user has actually used. Distinct from `lastRewriteVoice` which
+    // stores a single string for the widget snapshot.
+    public static let recentRewrites = "tc.recentRewrites"
 }
 
 public enum SharedStore {
@@ -90,6 +110,10 @@ public struct TonePreferences {
     public var preferredVoice: String?
     public var axes: [RewriteAxis]
     public var proUnlocked: Bool
+    /// True when the user is currently in Apple's introductory 7-day free
+    /// trial (configured in App Store Connect). Mirrored from StoreKit
+    /// transactions so the keyboard extension can show "X days left".
+    public var inFreeTrial: Bool
 
     public init() {
         let d = SharedStore.defaults
@@ -98,10 +122,11 @@ public struct TonePreferences {
         // one-time migration window (wiped in registerIfNeeded after first use).
         self.apiKey = SharedKeychain.get(KeychainKeys.apiKey)
             ?? d.string(forKey: SharedKeys.apiKey)
-        self.preferredVoice = d.string(forKey: SharedKeys.preferredVoice)
+        self.preferredVoice = d.string(forKey: SharedKeys.lastRewriteVoice)
         let stored = d.array(forKey: SharedKeys.axes) as? [String] ?? RewriteAxis.allCases.map(\.rawValue)
         self.axes = stored.compactMap(RewriteAxis.init(rawValue:))
         self.proUnlocked = d.bool(forKey: SharedKeys.proUnlocked)
+        self.inFreeTrial = d.bool(forKey: SharedKeys.inFreeTrial)
     }
 
     public func save() {

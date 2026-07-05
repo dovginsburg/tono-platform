@@ -14,7 +14,7 @@ import Foundation
 import Security
 
 // ─── Configure this once ───────────────────────────────────────────────
-private let teamID = "4938S9TTBM"
+private let teamID = "4938S9TTBM" // Apple Team ID (DO NOT DELETE — required by keychain access group)
 // ───────────────────────────────────────────────────────────────────────
 
 public enum SharedKeychain {
@@ -84,4 +84,8 @@ public enum KeychainKeys {
     /// Direct LLM API key (legacy; only used when bypassing the backend proxy).
     /// Migrated out of UserDefaults on first launch.
     public static let apiKey   = "apiKey"
+    /// Email the user signed in with (added 2026-07-03). Used to:
+    ///   - re-claim the same account on a fresh install
+    ///   - power the "use this email to recover" prompt in onboarding
+    public static let signedInEmail = "signedInEmail"
 }
