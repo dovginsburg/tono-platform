@@ -1,0 +1,59 @@
+# Local dev stack: the backend plus the two services it now depends on
+# (Postgres, Redis) instead of the file-based SQLite store this used to be.
+#
+# Usage:
+#   cp .env.example .env      # fill in whatever provider/keys you want
+#   docker compose up --build
+#
+# The backend container talks to `db`/`redis` by their service names (not
+# localhost) — DATABASE_URL/REDIS_URL below override whatever's in your
+# .env for the docker-compose context specifically. Data persists across
+# `docker compose down` (not `down -v`) via the named volumes.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: tono_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - tono_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - tono_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: .
+    ports:
+      - "8765:8765"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/tono_dev
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  tono_pgdata:
+  tono_redisdata:

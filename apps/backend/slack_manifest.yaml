@@ -1,0 +1,41 @@
+display_information:
+  name: Tono
+  description: Say what you mean. Land how you intend. Analyze tone and get rewrite suggestions directly in Slack.
+  background_color: "#1a1a2e"
+  long_description: |
+    Tono is your AI tone coach in Slack. Run /tono on any draft message to get
+    an instant risk assessment (low / medium / high) and four rewrite suggestions
+    — warmer, clearer, funnier, safer — visible only to you.
+
+    Include prior thread context with:
+      /tono reply: <prior message> // <your draft>
+
+    Results are ephemeral (only you see them), so there's no noise in the channel.
+
+features:
+  slash_commands:
+    - command: /tono
+      url: https://YOUR_HOST/slack/command
+      description: Analyze tone and get rewrite suggestions for a draft message
+      usage_hint: "<your draft> or reply: <prior message> // <your draft>"
+      should_escape: false
+  shortcuts:
+    - name: Coach this message
+      type: message
+      callback_id: tono_coach_message
+      description: Interpret how this message likely landed — risk + subtext, visible only to you.
+
+oauth_config:
+  redirect_urls:
+    - https://YOUR_HOST/slack/oauth
+  scopes:
+    bot:
+      - commands
+
+settings:
+  interactivity:
+    is_enabled: true
+    request_url: https://YOUR_HOST/slack/interactivity
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
