@@ -9,8 +9,16 @@ An iOS keyboard extension that helps people say what they mean. User types a mes
 ## Architecture
 - **App/** — SwiftUI host app (onboarding, settings, playground)
 - **KeyboardExtension/** — Custom iOS keyboard with Coach mode
-- **Shared/** — Engine + analyzers compiled into both targets
+- **ShareExtension/** — Share Sheet extension (TonoShare.appex)
+- **TonoMessagesExtension/** — iMessage extension (TonoMessagesExtension.appex)
+- **Shared/** — Engine + analyzers compiled into all extension targets
 - **Backend/** — FastAPI proxy server (users never see API keys)
+
+## Entry points
+1. **Keyboard** — Full keyboard replacement with Coach mode (v1.1, gated off in v1.0)
+2. **Share Sheet** — Select text → Share → Tono → get rewrites
+3. **iMessage** — Messages app drawer → Tono → analyze draft before sending
+4. **Shortcut** — "Tono Rewrite" shortcut, auto-installs via deep link `shortcuts://import-workflow?url=...`
 
 ## Key files
 - `Shared/ToneEngine.swift` — Unified engine, routes to backend or local APIs
@@ -19,11 +27,15 @@ An iOS keyboard extension that helps people say what they mean. User types a mes
 - `Shared/OpenAIToneAnalyzer.swift` — gpt-4o-mini with structured JSON
 - `Shared/AnthropicToneAnalyzer.swift` — claude-haiku-4-5 with tool-use
 - `KeyboardExtension/KeyboardRootView.swift` — Full keyboard UI (draft → coach → results)
+- `ShareExtension/ShareViewController.swift` — Share sheet entry point
+- `TonoMessagesExtension/MessagesViewController.swift` — iMessage extension entry point
+- `App/OnboardingEntryPointsView.swift` — 3-tile onboarding (keyboard/share/shortcut)
 - `Backend/server.py` — FastAPI: /api/analyze, auth, rate limiting, Stripe
 - `Backend/store.py` — SQLite user/device storage
 - `Backend/payments.py` — Stripe checkout + billing portal
 - `Backend/auth.py` — Device registration + bearer tokens
 - `SCOPE.md` — Full business case (29KB, durable)
+- `scripts/add_messages_extension_target.rb` — Adds iMessage extension to Xcode project
 
 ## Current state
 - 3 commits on main, working tree clean

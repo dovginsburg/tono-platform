@@ -27,6 +27,9 @@ public enum TonoBackendError: Error, LocalizedError {
     case decoding(String)
     case network(String)
     case offline
+    /// Anti-fraud: email already on `current` devices (max allowed: `max`).
+    /// Backend returns 403 with `{detail: {error: "too_many_devices", current, max}}`.
+    case tooManyDevices(current: Int, max: Int)
 
     public var errorDescription: String? {
         switch self {
@@ -43,6 +46,8 @@ public enum TonoBackendError: Error, LocalizedError {
         case .decoding(let m): return "Could not read server response: \(m)"
         case .network(let m): return "Network error: \(m)"
         case .offline: return "Offline. Check your connection and try again."
+        case .tooManyDevices(let current, let max):
+            return "This email is already on \(current) devices (max \(max)). Contact support if you need more."
         }
     }
 }
@@ -55,6 +60,13 @@ public struct TonoMe: Codable, Equatable {
     public let dailyLimit: Int
     public let subscriptionStatus: String?
     public let subscriptionRenewsAt: String?
+    // Email identity (added 2026-07-03). nil = anonymous user.
+    public let email: String?
+    public let emailVerifiedAt: String?
+    // Number of devices linked to this email (1 = only this device).
+    // Used for the iOS app to show "This account is on N devices" + fraud signal.
+    public let deviceCountForEmail: Int?
+    public let maxDevicesPerEmail: Int?
 
     enum CodingKeys: String, CodingKey {
         case deviceId = "device_id"
@@ -64,6 +76,10 @@ public struct TonoMe: Codable, Equatable {
         case dailyLimit = "daily_limit"
         case subscriptionStatus = "subscription_status"
         case subscriptionRenewsAt = "subscription_renews_at"
+        case email
+        case emailVerifiedAt = "email_verified_at"
+        case deviceCountForEmail = "device_count_for_email"
+        case maxDevicesPerEmail = "max_devices_per_email"
     }
 }
 
@@ -248,6 +264,49 @@ public final class TonoBackend: @unchecked Sendable {
         try await get(path: "/v1/me")
     }
 
+    // ── Email identity (added 2026-07-03) ──────────────────────────────────
+    // Send a 6-digit OTP to `email`. Always succeeds (server doesn't leak
+    // whether the email exists). User receives the code in their inbox,
+    // types it back into the iOS app, which calls `verifyEmailOTP`.
+    @discardableResult
+    public func requestEmailLink(email: String) async throws -> [String: Any] {
+        let body: [String: Any] = ["email": email]
+        return try await postObject(path: "/v1/auth/request-link", json: body)
+    }
+
+    /// Verify the 6-digit OTP. On success, the backend:
+    ///   1. links this device's `device_id` to the email (or migrates
+    ///      an existing anonymous row to the canonical email row)
+    ///   2. returns a fresh `api_token` (per-device)
+    ///   3. marks `email` on the iOS keychain so the user stays signed in
+    ///      across reinstalls (next install will re-trigger this flow)
+    /// Throws `TonoBackendError.tooManyDevices(current, max)` if the email
+    /// already has the max allowed device rows.
+    @discardableResult
+    public func verifyEmailOTP(
+        email: String,
+        otp: String,
+    ) async throws -> TonoMe {
+        let body: [String: Any] = [
+            "email": email,
+            "otp": otp,
+            "device_id": SharedKeychain.get(KeychainKeys.deviceID) ?? "",
+        ]
+        let resp: [String: Any] = try await postObject(
+            path: "/v1/auth/verify-otp",
+            json: body,
+        )
+        // Persist the new api_token (per-device, server-issued).
+        if let token = resp["api_token"] as? String, !token.isEmpty {
+            SharedKeychain.set(token, forKey: KeychainKeys.apiToken)
+        }
+        // Persist the email so future installs (fresh device_id) can
+        // auto-claim the same identity on first sign-in.
+        SharedKeychain.set(email, forKey: KeychainKeys.signedInEmail)
+        // Re-read /v1/me to get the canonical user shape.
+        return try await me()
+    }
+
     /// Lightweight health check used by Settings to confirm reachability.
     /// Returns `true` when the backend responds 2xx to GET /health. Throws
     /// `TonoBackendError` for transport / non-2xx failures so the caller
@@ -307,6 +366,84 @@ public final class TonoBackend: @unchecked Sendable {
             mode: mode.rawValue
         )
         return try await post(path: "/api/analyze", body: req, authorize: true)
+    }
+
+    /// Thin convenience wrapper for the keyboard extension's "Coach" flow.
+    ///
+    /// The full `analyze(...)` surface takes ~7 parameters; in a custom
+    /// keyboard we want a single-tap entry point with no allocation of
+    /// RewriteAxis / AnalysisMode values. This hits `POST /v1/coach` with
+    /// the minimal `{text: ...}` body the user confirmed works.
+    ///
+    /// Returns the rewrites payload as a flat JSON string — the keyboard's
+    /// SwiftUI `KeyboardRootView` parses it client-side via `JSONDecoder`
+    /// straight into `ToneAnalysis`. Designed to be safe to call from
+    /// inside the keyboard extension (no UIApplication, no app-group
+    /// entitlements required — uses `URLSession.shared.data(for:)` like
+    /// the rest of the backend client).
+    public struct CoachResponse: Codable, Equatable {
+        public let rewrites: [CoachRewrite]
+        public let usedToday: Int?
+        public let dailyLimit: Int?
+        public let plan: String?
+        public init(rewrites: [CoachRewrite], usedToday: Int? = nil, dailyLimit: Int? = nil, plan: String? = nil) {
+            self.rewrites = rewrites
+            self.usedToday = usedToday
+            self.dailyLimit = dailyLimit
+            self.plan = plan
+        }
+    }
+    public struct CoachRewrite: Codable, Equatable {
+        public let axis: String
+        public let text: String
+        public let rationale: String?
+        public let riskAfter: String?
+        public init(axis: String, text: String, rationale: String? = nil, riskAfter: String? = nil) {
+            self.axis = axis
+            self.text = text
+            self.rationale = rationale
+            self.riskAfter = riskAfter
+        }
+    }
+    public func coach(text: String) async throws -> String {
+        struct Req: Encodable { let text: String }
+        struct Resp: Decodable {
+            let rewrites: [CoachRewrite]?
+            let suggestions: [CoachRewrite]?
+            let analysis: CoachResponse?
+        }
+        let req = Req(text: text)
+        let (data, response) = try await postRaw(path: "/v1/coach", body: req, authorize: true)
+        guard let http = response as? HTTPURLResponse else {
+            throw TonoBackendError.network("no http response")
+        }
+        if !(200...299).contains(http.statusCode) {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            if http.statusCode == 429 {
+                throw TonoBackendError.http(http.statusCode, "Daily free limit reached.")
+            }
+            if http.statusCode == 401 {
+                throw TonoBackendError.notRegistered
+            }
+            throw TonoBackendError.http(http.statusCode, body)
+        }
+        // Two server shapes observed: {rewrites: [...]} or {suggestions: [...]}
+        // or {analysis: {...}}. Tolerate all three; keyboard caller only
+        // needs the rewrite array so we hand back a canonical JSON blob.
+        if let parsed = try? JSONDecoder().decode(CoachResponse.self, from: data) {
+            return String(data: (try? JSONEncoder().encode(parsed)) ?? data, encoding: .utf8) ?? ""
+        }
+        if let loose = try? JSONDecoder().decode(Resp.self, from: data) {
+            let canonical = CoachResponse(
+                rewrites: loose.rewrites ?? loose.suggestions ?? [],
+                usedToday: loose.analysis?.usedToday,
+                dailyLimit: loose.analysis?.dailyLimit,
+                plan: loose.analysis?.plan
+            )
+            return String(data: (try? JSONEncoder().encode(canonical)) ?? data, encoding: .utf8) ?? ""
+        }
+        // Last-ditch: return whatever the server gave us.
+        return String(data: data, encoding: .utf8) ?? ""
     }
 
     /// Streaming version of analyze — returns an AsyncStream of AnalysisEvents.
@@ -543,11 +680,70 @@ public final class TonoBackend: @unchecked Sendable {
         return try await execute(req)
     }
 
+    /// POST with a free-form [String: Any] body, returns the raw JSON dict.
+    /// Used for the email-identity endpoints (`/v1/auth/request-link` and
+    /// `/v1/auth/verify-otp`) which need a non-Codable shape on the iOS side
+    /// (OTP codes, free-form errors).
+    private func postObject(
+        path: String,
+        json: [String: Any],
+        authorize: Bool = true
+    ) async throws -> [String: Any] {
+        let url = baseURL.appendingPathComponent(path.hasPrefix("/") ? String(path.dropFirst()) : path)
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if authorize, let token = SharedKeychain.get(KeychainKeys.apiToken) {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        req.httpBody = try JSONSerialization.data(withJSONObject: json)
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw TonoBackendError.network("no response")
+        }
+        if !(200...299).contains(http.statusCode) {
+            // Decode the error body — server returns {"detail": {...}} for our
+            // 403 too_many_devices, or {"detail": "..."} for 401.
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let detail = obj["detail"] {
+                if let dict = detail as? [String: Any], let err = dict["error"] as? String {
+                    if err == "too_many_devices",
+                       let cur = dict["current"] as? Int,
+                       let max = dict["max"] as? Int {
+                        throw TonoBackendError.tooManyDevices(current: cur, max: max)
+                    }
+                }
+                throw TonoBackendError.http(http.statusCode, "\(detail)")
+            }
+            throw TonoBackendError.http(http.statusCode, "request failed")
+        }
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw TonoBackendError.network("invalid JSON response")
+        }
+        return obj
+    }
+
     private func post<In: Encodable, Out: Decodable>(
         path: String, body: In, authorize: Bool
     ) async throws -> Out {
         let req = try buildRequest(path: path, method: "POST", body: body, authorize: authorize)
         return try await execute(req)
+    }
+
+    /// Raw POST that returns Data + URLResponse without trying to decode.
+    /// Used by the keyboard's coach() flow which tolerates multiple server
+    /// response shapes and needs to canonicalize the result itself.
+    fileprivate func postRaw<In: Encodable>(
+        path: String, body: In, authorize: Bool
+    ) async throws -> (Data, URLResponse) {
+        let req = try buildRequest(path: path, method: "POST", body: body, authorize: authorize)
+        do {
+            return try await URLSession.shared.data(for: req)
+        } catch let urlErr as URLError where urlErr.code == .notConnectedToInternet {
+            throw TonoBackendError.offline
+        } catch {
+            throw TonoBackendError.network(error.localizedDescription)
+        }
     }
 
     private func put<In: Encodable, Out: Decodable>(

@@ -29,6 +29,8 @@ public enum AnalyticsEvent: Sendable {
     case rewriteEditedAfterInsert
     /// User inserted one axis but others were shown (derived on back end).
     case axisRejected(shownAxes: [String], pickedAxis: String)
+    /// User inserted a word from the inline suggestion strip.
+    case suggestionTapped
     /// Collective improvement signal: content-free session outcome.
     /// Respects the improveTono flag — never sent when user has opted out.
     /// Fields: risk enum, axis enum or nil, mode enum, length BUCKET (not length),
@@ -49,6 +51,7 @@ public enum AnalyticsEvent: Sendable {
         case .rewriteInserted:          return "rewrite_inserted"
         case .rewriteEditedAfterInsert: return "rewrite_edited_after_insert"
         case .axisRejected:             return "axis_rejected"
+        case .suggestionTapped:         return "suggestion_tapped"
         case .improvementOutcome:       return "improvement_outcome"
         }
     }
@@ -66,6 +69,8 @@ public enum AnalyticsEvent: Sendable {
             return [:]
         case .axisRejected(let shown, let picked):
             return ["shown_axes": shown, "picked_axis": picked]
+        case .suggestionTapped:
+            return [:]
         case .improvementOutcome(let risk, let axis, let mode, let bucket, let used, let edit):
             var props: [String: Any] = [
                 "risk_level": risk,

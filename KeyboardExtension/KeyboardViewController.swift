@@ -5,9 +5,17 @@
 //   3. calls ToneEngine.analyze, displays risk badge + rewrites,
 //   4. on selection, inserts the chosen rewrite back into the text field.
 //
-// IMPORTANT: iOS keyboard extensions cannot present alerts or modal sheets
-// the way the host app can. The "Coach" sheet is rendered inside the
-// keyboard's own view hierarchy.
+// NEW (Tono keyboard rewrite):
+//   - Inline 3-word suggestion strip above the keys with tap-to-insert.
+//   - Long-press the return key to invoke the Coach rewrite flow without
+//     switching to the Coach screen (a SwiftUI confirmation sheet replaces
+//     tapping the explicit Coach button).
+//   - First-launch Full Access onboarding prompt that explains why Tono
+//     asks for Full Access before the user hits the keyboard's Coach path.
+//
+// IMPORTANT: iOS keyboard extensions cannot present UIAlertController;
+// any confirmations ("Coach this draft?") are rendered as SwiftUI views
+// inside the keyboard's own view hierarchy.
 
 import UIKit
 import SwiftUI
@@ -34,15 +42,25 @@ class KeyboardViewController: UIInputViewController {
         // hasFullAccess can change while the app is backgrounded (user toggles
         // Full Access in Settings), so refresh it every time the keyboard appears.
         keyboardModel?.hasFullAccess = hasFullAccess
+
+        // First-launch onboarding: if this is the very first time the user is
+        // seeing the keyboard and Full Access is off, surface a friendly intro
+        // view BEFORE they tap Coach. We only show this once per device.
+        if !hasFullAccess,
+           !SharedStore.defaults.bool(forKey: SharedKeys.fullAccessExplained) {
+            keyboardModel?.mode = .fullAccessOnboarding
+        }
     }
 
     override func viewWillLayoutSubviews() {
         super.viewWillLayoutSubviews()
         // The system sets a default height; respect it but allow growth.
+        // Increased from 320 to 360 because the new suggestion strip + Coach
+        // confirmation sheet need extra vertical room. iOS clamps this softly.
         let target = NSLayoutConstraint(
             item: view!, attribute: .height, relatedBy: .greaterThanOrEqual,
             toItem: nil, attribute: .notAnAttribute,
-            multiplier: 1, constant: 320
+            multiplier: 1, constant: 360
         )
         target.priority = .defaultHigh
         view.addConstraint(target)

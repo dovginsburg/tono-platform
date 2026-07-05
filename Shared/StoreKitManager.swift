@@ -32,6 +32,9 @@ public final class StoreKitManager: ObservableObject {
     @Published public var isPro:        Bool      = false
     @Published public var isLoading:    Bool      = false
     @Published public var purchaseError: String?
+    /// True when the user is in an active introductory free trial period
+    /// (Apple's "real" 7-day trial configured in App Store Connect).
+    @Published public var isInFreeTrial: Bool     = false
 
     private var updatesTask: Task<Void, Never>?
 
@@ -94,19 +97,37 @@ public final class StoreKitManager: ObservableObject {
 
     private func updateProState() async {
         var active = false
+        var inTrial = false
         for await result in Transaction.currentEntitlements {
-            if case .verified(let tx) = result,
-               ProductID.all.contains(tx.productID),
-               tx.revocationDate == nil {
-                active = true
+            // Verified by StoreKit; unverified transactions are silently
+            // skipped (StoreError.failedVerification would be thrown for
+            // any caller that needed to handle them explicitly).
+            guard case .verified(let tx) = result else { continue }
+            guard ProductID.all.contains(tx.productID) else { continue }
+            guard tx.revocationDate == nil else { continue }
+            active = true
+            // Detect Apple's real 7-day free trial: tx.offerType == .introductory
+            // and offer is a free-trial-period offer. This is the ONLY way to
+            // know the user is in a trial — there's no separate "isOnTrial" flag.
+            // tx.offer is only available on iOS 17.2+. We fall back to
+            // offerType alone on older OS versions (still correctly identifies
+            // an intro offer, just doesn't distinguish free-trial from pay-up-front).
+            if tx.offerType == .introductory {
+                // Transaction.Offer.PaymentMode values:
+                //   .freeTrial, .payAsYouGo, .payUpFront, .oneTime (iOS 26+)
+                if let offer = tx.offer, offer.paymentMode == .freeTrial {
+                    inTrial = true
+                }
             }
         }
         isPro = active
+        isInFreeTrial = inTrial
         // Mirror into shared prefs so the keyboard extension can read it
         // without importing StoreKit (extensions can't use @MainActor across
         // process boundary; the flag is the safe IPC channel).
         var prefs = TonePreferences()
         prefs.proUnlocked = active
+        prefs.inFreeTrial = inTrial
         prefs.save()
     }
 

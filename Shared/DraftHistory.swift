@@ -36,4 +36,27 @@ public enum DraftHistory {
             SharedStore.defaults.set(data, forKey: SharedKeys.draftHistory)
         }
     }
+
+    /// Word stems from the user's recent drafts that start with `prefix`
+    /// (case-insensitive). Used by SuggestionEngine to bias the inline
+    /// suggestion strip toward phrases the user has actually typed before.
+    /// Returns distinct lowercase tokens in most-recent-first order.
+    public static func stems(matching prefix: String, limit: Int = 8) -> [String] {
+        let lc = prefix.lowercased()
+        guard !lc.isEmpty else { return [] }
+        var seen = Set<String>()
+        var out: [String] = []
+        for entry in all() {
+            for word in entry.draft.lowercased().split(whereSeparator: { $0.isWhitespace || $0.isNewline }) {
+                let w = word.trimmingCharacters(in: CharacterSet(charactersIn: ".,!?;:\"'()[]{}—–-"))
+                if w.isEmpty { continue }
+                if !w.hasPrefix(lc) { continue }
+                if seen.contains(w) { continue }
+                seen.insert(w)
+                out.append(String(w))
+                if out.count >= limit { return out }
+            }
+        }
+        return out
+    }
 }

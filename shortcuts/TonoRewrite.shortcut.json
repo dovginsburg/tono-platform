@@ -1,0 +1,167 @@
+{
+  "WFWorkflowActions": [
+    {
+      "WFWorkflowActionIdentifier": "is.workflow.actions.receive.input",
+      "WFWorkflowActionParameters": [
+        {
+          "WFInputType": "Text",
+          "WFInputActionLabel": "Select text to rewrite"
+        }
+      ]
+    },
+    {
+      "WFWorkflowActionIdentifier": "is.workflow.actions.gettext",
+      "WFWorkflowActionParameters": [
+        {
+          "WFTextActionText": {
+            "Value": {
+              "Type": "Variable",
+              "VariableName": "Shortcut Input"
+            },
+            "WFSerializationType": "WFTextTokenAttachment"
+          }
+        }
+      ]
+    },
+    {
+      "WFWorkflowActionIdentifier": "is.workflow.actions.getcontentsofurl",
+      "WFWorkflowActionParameters": [
+        {
+          "WFHTTPMethod": "POST",
+          "WFHTTPHeaders": [
+            {
+              "WFKey": "Content-Type",
+              "WFValue": "application/json"
+            }
+          ],
+          "WFURLActionURL": "https://api.tonoit.com/api/analyze",
+          "WFHTTPRequestType": "Form",
+          "WFHTTPBodyType": "JSON",
+          "WFRawValuesRequestBody": {
+            "Value": {
+              "text": {
+                "Value": {
+                  "Type": "Variable",
+                  "VariableName": "Text"
+                },
+                "WFSerializationType": "WFTextTokenAttachment"
+              },
+              "provider": "",
+              "preferred_voice": "",
+              "axes": ["warmer", "clearer", "funnier", "safer"],
+              "mode": "coach"
+            },
+            "WFSerializationType": "WFTextTokenAttachment"
+          }
+        }
+      ]
+    },
+    {
+      "WFWorkflowActionIdentifier": "is.workflow.actions.getdictionaryvalue",
+      "WFWorkflowActionParameters": [
+        {
+          "WFDictionaryKey": "suggestions",
+          "WFDictionary": {
+            "Value": {
+              "Type": "Variable",
+              "VariableName": "Contents of URL"
+            },
+            "WFSerializationType": "WFTextTokenAttachment"
+          }
+        }
+      ]
+    },
+    {
+      "WFWorkflowActionIdentifier": "is.workflow.actions.getitemfromlist",
+      "WFWorkflowActionParameters": [
+        {
+          "WFItemIndex": 0,
+          "WFGetItemInput": {
+            "Value": {
+              "Type": "Variable",
+              "VariableName": "Dictionary Value"
+            },
+            "WFSerializationType": "WFTextTokenAttachment"
+          }
+        }
+      ]
+    },
+    {
+      "WFWorkflowActionIdentifier": "is.workflow.actions.getdictionaryvalue",
+      "WFWorkflowActionParameters": [
+        {
+          "WFDictionaryKey": "text",
+          "WFDictionary": {
+            "Value": {
+              "Type": "Variable",
+              "VariableName": "Item from List"
+            },
+            "WFSerializationType": "WFTextTokenAttachment"
+          }
+        }
+      ]
+    },
+    {
+      "WFWorkflowActionIdentifier": "is.workflow.actions.setclipboard",
+      "WFWorkflowActionParameters": [
+        {
+          "WFClipboardActionText": {
+            "Value": {
+              "Type": "Variable",
+              "VariableName": "Dictionary Value"
+            },
+            "WFSerializationType": "WFTextTokenAttachment"
+          }
+        }
+      ]
+    },
+    {
+      "WFWorkflowActionIdentifier": "is.workflow.actions.shownotification",
+      "WFWorkflowActionParameters": [
+        {
+          "WFNotificationActionTitle": "Tono rewrite copied",
+          "WFNotificationActionBody": {
+            "Value": {
+              "Type": "Variable",
+              "VariableName": "Dictionary Value"
+            },
+            "WFSerializationType": "WFTextTokenAttachment"
+          }
+        }
+      ]
+    }
+  ],
+  "WFWorkflowClientVersion": "2605",
+  "WFWorkflowClientRelease": "26.5",
+  "WFWorkflowMinimumClientRelease": 900,
+  "WFWorkflowIcon": {
+    "WFWorkflowIconStartColor": 2344310015,
+    "WFWorkflowIconImageData": ""
+  },
+  "WFWorkflowImportQuestions": [],
+  "WFWorkflowTypes": ["NCWidget", "WatchKit"],
+  "WFWorkflowInputContentItemClasses": [
+    "WFAppStoreAppContentItem",
+    "WFArticleContentItem",
+    "WFContactContentItem",
+    "WFDateContentItem",
+    "WFEmailAddressContentItem",
+    "WFGenericFileContentItem",
+    "WFImageContentItem",
+    "WFiTunesProductContentItem",
+    "WFLocationContentItem",
+    "WFDictionaryContentItem",
+    "WFMKMapItemContentItem",
+    "WFNumberContentItem",
+    "WFPDFContentItem",
+    "WFPhoneNumberContentItem",
+    "WFRichTextContentItem",
+    "WFSafariWebPageContentItem",
+    "WFStringContentItem",
+    "WFURLContentItem"
+  ],
+  "WFWorkflowOutputContentItemClasses": [],
+  "WFWorkflowHasShortcutInputVariables": true,
+  "WFWorkflowHasOutputData": false,
+  "WFWorkflowHasSleepAction": false
+}

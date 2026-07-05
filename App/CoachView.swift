@@ -475,6 +475,8 @@ struct CoachView: View {
             return "Account not set up yet. Open Settings → Account and tap ‘Set up Tono’."
         case .decoding(let m):
             return "Bad response: \(m)"
+        case .tooManyDevices(let current, let max):
+            return "This email is already on \(current) devices (max \(max))."
         }
     }
 

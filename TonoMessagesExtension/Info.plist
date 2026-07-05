@@ -21,35 +21,20 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.1</string>
 	<key>CFBundleVersion</key>
-	<string>28</string>
+	<string>18</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionAttributes</key>
 		<dict>
-			<key>IsASCIICapable</key>
-			<false/>
-			<key>PrefersRightToLeft</key>
-			<false/>
-			<key>PrimaryLanguage</key>
-			<string>en-US</string>
-			<key>RequestsAutofill</key>
-			<false/>
-			<key>RequestsOpenAccess</key>
+			<key>MSMessagesAppPresentationContextMessages</key>
 			<true/>
 		</dict>
 		<key>NSExtensionPointIdentifier</key>
-		<string>com.apple.keyboard-service</string>
+		<string>com.apple.message-payload-provider</string>
 		<key>NSExtensionPrincipalClass</key>
-		<string>$(PRODUCT_MODULE_NAME).KeyboardViewController</string>
+		<string>$(PRODUCT_MODULE_NAME).MessagesViewController</string>
 	</dict>
-	<key>UISupportedInterfaceOrientations</key>
-	<array>
-		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationPortraitUpsideDown</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
-	</array>
 </dict>
 </plist>

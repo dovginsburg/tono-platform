@@ -27,6 +27,7 @@ struct TonoApp: App {
 struct RootView: View {
     @State private var prefs = TonePreferences()
     @State private var showOnboarding = false
+    @State private var showEntryPointsOnboarding = false
     @Environment(\.requestReview) var requestReview
 
     var body: some View {
@@ -52,6 +53,17 @@ struct RootView: View {
             WidgetCenter.shared.reloadAllTimelines()
         }
         .task { await fetchFeaturesAndOnboard() }
+        .fullScreenCover(isPresented: $showEntryPointsOnboarding) {
+            OnboardingEntryPointsView {
+                // After entry-points tiles, fall through to calibration
+                // if user hasn't done that flow yet.
+                let calibrationDone = SharedStore.defaults.bool(forKey: SharedKeys.onboardingDone)
+                if !calibrationDone && FeatureFlags.isEnabled(.onboardingCalibration) {
+                    showOnboarding = true
+                }
+                showEntryPointsOnboarding = false
+            }
+        }
         .fullScreenCover(isPresented: $showOnboarding) {
             OnboardingCalibrationView {
                 showOnboarding = false
@@ -79,8 +91,17 @@ struct RootView: View {
                 NotificationManager.shared.cancelWeeklyDigest()
             }
         }
-        let done = SharedStore.defaults.bool(forKey: SharedKeys.onboardingDone)
-        if !done && FeatureFlags.isEnabled(.onboardingCalibration) {
+        // v1.0 onboarding order: entry-points tiles first (per skill
+        // tono-ios-multi-entry-architecture), then calibration if not done.
+        // Both are independently gated so a user who skips entry-points
+        // still sees the calibration flow if applicable.
+        let entryPointsDone = SharedStore.defaults.bool(forKey: SharedKeys.entryPointsOnboardingDone)
+        if !entryPointsDone && FeatureFlags.isEnabled(.onboardingCalibration) {
+            showEntryPointsOnboarding = true
+            return
+        }
+        let calibrationDone = SharedStore.defaults.bool(forKey: SharedKeys.onboardingDone)
+        if !calibrationDone && FeatureFlags.isEnabled(.onboardingCalibration) {
             showOnboarding = true
         }
     }

@@ -2,13 +2,27 @@
 // SwiftUI body for the keyboard extension.
 //
 // Modes:
-//  .keyboard     — standard QWERTY-ish layout with Coach + Read + History buttons
-//  .loading      — spinner while the backend call is in flight
-//  .results      — risk badge + 4 rewrite chips (Coach mode)
-//  .reading      — risk badge + interpretation (Read mode, no rewrites)
-//  .history      — last 5 coach sessions (tap to re-open any result)
-//  .noFullAccess — prompt to enable Full Access in Settings
-//  .error        — inline error with back button
+//  .keyboard             — standard QWERTY-ish layout with Coach + Read + History buttons
+//  .loading              — spinner while the backend call is in flight
+//  .results              — risk badge + 4 rewrite chips (Coach mode)
+//  .reading              — risk badge + interpretation (Read mode, no rewrites)
+//  .history              — last 5 coach sessions (tap to re-open any result)
+//  .noFullAccess         — prompt to enable Full Access in Settings
+//                          (reached only after user attempts Coach without Full Access)
+//  .fullAccessOnboarding — first-launch friendly intro shown before any tap,
+//                          explains why Tono asks for Full Access
+//  .coachPrompt          — confirmation sheet "Coach this draft?" triggered
+//                          by long-pressing the return key. Cancel/Coach.
+//  .error                — inline error with back button
+//
+// NEW additions for Tono keyboard rewrite:
+//  - SuggestionStripView — three inline word suggestions above the keys,
+//                          computed from the current draft prefix + a small
+//                          on-device bigram vocabulary. Tap inserts the
+//                          predicted word into the host text field.
+//  - ReturnKey long-press — long-press the return (newline) key to invoke
+//                          Coach on the current draft without leaving the
+//                          keyboard or hunting for the Coach button.
 
 import SwiftUI
 
@@ -19,6 +33,8 @@ enum KeyboardMode: Equatable {
     case reading(ToneAnalysis)
     case history
     case noFullAccess
+    case fullAccessOnboarding
+    case coachPrompt
     case error(String)
 }
 
@@ -45,6 +61,12 @@ final class KeyboardModel: ObservableObject {
     @Published var isRefinementLoading: Bool = false  // true while LLM refines the mock preview
     @Published var threadContext: String? = nil
     @Published var selectedRecipient: Recipient? = nil
+
+    /// Inline suggestion strip (3 words). Recomputed whenever `draft` changes.
+    /// Computed off the main thread by `SuggestionEngine`; this array is
+    /// what the SwiftUI strip renders. Empty when there are no useful
+    /// completions.
+    @Published var suggestions: [String] = []
 
     // C4: edit-after-insert tracking — set when user inserts a rewrite;
     // cleared after detected edit fires the analytics event.
@@ -89,6 +111,76 @@ final class KeyboardModel: ObservableObject {
         }
 
         draft = newDraft
+        recomputeSuggestions()
+    }
+
+    /// Long-press on the return key: load the draft and pop the Coach prompt.
+    /// We deliberately run through `requestCoach()` rather than `runCoach()`
+    /// directly so the user always gets a confirmation step — a long-press on
+    /// the return key is an exploratory gesture and should not silently burn
+    /// a /v1/coach call against their daily quota.
+    func requestCoach() {
+        loadDraft()
+        guard !draft.isEmpty else {
+            mode = .error("Type something first.")
+            return
+        }
+        if !hasFullAccess {
+            mode = .noFullAccess
+            return
+        }
+        TonoAnalytics.track(.coachRequested(mode: "longpress_return"))
+        CrashReporter.addBreadcrumb("Coach long-press requested")
+        mode = .coachPrompt
+    }
+
+    /// User confirmed the long-press Coach prompt — runs the actual analyze.
+    func confirmCoachFromPrompt() {
+        mode = .keyboard
+        runCoach()
+    }
+
+    /// User cancelled the long-press Coach prompt.
+    func cancelCoachPrompt() {
+        mode = .keyboard
+    }
+
+    /// User dismissed the first-launch Full Access onboarding card.
+    /// We never auto-block the keyboard based on Full Access — the user can
+    /// still type without it. The only gated action is Coach.
+    func fullAccessOnboardingDismissed() {
+        SharedStore.defaults.set(true, forKey: SharedKeys.fullAccessExplained)
+        mode = .keyboard
+    }
+
+    /// Recompute the inline suggestion strip from the current draft.
+    /// Runs synchronously (the vocab is small and the operation is O(prefix)).
+    /// Stays in the model rather than the SwiftUI view so the strip updates
+    /// immediately even when the user is in the middle of a Coach flow.
+    func recomputeSuggestions() {
+        suggestions = SuggestionEngine.suggestions(for: draft, count: 3)
+    }
+
+    /// Insert a suggestion chip's text into the host text field.
+    /// Only the *tail* (characters not already typed) is appended so the
+    /// user's in-progress word is replaced, not doubled.
+    func insertSuggestion(_ word: String) {
+        guard let proxy = proxyProvider() else { return }
+        // Find the in-progress word boundary in the proxy's text-before-input.
+        let before = proxy.documentContextBeforeInput ?? ""
+        let prefix = before.lastWord()
+        let tail: String
+        if !prefix.isEmpty,
+           word.lowercased().hasPrefix(prefix.lowercased()),
+           word.count > prefix.count {
+            tail = String(word.dropFirst(prefix.count))
+        } else {
+            tail = word
+        }
+        proxy.insertText(tail + " ")
+        // Refresh draft from proxy and recompute suggestions.
+        loadDraft()
+        TonoAnalytics.track(.suggestionTapped)
     }
 
     func runCoach() {
@@ -364,6 +456,7 @@ final class KeyboardModel: ObservableObject {
         proxy.insertText(suggestion.text)
         SharedStore.defaults.set(suggestion.text, forKey: SharedKeys.lastRewriteVoice)
         StyleMemory.recordTap(axis: suggestion.axis, recipientId: selectedRecipient?.id)
+        StyleMemory.rememberRewrite(text: suggestion.text)
         UserMemory.recordSession(flags: analysis.flags, chosenAxis: suggestion.axis.rawValue)
         TonoBackend.shared.logAxisWin(axis: suggestion.axis.rawValue, riskLevel: analysis.riskLevel.rawValue)
 
@@ -407,6 +500,8 @@ final class KeyboardModel: ObservableObject {
 
     func insertCharacter(_ s: String) {
         proxyProvider()?.insertText(s)
+        // Keep suggestions in sync with typing. Cheap; runs in <1ms.
+        loadDraft()
     }
 
     func backspace() {
@@ -467,6 +562,10 @@ struct KeyboardRootView: View {
                 HistoryView(model: model)
             case .noFullAccess:
                 NoFullAccessView(model: model)
+            case .fullAccessOnboarding:
+                FullAccessOnboardingView(model: model)
+            case .coachPrompt:
+                CoachPromptView(model: model)
             case .error(let msg):
                 ErrorView(model: model, message: msg)
             }
@@ -499,6 +598,10 @@ private struct KeyboardLayout: View {
                 ThreadContextStrip(model: model)
             }
 
+            // Inline 3-word suggestion strip — Tono's first keyboard identity
+            // surface. Tap a chip to insert (replaces in-progress word).
+            SuggestionStripView(model: model)
+
             ForEach(0..<rows.count, id: \.self) { r in
                 HStack(spacing: 6) {
                     ForEach(rows[r], id: \.self) { key in
@@ -516,9 +619,13 @@ private struct KeyboardLayout: View {
                     .accessibilityLabel("Space")
                 ActionKey(label: "⌫", action: model.backspace)
                     .accessibilityLabel("Delete")
-                ActionKey(label: "Read", action: model.runRead, accent: false)
-                    .accessibilityLabel("Read received message")
-                    .accessibilityHint("Interprets the tone of a message you received")
+                // Return key: tap = newline, long-press (≥0.5s) = open Coach prompt.
+                ReturnKey(
+                    label: "return",
+                    insertOnTap: { model.insertCharacter("\n") },
+                    longPress: model.requestCoach
+                )
+                // Coach button remains for users who prefer the explicit affordance.
                 ActionKey(label: "Coach", action: model.runCoach, accent: true)
                     .accessibilityLabel("Coach your draft")
                     .accessibilityHint("Analyzes what you typed and suggests rewrites")
@@ -1085,5 +1192,402 @@ private struct HistoryView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+// MARK: - Inline suggestion engine
+//
+// A small, offline word-prediction engine. The goal is not to rival Apple's
+// QuickType — it's to give Tono's keyboard identity before Apple pulls
+// Real-time suggestions out of the sandbox. Order of preference:
+//   1. StyleMemory's recent rewrite vocabulary (Pro users, never persisted).
+//   2. The user's own DraftHistory stems (last 50 entries, offline-safe).
+//   3. A baked-in bigram-frequency table for English text messaging.
+//
+// All returned words respect the prefix filter (case-insensitive). The
+// vocabulary is intentionally conservative — we'd rather show nothing than
+// something wrong while the keyboard is a draft surface.
+
+enum SuggestionEngine {
+    private static let bakedVocab: [String: [String]] = {
+        // Compact message-style bigrams (hand-curated for tone coaching; not
+        // trying to be linguistically complete). Values are themselves
+        // frequency-ranked arrays so the first match wins for that prefix.
+        let raw: [String: [String]] = [
+            // greetings / closings
+            "h": ["hey", "hi", "hope", "how", "had", "have", "happy", "here"],
+            "hey": ["hey!", "hey,", "hey there"],
+            "hi": ["hi!", "hiya", "hi there"],
+            "th": ["the", "thanks", "that", "this", "they", "them", "there", "think", "thought", "thing"],
+            "thanks": ["thanks!", "thanks for", "thanks so much", "thanks again"],
+            "thank": ["thank you", "thanks!", "thanks for"],
+            "yo": ["you", "your", "yours"],
+            "you": ["you're", "you'll", "you've", "you can", "you know"],
+            // confirmations
+            "ok": ["okay", "ok!", "ok so", "ok cool", "ok great"],
+            "okay": ["okay!", "okay so", "okay cool"],
+            "ye": ["yes", "yeah", "yep"],
+            "yea": ["yeah", "yeah,"],
+            "yeah": ["yeah!", "yeah,", "yeah I", "yeah no"],
+            "sure": ["sure!", "sure thing", "sure,", "sure—"],
+            "sounds": ["sounds good", "sounds great", "sounds like", "sounds fun"],
+            // respond / replies
+            "lo": ["look", "looks", "long", "lot"],
+            "loo": ["look", "looking", "looped"],
+            "look": ["look at", "looks like", "looking forward"],
+            "i": ["I", "I'm", "I'll", "I think", "I just", "I don't", "I didn't", "I was", "I want"],
+            "i ": ["I ", "I'm ", "I'll ", "I think ", "I just ", "I don't ", "I didn't "],
+            "i'": ["I'm", "I'll", "I'd", "I've"],
+            "i'm": ["I'm so", "I'm not", "I'm going", "I'm here", "I'm good", "I'm happy"],
+            "i'l": ["I'll", "I'll be", "I'll let", "I'll try"],
+            "i do": ["I don't", "I doubt"],
+            "i don": ["I don't", "I don't know", "I don't think"],
+            // questions
+            "wh": ["what", "when", "where", "why", "which", "who"],
+            "what": ["what's up", "what's", "what do you", "what time", "what do"],
+            "how": ["how's", "how are", "how about", "how is", "how was", "how would"],
+            "are": ["are you", "are we", "are they", "are good"],
+            "are y": ["are you", "are you doing", "are you free"],
+            "can": ["can you", "can we", "can I"],
+            "do": ["do you", "do we", "do I"],
+            // prepositions
+            "wi": ["with", "will", "would", "wish"],
+            "wit": ["with", "with you", "with the", "with a"],
+            "fo": ["for", "forward"],
+            "for": ["for you", "for the", "for a", "for me", "for sure"],
+            // common verbs
+            "go": ["going", "got", "gone", "good"],
+            "goi": ["going", "going to", "going on"],
+            "going": ["going to", "going on", "going to be"],
+            "ge": ["get", "getting", "gentle"],
+            "get": ["get it", "get back", "get a", "get some"],
+            "ma": ["make", "may", "many", "matter"],
+            "let": ["let me", "let me know", "let's", "let you"],
+            "let's": ["let's do", "let's go", "let's chat"],
+            "le": ["let", "left"],
+            // time
+            "to": ["to", "today", "tomorrow", "tonight", "too"],
+            "to ": ["to ", "today ", "tomorrow ", "tonight "],
+            "tod": ["today", "today!", "today's"],
+            "tom": ["tomorrow", "tomorrow's"],
+            "ton": ["tonight", "tonight's"],
+            "ne": ["next", "never"],
+            "nex": ["next", "next week", "next time"],
+            // tone words Tono often rewrites
+            "actually": ["actually,", "actually I", "actually we"],
+            "sorry": ["sorry!", "sorry about", "sorry I", "sorry to"],
+            "perha": ["perhaps", "perhaps I", "perhaps we"],
+            "kind": ["kind of", "kindly"],
+            // agreements / reactions
+            "great": ["great!", "great to", "great,", "great work"],
+            "awesome": ["awesome!", "awesome,", "awesome to"],
+            "nice": ["nice!", "nice to", "nice work", "nice meeting"],
+            "perfect": ["perfect!", "perfect,", "perfect timing"],
+            "love": ["love it", "love this", "love that", "love you"],
+            "love i": ["love it", "love it!", "love it—"],
+            "wow": ["wow!", "wow,"],
+            // emotional / human words
+            "fee": ["feel", "feeling"],
+            "feel": ["feel like", "feel about", "feeling"],
+            "happ": ["happy", "happen", "happiness"],
+            "happy": ["happy to", "happy birthday", "happy with"],
+            "sad": ["sad", "sadly"],
+            "an": ["and", "any", "another"],
+            "anx": ["anxious", "anxiety"],
+            "exci": ["excited", "exciting"],
+            "excited": ["excited to", "excited about", "excited!"],
+            // punctuation-led closings
+            "shi": ["shit", "shift"],
+            "haha": ["haha", "haha!", "hahaha"],
+            "lol": ["lol", "lol!", "lol,"],
+            "btw": ["btw", "btw,", "btw —"],
+            "fyi": ["fyi,", "fyi —"],
+        ]
+        return raw
+    }()
+
+    /// Returns up to `count` word suggestions for a given draft string.
+    /// Empty result is meaningful: strip just hides when nothing useful exists.
+    static func suggestions(for draft: String, count: Int) -> [String] {
+        let prefix = draft.lastWord()
+        guard !prefix.isEmpty, prefix.count >= 1 else { return [] }
+
+        // 1. StyleMemory (if Pro) — recent rewrite vocabulary.
+        var personalized: [String] = []
+        if FeatureFlags.isEnabled(.memoryInference) {
+            personalized = StyleMemory.recentRewrites(matching: prefix)
+        }
+
+        // 2. DraftHistory stems — what the user actually typed recently.
+        let historyStems = DraftHistory.stems(matching: prefix, limit: 8)
+
+        // 3. Built-in bigram vocab.
+        let lc = prefix.lowercased()
+        let canned = bakedVocab[lc] ?? bakedVocab[String(lc.prefix(2))] ?? []
+
+        // Merge, preserving order: personalized → history → canned,
+        // dedup, lowercased, prefix-filtered.
+        var seen = Set<String>()
+        var out: [String] = []
+        for list in [personalized, historyStems, canned] {
+            for w in list {
+                let lower = w.lowercased()
+                if seen.contains(lower) { continue }
+                if !lower.hasPrefix(lc) { continue }
+                if lower == lc { continue }
+                seen.insert(lower)
+                out.append(lower)
+                if out.count >= count { return out }
+            }
+        }
+        // If we have fewer than `count` but the prefix is at least 2 chars,
+        // try the 2-char fallback too — feels worse than nothing.
+        if out.count < count, lc.count >= 2 {
+            let two = String(lc.prefix(2))
+            if let more = bakedVocab[two] {
+                for w in more where !seen.contains(w.lowercased()) {
+                    let lower = w.lowercased()
+                    if !lower.hasPrefix(lc) || lower == lc { continue }
+                    seen.insert(lower)
+                    out.append(lower)
+                    if out.count >= count { return out }
+                }
+            }
+        }
+        return out
+    }
+}
+
+// MARK: - String helpers
+
+private extension String {
+    /// Last whitespace-delimited token. Empty if string is whitespace/empty.
+    /// Used by both the suggestion engine and the suggestion-chip inserter
+    /// to figure out what the user is mid-typing.
+    func lastWord() -> String {
+        if let range = self.rangeOfCharacter(from: .whitespacesAndNewlines, options: .backwards) {
+            let token = String(self[range.upperBound...])
+            return token.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return self.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+// MARK: - Inline suggestion strip
+
+private struct SuggestionStripView: View {
+    @ObservedObject var model: KeyboardModel
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if model.suggestions.isEmpty {
+                Spacer()
+                Text(" ")   // keeps row at a stable height even when empty
+                    .font(.system(size: 14, design: .rounded))
+                Spacer()
+            } else {
+                ForEach(model.suggestions, id: \.self) { word in
+                    Button {
+                        model.insertSuggestion(word)
+                    } label: {
+                        Text(word)
+                            .font(.system(size: 15, weight: .medium, design: .rounded))
+                            .foregroundColor(.white.opacity(0.85))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .frame(maxWidth: .infinity)
+                            .background(Color.white.opacity(0.10))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Insert \(word)")
+                    .accessibilityHint("Replaces your in-progress word with \(word)")
+                }
+            }
+        }
+        .padding(.horizontal, 6)
+        .frame(maxWidth: .infinity, minHeight: 36)
+        .background(Color.white.opacity(0.03))
+    }
+}
+
+// MARK: - Return key with long-press → Coach prompt
+//
+// iOS keyboards don't get a real "return" key for free, so we ship our
+// own. Short tap inserts a newline (matches system default); long-press
+// (≥0.5s) fires `requestCoach()` which opens the SwiftUI Coach prompt.
+
+private struct ReturnKey: View {
+    let label: String
+    let insertOnTap: () -> Void
+    let longPress: () -> Void
+    var accent: Bool = false
+
+    @State private var didLongPress = false
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 18, weight: .medium, design: .rounded))
+            .frame(maxWidth: .infinity, minHeight: 38)
+            .background(accent ? Color.accentColor : Color.white.opacity(0.18))
+            .foregroundColor(accent ? .black : .primary)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            // Use plain gestures instead of Button — Button's tap recognizer
+            // sometimes wins the race against the long-press and the
+            // long-press never fires. Plain onTapGesture + simultaneous
+            // LongPressGesture plays nicely together in iOS 16+.
+            .onTapGesture {
+                if !didLongPress {
+                    insertOnTap()
+                }
+                didLongPress = false
+            }
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: 0.5)
+                    .onEnded { _ in
+                        didLongPress = true
+                        longPress()
+                    }
+            )
+            .accessibilityLabel("Return. Long press to coach your draft.")
+            .accessibilityHint("Tap to insert a new line. Long press to have Tono rewrite your draft.")
+    }
+}
+
+// MARK: - Coach prompt (SwiftUI confirm sheet)
+
+private struct CoachPromptView: View {
+    @ObservedObject var model: KeyboardModel
+
+    var body: some View {
+        VStack(spacing: 14) {
+            HStack {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(.purple)
+                Text("Coach this?")
+                    .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    .foregroundColor(.white)
+                Spacer()
+                Button {
+                    model.cancelCoachPrompt()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundColor(.secondary)
+                }
+                .accessibilityLabel("Cancel Coach prompt")
+            }
+
+            Text(model.draft)
+                .font(.system(size: 15, design: .rounded))
+                .foregroundColor(.white.opacity(0.85))
+                .lineLimit(3)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(Color.white.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+
+            HStack(spacing: 10) {
+                Button {
+                    model.cancelCoachPrompt()
+                } label: {
+                    Text("Cancel")
+                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .foregroundColor(.white)
+                        .background(Color.white.opacity(0.10))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Cancel Coach")
+
+                Button {
+                    model.confirmCoachFromPrompt()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 13, weight: .bold))
+                        Text("Coach")
+                    }
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .foregroundColor(.black)
+                    .background(Color.accentColor)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Run Coach on this draft")
+            }
+
+            Text("Uses one of your \(model.dailyLimit) daily rewrites. Cancel if you weren't sure.")
+                .font(.system(size: 11, design: .rounded))
+                .foregroundColor(.white.opacity(0.4))
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - First-launch Full Access onboarding
+
+private struct FullAccessOnboardingView: View {
+    @ObservedObject var model: KeyboardModel
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 36))
+                .foregroundColor(.purple)
+
+            Text("Tono needs Full Access")
+                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                .foregroundColor(.white)
+
+            VStack(alignment: .leading, spacing: 10) {
+                bullet("Reads only the message you're typing — never anything else.")
+                bullet("Sends that text to Tono's coach to suggest rewrites.")
+                bullet("Writes back the rewrite you pick. Nothing else.")
+            }
+            .padding(.horizontal, 6)
+
+            Text("Settings → General → Keyboard → Keyboards → Tono → Allow Full Access")
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundColor(.white.opacity(0.65))
+                .multilineTextAlignment(.center)
+
+            Button {
+                model.fullAccessOnboardingDismissed()
+            } label: {
+                Text("Got it")
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .foregroundColor(.black)
+                    .background(Color.accentColor)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss Full Access explanation")
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private func bullet(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "checkmark")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundColor(.green)
+                .padding(.top, 3)
+            Text(text)
+                .font(.system(size: 13, design: .rounded))
+                .foregroundColor(.white.opacity(0.8))
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
