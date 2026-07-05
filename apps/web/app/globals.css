@@ -1,0 +1,396 @@
+/* Design tokens — sampled from tonoit.com (see /DESIGN.md for how, and its
+   caveats). Keep this in sync with apps/desktop/renderer/index.html's
+   :root block and apps/android's Theme.kt. Dark is the brand's default;
+   light is the supported-but-secondary variant. */
+:root {
+  --bg: #000000;
+  --surface: #14091f;
+  --surface-raised: #1c1029;
+  --border: rgba(156, 88, 236, 0.35);
+  --text-primary: #ffffff;
+  --text-secondary: #aaaaac;
+  --text-tertiary: #77707f;
+  --accent: #9c58ec;
+  --accent-contrast: #ffffff;
+  --accent-soft-text: #ceb1f2;
+  --risk-low: #16a34a;
+  --risk-medium: #d97706;
+  --risk-high: #dc2626;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-pill: 999px;
+  --shadow-card: none;
+  --shadow-glow: 0 0 24px rgba(156, 88, 236, 0.35);
+  --motion: 150ms ease-out;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #ffffff;
+    --surface: #f7f7f9;
+    --surface-raised: #ffffff;
+    --border: #e3e3e8;
+    --text-primary: #18181b;
+    --text-secondary: #6b6b76;
+    --text-tertiary: #9a9aa5;
+    --accent: #7c3aed;
+    --accent-contrast: #ffffff;
+    --accent-soft-text: #6d28d9;
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.06);
+    --shadow-glow: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion: 0ms;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+main {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 40px 20px 80px;
+}
+
+.wordmark {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px;
+}
+
+.wordmark-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+h1 {
+  font-size: 1.75rem;
+  font-weight: 800;
+  line-height: 1.15;
+  margin: 0;
+}
+
+.tagline {
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  margin: 0 0 28px;
+}
+
+textarea {
+  width: 100%;
+  min-height: 120px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 1rem;
+  line-height: 1.5;
+  font-family: inherit;
+  resize: vertical;
+  transition: border-color var(--motion);
+}
+
+textarea::placeholder {
+  color: var(--text-tertiary);
+}
+
+textarea:hover {
+  border-color: var(--accent);
+}
+
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+input[type="text"] {
+  padding: 8px 14px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  font-family: inherit;
+  transition: border-color var(--motion);
+}
+
+input[type="text"]::placeholder {
+  color: var(--text-tertiary);
+}
+
+input[type="text"]:hover {
+  border-color: var(--accent);
+}
+
+input[type="text"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+.row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+button {
+  font-family: inherit;
+}
+
+button:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Primary: solid accent fill + glow, for the one main action per screen. */
+button.primary {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border: none;
+  padding: 10px 22px;
+  border-radius: var(--radius-pill);
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow-glow);
+  transition: opacity var(--motion), transform var(--motion);
+}
+
+button.primary:hover:not(:disabled) {
+  opacity: 0.92;
+}
+
+button.primary:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+button.primary:disabled {
+  opacity: 0.5;
+  box-shadow: none;
+  cursor: default;
+}
+
+/* Secondary: accent-tinted outline, for the mode toggle and lower-emphasis actions. */
+button.secondary {
+  background: transparent;
+  color: var(--accent-soft-text);
+  border: 1px solid var(--border);
+  padding: 8px 14px;
+  border-radius: var(--radius-pill);
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background var(--motion), border-color var(--motion);
+}
+
+button.secondary:hover {
+  background: var(--surface);
+  border-color: var(--accent);
+}
+
+button.secondary:active {
+  transform: translateY(1px);
+}
+
+select {
+  background: var(--surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: border-color var(--motion);
+}
+
+select:hover {
+  border-color: var(--accent);
+}
+
+.axis-settings {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.axis-settings-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.axis-chip {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  font-size: 0.85rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background var(--motion), border-color var(--motion), color var(--motion);
+}
+
+.axis-chip:hover {
+  border-color: var(--accent);
+}
+
+.axis-chip-on {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: var(--accent);
+}
+
+.card {
+  margin-top: 24px;
+  padding: 20px;
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
+}
+
+.risk-badge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: var(--radius-pill);
+  font-weight: 600;
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: white;
+}
+
+.risk-low { background: var(--risk-low); }
+.risk-medium { background: var(--risk-medium); }
+.risk-high { background: var(--risk-high); }
+
+.perception {
+  margin-top: 12px;
+  font-size: 1.05rem;
+  line-height: 1.5;
+}
+
+.subtext, .risk-reason {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.4;
+  margin-top: 4px;
+}
+
+.suggestions {
+  margin-top: 20px;
+  display: grid;
+  gap: 12px;
+}
+
+.suggestion {
+  padding: 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  transition: border-color var(--motion);
+}
+
+.suggestion:hover {
+  border-color: var(--accent);
+}
+
+.suggestion-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.axis-label {
+  font-weight: 600;
+}
+
+.rationale {
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  margin-top: 6px;
+}
+
+.error {
+  color: var(--risk-high);
+  font-size: 0.9rem;
+  margin-top: 12px;
+}
+
+.empty-state {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  margin-top: 24px;
+}
+
+.muted-inline {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.passkey-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.passkey-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  color: var(--accent-soft-text);
+}

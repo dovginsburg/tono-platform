@@ -10,7 +10,8 @@ the working canonical and continue to receive new work.
 |---|---|---|---|
 | iOS | `apps/ios/` | `dovginsburg/tono-ios` (main) | `tono-ios/main` (v28 = cdeb8a5 + 4726a50); keyboard parity cherry-pick from `Tono-/claude/tono-globalization-rzoqc7` |
 | Android | `apps/android/` | `dovginsburg/Tono-` (apps/android/) | `Tono-/apps/android/` (more recent than `tono-android/`) |
-| Web | `apps/web/` | `dovginsburg/tonoit.com` (main) | `tonoit.com/main` (Next.js 14, Supabase) |
+| Web (app) | `apps/web/` | `dovginsburg/Tono-` (apps/web/) | `Tono-/apps/web/` (Next.js 14, deployed at tonoit.com/app). Note: there is no standalone `tono-web` GitHub repo — the web app only exists as a subtree of `Tono-`. |
+| Marketing | `apps/marketing/` | `dovginsburg/tonoit.com` (main) | `tonoit.com/main` (static HTML at tonoit.com/ root). Distinct from the web app — `tonoit.com` is the marketing site. |
 | Backend | `apps/backend/` | `dovginsburg/Tono-` (apps/backend/) | `Tono-/apps/backend/` (Postgres+Redis+Stripe-account+WebAuthn) |
 
 ## Legacy repos (READ-ONLY during build-out, archive-pending after gate)

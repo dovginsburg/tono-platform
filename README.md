@@ -29,10 +29,11 @@ back into the legacy repos.
 
 ```
 apps/
-  ios/      Tono iOS app (keyboard + iMessage extension)
-  android/  Tono Android app (IME + main app)
-  web/      Tono web app (Next.js, deployed at tonoit.com/app)
-  backend/  Tono unified backend (Postgres + Redis + Stripe account billing + WebAuthn passkeys)
+  ios/       Tono iOS app (keyboard + iMessage extension)
+  android/   Tono Android app (IME + main app)
+  web/       Tono web app (Next.js, deployed at tonoit.com/app)
+  backend/   Tono unified backend (Postgres + Redis + Stripe account billing + WebAuthn passkeys)
+  marketing/ tonoit.com marketing site (static HTML)
 ```
 
 ## Source repos (READ-ONLY during build-out)
