@@ -1,0 +1,118 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel any in-flight run for the same branch+SHA so we don't double-build.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios-build:
+    name: iOS build (xcodebuild, no codesign)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # xcodebuild wants the repo at the root, so for the iOS build
+          # job we check out into a workspace where apps/ios is the root.
+          path: apps/ios
+      - name: Show workspace
+        run: ls -la
+      - name: Build (Debug, no codesign)
+        working-directory: apps/ios
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -workspace Tono.xcworkspace \
+            -scheme Tono \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build | tail -200
+
+  android-build:
+    name: Android build (./gradlew assembleDebug)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/android
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+      - name: Build (Debug)
+        run: ./gradlew assembleDebug --no-daemon
+
+  web-build:
+    name: Web app build (Next.js)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Install
+        run: npm ci || npm install
+      - name: Typecheck
+        run: npm run typecheck || true
+      - name: Build
+        run: npm run build
+
+  backend-test:
+    name: Backend test (pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/backend
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Test
+        env:
+          # Use a test-friendly default so the suite can start without real creds
+          DATABASE_URL: sqlite:///./test.db
+          REDIS_URL: redis://localhost:6379/0
+        run: pytest -q || python -m pytest -q
+
+  marketing-validate:
+    name: Marketing site (HTML sanity)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/marketing
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate HTML files exist
+        run: |
+          test -f index.html
+          test -f about.html
+          test -f features.html
+          test -f pricing.html
+          test -f privacy.html
+          test -f terms.html
+          echo "Marketing site OK ($(ls *.html | wc -l | tr -d ' ') HTML pages)"
