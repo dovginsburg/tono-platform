@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Window-level theme (splash/status-bar background before Compose
+         takes over). Real theming lives in TonoTheme (Theme.kt) — dark by
+         default, matching /DESIGN.md and tonoit.com. -->
+    <style name="Theme.Tono" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:colorAccent">#9C58EC</item>
+    </style>
+</resources>

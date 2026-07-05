@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">tono</string>
+    <string name="tagline">di lo que quieres decir. que se entienda como quieres.</string>
+
+    <string name="draft_placeholder">escribe o pega tu mensaje…</string>
+    <string name="coach_button">analizar</string>
+    <string name="analyzing">analizando…</string>
+    <string name="insert">insertar</string>
+    <string name="copy">copiar</string>
+    <string name="copied">copiado</string>
+    <string name="retry">reintentar</string>
+
+    <string name="risk_low">Riesgo bajo</string>
+    <string name="risk_medium">Riesgo medio</string>
+    <string name="risk_high">Riesgo alto</string>
+
+    <string name="axis_warmer">más cálido</string>
+    <string name="axis_clearer">más claro</string>
+    <string name="axis_funnier">más gracioso</string>
+    <string name="axis_safer">más seguro</string>
+
+    <string name="mode_coach">analizar un borrador</string>
+    <string name="mode_read">interpretar un mensaje</string>
+    <string name="empty_state">escribe un mensaje arriba y toca analizar para ver cómo se percibe.</string>
+
+    <string name="settings_title">configuración</string>
+    <string name="error_generic">algo salió mal. inténtalo de nuevo.</string>
+    <string name="error_text_required">escribe un mensaje primero.</string>
+
+    <string name="account_plan_free">plan: %1$s</string>
+    <string name="account_plan_pro">plan: %1$s (pro)</string>
+    <string name="upgrade_button">pasar a pro</string>
+    <string name="manage_button">gestionar suscripción</string>
+    <string name="coupon_placeholder">código promocional</string>
+    <string name="redeem_button">canjear</string>
+</resources>

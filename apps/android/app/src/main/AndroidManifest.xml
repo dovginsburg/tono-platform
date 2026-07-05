@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Face/fingerprint unlock gate — see ui/BiometricGate.kt -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+
+    <application
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:theme="@style/Theme.Tono"
+        android:allowBackup="true"
+        android:supportsRtl="true">
+
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Tono">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          The IME itself. This is the Android analogue of KeyboardExtension/
+          in tono-ios — a separate OS-level surface the user must explicitly
+          enable in system Settings > Languages & input, same as the iOS
+          "Keyboards > Add New Keyboard > Full Access" flow. Running it in
+          its own process (":keyboard") mirrors the iOS extension's separate
+          process: a crash in the keyboard can't take down the host app, and
+          vice versa, and it keeps the IME's memory footprint (tight limits
+          on some OEM skins) isolated from the companion app's.
+        -->
+        <service
+            android:name="com.tono.keyboard.TonoInputMethodService"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_INPUT_METHOD"
+            android:exported="true"
+            android:process=":keyboard">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/method" />
+        </service>
+    </application>
+</manifest>

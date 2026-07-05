@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">tono</string>
+    <string name="tagline">قل ما تقصده. ووصّله بالطريقة التي تريدها.</string>
+
+    <string name="draft_placeholder">اكتب رسالتك أو الصقها…</string>
+    <string name="coach_button">تحليل</string>
+    <string name="analyzing">جارٍ التحليل…</string>
+    <string name="insert">إدراج</string>
+    <string name="copy">نسخ</string>
+    <string name="copied">تم النسخ</string>
+    <string name="retry">إعادة المحاولة</string>
+
+    <string name="risk_low">خطر منخفض</string>
+    <string name="risk_medium">خطر متوسط</string>
+    <string name="risk_high">خطر مرتفع</string>
+
+    <string name="axis_warmer">أكثر دفئًا</string>
+    <string name="axis_clearer">أكثر وضوحًا</string>
+    <string name="axis_funnier">أكثر فكاهة</string>
+    <string name="axis_safer">أكثر أمانًا</string>
+
+    <string name="mode_coach">تحليل مسودة</string>
+    <string name="mode_read">تفسير رسالة</string>
+    <string name="empty_state">اكتب رسالة أعلاه واضغط على تحليل لترى كيف ستُفهم.</string>
+
+    <string name="settings_title">الإعدادات</string>
+    <string name="error_generic">حدث خطأ ما. يرجى المحاولة مرة أخرى.</string>
+    <string name="error_text_required">اكتب رسالة أولاً.</string>
+
+    <string name="account_plan_free">الخطة: %1$s</string>
+    <string name="account_plan_pro">الخطة: %1$s (pro)</string>
+    <string name="upgrade_button">الترقية إلى pro</string>
+    <string name="manage_button">إدارة الاشتراك</string>
+    <string name="coupon_placeholder">رمز ترويجي</string>
+    <string name="redeem_button">تفعيل</string>
+</resources>

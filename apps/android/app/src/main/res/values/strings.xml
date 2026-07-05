@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">tono</string>
+    <string name="tagline">say what you mean. land how you intend.</string>
+
+    <string name="draft_placeholder">type or paste your message…</string>
+    <string name="coach_button">coach</string>
+    <string name="analyzing">analyzing…</string>
+    <string name="insert">insert</string>
+    <string name="copy">copy</string>
+    <string name="copied">copied</string>
+    <string name="retry">try again</string>
+
+    <string name="risk_low">Low risk</string>
+    <string name="risk_medium">Medium risk</string>
+    <string name="risk_high">High risk</string>
+
+    <string name="axis_warmer">warmer</string>
+    <string name="axis_clearer">clearer</string>
+    <string name="axis_funnier">funnier</string>
+    <string name="axis_safer">safer</string>
+
+    <string name="mode_coach">coach a draft</string>
+    <string name="mode_read">interpret a message</string>
+    <string name="empty_state">write a message above and tap coach to see how it lands.</string>
+
+    <string name="settings_title">settings</string>
+    <string name="error_generic">something went wrong. please try again.</string>
+    <string name="error_text_required">type a message first.</string>
+
+    <string name="account_plan_free">plan: %1$s</string>
+    <string name="account_plan_pro">plan: %1$s (pro)</string>
+    <string name="upgrade_button">upgrade to pro</string>
+    <string name="manage_button">manage subscription</string>
+    <string name="coupon_placeholder">promo code</string>
+    <string name="redeem_button">redeem</string>
+</resources>

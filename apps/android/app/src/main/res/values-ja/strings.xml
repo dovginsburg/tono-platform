@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">tono</string>
+    <string name="tagline">伝えたいことを、伝わる形で。</string>
+
+    <string name="draft_placeholder">メッセージを入力または貼り付け…</string>
+    <string name="coach_button">コーチ</string>
+    <string name="analyzing">分析中…</string>
+    <string name="insert">挿入</string>
+    <string name="copy">コピー</string>
+    <string name="copied">コピーしました</string>
+    <string name="retry">再試行</string>
+
+    <string name="risk_low">リスク低</string>
+    <string name="risk_medium">リスク中</string>
+    <string name="risk_high">リスク高</string>
+
+    <string name="axis_warmer">より温かく</string>
+    <string name="axis_clearer">より明確に</string>
+    <string name="axis_funnier">よりユーモラスに</string>
+    <string name="axis_safer">より安全に</string>
+
+    <string name="mode_coach">下書きをコーチする</string>
+    <string name="mode_read">メッセージを解釈する</string>
+    <string name="empty_state">上にメッセージを書いて「コーチ」をタップすると、どう伝わるかがわかります。</string>
+
+    <string name="settings_title">設定</string>
+    <string name="error_generic">問題が発生しました。もう一度お試しください。</string>
+    <string name="error_text_required">先にメッセージを入力してください。</string>
+
+    <string name="account_plan_free">プラン: %1$s</string>
+    <string name="account_plan_pro">プラン: %1$s（pro）</string>
+    <string name="upgrade_button">proにアップグレード</string>
+    <string name="manage_button">サブスクリプションを管理</string>
+    <string name="coupon_placeholder">プロモコード</string>
+    <string name="redeem_button">適用</string>
+</resources>

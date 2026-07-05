@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">tono</string>
+    <string name="tagline">sag, was du meinst. komm so an, wie du es willst.</string>
+
+    <string name="draft_placeholder">Nachricht eingeben oder einfügen…</string>
+    <string name="coach_button">Analysieren</string>
+    <string name="analyzing">wird analysiert…</string>
+    <string name="insert">Einfügen</string>
+    <string name="copy">Kopieren</string>
+    <string name="copied">kopiert</string>
+    <string name="retry">erneut versuchen</string>
+
+    <string name="risk_low">Geringes Risiko</string>
+    <string name="risk_medium">Mittleres Risiko</string>
+    <string name="risk_high">Hohes Risiko</string>
+
+    <string name="axis_warmer">wärmer</string>
+    <string name="axis_clearer">klarer</string>
+    <string name="axis_funnier">lustiger</string>
+    <string name="axis_safer">sicherer</string>
+
+    <string name="mode_coach">Entwurf analysieren</string>
+    <string name="mode_read">Nachricht interpretieren</string>
+    <string name="empty_state">schreibe oben eine Nachricht und tippe auf Analysieren, um zu sehen, wie sie ankommt.</string>
+
+    <string name="settings_title">Einstellungen</string>
+    <string name="error_generic">etwas ist schiefgelaufen. bitte versuche es erneut.</string>
+    <string name="error_text_required">schreibe zuerst eine Nachricht.</string>
+
+    <string name="account_plan_free">Plan: %1$s</string>
+    <string name="account_plan_pro">Plan: %1$s (Pro)</string>
+    <string name="upgrade_button">auf Pro upgraden</string>
+    <string name="manage_button">Abo verwalten</string>
+    <string name="coupon_placeholder">Aktionscode</string>
+    <string name="redeem_button">einlösen</string>
+</resources>

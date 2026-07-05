@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">tono</string>
+    <string name="tagline">dis ce que tu penses. fais-le comprendre comme tu le souhaites.</string>
+
+    <string name="draft_placeholder">tapez ou collez votre message…</string>
+    <string name="coach_button">analyser</string>
+    <string name="analyzing">analyse en cours…</string>
+    <string name="insert">insérer</string>
+    <string name="copy">copier</string>
+    <string name="copied">copié</string>
+    <string name="retry">réessayer</string>
+
+    <string name="risk_low">Risque faible</string>
+    <string name="risk_medium">Risque moyen</string>
+    <string name="risk_high">Risque élevé</string>
+
+    <string name="axis_warmer">plus chaleureux</string>
+    <string name="axis_clearer">plus clair</string>
+    <string name="axis_funnier">plus drôle</string>
+    <string name="axis_safer">plus sûr</string>
+
+    <string name="mode_coach">analyser un brouillon</string>
+    <string name="mode_read">interpréter un message</string>
+    <string name="empty_state">écrivez un message ci-dessus et appuyez sur analyser pour voir comment il sera perçu.</string>
+
+    <string name="settings_title">réglages</string>
+    <string name="error_generic">une erreur s\'est produite. veuillez réessayer.</string>
+    <string name="error_text_required">écrivez d\'abord un message.</string>
+
+    <string name="account_plan_free">forfait : %1$s</string>
+    <string name="account_plan_pro">forfait : %1$s (pro)</string>
+    <string name="upgrade_button">passer à pro</string>
+    <string name="manage_button">gérer l\'abonnement</string>
+    <string name="coupon_placeholder">code promo</string>
+    <string name="redeem_button">valider</string>
+</resources>
