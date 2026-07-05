@@ -1,0 +1,54 @@
+# OS junk
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Node / Next.js (apps/web)
+node_modules/
+.next/
+out/
+.env*.local
+*.tsbuildinfo
+next-env.d.ts
+.vercel/
+
+# Xcode / iOS (apps/ios)
+build/
+DerivedData/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+Export/
+build_archive*/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Android (apps/android)
+.gradle/
+local.properties
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# Python / backend venv
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Secrets
+.env
+.envrc
+*.pem
