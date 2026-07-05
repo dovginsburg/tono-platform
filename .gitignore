@@ -86,3 +86,4 @@ Thumbs.db
 .vscode/
 Export/
 build_archive/
+build_archive*/
