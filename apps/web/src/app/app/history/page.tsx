@@ -138,7 +138,7 @@ export default function HistoryPage() {
         <div style={navInner}>
           <Link href="/app/app" style={brand} title="back to editor">
             <span style={brandDot} />
-            tono
+            <span style={{ fontSize: 18, fontWeight: 700, letterSpacing: '-0.02em' }}>tono</span>
           </Link>
           <div style={navRight}>
             <Link href="/app/app" style={navLink}>

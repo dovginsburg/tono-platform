@@ -204,7 +204,7 @@ export function RewriteEditor({
         <div style={navInnerStyle}>
           <Link href="/app/app" style={brandStyle} aria-label="tono home">
             <span aria-hidden style={brandDotStyle} />
-            tono
+            <span style={{ fontSize: 18, fontWeight: 700, letterSpacing: '-0.02em' }}>tono</span>
           </Link>
           <nav aria-label="Breadcrumb" style={crumbStyle}>
             <span>app</span>

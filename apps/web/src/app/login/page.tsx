@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { createClient } from '@/lib/supabase-client';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -55,228 +56,132 @@ export default function LoginPage() {
   };
 
   return (
-    <main
-      style={{
-        minHeight: '100vh',
-        display: 'grid',
-        placeItems: 'center',
-        padding: '48px 24px',
-      }}
-    >
-      <div
-        style={{
-          width: '100%',
-          maxWidth: 420,
-          background: 'var(--bg-card)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-lg)',
-          padding: 28,
-          boxShadow: '0 24px 64px rgba(0,0,0,0.4)',
-        }}
-      >
-        <header style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 22 }}>
-          <span
-            aria-hidden
-            style={{
-              width: 10,
-              height: 10,
-              borderRadius: '50%',
-              background: 'var(--accent)',
-              boxShadow: '0 0 16px var(--accent-glow)',
-            }}
-          />
-          <span style={{ fontWeight: 700, fontSize: 18, letterSpacing: '-0.02em' }}>tono</span>
-        </header>
-
-        <h1
-          style={{
-            fontSize: 28,
-            lineHeight: '34px',
-            fontWeight: 700,
-            letterSpacing: '-0.02em',
-            margin: '0 0 8px',
-          }}
-        >
-          four ways to say it.
-        </h1>
-        <p style={{ color: 'var(--text-softer)', margin: '0 0 24px', fontSize: 14 }}>
-          pick one, copy, send.
-        </p>
-
-        {/* OAuth buttons */}
-        <button
-          onClick={() => oauth('google')}
-          style={btnPrimary}
-          aria-label="Continue with Google"
-        >
-          <GoogleIcon /> continue with google
-        </button>
-        <button
-          onClick={() => oauth('apple')}
-          style={{ ...btnSecondary, marginTop: 10 }}
-          aria-label="Continue with Apple"
-        >
-          <AppleIcon /> continue with apple
-        </button>
-
-        <Divider />
-
-        {/* Magic link */}
-        {magicSent ? (
-          <div
-            role="status"
-            style={{
-              background: 'var(--bg-elev)',
-              border: '1px solid var(--border)',
-              borderRadius: 'var(--radius-md)',
-              padding: 14,
-              fontSize: 14,
-              color: 'var(--text-soft)',
-            }}
+    <div className="min-h-screen bg-tono-bg text-tono-text font-sans antialiased">
+      {/* Top nav — prominent wordmark + back to home. Same as landing. */}
+      <header className="sticky top-0 z-30 bg-tono-bg/80 backdrop-blur-md border-b border-tono-border">
+        <div className="max-w-[1180px] mx-auto px-6 md:px-10 py-4 flex items-center justify-between">
+          <Link
+            href="/"
+            className="flex items-center gap-2.5 shrink-0"
+            aria-label="tono — back to home"
           >
-            <strong style={{ color: 'var(--text)' }}>check your inbox.</strong> a magic link is
-            on its way. open it on this device to finish signing in.
-          </div>
-        ) : (
-          <form onSubmit={sendMagic}>
-            <label
-              htmlFor="email"
-              style={{
-                display: 'block',
-                fontSize: 12,
-                color: 'var(--text-softer)',
-                fontWeight: 500,
-                letterSpacing: '0.02em',
-                textTransform: 'uppercase',
-                marginBottom: 6,
-              }}
+            <span
+              aria-hidden="true"
+              className="w-3 h-3 rounded-full bg-tono-accent shadow-[0_0_16px_var(--accent-glow)]"
+            />
+            <span className="text-[22px] font-bold tracking-[-0.02em] text-tono-text">tono</span>
+          </Link>
+          <Link
+            href="/"
+            className="text-[13px] text-tono-text-soft hover:text-tono-text transition min-h-[44px] flex items-center px-2"
+          >
+            ← home
+          </Link>
+        </div>
+      </header>
+
+      <main className="grid place-items-center px-6 py-12 md:py-20">
+        <div className="w-full max-w-[440px] bg-tono-bg-card border border-tono-border rounded-[18px] p-7 md:p-8 shadow-[0_24px_64px_rgba(0,0,0,0.4)]">
+          <h1 className="text-[28px] md:text-[32px] font-bold tracking-[-0.02em] text-tono-text leading-[1.15]">
+            four ways to say it.
+          </h1>
+          <p className="text-tono-text-softer text-[14px] mt-2 mb-7">
+            pick one, copy, send.
+          </p>
+
+          {/* OAuth buttons */}
+          <div className="space-y-2.5">
+            <button
+              type="button"
+              onClick={() => oauth('google')}
+              className="w-full inline-flex items-center justify-center gap-3 px-5 py-3 rounded-[12px] bg-tono-bg-elev hover:bg-tono-bg-card text-tono-text border border-tono-border hover:border-tono-border-strong font-semibold text-[14px] transition min-h-[48px]"
+              aria-label="Continue with Google"
             >
-              or — sign in with email
-            </label>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input
-                id="email"
-                type="email"
-                required
-                placeholder="you@work.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                style={inputStyle}
-                autoComplete="email"
-              />
-              <button
-                type="submit"
-                disabled={sending || !email}
-                style={{
-                  ...btnPrimary,
-                  opacity: sending || !email ? 0.6 : 1,
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {sending ? 'sending…' : 'send link'}
-              </button>
+              <GoogleIcon /> continue with google
+            </button>
+            <button
+              type="button"
+              onClick={() => oauth('apple')}
+              className="w-full inline-flex items-center justify-center gap-3 px-5 py-3 rounded-[12px] bg-tono-bg-elev hover:bg-tono-bg-card text-tono-text border border-tono-border hover:border-tono-border-strong font-semibold text-[14px] transition min-h-[48px]"
+              aria-label="Continue with Apple"
+            >
+              <AppleIcon /> continue with apple
+            </button>
+          </div>
+
+          <Divider />
+
+          {/* Magic link */}
+          {magicSent ? (
+            <div
+              role="status"
+              className="bg-tono-bg-elev border border-tono-border rounded-[12px] p-4 text-[14px] text-tono-text-soft leading-[1.55]"
+            >
+              <strong className="text-tono-text">check your inbox.</strong> a magic link is
+              on its way. open it on this device to finish signing in.
             </div>
-          </form>
-        )}
+          ) : (
+            <form onSubmit={sendMagic}>
+              <label
+                htmlFor="email"
+                className="block text-[11px] font-semibold tracking-wider uppercase text-tono-text-softer mb-1.5"
+              >
+                sign in with email
+              </label>
+              <div className="flex gap-2">
+                <input
+                  id="email"
+                  type="email"
+                  required
+                  placeholder="you@work.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="flex-1 bg-tono-bg-elev text-tono-text border border-tono-border rounded-[12px] px-4 py-3 text-[14px] outline-none focus:border-tono-border-strong min-h-[48px] placeholder:text-tono-muted"
+                  autoComplete="email"
+                />
+                <button
+                  type="submit"
+                  disabled={sending || !email}
+                  className="inline-flex items-center justify-center px-5 py-3 rounded-[12px] bg-tono-accent hover:bg-tono-accent-hover disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold text-[14px] transition min-h-[48px] whitespace-nowrap"
+                >
+                  {sending ? 'sending…' : 'send link'}
+                </button>
+              </div>
+            </form>
+          )}
 
-        {error && (
-          <p
-            role="alert"
-            style={{
-              marginTop: 14,
-              padding: 10,
-              background: 'rgba(239,68,68,0.08)',
-              border: '1px solid rgba(239,68,68,0.3)',
-              borderRadius: 'var(--radius-md)',
-              color: '#FCA5A5',
-              fontSize: 13,
-            }}
-          >
-            {error}
+          {error && (
+            <p
+              role="alert"
+              className="mt-4 p-3 bg-[rgba(239,68,68,0.08)] border border-[rgba(239,68,68,0.3)] rounded-[12px] text-[#FCA5A5] text-[13px] leading-[1.5]"
+            >
+              {error}
+            </p>
+          )}
+
+          <p className="mt-8 text-[12px] text-tono-muted text-center">
+            by signing in, you agree tono holds your drafts. nothing else.
           </p>
-        )}
 
-        <p
-          style={{
-            marginTop: 28,
-            fontSize: 12,
-            color: 'var(--muted)',
-            textAlign: 'center',
-          }}
-        >
-          by signing in, you agree tono holds your drafts. nothing else.
-        </p>
-
-        {process.env.NODE_ENV !== 'production' && (
-          <p
-            style={{
-              marginTop: 14,
-              fontSize: 10,
-              color: 'var(--muted)',
-              wordBreak: 'break-all',
-              opacity: 0.6,
-            }}
-          >
-            supabase: {SUPABASE_URL}
-          </p>
-        )}
-      </div>
-    </main>
+          {process.env.NODE_ENV !== 'production' && (
+            <p className="mt-4 text-[10px] text-tono-muted text-center opacity-60 break-all">
+              supabase: {SUPABASE_URL}
+            </p>
+          )}
+        </div>
+      </main>
+    </div>
   );
 }
 
-const btnPrimary: React.CSSProperties = {
-  width: '100%',
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: 10,
-  padding: '12px 18px',
-  background: 'var(--accent)',
-  color: '#fff',
-  border: '1px solid var(--accent)',
-  borderRadius: 'var(--radius-md)',
-  fontSize: 14,
-  fontWeight: 600,
-  transition: 'all var(--duration) var(--ease)',
-  minHeight: 44,
-};
-
-const btnSecondary: React.CSSProperties = {
-  ...btnPrimary,
-  background: 'var(--bg-elev)',
-  color: 'var(--text)',
-  border: '1px solid var(--border)',
-};
-
-const inputStyle: React.CSSProperties = {
-  flex: 1,
-  background: 'var(--bg-elev)',
-  color: 'var(--text)',
-  border: '1px solid var(--border)',
-  borderRadius: 'var(--radius-md)',
-  padding: '12px 14px',
-  fontSize: 14,
-  outline: 'none',
-  minHeight: 44,
-};
-
 function Divider() {
   return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: '1fr auto 1fr',
-        alignItems: 'center',
-        gap: 12,
-        margin: '20px 0',
-      }}
-    >
-      <div style={{ height: 1, background: 'var(--border)' }} />
-      <span style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+    <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 my-6">
+      <div className="h-px bg-tono-border" />
+      <span className="text-[11px] text-tono-muted uppercase tracking-wider font-semibold">
         or
       </span>
-      <div style={{ height: 1, background: 'var(--border)' }} />
+      <div className="h-px bg-tono-border" />
     </div>
   );
 }
