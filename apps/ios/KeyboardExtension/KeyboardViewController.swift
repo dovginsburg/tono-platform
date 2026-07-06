@@ -20,16 +20,17 @@
 import UIKit
 import SwiftUI
 
-class KeyboardViewController: UIInputViewController {
+@objc(KeyboardViewController)
+public class KeyboardViewController: UIInputViewController {
 
     private var hostingController: UIHostingController<KeyboardRootView>?
     private var keyboardModel: KeyboardModel?
 
-    override func updateViewConstraints() {
+    public override func updateViewConstraints() {
         super.updateViewConstraints()
     }
 
-    override func viewDidLoad() {
+    public override func viewDidLoad() {
         super.viewDidLoad()
         // Signal to the host app that the keyboard is enabled and has loaded.
         // HomeView polls this on scenePhase changes to show a checkmark.
@@ -37,7 +38,7 @@ class KeyboardViewController: UIInputViewController {
         installRootView()
     }
 
-    override func viewWillAppear(_ animated: Bool) {
+    public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         // hasFullAccess can change while the app is backgrounded (user toggles
         // Full Access in Settings), so refresh it every time the keyboard appears.
@@ -58,7 +59,7 @@ class KeyboardViewController: UIInputViewController {
         keyboardModel?.applyAutoCapitalizationIfNeeded()
     }
 
-    override func viewWillLayoutSubviews() {
+    public override func viewWillLayoutSubviews() {
         super.viewWillLayoutSubviews()
         // The system sets a default height; respect it but allow growth.
         // Increased from 320 to 360 because the new suggestion strip + Coach
