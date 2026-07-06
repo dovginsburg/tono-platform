@@ -28,7 +28,7 @@ jobs:
         run: |
           set -euo pipefail
           xcodebuild \
-            -workspace Tono.xcworkspace \
+            -project Tono.xcodeproj \
             -scheme Tono \
             -destination 'generic/platform=iOS Simulator' \
             -configuration Debug \
