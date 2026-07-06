@@ -4,7 +4,7 @@
 //
 // Xcode setup:
 //   1. File > New > Target > Widget Extension, name "TonoWidget"
-//   2. Add App Group "group.com.tonocoach.shared" to the widget target
+//   2. Add App Group "group.com.tonoit.shared" to the widget target
 //   3. PRODUCT_BUNDLE_IDENTIFIER: com.tonocoach.app.widget
 //
 // Data flow: keyboard extension writes to App Group UserDefaults after each
@@ -55,7 +55,7 @@ struct UsageProvider: TimelineProvider {
     }
 
     private func currentEntry() -> UsageEntry {
-        let d = UserDefaults(suiteName: "group.com.tonocoach.shared") ?? .standard
+        let d = UserDefaults(suiteName: "group.com.tonoit.shared") ?? .standard
         let used  = d.integer(forKey: "tc.widgetUsedToday")
         let limit = d.object(forKey: "tc.widgetDailyLimit") as? Int ?? 10
         let isPro = limit == -1 || d.bool(forKey: "tc.proUnlocked")

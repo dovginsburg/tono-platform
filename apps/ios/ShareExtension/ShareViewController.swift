@@ -4,7 +4,7 @@
 //
 // Xcode setup required:
 //   1. File > New > Target > Share Extension, name "TonoShare"
-//   2. Add the App Group "group.com.tonocoach.shared" to the share extension target
+//   2. Add the App Group "group.com.tonoit.shared" to the share extension target
 //   3. Add keychain-access-groups entitlement (same group as the keyboard)
 //   4. In Info.plist set NSExtensionActivationRule to filter for public.plain-text
 //

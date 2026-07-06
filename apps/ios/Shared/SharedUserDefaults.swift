@@ -98,7 +98,7 @@ public enum SharedKeys {
 }
 
 public enum SharedStore {
-    public static let suiteName = "group.com.tonocoach.shared"
+    public static let suiteName = "group.com.tonoit.shared"
     public static var defaults: UserDefaults {
         UserDefaults(suiteName: suiteName) ?? .standard
     }
