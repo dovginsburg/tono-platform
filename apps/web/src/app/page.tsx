@@ -16,6 +16,7 @@
 
 import Link from 'next/link'
 import TonoDemo from './TonoDemo'
+import ProCheckoutButton from './ProCheckoutButton'
 
 // ── Server component — no client state needed. ──────────────────────────
 export default function LandingPage() {
@@ -57,8 +58,14 @@ export default function LandingPage() {
                   <ArrowIcon />
                 </Link>
                 <a
+                  href="#pricing"
+                  className="inline-flex items-center justify-center gap-2 px-5 py-3.5 rounded-[12px] bg-tono-bg-card border border-tono-accent/40 text-tono-text hover:border-tono-accent font-semibold transition min-h-[48px] text-[15px]"
+                >
+                  go pro — $3/mo
+                </a>
+                <a
                   href="#how"
-                  className="inline-flex items-center justify-center gap-2 px-5 py-3.5 rounded-[12px] bg-transparent text-tono-text-soft hover:text-tono-text font-semibold transition min-h-[48px] text-[15px] underline-offset-4 hover:underline"
+                  className="inline-flex items-center justify-center gap-2 px-5 py-3.5 rounded-[12px] bg-transparent text-tono-text-soft hover:text-tono-text font-semibold transition min-h-[48px] text-[15px] underline-offset-4 hover:underline hidden sm:inline-flex"
                 >
                   see how it works
                 </a>
@@ -187,7 +194,7 @@ export default function LandingPage() {
               </Link>
             </article>
 
-            {/* Pro tier — the $5.99/mo from the brand doc */}
+            {/* Pro tier — wired to Stripe Checkout via /api/checkout */}
             <article
               className="bg-tono-bg-card border border-tono-accent/40 rounded-[18px] p-7 flex flex-col relative shadow-[0_8px_32px_rgba(168,85,247,0.18)]"
             >
@@ -196,7 +203,7 @@ export default function LandingPage() {
               </span>
               <p className="text-[11px] uppercase tracking-wider font-semibold text-tono-accent-light">pro</p>
               <p className="text-[36px] md:text-[40px] font-bold tracking-[-0.02em] text-tono-text mt-2">
-                $5.99
+                $3
                 <span className="text-[15px] font-normal text-tono-text-softer ml-2">/ month</span>
               </p>
               <p className="text-[14px] text-tono-text-soft leading-[1.55] mt-3">
@@ -208,17 +215,26 @@ export default function LandingPage() {
                 <li className="flex gap-2"><span className="text-tono-tone-safer font-semibold">✓</span><span>priority on the rewrite queue — no cold-start</span></li>
                 <li className="flex gap-2"><span className="text-tono-tone-safer font-semibold">✓</span><span>cancel anytime — no retention, no dark patterns</span></li>
               </ul>
-              <Link
-                href="/login"
-                className="mt-8 inline-flex items-center justify-center gap-2 px-5 py-3 rounded-[12px] bg-tono-accent hover:bg-tono-accent-hover text-white font-semibold transition min-h-[44px] text-[14px] shadow-[0_8px_24px_rgba(168,85,247,0.30)]"
-              >
-                try pro free for 14 days
-                <ArrowIcon />
-              </Link>
+              <div className="mt-8 flex flex-col sm:flex-row gap-3">
+                <ProCheckoutButton
+                  interval="month"
+                  label="go pro — $3/mo"
+                >
+                  go pro — $3/mo
+                  <ArrowIcon />
+                </ProCheckoutButton>
+                <ProCheckoutButton
+                  interval="year"
+                  label="go pro — $29/yr"
+                  className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-[12px] bg-transparent border border-tono-border-strong text-tono-text hover:border-tono-accent disabled:opacity-60 disabled:pointer-events-none font-semibold transition min-h-[44px] text-[14px]"
+                >
+                  go pro — $29/yr
+                </ProCheckoutButton>
+              </div>
             </article>
           </div>
           <p className="text-center text-[13px] text-tono-text-softer mt-8">
-            billed monthly. no annual lock-in. the iOS keyboard ships with pro on day one.
+            billed monthly or yearly. no retention. the iOS keyboard ships with pro on day one.
           </p>
         </div>
       </section>
