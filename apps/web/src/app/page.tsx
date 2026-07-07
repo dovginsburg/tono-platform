@@ -154,6 +154,75 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* ── Pricing — Free tier vs Pro, what's actually in each ──────── */}
+      <section id="pricing" className="border-t border-tono-border bg-tono-bg">
+        <div className="max-w-[1080px] mx-auto px-6 md:px-10 py-20 md:py-24">
+          <div className="mb-10 max-w-2xl">
+            <span className="text-[11px] uppercase tracking-wider font-semibold text-tono-accent-light">pricing</span>
+            <h2 className="text-[32px] md:text-[40px] font-bold tracking-[-0.02em] text-tono-text mt-3">
+              free for most. pro when you rewrite all day.
+            </h2>
+          </div>
+          <div className="grid md:grid-cols-2 gap-5">
+            {/* Free tier — what anonymous visitors see */}
+            <article className="bg-tono-bg-card border border-tono-border rounded-[18px] p-7 flex flex-col">
+              <p className="text-[11px] uppercase tracking-wider font-semibold text-tono-text-softer">free</p>
+              <p className="text-[36px] md:text-[40px] font-bold tracking-[-0.02em] text-tono-text mt-2">
+                $0
+                <span className="text-[15px] font-normal text-tono-text-softer ml-2">forever</span>
+              </p>
+              <p className="text-[14px] text-tono-text-soft leading-[1.55] mt-3">
+                for the draft, the slack reply, the one email a week.
+              </p>
+              <ul className="mt-6 space-y-2.5 text-[14px] text-tono-text-soft">
+                <li className="flex gap-2"><span className="text-tono-tone-safer font-semibold">✓</span><span><strong className="text-tono-text font-semibold">3 rewrites a day</strong> — no signup required</span></li>
+                <li className="flex gap-2"><span className="text-tono-tone-safer font-semibold">✓</span><span>drafts stay in your browser only</span></li>
+                <li className="flex gap-2"><span className="text-tono-tone-safer font-semibold">✓</span><span>nothing about your writing trains anything</span></li>
+              </ul>
+              <Link
+                href="/login"
+                className="mt-8 inline-flex items-center justify-center gap-2 px-5 py-3 rounded-[12px] bg-transparent border border-tono-border-strong text-tono-text hover:border-tono-accent hover:text-tono-text font-semibold transition min-h-[44px] text-[14px]"
+              >
+                start free — no card
+              </Link>
+            </article>
+
+            {/* Pro tier — the $5.99/mo from the brand doc */}
+            <article
+              className="bg-tono-bg-card border border-tono-accent/40 rounded-[18px] p-7 flex flex-col relative shadow-[0_8px_32px_rgba(168,85,247,0.18)]"
+            >
+              <span className="absolute -top-3 right-5 inline-flex items-center gap-1 px-3 py-1 rounded-full bg-tono-accent text-white text-[10px] font-semibold uppercase tracking-wider">
+                tono pro
+              </span>
+              <p className="text-[11px] uppercase tracking-wider font-semibold text-tono-accent-light">pro</p>
+              <p className="text-[36px] md:text-[40px] font-bold tracking-[-0.02em] text-tono-text mt-2">
+                $5.99
+                <span className="text-[15px] font-normal text-tono-text-softer ml-2">/ month</span>
+              </p>
+              <p className="text-[14px] text-tono-text-soft leading-[1.55] mt-3">
+                for the people who write to be read all day.
+              </p>
+              <ul className="mt-6 space-y-2.5 text-[14px] text-tono-text-soft">
+                <li className="flex gap-2"><span className="text-tono-tone-safer font-semibold">✓</span><span><strong className="text-tono-text font-semibold">unlimited rewrites</strong> on the web composer</span></li>
+                <li className="flex gap-2"><span className="text-tono-tone-safer font-semibold">✓</span><span>local history of your last 50 rewrites</span></li>
+                <li className="flex gap-2"><span className="text-tono-tone-safer font-semibold">✓</span><span>priority on the rewrite queue — no cold-start</span></li>
+                <li className="flex gap-2"><span className="text-tono-tone-safer font-semibold">✓</span><span>cancel anytime — no retention, no dark patterns</span></li>
+              </ul>
+              <Link
+                href="/login"
+                className="mt-8 inline-flex items-center justify-center gap-2 px-5 py-3 rounded-[12px] bg-tono-accent hover:bg-tono-accent-hover text-white font-semibold transition min-h-[44px] text-[14px] shadow-[0_8px_24px_rgba(168,85,247,0.30)]"
+              >
+                try pro free for 14 days
+                <ArrowIcon />
+              </Link>
+            </article>
+          </div>
+          <p className="text-center text-[13px] text-tono-text-softer mt-8">
+            billed monthly. no annual lock-in. the iOS keyboard ships with pro on day one.
+          </p>
+        </div>
+      </section>
+
       {/* ── Privacy / local-only — concrete claim, not marketing fluff ── */}
       <section className="border-t border-tono-border bg-tono-bg-soft">
         <div className="max-w-[860px] mx-auto px-6 md:px-10 py-16 md:py-20 text-center">
@@ -238,6 +307,12 @@ function TonoNav() {
             how it works
           </a>
           <a
+            href="#pricing"
+            className="text-tono-text-soft hover:text-tono-text transition min-h-[44px] hidden sm:flex items-center px-2"
+          >
+            pricing
+          </a>
+          <a
             href="mailto:hi@tonoit.com?subject=tono%20feedback"
             className="text-tono-text-soft hover:text-tono-text transition min-h-[44px] hidden sm:flex items-center px-2"
           >
@@ -273,6 +348,7 @@ function TonoFooter() {
           <p className="text-[11px] uppercase tracking-wider font-semibold text-tono-text-softer mb-3">product</p>
           <ul className="space-y-2 text-[13px]">
             <li><a href="#how" className="text-tono-text-soft hover:text-tono-text transition">how it works</a></li>
+            <li><a href="#pricing" className="text-tono-text-soft hover:text-tono-text transition">pricing</a></li>
             <li><Link href="/login" className="text-tono-text-soft hover:text-tono-text transition">sign in</Link></li>
             <li><a href="mailto:hi@tonoit.com?subject=tono%20feedback" className="text-tono-text-soft hover:text-tono-text transition">feedback</a></li>
           </ul>
