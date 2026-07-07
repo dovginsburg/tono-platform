@@ -58,7 +58,7 @@ enum KeyboardLayoutMode { case letters, symbols }
 enum ShiftState { case none, shiftOnce, capsLock }
 
 @MainActor
-final class KeyboardModel: ObservableObject {
+public final class KeyboardModel: ObservableObject {
     @Published var mode: KeyboardMode = .keyboard
     @Published var draft: String = ""
     @Published var usedToday: Int = 0
@@ -100,7 +100,7 @@ final class KeyboardModel: ObservableObject {
     private let advance: () -> Void
     private let dismiss: () -> Void
 
-    init(
+    public init(
         initialText: String = "",
         proxy: @escaping () -> UITextDocumentProxy?,
         advance: @escaping () -> Void,
@@ -614,11 +614,11 @@ final class KeyboardModel: ObservableObject {
 
 // MARK: - Root
 
-struct KeyboardRootView: View {
+public struct KeyboardRootView: View {
     @ObservedObject var model: KeyboardModel
     let proxyProvider: () -> UITextDocumentProxy?
 
-    var body: some View {
+    public var body: some View {
         ZStack {
             Color(red: 0.07, green: 0.07, blue: 0.08)
                 .ignoresSafeArea()
