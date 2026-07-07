@@ -27,13 +27,13 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
-from .auth import CurrentUser
+from .auth import CurrentUser, OptionalCurrentUser
 from .store import Store, get_store
 
 logger = logging.getLogger(__name__)
@@ -81,6 +81,15 @@ router = APIRouter(prefix="/v1", tags=["payments"])
 
 class CheckoutRequest(BaseModel):
     interval: str = "month"  # "month" | "year"
+    # Optional email for anonymous web checkout so Stripe can prefill the
+    # receipt address / create the customer without prompting. iOS flows
+    # already have an account, this is just a passthrough.
+    email: Optional[str] = None
+    # Optional landing-page overrides. Defaults below point at tonoit.com
+    # so unauthenticated website visitors land on the welcome page;
+    # authenticated app flows can still override per-request.
+    success_url: Optional[str] = None
+    cancel_url: Optional[str] = None
 
 
 class CheckoutResponse(BaseModel):
@@ -110,7 +119,7 @@ def _store_dep() -> Store:
 def create_checkout_session(
     body: CheckoutRequest,
     request: Request,
-    user: CurrentUser,
+    user: OptionalCurrentUser,
     store: Annotated[Store, Depends(_store_dep)],
 ) -> CheckoutResponse:
     if not _is_configured():
@@ -131,31 +140,73 @@ def create_checkout_session(
 
     stripe.api_key = _secret()
 
-    # Reuse the Stripe customer if we've already created one; otherwise
-    # let Checkout create it and we'll attach later from the webhook.
-    customer_id = user.stripe_customer_id
-    if not customer_id:
-        customer = stripe.Customer.create(
-            metadata={"tono_device_id": user.device_id},
-        )
-        customer_id = customer["id"]
-        store.attach_stripe_customer(user.device_id, customer_id)
+    # Two callers share this endpoint:
+    #  - iOS app (authenticated, ``user`` is a real row): reuse the
+    #    existing Stripe customer; the subscription is attached to that
+    #    device via ``client_reference_id``.
+    #  - Public website (anonymous, ``user`` is None): no customer on
+    #    file. We let Stripe Checkout create the customer at session
+    #    time and use ``customer_email`` so the receipt already has an
+    #    address when the buyer hits the hosted page.
+    #
+    # Both flows set ``metadata.tono_source`` so the webhook can tell
+    # app-sourced subscriptions from web-sourced ones later (web
+    # subscriptions have no device row to attach to).
+    if user is not None:
+        customer_id = user.stripe_customer_id
+        if not customer_id:
+            customer = stripe.Customer.create(
+                metadata={"tono_device_id": user.device_id},
+            )
+            customer_id = customer["id"]
+            store.attach_stripe_customer(user.device_id, customer_id)
+        metadata = {
+            "tono_device_id": user.device_id,
+            "tono_source": "app",
+        }
+        client_reference_id = user.device_id
+    else:
+        customer_id = None
+        metadata = {"tono_source": "web"}
+        client_reference_id = None
 
-    success_url = f"{_public_base_url(request)}/v1/checkout/return?status=success"
-    cancel_url = f"{_public_base_url(request)}/v1/checkout/return?status=cancel"
+    # PUBLIC_BASE_URL wins over the request host so deployments behind
+    # Railway's proxy don't surface ``*.up.railway.app`` in the user's
+    # browser. The static-site caller passes ``PUBLIC_BASE_URL=https://
+    # tonoit.com`` in the env, which keeps the success URL on-brand.
+    base = os.environ.get("PUBLIC_BASE_URL") or _public_base_url(request)
+    success_url = body.success_url or f"{base.rstrip('/')}/welcome-pro?s=1"
+    cancel_url = body.cancel_url or f"{base.rstrip('/')}/pricing"
 
-    session = stripe.checkout.Session.create(
+    session_kwargs: dict[str, Any] = dict(
         mode="subscription",
-        customer=customer_id,
         line_items=[{"price": price_id, "quantity": 1}],
         success_url=success_url,
         cancel_url=cancel_url,
-        client_reference_id=user.device_id,
-        metadata={"tono_device_id": user.device_id},
-        subscription_data={
-            "metadata": {"tono_device_id": user.device_id},
-        },
+        # Enable Apple Pay / Google Pay buttons on the hosted page. With
+        # automatic_payment_methods on, Stripe Checkout renders the
+        # express-checkout row automatically when the wallet is
+        # available in the customer's browser; the underlying
+        # PaymentIntent still resolves to a card charge.
+        automatic_payment_methods={"enabled": True},
+        # Defensive belt-and-braces for old client integrations — keep
+        # ``card`` explicit so the hosted page always has a fallback
+        # path even if the merchant dashboard hasn't enabled APMs yet.
+        payment_method_types=["card"],
+        subscription_data={"metadata": metadata},
+        metadata=metadata,
     )
+    if customer_id is not None:
+        session_kwargs["customer"] = customer_id
+        if client_reference_id is not None:
+            session_kwargs["client_reference_id"] = client_reference_id
+    else:
+        # Anonymous web flow — let Stripe create the customer from the
+        # email we pass, or prompt for one if the request didn't carry
+        # one (the static-site JS doesn't collect email up front).
+        session_kwargs["customer_email"] = body.email or None
+
+    session = stripe.checkout.Session.create(**session_kwargs)
 
     return CheckoutResponse(url=session["url"], session_id=session["id"])
 
