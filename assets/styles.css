@@ -285,6 +285,20 @@ h3 {
 }
 .hero-ctas { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
 
+.hero-secondary {
+  text-align: center;
+  margin-top: 18px;
+  font-size: 0.88rem;
+  color: var(--text-softer);
+}
+.hero-secondary a {
+  color: var(--accent-light);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(168, 85, 247, 0.3);
+  transition: color 0.2s ease, border-color 0.2s ease;
+}
+.hero-secondary a:hover { color: var(--text); border-bottom-color: var(--accent); }
+
 /* Phone mockup (home hero) */
 .hero-phone {
   position: relative;
@@ -318,11 +332,11 @@ h3 {
   z-index: 2;
 }
 .msg {
-  padding: 10px 14px;
+  padding: 11px 14px;
   border-radius: 16px;
-  font-size: 0.85rem;
-  max-width: 82%;
-  line-height: 1.4;
+  font-size: 0.92rem;
+  max-width: 84%;
+  line-height: 1.45;
 }
 .msg.them { background: #1f1f23; color: var(--text-soft); align-self: flex-start; border-bottom-left-radius: 4px; }
 .msg.you { background: var(--accent); color: white; align-self: flex-end; border-bottom-right-radius: 4px; }
@@ -1016,6 +1030,12 @@ footer {
   .video-frame.hero-video .play-button { width: 76px; height: 76px; }
   .video-frame.hero-video .play-button svg { width: 30px; height: 30px; }
   .video-grid { grid-template-columns: 1fr; gap: 28px; }
+  .hero { padding: 56px 18px 36px; }
+  .hero h1 { font-size: 2.1rem !important; letter-spacing: -0.02em; }
+  .hero-tag { font-size: 0.98rem !important; margin-bottom: 28px; }
+  .hero-ctas .btn { padding: 12px 18px; font-size: 0.92rem; }
+  .hero-phone { max-width: 260px; margin-top: 40px; }
+  .phone-chip { font-size: 0.66rem; padding: 7px 4px; }
 }
 
 /* ---------- GOOGLE PLAY STORE BUTTON ---------- */
