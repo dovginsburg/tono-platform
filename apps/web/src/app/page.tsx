@@ -14,7 +14,8 @@
 //
 // Brand: docs/BRAND-TONO.md · tokens: tailwind.config.ts
 
-import Link from 'next/link';
+import Link from 'next/link'
+import TonoDemo from './TonoDemo'
 
 // ── Server component — no client state needed. ──────────────────────────
 export default function LandingPage() {
@@ -41,10 +42,10 @@ export default function LandingPage() {
               </h1>
               <div className="mt-5 flex flex-wrap items-center gap-x-3 gap-y-2 text-[15px] md:text-[16px] text-tono-text-soft leading-[1.5]">
                 <span className="text-tono-text-softer">pick one —</span>
-                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-[8px] bg-[#F472B6]/10 text-[#F472B6] font-semibold text-[13px]">warmer</span>
-                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-[8px] bg-[#38BDF8]/10 text-[#38BDF8] font-semibold text-[13px]">clearer</span>
-                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-[8px] bg-[#FBBF24]/10 text-[#FBBF24] font-semibold text-[13px]">funnier</span>
-                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-[8px] bg-[#34D399]/10 text-[#34D399] font-semibold text-[13px]">safer</span>
+                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-[8px] tone-bg-soft-wamer tone-text-wamer font-semibold text-[13px]">warmer</span>
+                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-[8px] tone-bg-soft-clearer tone-text-clearer font-semibold text-[13px]">clearer</span>
+                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-[8px] tone-bg-soft-funnier tone-text-funnier font-semibold text-[13px]">funnier</span>
+                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-[8px] tone-bg-soft-safer tone-text-safer font-semibold text-[13px]">safer</span>
                 <span className="text-tono-text">— copy, send.</span>
               </div>
               <div className="mt-8 flex flex-col sm:flex-row gap-3">
@@ -67,54 +68,11 @@ export default function LandingPage() {
               </p>
             </div>
 
-            {/* ── Inline demo — iOS phone frame, real keyboard surface, not nested cards ── */}
-            <aside
-              aria-label="tono iOS keyboard preview"
-              className="relative"
-            >
-              {/* soft glow behind the phone */}
-              <div
-                aria-hidden="true"
-                className="absolute -inset-6 rounded-[44px] bg-tono-accent/10 blur-2xl pointer-events-none"
-              />
-              {/* phone bezel */}
-              <div className="relative rounded-[40px] bg-[#1A1A1F] p-3 shadow-[0_24px_64px_rgba(0,0,0,0.55)] border border-[#2A2A30]">
-                {/* dynamic-island / status bar */}
-                <div className="flex items-center justify-between px-5 pt-2 pb-3">
-                  <span className="text-[10px] font-mono font-semibold text-tono-text">9:41</span>
-                  <div className="w-20 h-5 rounded-full bg-black" aria-hidden="true" />
-                  <div className="flex items-center gap-1 text-tono-text" aria-hidden="true">
-                    <svg width="13" height="9" viewBox="0 0 13 9" fill="currentColor"><rect x="0" y="6" width="2" height="3" rx="0.5"/><rect x="3.5" y="4" width="2" height="5" rx="0.5"/><rect x="7" y="2" width="2" height="7" rx="0.5"/><rect x="10.5" y="0" width="2" height="9" rx="0.5"/></svg>
-                    <svg width="14" height="9" viewBox="0 0 14 9" fill="none" stroke="currentColor" strokeWidth="1.2"><rect x="0.6" y="0.6" width="11" height="7.8" rx="1.4"/><rect x="12.4" y="3" width="1.4" height="3" fill="currentColor"/></svg>
-                  </div>
-                </div>
-                {/* screen surface — the keyboard */}
-                <div className="rounded-[28px] bg-tono-bg-card border border-tono-border overflow-hidden">
-                  {/* composer — pasted draft */}
-                  <div className="px-4 pt-5 pb-3 border-b border-tono-border">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-tono-accent shadow-[0_0_8px_var(--accent-glow)]" />
-                      <span className="text-[10px] font-semibold tracking-[0.06em] text-tono-text uppercase">tono · draft</span>
-                    </div>
-                    <p className="text-[13px] sm:text-[14px] text-tono-text-soft leading-[1.5] italic">
-                      &ldquo;Q3 timeline keeps slipping. I need the design files by Friday or we are missing the launch.&rdquo;
-                    </p>
-                  </div>
-                  {/* four tone rewriters */}
-                  <div className="px-2.5 py-2 space-y-1.5">
-                    <ToneChip color="#F472B6" label="warmer" text="Hey — totally hear the urgency. Could we get the design files by Friday? Without them we're at risk of slipping past the launch window." />
-                    <ToneChip color="#38BDF8" label="clearer" text="The Q3 launch depends on design files arriving by Friday. Can you confirm whether that deadline is feasible?" />
-                    <ToneChip color="#FBBF24" label="funnier" text="Design files by Friday or we are all attending the post-launch pizza party in our PJs. No pressure." />
-                    <ToneChip color="#34D399" label="safer" text="Friendly nudge on the design files — Friday is the launch cutoff. Happy to scope the ask if you need a different target." />
-                  </div>
-                  {/* keyboard hint footer */}
-                  <div className="flex items-center justify-between px-4 py-2.5 bg-tono-bg border-t border-tono-border">
-                    <span className="text-[10px] font-mono lowercase text-tono-muted">tap any → copy</span>
-                    <span className="text-[10px] font-mono lowercase text-tono-accent-light">↩︎ send</span>
-                  </div>
-                </div>
-              </div>
-            </aside>
+            {/* ── Inline demo — the actual working paste → rewrite tool ──
+                Real client component, hits POST /api/analyze. Replaces
+                the static phone-frame screenshot from the previous
+                build so the above-the-fold experience is honest. */}
+            <TonoDemo />
           </div>
         </div>
       </section>
@@ -175,18 +133,17 @@ export default function LandingPage() {
           </div>
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {[
-              { color: '#F472B6', name: 'warmer', sub: 'soften the edge.', body: 'for the messages that need to land human. the difficult conversation. the ask that already sounds pushy in your head.' },
-              { color: '#38BDF8', name: 'clearer', sub: 'cut the noise.', body: 'for the updates that get ignored. the status emails that read like riddles. the meeting invites that bury the ask.' },
-              { color: '#FBBF24', name: 'funnier', sub: 'loosen the grip.', body: 'for the messages that don\'t need to be formal. the slack reply. the introduction. the all-hands slide that nobody is awake for.' },
-              { color: '#34D399', name: 'safer', sub: 'pull the spike.', body: 'for the messages you wrote angry, or tired, or both. the post-incident note. the reply-all you almost sent.' },
+              { name: 'warmer',   sub: 'soften the edge.', body: 'for the messages that need to land human. the difficult conversation. the ask that already sounds pushy in your head.',         cls: 'tone-rule-t-wamer' },
+              { name: 'clearer',  sub: 'cut the noise.',   body: 'for the updates that get ignored. the status emails that read like riddles. the meeting invites that bury the ask.',         cls: 'tone-rule-t-clearer' },
+              { name: 'funnier',  sub: 'loosen the grip.', body: 'for the messages that don\'t need to be formal. the slack reply. the introduction. the all-hands slide that nobody is awake for.', cls: 'tone-rule-t-funnier' },
+              { name: 'safer',    sub: 'pull the spike.',  body: 'for the messages you wrote angry, or tired, or both. the post-incident note. the reply-all you almost sent.',                  cls: 'tone-rule-t-safer' },
             ].map((t) => (
               <article
                 key={t.name}
-                className="bg-tono-bg-card border border-tono-border rounded-[18px] p-5 hover:border-tono-border-strong transition"
-                style={{ borderTopColor: t.color, borderTopWidth: '2px' }}
+                className={`bg-tono-bg-card border border-tono-border rounded-[18px] p-5 hover:border-tono-border-strong transition ${t.cls}`}
               >
                 <div className="flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full" style={{ background: t.color, boxShadow: `0 0 12px ${t.color}80` }} aria-hidden="true" />
+                  <span className={`w-2.5 h-2.5 rounded-full tone-dot-${t.name}`} aria-hidden="true" />
                   <span className="text-[15px] font-semibold text-tono-text">{t.name}</span>
                 </div>
                 <p className="text-[13px] text-tono-text-softer mt-1.5 font-medium">{t.sub}</p>
@@ -340,21 +297,22 @@ function TonoFooter() {
 
 // ── ToneChip ────────────────────────────────────────────────────────────
 // Compact tone preview for the hero demo card. Single-column list inside
-// the iOS phone screen so the demo reads finished on mobile too. Border-
-// left in tone color, label + dot in tone color.
-function ToneChip({ color, label, text }: { color: string; label: string; text: string }) {
+// the iOS phone screen so the demo reads finished on mobile too. The
+// tone name drives a class suffix — never an inline color literal.
+function ToneChip({ name, text }: { name: 'warmer' | 'clearer' | 'funnier' | 'safer'; text: string }) {
+  const rule = `tone-rule-l-${name}`
+  const dot = `tone-dot-sm-${name}`
   return (
     <div
-      className="bg-tono-bg-elev border border-tono-border rounded-[10px] p-2.5 hover:border-tono-border-strong transition"
-      style={{ borderLeft: `2px solid ${color}` }}
+      className={`bg-tono-bg-elev border border-tono-border rounded-[10px] p-2.5 hover:border-tono-border-strong transition ${rule}`}
     >
       <div className="flex items-center gap-1.5 mb-1">
-        <span className="w-1.5 h-1.5 rounded-full" style={{ background: color, boxShadow: `0 0 6px ${color}80` }} aria-hidden="true" />
-        <span className="text-[10px] font-semibold tracking-[0.04em] uppercase" style={{ color }}>{label}</span>
+        <span className={`w-1.5 h-1.5 rounded-full ${dot}`} aria-hidden="true" />
+        <span className={`text-[10px] font-semibold tracking-[0.04em] uppercase tone-text-${name}`}>{name}</span>
       </div>
       <p className="text-[12px] text-tono-text-soft leading-[1.45]">{text}</p>
     </div>
-  );
+  )
 }
 
 function ArrowIcon() {

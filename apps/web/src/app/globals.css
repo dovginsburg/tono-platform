@@ -27,6 +27,10 @@
   --accent-light: #D8B4FE;
   --accent-glow: rgba(168,85,247,0.35);
 
+  /* bezel — dark frame around the iOS phone preview, slightly
+     lighter than --bg-card so the screen edge reads on dark */
+  --bezel: #1A1A1F;
+
   --tone-warmer: #F472B6;
   --tone-clearer: #38BDF8;
   --tone-funnier: #FBBF24;
@@ -98,3 +102,50 @@ select {
     animation: none !important;
   }
 }
+
+/* ============================================================
+   Tone-driven utilities — replace inline color literals.
+   Each tone (warmer / clearer / funnier / safer) gets a paired
+   set: solid, soft (10% bg), left-rule, top-rule, dot-glow.
+   Apply with classes like .tone-text-wamer, .tone-rule-l-wamer
+   so page.tsx never has to reach for hex in JSX.
+   ============================================================ */
+.tone-text-wamer  { color: var(--tone-warmer); }
+.tone-text-clearer{ color: var(--tone-clearer); }
+.tone-text-funnier{ color: var(--tone-funnier); }
+.tone-text-safer  { color: var(--tone-safer); }
+
+.tone-bg-wamer   { background-color: var(--tone-warmer); }
+.tone-bg-clearer { background-color: var(--tone-clearer); }
+.tone-bg-funnier { background-color: var(--tone-funnier); }
+.tone-bg-safer   { background-color: var(--tone-safer); }
+
+/* Soft surfaces: dark bg under-painted with 10% accent. */
+.tone-bg-soft-wamer   { background-color: rgba(244, 114, 182, 0.10); }
+.tone-bg-soft-clearer { background-color: rgba(56, 189, 248, 0.10); }
+.tone-bg-soft-funnier { background-color: rgba(251, 191, 36, 0.10); }
+.tone-bg-soft-safer   { background-color: rgba(52, 211, 153, 0.10); }
+
+/* 4px rule on the left edge of a tone card. */
+.tone-rule-l-wamer   { box-shadow: inset 4px 0 0 0 var(--tone-warmer); border-left: 0; }
+.tone-rule-l-clearer { box-shadow: inset 4px 0 0 0 var(--tone-clearer); border-left: 0; }
+.tone-rule-l-funnier { box-shadow: inset 4px 0 0 0 var(--tone-funnier); border-left: 0; }
+.tone-rule-l-safer   { box-shadow: inset 4px 0 0 0 var(--tone-safer); border-left: 0; }
+
+/* 2px top rule for the "named in the copy" tone-cards grid. */
+.tone-rule-t-wamer   { box-shadow: inset 0 2px 0 0 var(--tone-warmer); border-top: 0; }
+.tone-rule-t-clearer { box-shadow: inset 0 2px 0 0 var(--tone-clearer); border-top: 0; }
+.tone-rule-t-funnier { box-shadow: inset 0 2px 0 0 var(--tone-funnier); border-top: 0; }
+.tone-rule-t-safer   { box-shadow: inset 0 2px 0 0 var(--tone-safer); border-top: 0; }
+
+/* Tone dot indicator — small filled circle with a tinted glow. */
+.tone-dot-wamer   { background: var(--tone-warmer);   box-shadow: 0 0 12px rgba(244, 114, 182, 0.50); }
+.tone-dot-clearer { background: var(--tone-clearer); box-shadow: 0 0 12px rgba(56, 189, 248, 0.50); }
+.tone-dot-funnier { background: var(--tone-funnier); box-shadow: 0 0 12px rgba(251, 191, 36, 0.50); }
+.tone-dot-safer   { background: var(--tone-safer);   box-shadow: 0 0 12px rgba(52, 211, 153, 0.50); }
+
+/* Compact dot for inline tone labels. */
+.tone-dot-sm-wamer   { background: var(--tone-warmer);   box-shadow: 0 0 6px rgba(244, 114, 182, 0.50); }
+.tone-dot-sm-clearer { background: var(--tone-clearer); box-shadow: 0 0 6px rgba(56, 189, 248, 0.50); }
+.tone-dot-sm-funnier { background: var(--tone-funnier); box-shadow: 0 0 6px rgba(251, 191, 36, 0.50); }
+.tone-dot-sm-safer   { background: var(--tone-safer);   box-shadow: 0 0 6px rgba(52, 211, 153, 0.50); }
