@@ -183,15 +183,17 @@ def create_checkout_session(
         line_items=[{"price": price_id, "quantity": 1}],
         success_url=success_url,
         cancel_url=cancel_url,
-        # Enable Apple Pay / Google Pay buttons on the hosted page. With
-        # automatic_payment_methods on, Stripe Checkout renders the
-        # express-checkout row automatically when the wallet is
-        # available in the customer's browser; the underlying
-        # PaymentIntent still resolves to a card charge.
-        automatic_payment_methods={"enabled": True},
-        # Defensive belt-and-braces for old client integrations — keep
-        # ``card`` explicit so the hosted page always has a fallback
-        # path even if the merchant dashboard hasn't enabled APMs yet.
+        # Hosted Checkout in subscription mode. The ``payment_method_types``
+        # list intentionally ONLY contains ``card`` because the
+        # ``apple_pay`` / ``google_pay`` values are not valid
+        # ``payment_method_types`` for subscription Checkout (Stripe
+        # returns ``Invalid payment_method_types[i]: must be one of
+        # card, cashapp, link, ...``). Wallet buttons are surfaced
+        # separately via the **Dashboard → Settings → Payment methods
+        # → Wallets** toggles — when Apple Pay / Google Pay are enabled
+        # there, the hosted Checkout page renders them automatically in
+        # the express-checkout row when the buyer's browser supports
+        # them. This matches how Stripe-hosted Checkout Pages work.
         payment_method_types=["card"],
         subscription_data={"metadata": metadata},
         metadata=metadata,
