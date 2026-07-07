@@ -25,27 +25,31 @@ export default function LandingPage() {
       {/* ── Hero ──────────────────────────────────────────────────────── */}
       <section className="relative">
         {/* ambient backdrop — already in body globals, no extra div needed */}
-        <div className="max-w-[1180px] mx-auto px-6 md:px-10 pt-20 md:pt-28 pb-16 md:pb-24">
-          <div className="grid lg:grid-cols-[1.15fr_1fr] gap-12 lg:gap-16 items-center">
+        <div className="max-w-[1180px] mx-auto px-5 sm:px-6 md:px-10 pt-14 sm:pt-20 md:pt-28 pb-12 sm:pb-16 md:pb-24">
+          <div className="grid lg:grid-cols-[1.15fr_1fr] gap-10 lg:gap-16 items-start lg:items-center">
             <div>
               <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-tono-accent-soft text-tono-accent-light text-[11px] font-semibold uppercase tracking-wider border border-tono-accent/30">
                 <span className="w-1.5 h-1.5 rounded-full bg-tono-accent shadow-[0_0_8px_var(--accent-glow)]" />
-                now in public beta
+                now in public beta · ios keyboard
               </span>
-              <h1 className="text-[44px] md:text-[60px] leading-[1.05] font-bold tracking-[-0.025em] text-tono-text mt-6">
-                <em className="not-italic text-tono-accent-light">say what you mean.</em>
-              </h1>
-              <p className="text-lg md:text-xl text-tono-text-soft leading-[1.55] mt-5 max-w-xl">
-                paste a draft. tono hands you four ways to say it —{' '}
-                <span className="text-[#F472B6]">warmer</span>,{' '}
-                <span className="text-[#38BDF8]">clearer</span>,{' '}
-                <span className="text-[#FBBF24]">funnier</span>,{' '}
-                <span className="text-[#34D399]">safer</span>{' '}
-                — pick one, copy, send.
+              <p className="text-[12px] md:text-[14px] text-tono-text-softer uppercase tracking-[0.14em] font-semibold mt-4 sm:mt-5">
+                For sales, ops, eng, and anyone who writes to be read.
               </p>
+              <h1 className="text-[36px] sm:text-[44px] md:text-[60px] leading-[1.05] md:leading-[1.02] font-bold tracking-[-0.025em] text-tono-text mt-2 sm:mt-3">
+                paste a draft.{' '}
+                <em className="not-italic text-tono-accent-light">get four ways to say it.</em>
+              </h1>
+              <div className="mt-5 flex flex-wrap items-center gap-x-3 gap-y-2 text-[15px] md:text-[16px] text-tono-text-soft leading-[1.5]">
+                <span className="text-tono-text-softer">pick one —</span>
+                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-[8px] bg-[#F472B6]/10 text-[#F472B6] font-semibold text-[13px]">warmer</span>
+                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-[8px] bg-[#38BDF8]/10 text-[#38BDF8] font-semibold text-[13px]">clearer</span>
+                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-[8px] bg-[#FBBF24]/10 text-[#FBBF24] font-semibold text-[13px]">funnier</span>
+                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-[8px] bg-[#34D399]/10 text-[#34D399] font-semibold text-[13px]">safer</span>
+                <span className="text-tono-text">— copy, send.</span>
+              </div>
               <div className="mt-8 flex flex-col sm:flex-row gap-3">
                 <Link
-                  href="/app/login"
+                  href="/login"
                   className="inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-[12px] bg-tono-accent hover:bg-tono-accent-hover text-white font-semibold transition shadow-[0_8px_32px_rgba(168,85,247,0.30)] min-h-[48px]"
                 >
                   try tono free
@@ -59,29 +63,35 @@ export default function LandingPage() {
                 </a>
               </div>
               <p className="text-xs text-tono-muted mt-4">
-                free tier — 3 rewrites a day. no credit card.
+                free tier — 3 rewrites a day. no credit card. no sign-in required.
               </p>
             </div>
 
-            {/* ── Inline demo card — concrete artifact, not abstract promise ── */}
+            {/* ── Inline demo card — real ios keyboard surface, not abstract promise ── */}
             <aside
-              aria-label="tono editor preview"
-              className="bg-tono-bg-card border border-tono-border rounded-[18px] p-6 shadow-[0_24px_64px_rgba(0,0,0,0.5)]"
+              aria-label="tono keyboard preview"
+              className="relative bg-tono-bg-card border border-tono-border rounded-[24px] p-4 sm:p-5 md:p-6 shadow-[0_24px_64px_rgba(0,0,0,0.55)]"
             >
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full bg-tono-accent shadow-[0_0_8px_var(--accent-glow)]" />
-                  <span className="text-[12px] font-semibold tracking-[0.04em] text-tono-text">tono</span>
+                  <span className="text-[11px] font-semibold tracking-[0.06em] text-tono-text uppercase">the tono keyboard</span>
                 </div>
-                <span className="text-[11px] text-tono-muted font-mono lowercase">draft</span>
+                <span className="text-[11px] text-tono-muted font-mono lowercase">iOS · draft</span>
               </div>
 
-              <p className="text-[13px] text-tono-text-softer mb-2 font-semibold tracking-wider uppercase">your draft</p>
-              <p className="text-[15px] text-tono-text leading-[1.55] mb-5">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-tono-text-softer">your draft</span>
+                <span className="text-[10px] font-mono lowercase text-tono-text-softer/70">paste → rewrite</span>
+              </div>
+              <p className="text-[14px] sm:text-[15px] text-tono-text leading-[1.55] mb-5 px-3 py-2 border-l-2 border-tono-text-softer/30 bg-tono-bg-elev/60 rounded-r-[8px]">
                 "Q3 timeline keeps slipping. I need the design files by Friday or we are missing the launch."
               </p>
 
-              <p className="text-[13px] text-tono-text-softer mb-2 font-semibold tracking-wider uppercase">four ways to say it</p>
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-tono-text-softer">four ways to say it</span>
+                <span className="text-[10px] font-mono lowercase text-tono-accent-light">tap any → copy</span>
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <ToneChip color="#F472B6" label="warmer" text="Hey — totally hear the urgency. Could we get the design files by Friday? Without them we're at risk of slipping past the launch window." />
                 <ToneChip color="#38BDF8" label="clearer" text="The Q3 launch depends on design files arriving by Friday. Can you confirm whether that deadline is feasible?" />
@@ -204,7 +214,7 @@ export default function LandingPage() {
           </p>
           <div className="mt-8 flex flex-col sm:flex-row gap-3 items-center justify-center">
             <Link
-              href="/app/login"
+              href="/login"
               className="inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-[12px] bg-tono-accent hover:bg-tono-accent-hover text-white font-semibold transition shadow-[0_8px_32px_rgba(168,85,247,0.30)] min-h-[48px]"
             >
               open tono
@@ -257,7 +267,7 @@ function TonoNav() {
             contact
           </a>
           <Link
-            href="/app/login"
+            href="/login"
             className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-[10px] bg-tono-accent hover:bg-tono-accent-hover text-white font-semibold transition min-h-[44px]"
           >
             sign in
@@ -286,15 +296,15 @@ function TonoFooter() {
           <p className="text-[11px] uppercase tracking-wider font-semibold text-tono-text-softer mb-3">product</p>
           <ul className="space-y-2 text-[13px]">
             <li><a href="#how" className="text-tono-text-soft hover:text-tono-text transition">how it works</a></li>
-            <li><a href="/app/login" className="text-tono-text-soft hover:text-tono-text transition">sign in</a></li>
+            <li><Link href="/login" className="text-tono-text-soft hover:text-tono-text transition">sign in</Link></li>
             <li><a href="mailto:hi@tonoit.com?subject=tono%20feedback" className="text-tono-text-soft hover:text-tono-text transition">feedback</a></li>
           </ul>
         </div>
         <div>
           <p className="text-[11px] uppercase tracking-wider font-semibold text-tono-text-softer mb-3">legal</p>
           <ul className="space-y-2 text-[13px]">
-            <li><a href="mailto:hi@tonoit.com?subject=tono%20privacy" className="text-tono-text-soft hover:text-tono-text transition">privacy</a></li>
-            <li><a href="mailto:hi@tonoit.com?subject=tono%20terms" className="text-tono-text-soft hover:text-tono-text transition">terms</a></li>
+            <li><Link href="/privacy" className="text-tono-text-soft hover:text-tono-text transition">privacy</Link></li>
+            <li><Link href="/terms" className="text-tono-text-soft hover:text-tono-text transition">terms</Link></li>
           </ul>
         </div>
       </div>
@@ -310,7 +320,8 @@ function TonoFooter() {
 
 // ── ToneChip ────────────────────────────────────────────────────────────
 // Compact tone preview for the hero demo card. Lowercase label, dot +
-// color matching the live editor (warmer/clearer/funnier/safer).
+// color matching the live editor (warmer/clearer/funnier/safer). Full text
+// — no clamp — so the demo reads finished on mobile too.
 function ToneChip({ color, label, text }: { color: string; label: string; text: string }) {
   return (
     <div className="bg-tono-bg-elev border border-tono-border rounded-[12px] p-3 hover:border-tono-border-strong transition"
@@ -319,7 +330,7 @@ function ToneChip({ color, label, text }: { color: string; label: string; text: 
         <span className="w-1.5 h-1.5 rounded-full" style={{ background: color, boxShadow: `0 0 6px ${color}80` }} aria-hidden="true" />
         <span className="text-[11px] font-semibold tracking-wide" style={{ color }}>{label}</span>
       </div>
-      <p className="text-[12px] text-tono-text-soft leading-[1.5] line-clamp-3">{text}</p>
+      <p className="text-[12px] text-tono-text-soft leading-[1.5]">{text}</p>
     </div>
   );
 }
