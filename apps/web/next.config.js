@@ -13,9 +13,16 @@ const nextConfig = {
   // required for cookie-based sessions to stick (Sherlock's runbook #1).
   async rewrites() {
     return [
+      // SEO surface at the apex so /sitemap.xml and /robots.txt return 200
+      // (basePath is applied to the destination, so /sitemap.xml → /app/sitemap.xml).
+      { source: '/sitemap.xml', destination: '/sitemap.xml' },
+      { source: '/robots.txt', destination: '/robots.txt' },
+
       // Tono backend
       { source: '/api/tono/:path*', destination: 'https://api.tonoit.com/v1/:path*' },
       { source: '/api/health', destination: 'https://api.tonoit.com/health' },
+      // Stripe checkout (called by ProCheckoutButton on /pricing and /upgrade→/pricing)
+      { source: '/api/checkout', destination: 'https://api.tonoit.com/v1/checkout' },
       // Authenticated analyze (uses bearer token + rate limit)
       { source: '/api/analyze', destination: 'https://api.tonoit.com/api/analyze' },
 
