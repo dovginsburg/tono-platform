@@ -101,7 +101,7 @@ export default function PricingPage() {
               pro
             </p>
             <p className="text-[40px] md:text-[44px] font-bold tracking-[-0.02em] text-tono-text mt-2">
-              $5.99
+              $3.99
               <span className="text-[15px] font-normal text-tono-text-softer ml-2">
                 / month
               </span>
@@ -133,8 +133,8 @@ export default function PricingPage() {
               </li>
             </ul>
             <div className="mt-8 flex flex-col gap-3">
-              <ProCheckoutButton interval="month" label="go pro — $5.99/mo">
-                go pro — $5.99/mo
+              <ProCheckoutButton interval="month" label="go pro — $3.99/mo">
+                go pro — $3.99/mo
               </ProCheckoutButton>
               <ProCheckoutButton
                 interval="year"

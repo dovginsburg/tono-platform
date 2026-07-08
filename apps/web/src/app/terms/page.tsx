@@ -38,7 +38,7 @@ export default function TermsPage() {
 
           <h2 className="text-2xl font-semibold pt-6">subscriptions</h2>
           <p>
-            pro tier is $5.99/month or $39.99/year, billed via stripe. cancel
+            pro tier is $3.99/month or $39.99/year, billed via stripe. cancel
             anytime from your account page or via stripe's customer portal. no
             retention, no dark patterns, no "are you sure" loops.
           </p>

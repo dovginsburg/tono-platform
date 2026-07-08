@@ -35,8 +35,23 @@ export default function LandingPage() {
                 now in public beta · ios keyboard
               </span>
               <p className="text-[12px] md:text-[14px] text-tono-text-softer uppercase tracking-[0.14em] font-semibold mt-4 sm:mt-5">
-                For sales, ops, eng, and anyone who writes to be read.
+                Stop rewriting in your head.
               </p>
+              <ul
+                aria-label="trust and privacy"
+                className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] md:text-[12px] tracking-[0.06em] uppercase font-semibold text-tono-text-softer"
+              >
+                <li className="flex items-center gap-1.5">
+                  <span className="w-1 h-1 rounded-full bg-tono-tone-safer" aria-hidden="true" />
+                  private by default
+                </li>
+                <li aria-hidden="true" className="text-tono-text-softer/60">·</li>
+                <li>no sign-in required</li>
+                <li aria-hidden="true" className="text-tono-text-softer/60">·</li>
+                <li>drafts stay in your browser</li>
+                <li aria-hidden="true" className="text-tono-text-softer/60">·</li>
+                <li>not used for training</li>
+              </ul>
               <h1 className="text-[36px] sm:text-[44px] md:text-[60px] leading-[1.05] md:leading-[1.02] font-bold tracking-[-0.025em] text-tono-text mt-2 sm:mt-3">
                 paste a draft.{' '}
                 <em className="not-italic text-tono-accent-light">get four ways to say it.</em>
@@ -61,7 +76,7 @@ export default function LandingPage() {
                   href="#pricing"
                   className="inline-flex items-center justify-center gap-2 px-5 py-3.5 rounded-[12px] bg-tono-bg-card border border-tono-accent/40 text-tono-text hover:border-tono-accent font-semibold transition min-h-[48px] text-[15px]"
                 >
-                  go pro — $3/mo
+                  go pro — $3.99/mo
                 </a>
                 <a
                   href="#how"
@@ -203,12 +218,14 @@ export default function LandingPage() {
               </span>
               <p className="text-[11px] uppercase tracking-wider font-semibold text-tono-accent-light">pro</p>
               <p className="text-[36px] md:text-[40px] font-bold tracking-[-0.02em] text-tono-text mt-2">
-                $3
-                <span className="text-[15px] font-normal text-tono-text-softer ml-2">/ month</span>
+                $3.99
+                <span className="text-[15px] font-normal text-tono-text-softer ml-2">
+                  / month
+                </span>
               </p>
-              <p className="text-[14px] text-tono-text-soft leading-[1.55] mt-3">
-                for the people who write to be read all day.
-              </p>
+            <p className="text-[14px] text-tono-text-soft leading-[1.55] mt-3">
+              for the people who write to be read all day.
+            </p>
               <ul className="mt-6 space-y-2.5 text-[14px] text-tono-text-soft">
                 <li className="flex gap-2"><span className="text-tono-tone-safer font-semibold">✓</span><span><strong className="text-tono-text font-semibold">unlimited rewrites</strong> on the web composer</span></li>
                 <li className="flex gap-2"><span className="text-tono-tone-safer font-semibold">✓</span><span>local history of your last 50 rewrites</span></li>
@@ -218,17 +235,17 @@ export default function LandingPage() {
               <div className="mt-8 flex flex-col sm:flex-row gap-3">
                 <ProCheckoutButton
                   interval="month"
-                  label="go pro — $3/mo"
+                  label="go pro — $3.99/mo"
                 >
-                  go pro — $3/mo
+                  go pro — $3.99/mo
                   <ArrowIcon />
                 </ProCheckoutButton>
                 <ProCheckoutButton
                   interval="year"
-                  label="go pro — $29/yr"
+                  label="go pro — $39.99/yr"
                   className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-[12px] bg-transparent border border-tono-border-strong text-tono-text hover:border-tono-accent disabled:opacity-60 disabled:pointer-events-none font-semibold transition min-h-[44px] text-[14px]"
                 >
-                  go pro — $29/yr
+                  go pro — $39.99/yr
                 </ProCheckoutButton>
               </div>
             </article>
