@@ -292,7 +292,7 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <TonoFooter />
+      {/* Footer is rendered in the root layout so it ships on every page. */}
     </main>
   );
 }
@@ -320,47 +320,6 @@ function TonoNav() {
       </div>
     </header>
   )
-}
-
-// ── TonoFooter ──────────────────────────────────────────────────────────
-function TonoFooter() {
-  return (
-    <footer className="border-t border-tono-border bg-tono-bg-soft">
-      <div className="max-w-[1180px] mx-auto px-6 md:px-10 py-10 grid sm:grid-cols-[1.4fr_1fr_1fr] gap-8">
-        <div>
-          <div className="flex items-center gap-2.5">
-            <span aria-hidden="true" className="w-2.5 h-2.5 rounded-full bg-tono-accent shadow-[0_0_10px_var(--accent-glow)]" />
-            <span className="text-[16px] font-bold tracking-[-0.02em] text-tono-text">tono</span>
-          </div>
-          <p className="text-[13px] text-tono-text-soft leading-[1.6] mt-3 max-w-sm">
-            <em className="not-italic text-tono-text">say what you mean.</em> four ways to say it.
-          </p>
-        </div>
-        <div>
-          <p className="text-[11px] uppercase tracking-wider font-semibold text-tono-text-softer mb-3">product</p>
-          <ul className="space-y-2 text-[13px]">
-            <li><a href="#how" className="text-tono-text-soft hover:text-tono-text transition">how it works</a></li>
-            <li><a href="#pricing" className="text-tono-text-soft hover:text-tono-text transition">pricing</a></li>
-            <li><Link href="/login" className="text-tono-text-soft hover:text-tono-text transition">sign in</Link></li>
-            <li><a href="mailto:hi@tonoit.com?subject=tono%20feedback" className="text-tono-text-soft hover:text-tono-text transition">feedback</a></li>
-          </ul>
-        </div>
-        <div>
-          <p className="text-[11px] uppercase tracking-wider font-semibold text-tono-text-softer mb-3">legal</p>
-          <ul className="space-y-2 text-[13px]">
-            <li><Link href="/privacy" className="text-tono-text-soft hover:text-tono-text transition">privacy</Link></li>
-            <li><Link href="/terms" className="text-tono-text-soft hover:text-tono-text transition">terms</Link></li>
-          </ul>
-        </div>
-      </div>
-      <div className="border-t border-tono-border">
-        <div className="max-w-[1180px] mx-auto px-6 md:px-10 py-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
-          <p className="text-[11px] text-tono-muted">© {new Date().getFullYear()} tono. all rights reserved.</p>
-          <p className="text-[11px] text-tono-muted">drafts stay in your browser. nothing leaves unless you copy it.</p>
-        </div>
-      </div>
-    </footer>
-  );
 }
 
 // ── ToneChip ────────────────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import NavDropdown from './NavDropdown';
+import TonoFooter from './TonoFooter';
 
 export const metadata: Metadata = {
   title: 'tono — say what you mean',
@@ -33,6 +34,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body>
         {children}
+        {/* Site-wide footer + trust rail — present on every page.
+            See TonoFooter.tsx for the spec. */}
+        <TonoFooter />
         {/* Top-right nav dropdown — present on every page (nav-spec.md).
             Renders nothing until JS hydrates; client component. */}
         <NavDropdown />

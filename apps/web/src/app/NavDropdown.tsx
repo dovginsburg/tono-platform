@@ -32,17 +32,22 @@ type NavItem = {
   external?: boolean
 }
 
+// All hrefs are relative to Next.js basePath '/app'. At render time
+// <Link href="/pricing"> resolves to /app/pricing, <Link href="/login">
+// resolves to /app/login, etc. The "App" item points at the editor
+// (src/app/app/page.tsx → /app/app). Keep these consistent so the
+// dropdown works from every route, including /app/app itself.
 const ITEMS: NavItem[] = [
   { label: 'Home', href: '/' },
-  { label: 'App', href: '/app/app' },
-  { label: 'Sign in', href: '/app/login' },
+  { label: 'App', href: '/app' },
+  { label: 'Sign in', href: '/login' },
   { label: 'Pricing', href: '/pricing' },
   { label: 'About', href: '/about' },
   { label: 'Features', href: '/features' },
   { label: 'Blog', href: '/blog' },
   { label: 'Contact', href: '/contact' },
-  { label: 'Privacy', href: '/app/privacy' },
-  { label: 'Terms', href: '/app/terms' },
+  { label: 'Privacy', href: '/privacy' },
+  { label: 'Terms', href: '/terms' },
 ]
 
 function MenuIcon() {
