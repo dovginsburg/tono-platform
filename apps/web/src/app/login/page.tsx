@@ -57,9 +57,10 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen bg-tono-bg text-tono-text font-sans antialiased">
-      {/* Top nav — prominent wordmark + back to home. Same as landing. */}
+      {/* Top wordmark — the top-right dropdown lives in the root layout
+          and provides full navigation. */}
       <header className="sticky top-0 z-30 bg-tono-bg/80 backdrop-blur-md border-b border-tono-border">
-        <div className="max-w-[1180px] mx-auto px-6 md:px-10 py-4 flex items-center justify-between">
+        <div className="max-w-[1180px] mx-auto px-6 md:px-10 py-4 flex items-center">
           <Link
             href="/"
             className="flex items-center gap-2.5 shrink-0"
@@ -70,12 +71,6 @@ export default function LoginPage() {
               className="w-3 h-3 rounded-full bg-tono-accent shadow-[0_0_16px_var(--accent-glow)]"
             />
             <span className="text-[22px] font-bold tracking-[-0.02em] text-tono-text">tono</span>
-          </Link>
-          <Link
-            href="/"
-            className="text-[13px] text-tono-text-soft hover:text-tono-text transition min-h-[44px] flex items-center px-2"
-          >
-            ← home
           </Link>
         </div>
       </header>

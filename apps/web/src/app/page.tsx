@@ -298,8 +298,10 @@ export default function LandingPage() {
 }
 
 // ── TonoNav ─────────────────────────────────────────────────────────────
-// Shared nav for tono public surfaces. Wordmark is prominent: 22px Inter
-// SemiBold with a glowing accent dot. Brand-voice: lowercase.
+// Brand wordmark on the left; top-right dropdown lives in the global
+// layout (NavDropdown.tsx — present on every page per nav-spec.md).
+// The wordmark stays here so the chrome reads as a header on the
+// landing page, but it no longer carries inline links.
 function TonoNav() {
   return (
     <header className="sticky top-0 z-30 bg-tono-bg/80 backdrop-blur-md border-b border-tono-border">
@@ -315,35 +317,9 @@ function TonoNav() {
           />
           <span className="text-[22px] font-bold tracking-[-0.02em] text-tono-text">tono</span>
         </Link>
-        <nav className="flex items-center gap-2 sm:gap-4 text-[14px] font-medium">
-          <a
-            href="#how"
-            className="text-tono-text-soft hover:text-tono-text transition min-h-[44px] flex items-center px-2"
-          >
-            how it works
-          </a>
-          <a
-            href="#pricing"
-            className="text-tono-text-soft hover:text-tono-text transition min-h-[44px] hidden sm:flex items-center px-2"
-          >
-            pricing
-          </a>
-          <a
-            href="mailto:hi@tonoit.com?subject=tono%20feedback"
-            className="text-tono-text-soft hover:text-tono-text transition min-h-[44px] hidden sm:flex items-center px-2"
-          >
-            contact
-          </a>
-          <Link
-            href="/login"
-            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-[10px] bg-tono-accent hover:bg-tono-accent-hover text-white font-semibold transition min-h-[44px]"
-          >
-            sign in
-          </Link>
-        </nav>
       </div>
     </header>
-  );
+  )
 }
 
 // ── TonoFooter ──────────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
+import NavDropdown from './NavDropdown';
 
 export const metadata: Metadata = {
   title: 'tono — say what you mean',
@@ -30,7 +31,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           rel="stylesheet"
         />
       </head>
-      <body>{children}</body>
+      <body>
+        {children}
+        {/* Top-right nav dropdown — present on every page (nav-spec.md).
+            Renders nothing until JS hydrates; client component. */}
+        <NavDropdown />
+      </body>
     </html>
   );
 }
