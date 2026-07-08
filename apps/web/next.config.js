@@ -30,6 +30,23 @@ const nextConfig = {
     ];
   },
 
+  redirects: async () => [
+    // /upgrade is deprecated — single source of truth lives at /pricing.
+    // Using config-level redirects (rather than a Server Component redirect())
+    // so the response carries a proper HTTP Location header for full-page
+    // navigations; the App Router redirect() helper emits an RSC-stream
+    // redirect that only the client router picks up.
+    //
+    // basePath: '/app' is applied AFTER the source match, so we declare
+    // the source WITHOUT the leading /app. The effective URL is
+    // /app/upgrade; the destination becomes /app/pricing.
+    {
+      source: '/upgrade',
+      destination: '/pricing',
+      permanent: true,
+    },
+  ],
+
   async headers() {
     return [
       {

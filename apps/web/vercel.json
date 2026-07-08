@@ -1,6 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
+    { "source": "/upgrade", "destination": "/app/upgrade" },
     { "source": "/", "destination": "/app" }
   ]
 }
