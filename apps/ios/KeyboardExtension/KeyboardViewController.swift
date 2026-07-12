@@ -18,86 +18,57 @@
 // inside the keyboard's own view hierarchy.
 
 import UIKit
-import SwiftUI
 
 @objc(KeyboardViewController)
-public class KeyboardViewController: UIInputViewController {
-
-    private var hostingController: UIHostingController<KeyboardRootView>?
-    private var keyboardModel: KeyboardModel?
-
-    public override func updateViewConstraints() {
-        super.updateViewConstraints()
-    }
+public final class KeyboardViewController: UIInputViewController {
 
     public override func viewDidLoad() {
         super.viewDidLoad()
-        // Signal to the host app that the keyboard is enabled and has loaded.
-        // HomeView polls this on scenePhase changes to show a checkmark.
-        SharedStore.defaults.set(true, forKey: SharedKeys.keyboardLoaded)
-        installRootView()
+        NSLog("TONO_KB SAFE_ROOT 01: viewDidLoad")
+
+        view.backgroundColor = .systemBlue
+
+        let label = UILabel()
+        label.text = "TONO SAFE ROOT"
+        label.textColor = .white
+        label.font = .systemFont(ofSize: 24, weight: .bold)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(label)
+
+        let detail = UILabel()
+        detail.text = "UIKit-only diagnostic keyboard"
+        detail.textColor = UIColor.white.withAlphaComponent(0.85)
+        detail.font = .systemFont(ofSize: 14)
+        detail.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(detail)
+
+        let nextButton = UIButton(type: .system)
+        nextButton.setTitle("Next keyboard", for: .normal)
+        nextButton.setTitleColor(.white, for: .normal)
+        nextButton.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
+        nextButton.addTarget(self, action: #selector(advanceToNextInputMode), for: .touchUpInside)
+        nextButton.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(nextButton)
+
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: -12),
+            detail.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            detail.topAnchor.constraint(equalTo: label.bottomAnchor, constant: 8),
+            nextButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            nextButton.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -12),
+        ])
+
+        NSLog("TONO_KB SAFE_ROOT 02: UIKit hierarchy installed")
     }
 
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        // hasFullAccess can change while the app is backgrounded (user toggles
-        // Full Access in Settings), so refresh it every time the keyboard appears.
-        keyboardModel?.hasFullAccess = hasFullAccess
-
-        // First-launch onboarding: if this is the very first time the user is
-        // seeing the keyboard and Full Access is off, surface a friendly intro
-        // view BEFORE they tap Coach. We only show this once per device.
-        if !hasFullAccess,
-           !SharedStore.defaults.bool(forKey: SharedKeys.fullAccessExplained) {
-            keyboardModel?.mode = .fullAccessOnboarding
-        }
-
-        // Recompute shift state against wherever the cursor now sits. The
-        // field being edited (and its auto-cap-relevant surrounding text)
-        // can be completely different each time the keyboard shows — same
-        // logic as Tono Android's TonoInputMethodService.onStartInputView.
-        keyboardModel?.applyAutoCapitalizationIfNeeded()
+        NSLog("TONO_KB SAFE_ROOT 03: viewWillAppear")
     }
 
-    public override func viewWillLayoutSubviews() {
-        super.viewWillLayoutSubviews()
-        // The system sets a default height; respect it but allow growth.
-        // Increased from 320 to 360 because the new suggestion strip + Coach
-        // confirmation sheet need extra vertical room. iOS clamps this softly.
-        let target = NSLayoutConstraint(
-            item: view!, attribute: .height, relatedBy: .greaterThanOrEqual,
-            toItem: nil, attribute: .notAnAttribute,
-            multiplier: 1, constant: 360
-        )
-        target.priority = .defaultHigh
-        view.addConstraint(target)
-    }
-
-    private func installRootView() {
-        let model = KeyboardModel(
-            initialText: "",
-            proxy: { [weak self] in self?.textDocumentProxy },
-            advance: { [weak self] in self?.advanceToNextInputMode() },
-            dismiss: { [weak self] in self?.dismissKeyboard() }
-        )
-        model.hasFullAccess = hasFullAccess
-        self.keyboardModel = model
-        let root = KeyboardRootView(
-            model: model,
-            proxyProvider: { [weak self] in self?.textDocumentProxy }
-        )
-        let host = UIHostingController(rootView: root)
-        host.view.translatesAutoresizingMaskIntoConstraints = false
-        host.view.backgroundColor = .clear
-        addChild(host)
-        view.addSubview(host.view)
-        host.didMove(toParent: self)
-        NSLayoutConstraint.activate([
-            host.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            host.view.topAnchor.constraint(equalTo: view.topAnchor),
-            host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-        ])
-        self.hostingController = host
+    public override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        NSLog("TONO_KB SAFE_ROOT 04: viewDidAppear")
     }
 }
