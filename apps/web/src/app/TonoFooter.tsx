@@ -1,5 +1,28 @@
 import Link from 'next/link'
-import NewsletterSignup from './NewsletterSignup'
+
+// ── Newsletter strip — replaced the no-op NewsletterSignup form
+// (which only set local "subscribed" state) with a single email link.
+// A real signup form is a backend project, not a marketer-lane fix. ──
+function NewsletterStrip() {
+  return (
+    <div className="mt-10 pt-8 border-t border-tono-border">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <p className="text-[14px] font-semibold text-tono-text">
+          Get the next rewrite.
+        </p>
+        <a
+          href="mailto:hello@tonoit.com?subject=tono%20newsletter"
+          className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-[10px] bg-tono-accent hover:bg-tono-accent-hover text-white font-semibold transition min-h-[44px] text-[13px]"
+        >
+          Subscribe by email
+        </a>
+      </div>
+      <p className="text-[11px] text-tono-muted mt-3">
+        One short email a month. No tracking pixels, no marketing automation — open your mail client and hit send.
+      </p>
+    </div>
+  )
+}
 
 // ──────────────────────────────────────────────────────────────────────
 // TonoFooter — site-wide footer + trust rail
@@ -206,9 +229,9 @@ export default function TonoFooter() {
           </div>
         </div>
 
-        {/* ── Newsletter signup — TODO: wire to a real endpoint.
-                For now it shows a local success state. ────────────── */}
-        <NewsletterSignup />
+        {/* ── Newsletter strip — replaced the no-op form with a mailto.
+                Real signup backend is out of scope for this audit. ── */}
+        <NewsletterStrip />
 
         {/* Bottom rail */}
         <div className="mt-10 pt-6 border-t border-tono-border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">

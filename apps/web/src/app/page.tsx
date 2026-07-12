@@ -32,10 +32,13 @@ export default function LandingPage() {
             <div>
               <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-tono-accent-soft text-tono-accent-light text-[11px] font-semibold uppercase tracking-wider border border-tono-accent/30">
                 <span className="w-1.5 h-1.5 rounded-full bg-tono-accent shadow-[0_0_8px_var(--accent-glow)]" />
-                now in public beta · ios keyboard
+                now in public beta · web · ios · android
               </span>
-              <p className="text-[12px] md:text-[14px] text-tono-text-softer uppercase tracking-[0.14em] font-semibold mt-4 sm:mt-5">
-                Stop rewriting in your head.
+              {/* Benefit-first subline — the thing the first-2-second scanner
+                  actually needs to know before reading the trust strip and h1.
+                  Pitches the value, not the feature list. */}
+              <p className="text-[14px] md:text-[16px] text-tono-text-soft leading-[1.45] mt-4 sm:mt-5 max-w-xl">
+                Check tone before you send, in 8 seconds.
               </p>
               <ul
                 aria-label="trust and privacy"
@@ -65,13 +68,13 @@ export default function LandingPage() {
                 <span className="text-tono-text">— copy, send.</span>
               </div>
               <div className="mt-8 flex flex-col sm:flex-row gap-3">
-                <Link
-                  href="/login"
+                <a
+                  href="#try-tono"
                   className="inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-[12px] bg-tono-accent hover:bg-tono-accent-hover text-white font-semibold transition shadow-[0_8px_32px_rgba(168,85,247,0.30)] min-h-[48px]"
                 >
                   try tono free
                   <ArrowIcon />
-                </Link>
+                </a>
                 <a
                   href="#pricing"
                   className="inline-flex items-center justify-center gap-2 px-5 py-3.5 rounded-[12px] bg-tono-bg-card border border-tono-accent/40 text-tono-text hover:border-tono-accent font-semibold transition min-h-[48px] text-[15px]"
@@ -93,8 +96,12 @@ export default function LandingPage() {
             {/* ── Inline demo — the actual working paste → rewrite tool ──
                 Real client component, hits POST /api/analyze. Replaces
                 the static phone-frame screenshot from the previous
-                build so the above-the-fold experience is honest. */}
-            <TonoDemo />
+                build so the above-the-fold experience is honest.
+                `id="try-tono"` is the anchor target for the hero CTA — the
+                demo is the actual hook, not the /login wall. */}
+            <aside id="try-tono" className="relative scroll-mt-32">
+              <TonoDemo />
+            </aside>
           </div>
         </div>
       </section>
@@ -201,12 +208,12 @@ export default function LandingPage() {
                 <li className="flex gap-2"><span className="text-tono-tone-safer font-semibold">✓</span><span>drafts stay in your browser only</span></li>
                 <li className="flex gap-2"><span className="text-tono-tone-safer font-semibold">✓</span><span>nothing about your writing trains anything</span></li>
               </ul>
-              <Link
-                href="/login"
+              <a
+                href="#try-tono"
                 className="mt-8 inline-flex items-center justify-center gap-2 px-5 py-3 rounded-[12px] bg-transparent border border-tono-border-strong text-tono-text hover:border-tono-accent hover:text-tono-text font-semibold transition min-h-[44px] text-[14px]"
               >
                 start free — no card
-              </Link>
+              </a>
             </article>
 
             {/* Pro tier — wired to Stripe Checkout via /api/checkout */}
@@ -251,7 +258,7 @@ export default function LandingPage() {
             </article>
           </div>
           <p className="text-center text-[13px] text-tono-text-softer mt-8">
-            billed monthly or yearly. no retention. the iOS keyboard ships with pro on day one.
+            billed monthly or yearly. no retention. pro features ship on every surface on day one.
           </p>
         </div>
       </section>
