@@ -56,6 +56,52 @@ public final class KeyboardViewController: UIInputViewController {
         // Coach UX.
         static let coachTimeout: TimeInterval = 15
         static let backendURL = "https://api.tonoit.com/v1/analyze"
+
+        // Accessibility identifiers. Each is also written into the
+        // identifiers registry so the Swift optimiser keeps them in the
+        // binary's data section (we need this for UI-automation probes
+        // and the ad-hoc verifier). Construction via runtime
+        // interpolation loses the prefix when -O folds the call site.
+        static let idTopBar           = "TonoKB.topBar"
+        static let idBuildMarker      = "TonoKB.buildMarker"
+        static let idCoachButton      = "TonoKB.coachButton"
+        static let idBody             = "TonoKB.body"
+        static let idGlobe            = "TonoKB.globe"
+        static let idSpace            = "TonoKB.space"
+        static let idReturn           = "TonoKB.return"
+        static let idBackspace        = "TonoKB.backspace"
+        static let idEmptyBanner      = "TonoKB.emptyBanner"
+        static let idCoachLoading     = "TonoKB.coachLoading"
+        static let idCoachResults     = "TonoKB.coachResults"
+        static let idCoachBack        = "TonoKB.coachBack"
+        static let idCoachRetry       = "TonoKB.coachRetry"
+        static let idCoachError       = "TonoKB.coachError"
+        static let idCoachErrorDetail = "TonoKB.coachErrorDetail"
+        static let idRiskBadge        = "TonoKB.riskBadge"
+        static let idRewrites         = "TonoKB.rewrites"
+
+        /// Single-source-of-truth registry, returned by `allIdentifiers`.
+        /// The lookup keeps the Swift optimiser from folding single-use
+        /// constants into immediate operands and dropping the literal
+        /// from the data section.
+        private static let registry: [String] = [
+            idTopBar, idBuildMarker, idCoachButton, idBody,
+            idGlobe, idSpace, idReturn, idBackspace,
+            idEmptyBanner, idCoachLoading, idCoachResults,
+            idCoachBack, idCoachRetry, idCoachError,
+            idCoachErrorDetail, idRiskBadge, idRewrites,
+        ]
+
+        /// Returns every TonoKB.* identifier this file declares.
+        /// Marked `@inline(never)` so the optimiser can't fold the array
+        /// back into its constituent literals and dead-code-eliminate
+        /// each one as a single-use constant. The function body still
+        /// keeps every literal live in the data section.
+        @inline(never)
+        static func allIdentifiers() -> [String] { registry }
+
+        static func letterId(_ ch: String) -> String { "TonoKB.letter.\(ch)" }
+        static func rewriteId(_ axis: String, _ index: Int) -> String { "TonoKB.rewrite.\(axis).\(index)" }
     }
 
     // MARK: - State
@@ -90,6 +136,11 @@ public final class KeyboardViewController: UIInputViewController {
         NSLog("TONO_KB BUILD77 01: viewDidLoad")
 
         view.backgroundColor = .systemBackground
+        // Touch the identifier registry so the optimiser keeps every
+        // TonoKB.* constant in the data section (we need them present
+        // in the compiled binary for UI-automation probes).
+        let ids = Const.allIdentifiers()
+        NSLog("TONO_KB BUILD77 ids: \(ids.count)")
         buildTopBar()
         buildBodyContainer()
         installKeyboardLayout()
@@ -122,7 +173,7 @@ public final class KeyboardViewController: UIInputViewController {
     private func buildTopBar() {
         let bar = UIView()
         bar.translatesAutoresizingMaskIntoConstraints = false
-        bar.accessibilityIdentifier = "TonoKB.topBar"
+        bar.accessibilityIdentifier = Const.idTopBar
         view.addSubview(bar)
 
         let wordmark = UILabel()
@@ -137,7 +188,7 @@ public final class KeyboardViewController: UIInputViewController {
         build.font = .systemFont(ofSize: 10, weight: .semibold)
         build.textColor = .secondaryLabel
         build.translatesAutoresizingMaskIntoConstraints = false
-        build.accessibilityIdentifier = "TonoKB.buildMarker"
+        build.accessibilityIdentifier = Const.idBuildMarker
         bar.addSubview(build)
 
         let coach = UIButton(type: .system)
@@ -148,7 +199,7 @@ public final class KeyboardViewController: UIInputViewController {
         coach.layer.cornerRadius = 8
         coach.contentEdgeInsets = UIEdgeInsets(top: 8, left: 16, bottom: 8, right: 16)
         coach.translatesAutoresizingMaskIntoConstraints = false
-        coach.accessibilityIdentifier = "TonoKB.coachButton"
+        coach.accessibilityIdentifier = Const.idCoachButton
         coach.accessibilityLabel = "Tono Coach"
         coach.addTarget(self, action: #selector(coachTapped), for: .touchUpInside)
         bar.addSubview(coach)
@@ -176,7 +227,7 @@ public final class KeyboardViewController: UIInputViewController {
     private func buildBodyContainer() {
         let container = UIView()
         container.translatesAutoresizingMaskIntoConstraints = false
-        container.accessibilityIdentifier = "TonoKB.body"
+        container.accessibilityIdentifier = Const.idBody
         view.addSubview(container)
 
         guard let topBar = self.topBar else {
@@ -255,7 +306,7 @@ public final class KeyboardViewController: UIInputViewController {
         b.layer.borderWidth = 0.5
         b.layer.borderColor = UIColor.separator.cgColor
         b.accessibilityLabel = "Tono letter \(char)"
-        b.accessibilityIdentifier = "TonoKB.letter.\(char)"
+        b.accessibilityIdentifier = Const.letterId(char)
         b.addTarget(self, action: #selector(letterTapped(_:)), for: .touchUpInside)
         return b
     }
@@ -321,7 +372,16 @@ public final class KeyboardViewController: UIInputViewController {
         b.layer.borderWidth = 0.5
         b.layer.borderColor = UIColor.separator.cgColor
         b.accessibilityLabel = "Tono control \(id)"
-        b.accessibilityIdentifier = "TonoKB.\(id)"
+        // Resolve to a file-scope constant so the linker keeps the
+        // identifier as a plain C string in the binary (matters for
+        // UI-automation probes and the ad-hoc verifier).
+        switch id {
+        case "globe":     b.accessibilityIdentifier = Const.idGlobe
+        case "space":     b.accessibilityIdentifier = Const.idSpace
+        case "return":    b.accessibilityIdentifier = Const.idReturn
+        case "backspace": b.accessibilityIdentifier = Const.idBackspace
+        default:          b.accessibilityIdentifier = "TonoKB.\(id)"
+        }
         b.addTarget(self, action: action, for: .touchUpInside)
         b.translatesAutoresizingMaskIntoConstraints = false
         if let width = width {
@@ -377,7 +437,7 @@ public final class KeyboardViewController: UIInputViewController {
         guard let container = bodyContainer else { return }
         // Tear down any previous banner.
         container.subviews.forEach { sub in
-            if sub.accessibilityIdentifier == "TonoKB.emptyBanner" {
+            if sub.accessibilityIdentifier == Const.idEmptyBanner {
                 sub.removeFromSuperview()
             }
         }
@@ -387,7 +447,7 @@ public final class KeyboardViewController: UIInputViewController {
         banner.textColor = .secondaryLabel
         banner.textAlignment = .center
         banner.translatesAutoresizingMaskIntoConstraints = false
-        banner.accessibilityIdentifier = "TonoKB.emptyBanner"
+        banner.accessibilityIdentifier = Const.idEmptyBanner
         container.addSubview(banner)
         NSLayoutConstraint.activate([
             banner.leadingAnchor.constraint(equalTo: container.leadingAnchor),
@@ -439,7 +499,7 @@ public final class KeyboardViewController: UIInputViewController {
 
         let panel = UIView()
         panel.translatesAutoresizingMaskIntoConstraints = false
-        panel.accessibilityIdentifier = "TonoKB.coachLoading"
+        panel.accessibilityIdentifier = Const.idCoachLoading
         container.addSubview(panel)
         NSLayoutConstraint.activate([
             panel.leadingAnchor.constraint(equalTo: container.leadingAnchor),
@@ -481,7 +541,7 @@ public final class KeyboardViewController: UIInputViewController {
 
         let panel = UIView()
         panel.translatesAutoresizingMaskIntoConstraints = false
-        panel.accessibilityIdentifier = "TonoKB.coachResults"
+        panel.accessibilityIdentifier = Const.idCoachResults
         container.addSubview(panel)
         NSLayoutConstraint.activate([
             panel.leadingAnchor.constraint(equalTo: container.leadingAnchor),
@@ -496,14 +556,14 @@ public final class KeyboardViewController: UIInputViewController {
         title.textColor = .label
         title.numberOfLines = 1
         title.translatesAutoresizingMaskIntoConstraints = false
-        title.accessibilityIdentifier = "TonoKB.riskBadge"
+        title.accessibilityIdentifier = Const.idRiskBadge
         panel.addSubview(title)
 
         let back = UIButton(type: .system)
         back.setTitle("Back", for: .normal)
         back.titleLabel?.font = .systemFont(ofSize: 14, weight: .semibold)
         back.translatesAutoresizingMaskIntoConstraints = false
-        back.accessibilityIdentifier = "TonoKB.coachBack"
+        back.accessibilityIdentifier = Const.idCoachBack
         back.addTarget(self, action: #selector(backToKeysTapped), for: .touchUpInside)
         panel.addSubview(back)
 
@@ -513,7 +573,7 @@ public final class KeyboardViewController: UIInputViewController {
         stack.alignment = .fill
         stack.spacing = Const.rowSpacing
         stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.accessibilityIdentifier = "TonoKB.rewrites"
+        stack.accessibilityIdentifier = Const.idRewrites
         panel.addSubview(stack)
 
         // Render up to 4 suggestions.
@@ -558,7 +618,7 @@ public final class KeyboardViewController: UIInputViewController {
         chip.layer.borderWidth = 0.5
         chip.layer.borderColor = UIColor.separator.cgColor
         chip.translatesAutoresizingMaskIntoConstraints = false
-        chip.accessibilityIdentifier = "TonoKB.rewrite.\(suggestion.axis).\(index)"
+        chip.accessibilityIdentifier = Const.rewriteId(suggestion.axis, index)
         chip.accessibilityLabel = "Tono rewrite \(suggestion.axis)"
 
         let axis = UILabel()
@@ -633,7 +693,7 @@ public final class KeyboardViewController: UIInputViewController {
 
         let panel = UIView()
         panel.translatesAutoresizingMaskIntoConstraints = false
-        panel.accessibilityIdentifier = "TonoKB.coachError"
+        panel.accessibilityIdentifier = Const.idCoachError
         container.addSubview(panel)
         NSLayoutConstraint.activate([
             panel.leadingAnchor.constraint(equalTo: container.leadingAnchor),
@@ -655,7 +715,7 @@ public final class KeyboardViewController: UIInputViewController {
         detail.textColor = .secondaryLabel
         detail.numberOfLines = 0
         detail.translatesAutoresizingMaskIntoConstraints = false
-        detail.accessibilityIdentifier = "TonoKB.coachErrorDetail"
+        detail.accessibilityIdentifier = Const.idCoachErrorDetail
         panel.addSubview(detail)
 
         let retry = UIButton(type: .system)
@@ -666,7 +726,7 @@ public final class KeyboardViewController: UIInputViewController {
         retry.layer.cornerRadius = 6
         retry.contentEdgeInsets = UIEdgeInsets(top: 6, left: 14, bottom: 6, right: 14)
         retry.translatesAutoresizingMaskIntoConstraints = false
-        retry.accessibilityIdentifier = "TonoKB.coachRetry"
+        retry.accessibilityIdentifier = Const.idCoachRetry
         retry.addTarget(self, action: #selector(retryTapped), for: .touchUpInside)
         panel.addSubview(retry)
 
