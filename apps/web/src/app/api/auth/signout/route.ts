@@ -13,8 +13,9 @@ export async function POST(request: Request) {
     // ignore — even if sign-out fails, we still clear our cookies below
   }
 
-  cookies().delete('tono_api_token');
-  cookies().delete('tono_plan');
+  const cookieStore = await cookies();
+  cookieStore.delete('tono_api_token');
+  cookieStore.delete('tono_plan');
 
   const url = new URL(request.url);
   return NextResponse.redirect(`${url.protocol}//${url.host}/app/login`);

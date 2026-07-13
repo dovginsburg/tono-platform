@@ -59,6 +59,9 @@ jobs:
       - run: python3 scripts/ci/prepare_provenance.py
       - run: npm ci
         working-directory: apps/web
+      - name: Reject high or critical production dependency advisories
+        run: npm run audit:prod
+        working-directory: apps/web
       - run: npm run build
         working-directory: apps/web
         env:

@@ -67,16 +67,17 @@ export async function GET(request: Request) {
         if (reg.ok) {
           const data = (await reg.json()) as { api_token?: string; plan?: string; is_pro?: boolean };
           if (data.api_token) {
+            const cookieStore = await cookies();
             // Set httpOnly cookie so the browser can hit /api/analyze via
             // the rewrite without re-minting on every request.
-            cookies().set('tono_api_token', data.api_token, {
+            cookieStore.set('tono_api_token', data.api_token, {
               httpOnly: true,
               secure: true,
               sameSite: 'lax',
               path: '/',
               maxAge: 60 * 60 * 24 * 365, // 1y; rotated on register re-call
             });
-            cookies().set('tono_plan', data.plan || 'free', {
+            cookieStore.set('tono_plan', data.plan || 'free', {
               httpOnly: false,
               secure: true,
               sameSite: 'lax',

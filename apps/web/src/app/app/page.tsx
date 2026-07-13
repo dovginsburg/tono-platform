@@ -20,10 +20,13 @@ export default async function RewritePage() {
   } = await supabase.auth.getUser();
 
   if (!user) {
-    redirect('/app/login?next=/app/app');
+    // App Router navigation adds basePath, so keep the redirect target relative
+    // to the application mount while preserving the full return URL.
+    redirect('/login?next=/app/app');
   }
 
-  const apiToken = cookies().get('tono_api_token')?.value;
+  const cookieStore = await cookies();
+  const apiToken = cookieStore.get('tono_api_token')?.value;
 
   return (
     <RewriteEditor

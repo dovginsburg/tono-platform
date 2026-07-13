@@ -17,7 +17,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'text is required' }, { status: 400 });
   }
 
-  const token = cookies().get('tono_api_token')?.value;
+  const cookieStore = await cookies();
+  const token = cookieStore.get('tono_api_token')?.value;
   const backendUrl = process.env.TONO_BACKEND_URL || 'https://api.tonoit.com';
 
   if (!token) {
