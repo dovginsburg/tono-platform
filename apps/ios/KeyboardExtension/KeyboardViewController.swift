@@ -83,9 +83,10 @@ public final class KeyboardViewController: UIInputViewController {
         static let symRow3: [String] = [".",",","?","!","'"]
 
         // Touch-target + spacing values calibrated to iPhone.
-        static let keyMinHeight: CGFloat = 42
+        static let keyMinHeight: CGFloat = 40
         static let rowSpacing: CGFloat = 6
         static let edgePadding: CGFloat = 4
+        static let preferredKeyboardHeight: CGFloat = 226
 
         // Apple-like keycap geometry.
         static let keyCornerRadius: CGFloat = 5
@@ -147,7 +148,7 @@ public final class KeyboardViewController: UIInputViewController {
         // The visible "BUILD 81" marker label. Stored as a registry
         // constant so the optimiser keeps the literal in the binary
         // even under aggressive Release optimisation.
-        static let buildMarkerText: String = "BUILD 81"
+        static let buildMarkerText: String = "BUILD 82"
 
         /// Single-source-of-truth registry, returned by
         /// `allIdentifiers`. The lookup keeps the Swift optimiser
@@ -279,25 +280,31 @@ public final class KeyboardViewController: UIInputViewController {
 
     public override func viewDidLoad() {
         super.viewDidLoad()
-        NSLog("TONO_KB BUILD81 01: viewDidLoad")
+        NSLog("TONO_KB BUILD82 01: viewDidLoad")
+
+        // Keep the extension itself compact. Apple-owned input-assistant UI may
+        // still be placed below us by the host and must never be hidden.
+        let height = view.heightAnchor.constraint(equalToConstant: Const.preferredKeyboardHeight)
+        height.priority = .defaultHigh
+        height.isActive = true
 
         view.backgroundColor = .systemBackground
         let ids = Const.allIdentifiers()
-        NSLog("TONO_KB BUILD81 ids: \(ids.count)")
+        NSLog("TONO_KB BUILD82 ids: \(ids.count)")
         buildTopBar()
         buildBodyContainer()
         installKeyboardLayout()
-        NSLog("TONO_KB BUILD81 02: UIKit hierarchy installed")
+        NSLog("TONO_KB BUILD82 02: UIKit hierarchy installed")
     }
 
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        NSLog("TONO_KB BUILD81 03: viewWillAppear")
+        NSLog("TONO_KB BUILD82 03: viewWillAppear")
     }
 
     public override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        NSLog("TONO_KB BUILD81 04: viewDidAppear")
+        NSLog("TONO_KB BUILD82 04: viewDidAppear")
         if !keysInstalled {
             installKeyboardLayout()
             keysInstalled = true
@@ -338,7 +345,7 @@ public final class KeyboardViewController: UIInputViewController {
         coach.setTitleColor(.white, for: .normal)
         coach.backgroundColor = .systemBlue
         coach.layer.cornerRadius = 8
-        coach.contentEdgeInsets = UIEdgeInsets(top: 8, left: 16, bottom: 8, right: 16)
+        coach.contentEdgeInsets = UIEdgeInsets(top: 4, left: 12, bottom: 4, right: 12)
         coach.translatesAutoresizingMaskIntoConstraints = false
         coach.accessibilityIdentifier = Const.idCoachButton
         coach.accessibilityLabel = "Tono Coach"
@@ -349,7 +356,7 @@ public final class KeyboardViewController: UIInputViewController {
             bar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             bar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             bar.topAnchor.constraint(equalTo: view.topAnchor),
-            bar.heightAnchor.constraint(equalToConstant: 44),
+            bar.heightAnchor.constraint(equalToConstant: 34),
 
             wordmark.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 12),
             wordmark.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
@@ -359,7 +366,7 @@ public final class KeyboardViewController: UIInputViewController {
 
             coach.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
             coach.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            coach.heightAnchor.constraint(equalToConstant: 36),
+            coach.heightAnchor.constraint(equalToConstant: 28),
         ])
 
         self.topBar = bar
@@ -372,7 +379,7 @@ public final class KeyboardViewController: UIInputViewController {
         view.addSubview(container)
 
         guard let topBar = self.topBar else {
-            NSLog("TONO_KB BUILD81 ERR: topBar missing in buildBodyContainer")
+            NSLog("TONO_KB BUILD82 ERR: topBar missing in buildBodyContainer")
             return
         }
 
@@ -429,7 +436,7 @@ public final class KeyboardViewController: UIInputViewController {
         stack.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight * 4 + Const.rowSpacing * 3).isActive = true
 
         self.keysStack = stack
-        NSLog("TONO_KB BUILD81 05: keyboard layout installed mode=\(modeName(layoutMode))")
+        NSLog("TONO_KB BUILD82 05: keyboard layout installed mode=\(modeName(layoutMode))")
     }
 
     private func row1Chars() -> [String] {
@@ -464,12 +471,8 @@ public final class KeyboardViewController: UIInputViewController {
         }
     }
 
-    private var shiftGlyph: String {
-        switch shiftState {
-        case .none:      return "\u{21E7}"   // ⇧
-        case .shiftOnce: return "\u{2B06}"   // ⬆
-        case .capsLock:  return "\u{21EA}"   // ⇪
-        }
+    private var shiftSymbolName: String {
+        shiftState == .none ? "shift" : "shift.fill"
     }
 
     private var modeToggleGlyph: String {
@@ -577,8 +580,8 @@ public final class KeyboardViewController: UIInputViewController {
         }
         row.addArrangedSubview(middle)
 
-        let backspace = makeControlButton(
-            title: "\u{232B}",
+        let backspace = makeSymbolControlButton(
+            systemName: "delete.left",
             action: #selector(backspaceTapped),
             width: Const.backspaceWidth,
             bg: keyboardKeyBackground(.tertiary),
@@ -607,9 +610,8 @@ public final class KeyboardViewController: UIInputViewController {
 
     private func makeShiftButton() -> UIButton {
         let b = UIButton(type: .system)
-        b.setTitle(shiftGlyph, for: .normal)
-        b.titleLabel?.font = .systemFont(ofSize: 18, weight: .semibold)
-        b.setTitleColor(.label, for: .normal)
+        b.setImage(UIImage(systemName: shiftSymbolName), for: .normal)
+        b.tintColor = shiftState == .capsLock ? .systemBlue : .label
         b.backgroundColor = shiftState == .capsLock
             ? UIColor.systemBlue.withAlphaComponent(0.22)
             : keyboardKeyBackground(.tertiary)
@@ -677,15 +679,8 @@ public final class KeyboardViewController: UIInputViewController {
         row.spacing = Const.rowSpacing
 
         let modeToggle = makeModeToggleButton()
-        let globe = makeControlButton(
-            title: "🌐",
-            action: #selector(globeTapped),
-            width: Const.modeToggleWidth,
-            bg: keyboardKeyBackground(.tertiary),
-            id: "globe"
-        )
-        let emoji = makeControlButton(
-            title: "\u{1F60A}",
+        let emoji = makeSymbolControlButton(
+            systemName: "face.smiling",
             action: #selector(emojiToggleTapped),
             width: Const.emojiButtonWidth,
             bg: isEmojiPanelVisible ? UIColor.systemFill : keyboardKeyBackground(.tertiary),
@@ -705,21 +700,36 @@ public final class KeyboardViewController: UIInputViewController {
             bg: keyboardKeyBackground(.tertiary),
             id: "return"
         )
-        let backspace = makeControlButton(
-            title: "\u{232B}",
-            action: #selector(backspaceTapped),
-            width: Const.backspaceWidth,
-            bg: keyboardKeyBackground(.tertiary),
-            id: "backspace"
-        )
-
         row.addArrangedSubview(modeToggle)
-        row.addArrangedSubview(globe)
+        // UIInputViewController owns this decision. Never render an
+        // unconditional globe beside Apple-owned input controls.
+        if needsInputModeSwitchKey {
+            row.addArrangedSubview(makeSymbolControlButton(
+                systemName: "globe",
+                action: #selector(globeTapped),
+                width: Const.modeToggleWidth,
+                bg: keyboardKeyBackground(.tertiary),
+                id: "globe"
+            ))
+        }
         row.addArrangedSubview(emoji)
         row.addArrangedSubview(space)
         row.addArrangedSubview(returnKey)
-        row.addArrangedSubview(backspace)
         return row
+    }
+
+    private func makeSymbolControlButton(
+        systemName: String,
+        action: Selector,
+        width: CGFloat?,
+        bg: UIColor,
+        id: String
+    ) -> UIButton {
+        let button = makeControlButton(title: "", action: action, width: width, bg: bg, id: id)
+        button.setImage(UIImage(systemName: systemName), for: .normal)
+        button.tintColor = .label
+        button.imageView?.contentMode = .scaleAspectFit
+        return button
     }
 
     private func makeControlButton(
@@ -793,7 +803,7 @@ public final class KeyboardViewController: UIInputViewController {
         case .symbols:
             layoutMode = .letters
         }
-        NSLog("TONO_KB BUILD81 mode-toggle: -> \(modeName(layoutMode))")
+        NSLog("TONO_KB BUILD82 mode-toggle: -> \(modeName(layoutMode))")
         installKeyboardLayout()
     }
 
@@ -838,7 +848,8 @@ public final class KeyboardViewController: UIInputViewController {
 
     private func applyShiftToKey(_ b: UIButton) {
         if b.accessibilityIdentifier == Const.idShift {
-            b.setTitle(shiftGlyph, for: .normal)
+            b.setImage(UIImage(systemName: shiftSymbolName), for: .normal)
+            b.tintColor = shiftState == .capsLock ? .systemBlue : .label
             b.accessibilityLabel = shiftAccessibilityLabel()
             b.backgroundColor = shiftState == .capsLock
                 ? UIColor.systemBlue.withAlphaComponent(0.22)
@@ -857,7 +868,8 @@ public final class KeyboardViewController: UIInputViewController {
                 if let inner = sub as? UIStackView {
                     for case let b as UIButton in inner.arrangedSubviews
                         where b.accessibilityIdentifier == Const.idShift {
-                        b.setTitle(shiftGlyph, for: .normal)
+                        b.setImage(UIImage(systemName: shiftSymbolName), for: .normal)
+            b.tintColor = shiftState == .capsLock ? .systemBlue : .label
                         b.accessibilityLabel = shiftAccessibilityLabel()
                         b.backgroundColor = shiftState == .capsLock
                             ? UIColor.systemBlue.withAlphaComponent(0.22)
@@ -1027,7 +1039,7 @@ public final class KeyboardViewController: UIInputViewController {
 
         emojiPanelView = panel
         isEmojiPanelVisible = true
-        NSLog("TONO_KB BUILD81 emoji-panel: visible categories=\(EmojiCategory.allCases.count) active=\(emojiActiveCategory.rawValue)")
+        NSLog("TONO_KB BUILD82 emoji-panel: visible categories=\(EmojiCategory.allCases.count) active=\(emojiActiveCategory.rawValue)")
     }
 
     @objc private func emojiHideTapped() {
@@ -1217,17 +1229,17 @@ public final class KeyboardViewController: UIInputViewController {
         coachBusy = true
         presentCoachLoading()
         let client = TonoCoachClient(endpoint: Const.backendURL, timeout: Const.coachTimeout)
-        NSLog("TONO_KB BUILD81 coach: begin POST /v1/analyze (len=\(draft.count))")
+        NSLog("TONO_KB BUILD82 coach: begin POST /v1/analyze (len=\(draft.count))")
         client.coach(draft: draft) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.coachBusy = false
                 switch result {
                 case .success(let response):
-                    NSLog("TONO_KB BUILD81 coach: OK risk=\(response.riskLevel) suggestions=\(response.suggestions.count)")
+                    NSLog("TONO_KB BUILD82 coach: OK risk=\(response.riskLevel) suggestions=\(response.suggestions.count)")
                     self.presentCoachResults(response)
                 case .failure(let err):
-                    NSLog("TONO_KB BUILD81 coach: FAIL \(err.userFacingMessage)")
+                    NSLog("TONO_KB BUILD82 coach: FAIL \(err.userFacingMessage)")
                     self.presentCoachError(err)
                 }
             }
@@ -1418,7 +1430,7 @@ public final class KeyboardViewController: UIInputViewController {
             proxy.deleteBackward()
         }
         proxy.insertText(rewrite)
-        NSLog("TONO_KB BUILD81 rewrite: inserted len=\(rewrite.count) (deleted \(deletions))")
+        NSLog("TONO_KB BUILD82 rewrite: inserted len=\(rewrite.count) (deleted \(deletions))")
     }
 
     // MARK: - Coach error
