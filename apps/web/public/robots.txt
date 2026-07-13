@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+
+# Tono — pre-send rewrite tool
+# Marketing: https://tonoit.com
+# Docs:     https://tonoit.com/about
+# Support:  hi@tonoit.com
+
+Sitemap: https://tonoit.com/sitemap.xml

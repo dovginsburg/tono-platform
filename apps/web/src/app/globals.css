@@ -1,0 +1,324 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   Tono design tokens — raw CSS variables for non-Tailwind use.
+   Source: /Users/Ezra/Projects/team/mark-deliverables/design-tokens.json
+   (products.tono). Mirrored in tailwind.config.ts.
+   ============================================================ */
+
+:root {
+  --bg: #000000;
+  --bg-soft: #0A0A0A;
+  --bg-card: #111113;
+  --bg-elev: #16161A;
+  --border: #1F1F23;
+  --border-strong: #2A2A30;
+  --text: #FFFFFF;
+  --text-soft: #C9C9D1;
+  --text-softer: #9CA3AF;
+  --muted: #6B7280;
+
+  --accent: #A855F7;
+  --accent-hover: #9333EA;
+  --accent-soft: rgba(168,85,247,0.12);
+  --accent-softer: rgba(168,85,247,0.06);
+  --accent-light: #D8B4FE;
+  --accent-glow: rgba(168,85,247,0.35);
+
+  /* bezel — dark frame around the iOS phone preview, slightly
+     lighter than --bg-card so the screen edge reads on dark */
+  --bezel: #1A1A1F;
+
+  --tone-warmer: #F472B6;
+  --tone-clearer: #38BDF8;
+  --tone-funnier: #FBBF24;
+  --tone-safer: #34D399;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --duration: 240ms;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    Helvetica, Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100%;
+}
+
+body {
+  /* subtle ambient backdrop, no glossy gradient slop */
+  background:
+    radial-gradient(800px 400px at 75% 0%, rgba(168, 85, 247, 0.08), transparent 60%),
+    radial-gradient(600px 300px at 10% 100%, rgba(56, 189, 248, 0.04), transparent 60%),
+    var(--bg);
+  background-attachment: fixed;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+}
+
+/* Focus rings — use Mark's focus shadow */
+*:focus-visible {
+  outline: none;
+  box-shadow: var(--accent-glow) 0 0 0 3px;
+  border-radius: var(--radius-sm);
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 1ms !important;
+    animation: none !important;
+  }
+}
+
+/* ============================================================
+   NavDropdown — top-right hamburger menu (nav-spec.md §1-§4)
+   Renders on every page; opens dropdown on desktop, drawer on
+   mobile. Dark surface; trigger and panel use the tono tokens.
+   ============================================================ */
+@keyframes tono-nav-in {
+  0%   { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes tono-drawer-in {
+  0%   { transform: translateX(100%); }
+  100% { transform: translateX(0); }
+}
+.tono-nav-trigger {
+  position: fixed;
+  top: max(16px, env(safe-area-inset-top, 16px));
+  right: max(16px, env(safe-area-inset-right, 16px));
+  z-index: 200;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid #1F1F23;
+  border-radius: 12px;
+  color: #C9C9D1;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  cursor: pointer;
+  transition: background 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              color 160ms,
+              border-color 160ms,
+              transform 80ms ease-out;
+}
+.tono-nav-trigger:hover,
+.tono-nav-trigger[data-open="true"] {
+  background: rgba(168, 85, 247, 0.10);
+  color: #FFFFFF;
+  border-color: #2A2A30;
+}
+.tono-nav-trigger:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.35);
+}
+.tono-nav-trigger:active {
+  transform: scale(0.97);
+}
+
+.tono-nav-panel {
+  position: fixed;
+  top: calc(max(16px, env(safe-area-inset-top, 16px)) + 52px);
+  right: max(16px, env(safe-area-inset-right, 16px));
+  z-index: 200;
+  width: 280px;
+  max-width: calc(100vw - 32px);
+  background: #111113;
+  border: 1px solid #1F1F23;
+  border-radius: 18px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45),
+              0 8px 24px rgba(0, 0, 0, 0.30);
+  padding: 8px;
+  transform-origin: top right;
+  animation: tono-nav-in 100ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  list-style: none;
+  margin: 0;
+}
+.tono-nav-panel li {
+  list-style: none;
+}
+.tono-nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 48px;
+  padding: 0 16px;
+  border-radius: 10px;
+  color: #C9C9D1;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 24px;
+  text-decoration: none;
+  border-bottom: 1px solid #1F1F23;
+  transition: background 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              color 160ms;
+}
+.tono-nav-item:last-child {
+  border-bottom: none;
+}
+.tono-nav-item:hover {
+  background: rgba(168, 85, 247, 0.06);
+  color: #FFFFFF;
+}
+.tono-nav-item:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px #A855F7;
+  color: #FFFFFF;
+}
+.tono-nav-item[aria-current="page"] {
+  color: #FFFFFF;
+}
+.tono-nav-item .chevron {
+  opacity: 0.2;
+}
+
+.tono-nav-drawer {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  background: #000000;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  padding-top: env(safe-area-inset-top, 0);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+  animation: tono-drawer-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.tono-nav-drawer-head {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  border-bottom: 1px solid #1F1F23;
+  flex-shrink: 0;
+}
+.tono-nav-drawer-close {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid #1F1F23;
+  border-radius: 12px;
+  color: #C9C9D1;
+  cursor: pointer;
+}
+.tono-nav-drawer-close:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.35);
+}
+.tono-nav-drawer-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 24px 24px;
+  list-style: none;
+  margin: 0;
+}
+.tono-nav-drawer-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 56px;
+  padding: 0 4px;
+  border-bottom: 1px solid #1F1F23;
+  color: #C9C9D1;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 26px;
+  text-decoration: none;
+  transition: color 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.tono-nav-drawer-item:last-child {
+  border-bottom: none;
+}
+.tono-nav-drawer-item[aria-current="page"] {
+  color: #FFFFFF;
+}
+.tono-nav-drawer-item .chevron {
+  opacity: 0.2;
+}
+
+/* ============================================================
+   Tone-driven utilities — replace inline color literals.
+   Each tone (warmer / clearer / funnier / safer) gets a paired
+   set: solid, soft (10% bg), left-rule, top-rule, dot-glow.
+   Apply with classes like .tone-text-wamer, .tone-rule-l-wamer
+   so page.tsx never has to reach for hex in JSX.
+   ============================================================ */
+.tone-text-wamer  { color: var(--tone-warmer); }
+.tone-text-clearer{ color: var(--tone-clearer); }
+.tone-text-funnier{ color: var(--tone-funnier); }
+.tone-text-safer  { color: var(--tone-safer); }
+
+.tone-bg-wamer   { background-color: var(--tone-warmer); }
+.tone-bg-clearer { background-color: var(--tone-clearer); }
+.tone-bg-funnier { background-color: var(--tone-funnier); }
+.tone-bg-safer   { background-color: var(--tone-safer); }
+
+/* Soft surfaces: dark bg under-painted with 10% accent. */
+.tone-bg-soft-wamer   { background-color: rgba(244, 114, 182, 0.10); }
+.tone-bg-soft-clearer { background-color: rgba(56, 189, 248, 0.10); }
+.tone-bg-soft-funnier { background-color: rgba(251, 191, 36, 0.10); }
+.tone-bg-soft-safer   { background-color: rgba(52, 211, 153, 0.10); }
+
+/* 4px rule on the left edge of a tone card. */
+.tone-rule-l-wamer   { box-shadow: inset 4px 0 0 0 var(--tone-warmer); border-left: 0; }
+.tone-rule-l-clearer { box-shadow: inset 4px 0 0 0 var(--tone-clearer); border-left: 0; }
+.tone-rule-l-funnier { box-shadow: inset 4px 0 0 0 var(--tone-funnier); border-left: 0; }
+.tone-rule-l-safer   { box-shadow: inset 4px 0 0 0 var(--tone-safer); border-left: 0; }
+
+/* 2px top rule for the "named in the copy" tone-cards grid. */
+.tone-rule-t-wamer   { box-shadow: inset 0 2px 0 0 var(--tone-warmer); border-top: 0; }
+.tone-rule-t-clearer { box-shadow: inset 0 2px 0 0 var(--tone-clearer); border-top: 0; }
+.tone-rule-t-funnier { box-shadow: inset 0 2px 0 0 var(--tone-funnier); border-top: 0; }
+.tone-rule-t-safer   { box-shadow: inset 0 2px 0 0 var(--tone-safer); border-top: 0; }
+
+/* Tone dot indicator — small filled circle with a tinted glow. */
+.tone-dot-wamer   { background: var(--tone-warmer);   box-shadow: 0 0 12px rgba(244, 114, 182, 0.50); }
+.tone-dot-clearer { background: var(--tone-clearer); box-shadow: 0 0 12px rgba(56, 189, 248, 0.50); }
+.tone-dot-funnier { background: var(--tone-funnier); box-shadow: 0 0 12px rgba(251, 191, 36, 0.50); }
+.tone-dot-safer   { background: var(--tone-safer);   box-shadow: 0 0 12px rgba(52, 211, 153, 0.50); }
+
+/* Compact dot for inline tone labels. */
+.tone-dot-sm-wamer   { background: var(--tone-warmer);   box-shadow: 0 0 6px rgba(244, 114, 182, 0.50); }
+.tone-dot-sm-clearer { background: var(--tone-clearer); box-shadow: 0 0 6px rgba(56, 189, 248, 0.50); }
+.tone-dot-sm-funnier { background: var(--tone-funnier); box-shadow: 0 0 6px rgba(251, 191, 36, 0.50); }
+.tone-dot-sm-safer   { background: var(--tone-safer);   box-shadow: 0 0 6px rgba(52, 211, 153, 0.50); }

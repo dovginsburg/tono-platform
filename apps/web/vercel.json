@@ -1,0 +1,21 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    { "source": "/", "destination": "/app" },
+    { "source": "/pricing", "destination": "/app/pricing" },
+    { "source": "/checkout/success", "destination": "/app/checkout/success" },
+    { "source": "/about", "destination": "/app/about" },
+    { "source": "/contact", "destination": "/app/contact" },
+    { "source": "/features", "destination": "/app/features" },
+    { "source": "/blog", "destination": "/app/blog" },
+    { "source": "/privacy", "destination": "/app/privacy" },
+    { "source": "/terms", "destination": "/app/terms" },
+    { "source": "/upgrade", "destination": "/app/pricing" },
+    { "source": "/sitemap.xml", "destination": "/app/sitemap.xml" },
+    { "source": "/robots.txt", "destination": "/app/robots.txt" },
+    { "source": "/api/checkout", "destination": "/app/api/checkout" },
+    { "source": "/api/health", "destination": "/app/api/health" },
+    { "source": "/api/analyze", "destination": "/app/api/analyze" },
+    { "source": "/api/me", "destination": "/app/api/me" }
+  ]
+}
