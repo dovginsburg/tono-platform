@@ -50,6 +50,12 @@ Operate by these rules:
     verdict. Examples: "Reads as abrupt — opens with a demand."
     "Lands cleanly — direct ask with a deadline." Return in field
     risk_reason.
+11. Preserve the user's semantic intent. Remove clearly accidental leading
+    gibberish when a coherent trailing message is present, but never invent a
+    new event or scenario (for example a pocket text, wrong recipient, apology,
+    or instruction to ignore the message).
+12. Return exactly one rewrite for every requested axis, in this order:
+    warmer, clearer, funnier, safer. Never omit an axis.
 
 Return JSON ONLY matching the ToneAnalysis schema. No prose, no markdown
 fences, no commentary.
@@ -123,6 +129,102 @@ class ToneAnalysis(BaseModel):
     flags: list[str]
 
 
+CANONICAL_COACH_AXES = ("warmer", "clearer", "funnier", "safer")
+
+
+class CoachContractError(ValueError):
+    """Provider output cannot be rendered without hiding or inventing content."""
+
+
+def intended_draft(draft: str) -> str:
+    """Conservatively remove an accidental malformed prefix before a coherent greeting."""
+    stripped = draft.strip()
+    matches = list(re.finditer(
+        r"(?:^|\s)((?:hey|hi|hello)\b[\s\S]{3,}[.!?])\s*$",
+        stripped,
+        flags=re.IGNORECASE,
+    ))
+    if not matches:
+        return stripped
+    match = matches[-1]
+    candidate = match.group(1).strip()
+    prefix = stripped[:match.start(1)].strip()
+    if not prefix:
+        return candidate
+    malformed_words = [
+        word for word in re.findall(r"[A-Za-z]+", prefix)
+        if len(word) >= 3 and not re.search(r"[aeiouy]", word, flags=re.IGNORECASE)
+    ]
+    has_symbol_noise = any(
+        not (char.isalnum() or char.isspace() or char in "'’-_,.")
+        for char in prefix
+    )
+    return candidate if has_symbol_noise or len(malformed_words) >= 2 else stripped
+
+
+def _semantic_terms(text: str) -> set[str]:
+    stop = {
+        "a", "an", "and", "are", "at", "be", "can", "could", "for", "hey",
+        "hi", "i", "in", "is", "it", "me", "my", "of", "on", "please", "the",
+        "this", "to", "we", "with", "would", "you", "your",
+    }
+    return {
+        token for token in re.findall(r"[a-z0-9']+", text.lower())
+        if len(token) >= 3 and token not in stop
+    }
+
+
+def _preserves_semantic_intent(source: str, rewrite: str) -> bool:
+    lowered = rewrite.lower()
+    invented_scenarios = (
+        "pocket text", "wrong person", "wrong number", "sent by accident",
+        "accidental text", "ignore that", "ignore this",
+    )
+    if any(phrase in lowered for phrase in invented_scenarios):
+        return False
+    source_terms = _semantic_terms(source)
+    if not source_terms:
+        return True
+    return bool(source_terms & _semantic_terms(rewrite))
+
+
+def enforce_coach_contract(result: dict[str, Any], req: AnalyzeRequest) -> dict[str, Any]:
+    """Validate, canonicalize, and fail closed on incomplete or shifted rewrites."""
+    if req.mode == "read":
+        return result
+    requested = [axis.strip().lower() for axis in req.axes]
+    if not requested:
+        requested = list(CANONICAL_COACH_AXES)
+    if len(set(requested)) != len(requested) or any(
+        axis not in CANONICAL_COACH_AXES for axis in requested
+    ):
+        raise CoachContractError("invalid requested axes")
+    expected = [axis for axis in CANONICAL_COACH_AXES if axis in requested]
+    raw = result.get("suggestions")
+    if not isinstance(raw, list):
+        raise CoachContractError("missing suggestions")
+    by_axis: dict[str, dict[str, Any]] = {}
+    source = intended_draft(req.draft)
+    for suggestion in raw:
+        if not isinstance(suggestion, dict):
+            raise CoachContractError("invalid suggestion")
+        axis = str(suggestion.get("axis", "")).strip().lower()
+        text = str(suggestion.get("text", "")).strip()
+        if axis not in expected:
+            raise CoachContractError(f"unexpected axis: {axis}")
+        if axis in by_axis:
+            raise CoachContractError(f"duplicate axis: {axis}")
+        if not text:
+            raise CoachContractError(f"blank axis: {axis}")
+        if not _preserves_semantic_intent(source, text):
+            raise CoachContractError(f"{axis} rewrite does not preserve semantic intent")
+        by_axis[axis] = {**suggestion, "axis": axis, "text": text}
+    missing = [axis for axis in expected if axis not in by_axis]
+    if missing:
+        raise CoachContractError(f"missing axes: {', '.join(missing)}")
+    return {**result, "suggestions": [by_axis[axis] for axis in expected]}
+
+
 def build_system_prompt(req: AnalyzeRequest) -> str:
     """Pick prompt by mode, optionally extended with on-device user memory."""
     system = READ_SYSTEM_PROMPT if req.mode == "read" else SYSTEM_PROMPT
@@ -140,7 +242,8 @@ def build_user_prompt(req: AnalyzeRequest) -> str:
     lines: list[str] = []
     if req.thread_context:
         lines += ["THREAD (message you're replying to):", req.thread_context, ""]
-    lines += ["DRAFT (analyze and rewrite this):" if req.thread_context else "DRAFT:", req.draft]
+    draft = intended_draft(req.draft) if req.mode == "coach" else req.draft.strip()
+    lines += ["DRAFT (analyze and rewrite this):" if req.thread_context else "DRAFT:", draft]
     if req.recipient_hint:
         lines += ["", f"RECIPIENT CONTEXT: {req.recipient_hint}"]
     if req.preferred_voice:
@@ -150,7 +253,8 @@ def build_user_prompt(req: AnalyzeRequest) -> str:
 
 
 def mock_analyze(req: AnalyzeRequest) -> dict[str, Any]:
-    lower = req.draft.lower()
+    draft = intended_draft(req.draft) if req.mode == "coach" else req.draft.strip()
+    lower = draft.lower()
     flags: list[str] = []
 
     if req.mode == "read":
@@ -209,7 +313,7 @@ def mock_analyze(req: AnalyzeRequest) -> dict[str, Any]:
         perception = "The ask is hard to act on without more detail. 🤔"
         subtext = "wants a reply but won't ask directly"
         risk_reason = "Ambiguous ask — no deadline or clear next step."
-    elif len(req.draft.strip()) < 6 or req.draft.strip().lower() in {"ok.", "fine.", "k."}:
+    elif len(draft) < 6 or draft.lower() in {"ok.", "fine.", "k."}:
         flags.append("terse — could read as cold")
         risk = "high"
         perception = "Reads as dismissive. 🥶"
@@ -220,22 +324,22 @@ def mock_analyze(req: AnalyzeRequest) -> dict[str, Any]:
     if "warmer" in req.axes:
         warmer = (
             ("Hey — really appreciate it. " if lower.startswith(("thanks", "thank you")) else "Hey! ")
-            + req.draft
+            + draft
         )
         suggestions.append(
             {"axis": "warmer", "text": warmer, "rationale": "Adds a one-line validation before the ask."}
         )
     if "clearer" in req.axes:
-        clearer = req.draft.replace("let me know", "could you reply by Friday EOD?")
+        clearer = draft.replace("let me know", "could you reply by Friday EOD?")
         suggestions.append(
             {"axis": "clearer", "text": clearer, "rationale": "Names the ask and a specific deadline."}
         )
     if "funnier" in req.axes:
         suggestions.append(
-            {"axis": "funnier", "text": req.draft, "rationale": "context doesn't call for humor"}
+            {"axis": "funnier", "text": draft, "rationale": "context doesn't call for humor"}
         )
     if "safer" in req.axes:
-        safer = req.draft
+        safer = draft
         for bad, good in [
             (r"\bas per my last message\b", "following up on my last note"),
             (r"\bper my last\b", "following up on my last"),
@@ -246,14 +350,14 @@ def mock_analyze(req: AnalyzeRequest) -> dict[str, Any]:
             {"axis": "safer", "text": safer, "rationale": "Removes anything that could be read as guilt or cold."}
         )
 
-    return {
+    return enforce_coach_contract({
         "risk_level": risk,
         "perception": perception,
         "subtext": subtext,
         "risk_reason": risk_reason,
         "suggestions": suggestions,
         "flags": flags,
-    }
+    }, req)
 
 
 async def openai_analyze(req: AnalyzeRequest) -> dict[str, Any]:
@@ -276,7 +380,7 @@ async def openai_analyze(req: AnalyzeRequest) -> dict[str, Any]:
         )
         r.raise_for_status()
         content = r.json()["choices"][0]["message"]["content"]
-        return json.loads(content)
+        return enforce_coach_contract(json.loads(content), req)
 
 
 async def stream_openai_analyze(req: AnalyzeRequest):
@@ -340,7 +444,7 @@ async def stream_openai_analyze(req: AnalyzeRequest):
             text = text[:-3]
         text = text.strip()
 
-        result = json.loads(text)
+        result = enforce_coach_contract(json.loads(text), req)
 
         # Stream perception first
         if "perception" in result:
@@ -390,7 +494,7 @@ async def anthropic_analyze(req: AnalyzeRequest) -> dict[str, Any]:
                     text = text.split("\n", 1)[1] if "\n" in text else text[3:]
                 if text.endswith("```"):
                     text = text[:-3]
-                return json.loads(text.strip())
+                return enforce_coach_contract(json.loads(text.strip()), req)
         raise HTTPException(502, "no text block in anthropic response")
 
 
@@ -462,7 +566,7 @@ async def stream_anthropic_analyze(req: AnalyzeRequest):
             text = text[:-3]
         text = text.strip()
 
-        result = json.loads(text)
+        result = enforce_coach_contract(json.loads(text), req)
 
         # Stream perception first (the user sees this immediately)
         if "perception" in result:

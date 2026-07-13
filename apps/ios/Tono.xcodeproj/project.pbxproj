@@ -103,6 +103,8 @@
 		850000000000000000000001 /* SpellingCorrection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 850000000000000000000004 /* SpellingCorrection.swift */; };
 		850000000000000000000002 /* SpellingCorrection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 850000000000000000000004 /* SpellingCorrection.swift */; };
 		850000000000000000000003 /* SpellingCorrectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 850000000000000000000005 /* SpellingCorrectionTests.swift */; };
+		860000000000000000000001 /* CoachContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 860000000000000000000003 /* CoachContractTests.swift */; };
+		860000000000000000000002 /* TonoCoachClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EE5759E683FD2ECA633D8FC /* TonoCoachClient.swift */; };
 		FD395AA136FAAF23914CA72A /* TonoCoachClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EE5759E683FD2ECA633D8FC /* TonoCoachClient.swift */; };
 		FE1397E60BD23EA5225588DB /* MetricKitReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 640260545EC970E83D72B3B0 /* MetricKitReporter.swift */; };
 		FED5706B3648E7E30CC10E3E /* FeatureFlags.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8F4E5BEB850F3FDD9485F10 /* FeatureFlags.swift */; };
@@ -187,6 +189,7 @@
 		AA287EC754705B7065C31935 /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
 		850000000000000000000004 /* SpellingCorrection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpellingCorrection.swift; sourceTree = "<group>"; };
 		850000000000000000000005 /* SpellingCorrectionTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SpellingCorrectionTests.swift; sourceTree = "<group>"; };
+		860000000000000000000003 /* CoachContractTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CoachContractTests.swift; sourceTree = "<group>"; };
 		B3861F3AF2390477CF4D567E /* CoachDraftIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachDraftIntent.swift; sourceTree = "<group>"; };
 		B44BF0A224058437A1D2B6CB /* OnboardingEntryPointsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = OnboardingEntryPointsView.swift; sourceTree = "<group>"; };
 		B88FDB62F52944069CC31478 /* CoachView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachView.swift; sourceTree = "<group>"; };
@@ -255,6 +258,7 @@
 			isa = PBXGroup;
 			children = (
 				045FE2F8B15471B8BFD56595 /* ContactsAccessTests.swift */,
+				860000000000000000000003 /* CoachContractTests.swift */,
 				850000000000000000000005 /* SpellingCorrectionTests.swift */,
 			);
 			name = Tests;
@@ -610,6 +614,8 @@
 				4A7F52C5EC4E98E266267D4E /* ContactsAccessTests.swift in Sources */,
 				850000000000000000000002 /* SpellingCorrection.swift in Sources */,
 				850000000000000000000003 /* SpellingCorrectionTests.swift in Sources */,
+				860000000000000000000001 /* CoachContractTests.swift in Sources */,
+				860000000000000000000002 /* TonoCoachClient.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

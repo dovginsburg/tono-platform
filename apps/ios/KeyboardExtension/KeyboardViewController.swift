@@ -1,9 +1,8 @@
 // KeyboardViewController.swift
-// Tono keyboard extension — build 85.
+// Tono keyboard extension — build 86.
 //
-// Build 85 preserves build-84 typing and build-83 mode/emoji behavior while
-// adding memory-safe, on-device spelling. UIKit-only startup, Coach networking,
-// Unicode insertion, and conditional input-mode switching remain intact:
+// Build 86 preserves build-85 typing/spelling behavior while hardening
+// caret-range candidate replacement and the four-axis Coach result contract.
 //
 //   * Explicit navigation matrix: letters bottom `123`; numbers/symbols
 //     bottom `ABC`; numbers row-3 `#+=`; symbols row-3 `123`.
@@ -295,7 +294,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     public override func viewDidLoad() {
         super.viewDidLoad()
-        NSLog("TONO_KB BUILD85 01: viewDidLoad")
+        NSLog("TONO_KB BUILD86 01: viewDidLoad")
 
         // Keep the extension itself compact. Apple-owned input-assistant UI may
         // still be placed below us by the host and must never be hidden.
@@ -306,7 +305,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
         view.backgroundColor = .systemBackground
         let ids = Const.allIdentifiers()
-        NSLog("TONO_KB BUILD85 ids: \(ids.count)")
+        NSLog("TONO_KB BUILD86 ids: \(ids.count)")
         buildTopBar()
         buildBodyContainer()
         updateHostConfiguration(rebuildIfNeeded: false)
@@ -318,17 +317,17 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             self?.refreshSpellingSuggestions()
         }
         refreshSpellingSuggestions()
-        NSLog("TONO_KB BUILD85 02: UIKit hierarchy installed")
+        NSLog("TONO_KB BUILD86 02: UIKit hierarchy installed")
     }
 
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        NSLog("TONO_KB BUILD85 03: viewWillAppear")
+        NSLog("TONO_KB BUILD86 03: viewWillAppear")
     }
 
     public override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        NSLog("TONO_KB BUILD85 04: viewDidAppear")
+        NSLog("TONO_KB BUILD86 04: viewDidAppear")
         refreshHostConfigurationIfNeeded()
         applyAutoCapitalizationIfNeeded()
         refreshSpellingSuggestions()
@@ -476,7 +475,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         view.addSubview(container)
 
         guard let topBar = self.topBar else {
-            NSLog("TONO_KB BUILD85 ERR: topBar missing in buildBodyContainer")
+            NSLog("TONO_KB BUILD86 ERR: topBar missing in buildBodyContainer")
             return
         }
 
@@ -645,7 +644,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         stack.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight * 4 + Const.rowSpacing * 3).isActive = true
 
         self.keysStack = stack
-        NSLog("TONO_KB BUILD85 05: keyboard layout installed mode=\(modeName(layoutMode))")
+        NSLog("TONO_KB BUILD86 05: keyboard layout installed mode=\(modeName(layoutMode))")
     }
 
     private var currentKeyboardWidth: CGFloat {
@@ -1157,7 +1156,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     @objc private func bottomModeTapped() {
         cancelTransientInteractions()
         layoutMode = bottomModeSpec.target
-        NSLog("TONO_KB BUILD85 bottom-mode: -> \(modeName(layoutMode))")
+        NSLog("TONO_KB BUILD86 bottom-mode: -> \(modeName(layoutMode))")
         installKeyboardLayout()
     }
 
@@ -1165,7 +1164,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         cancelTransientInteractions()
         guard let target = thirdRowModeSpec?.target else { return }
         layoutMode = target
-        NSLog("TONO_KB BUILD85 third-row-mode: -> \(modeName(layoutMode))")
+        NSLog("TONO_KB BUILD86 third-row-mode: -> \(modeName(layoutMode))")
         installKeyboardLayout()
     }
 
@@ -1292,8 +1291,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             spellingService.cancel()
             return
         }
-        let context = textDocumentProxy.documentContextBeforeInput ?? ""
-        guard let token = SpellingToken.current(in: context) else {
+        let before = textDocumentProxy.documentContextBeforeInput ?? ""
+        let after = textDocumentProxy.documentContextAfterInput ?? ""
+        guard let token = SpellingToken.current(before: before, after: after) else {
             spellingService.cancel()
             spellingDecision = nil
             spellingToken = nil
@@ -1314,7 +1314,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         spellingService.schedule(request) { [weak self] _, decision in
             guard let self = self else { return }
             let live = SpellingToken.current(
-                in: self.textDocumentProxy.documentContextBeforeInput ?? ""
+                before: self.textDocumentProxy.documentContextBeforeInput ?? "",
+                after: self.textDocumentProxy.documentContextAfterInput ?? ""
             )
             guard live == token else { return }
             self.spellingDecision = decision
@@ -1359,7 +1360,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         guard let expected = spellingToken,
               let plan = SpellingMutationPlan.candidate(
                 liveToken: SpellingToken.current(
-                    in: textDocumentProxy.documentContextBeforeInput ?? ""
+                    before: textDocumentProxy.documentContextBeforeInput ?? "",
+                    after: textDocumentProxy.documentContextAfterInput ?? ""
                 ),
                 expected: expected,
                 replacement: value
@@ -1403,6 +1405,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     private func applySpellingMutation(_ plan: SpellingMutationPlan) {
+        if plan.cursorAdvance > 0 {
+            textDocumentProxy.adjustTextPosition(byCharacterOffset: plan.cursorAdvance)
+        }
         for _ in 0..<plan.deleteCount { textDocumentProxy.deleteBackward() }
         textDocumentProxy.insertText(plan.insertion)
     }
@@ -1722,7 +1727,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
         emojiPanelView = panel
         isEmojiPanelVisible = true
-        NSLog("TONO_KB BUILD85 emoji-panel: visible categories=\(EmojiCategory.allCases.count) active=\(emojiActiveCategory.rawValue)")
+        NSLog("TONO_KB BUILD86 emoji-panel: visible categories=\(EmojiCategory.allCases.count) active=\(emojiActiveCategory.rawValue)")
     }
 
     @objc private func emojiHideTapped() {
@@ -1905,17 +1910,17 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachBusy = true
         presentCoachLoading()
         let client = TonoCoachClient(endpoint: Const.backendURL, timeout: Const.coachTimeout)
-        NSLog("TONO_KB BUILD85 coach: begin POST /v1/analyze (len=\(draft.count))")
+        NSLog("TONO_KB BUILD86 coach: begin POST /v1/analyze (len=\(draft.count))")
         client.coach(draft: draft) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.coachBusy = false
                 switch result {
                 case .success(let response):
-                    NSLog("TONO_KB BUILD85 coach: OK risk=\(response.riskLevel) suggestions=\(response.suggestions.count)")
+                    NSLog("TONO_KB BUILD86 coach: OK risk=\(response.riskLevel) suggestions=\(response.suggestions.count)")
                     self.presentCoachResults(response)
                 case .failure(let err):
-                    NSLog("TONO_KB BUILD85 coach: FAIL \(err.userFacingMessage)")
+                    NSLog("TONO_KB BUILD86 coach: FAIL \(err.userFacingMessage)")
                     self.presentCoachError(err)
                 }
             }
@@ -2137,7 +2142,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             proxy.deleteBackward()
         }
         proxy.insertText(rewrite)
-        NSLog("TONO_KB BUILD85 rewrite: inserted len=\(rewrite.count) (deleted \(deletions))")
+        NSLog("TONO_KB BUILD86 rewrite: inserted len=\(rewrite.count) (deleted \(deletions))")
     }
 
     // MARK: - Coach error

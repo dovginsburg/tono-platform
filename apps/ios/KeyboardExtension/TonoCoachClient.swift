@@ -193,33 +193,36 @@ public final class TonoCoachClient {
                 riskAfter: raw["risk_after"] as? String
             ))
         }
+        let canonical = try canonicalSuggestions(suggestions)
         return CoachResponse(
             riskLevel: riskLevel,
             perception: perception,
             subtext: subtext,
             reason: reason,
-            suggestions: canonicalSuggestions(suggestions),
+            suggestions: canonical,
             flags: flags
         )
     }
 
     /// The keyboard has four fixed semantic result slots. Normalize backend
-    /// casing/whitespace, reject unsupported axes and blank/duplicate text,
-    /// then return at most one rewrite per axis in stable semantic order.
-    public static func canonicalSuggestions(_ raw: [CoachRewrite]) -> [CoachRewrite] {
+    /// casing/whitespace, reject unsupported, blank, duplicate, or missing axes,
+    /// and return exactly one rewrite per axis in stable semantic order.
+    public static func canonicalSuggestions(_ raw: [CoachRewrite]) throws -> [CoachRewrite] {
         let canonicalAxes = ["warmer", "clearer", "funnier", "safer"]
         var byAxis: [String: CoachRewrite] = [:]
-        var seenTexts = Set<String>()
 
         for rewrite in raw {
             let axis = rewrite.axis.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let text = rewrite.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard canonicalAxes.contains(axis), byAxis[axis] == nil, !text.isEmpty else { continue }
-            let identity = text.folding(
-                options: [.caseInsensitive, .diacriticInsensitive],
-                locale: Locale(identifier: "en_US_POSIX")
-            )
-            guard seenTexts.insert(identity).inserted else { continue }
+            guard canonicalAxes.contains(axis) else {
+                throw contractError("unsupported rewrite axis: \(axis)")
+            }
+            guard !text.isEmpty else {
+                throw contractError("blank \(axis) rewrite")
+            }
+            guard byAxis[axis] == nil else {
+                throw contractError("duplicate rewrite axis: \(axis)")
+            }
             byAxis[axis] = CoachRewrite(
                 axis: axis,
                 text: text,
@@ -227,6 +230,19 @@ public final class TonoCoachClient {
                 riskAfter: rewrite.riskAfter
             )
         }
+
+        let missing = canonicalAxes.filter { byAxis[$0] == nil }
+        guard missing.isEmpty, raw.count == canonicalAxes.count else {
+            throw contractError("missing rewrite axes: \(missing.joined(separator: ", "))")
+        }
         return canonicalAxes.compactMap { byAxis[$0] }
+    }
+
+    private static func contractError(_ message: String) -> NSError {
+        NSError(
+            domain: "TonoCoachClient",
+            code: 2,
+            userInfo: [NSLocalizedDescriptionKey: "Incomplete Coach response (\(message)). Tap Retry."]
+        )
     }
 }

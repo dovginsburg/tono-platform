@@ -49,6 +49,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import passkeys, payments, slack, social_auth
 from .analyze import (
     AnalyzeRequest,
+    CoachContractError,
     RewriteSuggestion,
     ToneAnalysis,
     mock_analyze,
@@ -379,13 +380,17 @@ async def v1_analyze(req: AnalyzeRequest, request: Request) -> dict[str, Any]:
             headers={"Retry-After": "60"},
         )
     provider = os.environ.get("TONO_PROVIDER", "mock")
-    if provider == "mock":
-        return mock_analyze(req)
-    if provider == "openai":
-        return await openai_analyze(req)
-    if provider == "anthropic":
-        return await anthropic_analyze(req)
-    raise HTTPException(400, f"unknown provider: {provider}")
+    try:
+        if provider == "mock":
+            return mock_analyze(req)
+        if provider == "openai":
+            return await openai_analyze(req)
+        if provider == "anthropic":
+            return await anthropic_analyze(req)
+        raise HTTPException(400, f"unknown provider: {provider}")
+    except CoachContractError as error:
+        logger.warning("Invalid Coach response from %s: %s", provider, error)
+        raise HTTPException(502, "Coach response incomplete. Please retry.") from error
 
 
 # ---------------------------------------------------------------------------
@@ -617,6 +622,13 @@ async def api_analyze(
             result = await anthropic_analyze(internal)
         else:
             raise HTTPException(400, f"unknown provider: {provider}")
+    except CoachContractError as e:
+        logger.warning("Invalid Coach response from %s: %s", provider, e)
+        store.log_usage(
+            user.device_id, "/api/analyze", 502, provider=provider,
+            drafts_chars=len(body.text),
+        )
+        raise HTTPException(502, "Coach response incomplete. Please retry.") from e
     except HTTPException:
         store.log_usage(
             user.device_id, "/api/analyze", 502, provider=provider,

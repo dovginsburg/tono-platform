@@ -120,6 +120,34 @@ final class SpellingCorrectionTests: XCTestCase {
         XCTAssertEqual(plan, SpellingMutationPlan(deleteCount: 3, insertion: "the"))
     }
 
+    func testMidTokenCandidateReplacementDeletesTheWholeToken() {
+        let token = SpellingToken.current(before: "Please hl", after: "p now")!
+        XCTAssertEqual(token.text, "hlp")
+        XCTAssertEqual(token.caretOffset, 2)
+
+        let plan = SpellingMutationPlan.candidate(
+            liveToken: token,
+            expected: token,
+            replacement: "help"
+        )
+
+        XCTAssertEqual(
+            plan,
+            SpellingMutationPlan(deleteCount: 3, insertion: "help", cursorAdvance: 1)
+        )
+    }
+
+    func testStaleCandidateTapDoesNotMutateChangedToken() {
+        let expected = SpellingToken.current(before: "Please hl", after: "p now")!
+        let live = SpellingToken.current(before: "Please help", after: " now")!
+
+        XCTAssertNil(SpellingMutationPlan.candidate(
+            liveToken: live,
+            expected: expected,
+            replacement: "help"
+        ))
+    }
+
     func testBoundaryAutocorrectInsertsPunctuationExactlyOnce() {
         let token = SpellingToken.current(in: "teh")!
         let decision = SpellingDecision(

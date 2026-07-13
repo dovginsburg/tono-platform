@@ -1,5 +1,5 @@
 // SpellingCorrection.swift
-// Tono keyboard extension — build 85 on-device spelling policy.
+// Tono keyboard extension — build 86 on-device spelling policy.
 
 import Foundation
 import UIKit
@@ -76,20 +76,33 @@ struct SpellingToken: Equatable {
     static let maximumLength = 48
 
     let text: String
+    let caretOffset: Int
     let hasSensitivePrefix: Bool
     let followsSentenceBoundary: Bool
 
     static func current(in context: String) -> SpellingToken? {
-        var characters: [Character] = []
-        characters.reserveCapacity(16)
-        for character in context.reversed() {
+        current(before: context, after: "")
+    }
+
+    static func current(before: String, after: String) -> SpellingToken? {
+        var left: [Character] = []
+        left.reserveCapacity(16)
+        for character in before.reversed() {
             guard isTokenCharacter(character) else { break }
-            guard characters.count < maximumLength else { return nil }
-            characters.append(character)
+            guard left.count < maximumLength else { return nil }
+            left.append(character)
         }
-        guard !characters.isEmpty else { return nil }
-        let text = String(characters.reversed())
-        let prefix = String(context.dropLast(text.count).suffix(32)).lowercased()
+        var right: [Character] = []
+        right.reserveCapacity(16)
+        for character in after {
+            guard isTokenCharacter(character) else { break }
+            guard left.count + right.count < maximumLength else { return nil }
+            right.append(character)
+        }
+        guard !left.isEmpty || !right.isEmpty else { return nil }
+        let leftText = String(left.reversed())
+        let text = leftText + String(right)
+        let prefix = String(before.dropLast(leftText.count).suffix(32)).lowercased()
         let sensitive = prefix.contains("@")
             || prefix.hasSuffix("http://")
             || prefix.hasSuffix("https://")
@@ -101,6 +114,7 @@ struct SpellingToken: Equatable {
         let sentenceBoundary = trimmed.isEmpty || ".!?\n".contains(trimmed.last ?? " ")
         return SpellingToken(
             text: text,
+            caretOffset: leftText.count,
             hasSensitivePrefix: sensitive,
             followsSentenceBoundary: sentenceBoundary
         )
@@ -384,6 +398,13 @@ enum DoubleSpacePolicy {
 struct SpellingMutationPlan: Equatable {
     let deleteCount: Int
     let insertion: String
+    let cursorAdvance: Int
+
+    init(deleteCount: Int, insertion: String, cursorAdvance: Int = 0) {
+        self.deleteCount = deleteCount
+        self.insertion = insertion
+        self.cursorAdvance = cursorAdvance
+    }
 
     static func candidate(
         liveToken: SpellingToken?,
@@ -393,7 +414,8 @@ struct SpellingMutationPlan: Equatable {
         guard liveToken == expected, replacement != expected.text else { return nil }
         return SpellingMutationPlan(
             deleteCount: expected.text.count,
-            insertion: replacement
+            insertion: replacement,
+            cursorAdvance: expected.text.count - expected.caretOffset
         )
     }
 
@@ -405,6 +427,7 @@ struct SpellingMutationPlan: Equatable {
     ) -> SpellingMutationPlan {
         guard let liveToken = liveToken,
               liveToken == expected,
+              liveToken.caretOffset == liveToken.text.count,
               decision?.original == liveToken.text,
               let replacement = decision?.automaticReplacement
         else { return SpellingMutationPlan(deleteCount: 0, insertion: boundary) }
