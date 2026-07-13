@@ -14,6 +14,14 @@
 
 set -eo pipefail
 
+# A normal Debug/Release build must be reproducible and must not edit the
+# checked-in plist files. Xcode uses ACTION=install for Archive; only that path
+# is allowed to advance the distributable build number.
+if [[ "${ACTION:-build}" != "install" ]]; then
+  echo "bump-build: skipping for ACTION=${ACTION:-build} (archive/install only)"
+  exit 0
+fi
+
 # When invoked from Xcode, SRCROOT points at the directory containing the
 # target's source files (i.e. the ios/ folder). When invoked by hand for a
 # dry run, fall back to the script's own parent directory so `bash
@@ -52,6 +60,15 @@ if [[ -f "$SHARE_PLIST" ]]; then
   SHARE_CURRENT=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$SHARE_PLIST")
   /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $NEXT" "$SHARE_PLIST"
   echo "bump-build: ShareExtension/Info.plist CFBundleVersion $SHARE_CURRENT -> $NEXT"
+fi
+
+# 4. Keep the Messages extension in the same release train as every other
+# shipped target.
+MESSAGES_PLIST="${SRCROOT}/TonoMessagesExtension/Info.plist"
+if [[ -f "$MESSAGES_PLIST" ]]; then
+  MESSAGES_CURRENT=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$MESSAGES_PLIST")
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $NEXT" "$MESSAGES_PLIST"
+  echo "bump-build: TonoMessagesExtension/Info.plist CFBundleVersion $MESSAGES_CURRENT -> $NEXT"
 fi
 
 exit 0

@@ -100,6 +100,9 @@
 		F80D80989CF1FB77AC24BF28 /* SharedKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 424F033D1993931EF9CFEF4D /* SharedKeychain.swift */; };
 		F9F9FEC515BC480346923B7B /* CrashReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4673C08A34AA91DC050C1D33 /* CrashReporter.swift */; };
 		FD235F56501E8926FED5616B /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA287EC754705B7065C31935 /* KeyboardViewController.swift */; };
+		850000000000000000000001 /* SpellingCorrection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 850000000000000000000004 /* SpellingCorrection.swift */; };
+		850000000000000000000002 /* SpellingCorrection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 850000000000000000000004 /* SpellingCorrection.swift */; };
+		850000000000000000000003 /* SpellingCorrectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 850000000000000000000005 /* SpellingCorrectionTests.swift */; };
 		FD395AA136FAAF23914CA72A /* TonoCoachClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EE5759E683FD2ECA633D8FC /* TonoCoachClient.swift */; };
 		FE1397E60BD23EA5225588DB /* MetricKitReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 640260545EC970E83D72B3B0 /* MetricKitReporter.swift */; };
 		FED5706B3648E7E30CC10E3E /* FeatureFlags.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8F4E5BEB850F3FDD9485F10 /* FeatureFlags.swift */; };
@@ -182,6 +185,8 @@
 		A8341350101744023555C179 /* StoreKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreKitManager.swift; sourceTree = "<group>"; };
 		A834BA4FC850457268EEDDD3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		AA287EC754705B7065C31935 /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
+		850000000000000000000004 /* SpellingCorrection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpellingCorrection.swift; sourceTree = "<group>"; };
+		850000000000000000000005 /* SpellingCorrectionTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SpellingCorrectionTests.swift; sourceTree = "<group>"; };
 		B3861F3AF2390477CF4D567E /* CoachDraftIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachDraftIntent.swift; sourceTree = "<group>"; };
 		B44BF0A224058437A1D2B6CB /* OnboardingEntryPointsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = OnboardingEntryPointsView.swift; sourceTree = "<group>"; };
 		B88FDB62F52944069CC31478 /* CoachView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachView.swift; sourceTree = "<group>"; };
@@ -250,6 +255,7 @@
 			isa = PBXGroup;
 			children = (
 				045FE2F8B15471B8BFD56595 /* ContactsAccessTests.swift */,
+				850000000000000000000005 /* SpellingCorrectionTests.swift */,
 			);
 			name = Tests;
 			path = Tests;
@@ -345,6 +351,7 @@
 				1B3DE7D6D3E9558EBAB94A9A /* Info.plist */,
 				65C4FC72401862C2052D7F44 /* KeyboardRootView.swift */,
 				AA287EC754705B7065C31935 /* KeyboardViewController.swift */,
+				850000000000000000000004 /* SpellingCorrection.swift */,
 				6EE5759E683FD2ECA633D8FC /* TonoCoachClient.swift */,
 				FF0B5EB3DADDC595EEDC1B0B /* TonoKeyboard.entitlements */,
 			);
@@ -551,6 +558,7 @@
 				FED5706B3648E7E30CC10E3E /* FeatureFlags.swift in Sources */,
 				C0E707D6242E36DA94356BE9 /* KeyboardRootView.swift in Sources */,
 				FD235F56501E8926FED5616B /* KeyboardViewController.swift in Sources */,
+				850000000000000000000001 /* SpellingCorrection.swift in Sources */,
 				FD395AA136FAAF23914CA72A /* TonoCoachClient.swift in Sources */,
 				53164013FEB9099C4ACC2C71 /* MetricKitReporter.swift in Sources */,
 				CF1989803A58FE3D8C29F187 /* MockToneAnalyzer.swift in Sources */,
@@ -600,6 +608,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				4A7F52C5EC4E98E266267D4E /* ContactsAccessTests.swift in Sources */,
+				850000000000000000000002 /* SpellingCorrection.swift in Sources */,
+				850000000000000000000003 /* SpellingCorrectionTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

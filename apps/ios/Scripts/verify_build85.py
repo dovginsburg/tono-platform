@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Executable static, model, plist, and Swift-parse verification for build 84."""
+"""Executable static, model, plist, and Swift-parse verification for build 85."""
 from pathlib import Path
 import plistlib
 import re
@@ -9,8 +9,16 @@ import sys
 root = Path(__file__).resolve().parents[1]
 swift = root / "KeyboardExtension/KeyboardViewController.swift"
 client_swift = root / "KeyboardExtension/TonoCoachClient.swift"
+spelling_swift = root / "KeyboardExtension/SpellingCorrection.swift"
+spelling_tests = root / "Tests/SpellingCorrectionTests.swift"
+project_file = root / "Tono.xcodeproj/project.pbxproj"
+bump_script = root / "Scripts/bump-build.sh"
 src = swift.read_text()
 client = client_swift.read_text()
+spelling = spelling_swift.read_text()
+tests = spelling_tests.read_text()
+project = project_file.read_text()
+bump = bump_script.read_text()
 errors: list[str] = []
 
 
@@ -245,7 +253,11 @@ for rel in ('App/Info.plist', 'KeyboardExtension/Info.plist',
             'ShareExtension/Info.plist', 'TonoMessagesExtension/Info.plist'):
     with open(root / rel, 'rb') as handle:
         plist = plistlib.load(handle)
-    check(plist.get('CFBundleVersion') == '84', f"{rel} is not string build 84")
+    check(plist.get('CFBundleVersion') == '85', f"{rel} is not string build 85")
+check('ACTION:-build' in bump and '!= \"install\"' in bump,
+      "ordinary builds must not mutate checked-in bundle versions")
+check('TonoMessagesExtension/Info.plist' in bump,
+      "archive build bump does not keep the Messages extension in lockstep")
 
 for path in root.rglob('*'):
     if path.is_file() and path.suffix in ('.plist', '.entitlements', '.swift', '.pbxproj'):
@@ -262,9 +274,70 @@ check(parse.returncode == 0, "Swift parse failed:\n" + parse.stderr)
 client_parse = subprocess.run(['xcrun', 'swiftc', '-frontend', '-parse', str(client_swift)],
                               text=True, capture_output=True)
 check(client_parse.returncode == 0, "Coach client Swift parse failed:\n" + client_parse.stderr)
+spelling_parse = subprocess.run(['xcrun', 'swiftc', '-frontend', '-parse', str(spelling_swift)],
+                                text=True, capture_output=True)
+check(spelling_parse.returncode == 0, "Spelling Swift parse failed:\n" + spelling_parse.stderr)
+
+# Build-85 spelling gates: public APIs, bounded state, async/stale safety,
+# host suppression, candidate UI, safe token-only mutations, and undo.
+for marker in ('UITextChecker()', 'rangeOfMisspelledWord', 'guesses(forWordRange:',
+               'completions(', 'requestSupplementaryLexicon'):
+    check(marker in spelling + src, f"on-device public spelling API missing: {marker}")
+check('DispatchQueue(label: "com.tonoit.keyboard.spelling", qos: .utility)' in spelling,
+      "spelling work is not isolated from the key path")
+check('debounce: TimeInterval = 0.12' in spelling and 'pending?.cancel()' in spelling,
+      "spelling debounce/cancellation missing")
+check('accepts(generation:' in spelling and spelling.count('accepts(generation: next)') >= 3,
+      "stale spelling results are not rejected before delivery")
+check('cacheLimit: Int = 64' in spelling and 'while cacheOrder.count > cacheLimit' in spelling,
+      "spelling cache is not bounded")
+check('static let maximumLength = 48' in spelling and 'documentContextBeforeInput' not in spelling,
+      "policy retains or accepts more than the current bounded token")
+check('supportedLanguage' in spelling and 'prefix == "en"' in spelling,
+      "English-only language gate missing")
+for kind in ('.email', '.url', '.numeric', '.secureLike'):
+    check(kind in spelling + src, f"host suppression missing: {kind}")
+check('autocorrectionType' in src and 'spellCheckingType' in src,
+      "autocorrection/spell-checking host traits are not respected")
+check('requestSupplementaryLexicon' in src and 'updateSupplementaryWords' in src,
+      "supplementary lexicon is not requested and applied")
+check('bar.heightAnchor.constraint(equalToConstant: 26)' in src
+      and 'candidates.distribution = .fillEqually' in src
+      and 'coach.trailingAnchor.constraint' in src,
+      "compact candidate strip / trailing Coach geometry missing")
+check('Array(values.prefix(3))' in src and 'adjustsFontForContentSizeCategory = true' in src,
+      "candidate count or Dynamic Type gate missing")
+check('Keeps or restores the original word' in src and 'Replaces the current word' in src,
+      "candidate accessibility semantics missing")
+check('SpellingMutationPlan.candidate' in src and 'SpellingMutationPlan.boundary' in src,
+      "token-safe candidate/boundary mutation plan missing")
+check('AutoCorrectionRecord' in spelling and 'restoreOriginalAfterBackspaceIfPossible' in src,
+      "autocorrect undo/backspace restoration missing")
+check('DoubleSpacePolicy.shouldTransform' in src and 'textDocumentProxy.insertText(". ")' in src,
+      "host-gated double-space period behavior missing")
+check('textDocumentProxy.insertText(plan.insertion)' in src,
+      "boundary insertion is not centralized into one insertion")
+check('URLSession' not in spelling and 'FileManager' not in spelling,
+      "spelling policy contains network or disk access")
+for test_name in ('testTehStrongCorrectionAndOriginalCandidate', 'testRecieveUsesInjectedChecker',
+                  'testUnknownAndProperNounArePreserved',
+                  'testURLemailAndNumericFieldsAreSuppressedWithoutCheckerCall',
+                  'testAllCapsAndMixedAlphanumericIdentifiersAreSuppressed',
+                  'testCapitalizationIsPreserved',
+                  'testPunctuationTokenAndCandidateReplacementPlan',
+                  'testBoundaryAutocorrectInsertsPunctuationExactlyOnce',
+                  'testUndoRecordPreservesBoundary',
+                  'testDoubleSpacePeriodRequiresOrdinaryPermittedFieldAndNoPendingUndo',
+                  'testStaleGenerationIsRejectedDeterministically',
+                  'testSupportedAndUnsupportedLanguages', 'testRealUITextCheckerSmokeWhenEnglishIsAvailable'):
+    check(test_name in tests, f"spelling XCTest missing: {test_name}")
+check(project.count('SpellingCorrection.swift in Sources') == 4,
+      "SpellingCorrection.swift must belong to keyboard and test targets")
+check(project.count('SpellingCorrectionTests.swift in Sources') == 2,
+      "SpellingCorrectionTests.swift is not in TonoTests")
 
 if errors:
     print('\n'.join('FAIL: ' + error for error in errors))
     sys.exit(1)
-print(f"PASS: build 84 verification (367.5pt key={key_width:.2f}, "
+print(f"PASS: build 85 verification (367.5pt key={key_width:.2f}, "
       f"row2Inset={row2_inset:.2f}, row3Gap={row3_inner_gap:.2f})")
