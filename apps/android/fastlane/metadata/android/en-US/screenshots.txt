@@ -1,0 +1,86 @@
+PHONE SCREENSHOTS — TONO (1080x1920 or device-native portrait, 5 images)
+
+SCREENSHOT 1 — "The Coach in action" (the hero shot)
+WHAT TO SHOW:
+  A real-looking iMessage-style chat thread. Top of screen: a contact name ("Sam") and a few sent/received bubbles. Mid-screen: a draft in the input field that reads something like "I just don't think this is going to work out for the project and I want to be upfront about that." Above the input field, a Tono Coach card overlay showing:
+    - A risk badge: "RISK: HIGH — sounds abrupt"
+    - Four rewrite chips in a row: [Warmer] [Clearer] [Funnier] [Safer]
+    - The "Clearer" chip selected, showing a preview: "I don't think this project is the right fit. Here's why, and what I'd want to do next."
+  Tono's purple/teal accent color (whatever the brand is) used in the Coach card.
+
+OVERLAY TEXT (top of screen, marketing-style): "Get a second opinion before you send."
+
+WHY FIRST: This is the literal "what does it do" answer. Anyone scrolling the listing should know in one second that Tono rewrites messages.
+
+────────────────────────────────────────
+
+SCREENSHOT 2 — "Four tone axes"
+WHAT TO SHOW:
+  Same draft message as Screenshot 1, but now showing all four rewrite results stacked vertically, each in its own card:
+    1. Warmer (coral accent):  "Honestly — I care about this project and about being straight with you. I don't think it's the right fit, and I'd rather tell you now than let it drag on."
+    2. Clearer (blue accent):  "I don't think this project is the right fit. Here's why, and what I'd want to do next."
+    3. Funnier (yellow accent):  "Plot twist: turns out this isn't my project. Wild, I know."
+    4. Safer (green accent):   "After thinking it over, I don't think this is the right fit for me. I want to be upfront about that. I really appreciate the time you've put into this."
+  Each card has a small "Insert" button.
+
+OVERLAY TEXT: "Four rewrites. One tap to insert."
+
+WHY: Differentiates from any other "tone detector" app. Shows the actual product output.
+
+────────────────────────────────────────
+
+SCREENSHOT 3 — "Risk badge"
+WHAT TO SHOW:
+  Close-up on a draft that's about to be sent: "Per my last email — did you even read it?" 
+  Big risk badge across the top of the Coach card: red circle with exclamation mark + "RISK: HIGH"
+  Two explanatory bullets below the badge:
+    - "May read as condescending"
+    - "Likely to escalate the conversation"
+  Below: three safer rewrite suggestions.
+
+OVERLAY TEXT: "See the risk before they do."
+
+WHY: Addresses the core anxiety — sending something that lands badly. Visually striking.
+
+────────────────────────────────────────
+
+SCREENSHOT 4 — "Style memory"
+WHAT TO SHOW:
+  Settings screen titled "Your style memory." A list of bullet points Tono has learned about the user's voice, e.g.:
+    - "You use short sentences."
+    - "You avoid exclamation points."
+    - "You favor concrete over abstract."
+    - "You sign off with '— D' not 'Best.'"
+  Each bullet has a small checkmark. A toggle at the bottom: "Help improve Tono" (off).
+  Subtle background pattern of past drafts (just first words, blurred).
+
+OVERLAY TEXT: "Learns how you write. Sounds like you."
+
+WHY: Addresses the "AI rewrites sound like a chatbot" objection. Style memory is a Pro feature — show it.
+
+────────────────────────────────────────
+
+SCREENSHOT 5 — "Works everywhere"
+WHAT TO SHOW:
+  Split or collage screen showing Tono in three contexts at once:
+    - Top-left: WhatsApp message being coached
+    - Top-right: Gmail compose being coached
+    - Bottom: LinkedIn DM being coached
+  All three show the Coach card with the same four rewrite chips. Same accent color across.
+  Below the collage: a single line of text — "Any app. Any keyboard."
+
+OVERLAY TEXT (none needed, layout speaks for itself) OR: "Works in every app you type in."
+
+WHY: Communicates distribution / ubiquity. The keyboard is the surface, not a separate app to remember to open.
+
+────────────────────────────────────────
+
+PRODUCTION NOTES FOR ALL FIVE:
+  - Realistic-looking chat content (use plausible names, plausible situations) — never "Lorem ipsum"
+  - The Tono Coach card UI must match the actual built UI exactly — no aspirational mock-ups that don't match what's shipping
+  - Status bar shows 9:41 AM and full battery (Apple convention, used universally)
+  - No notch/cutout if the screenshots are for Play Store (Android usually has a status bar but no notch requirement)
+  - PNG, sRGB, device-native portrait orientation
+  - Recommended dimensions: 1080 x 1920 px minimum (Play Store minimum is 320 px on the short side, but tiny screenshots hurt conversion — go big)
+  - Don't include personally identifying info about real people in any screenshot — use plausible fictional names ("Sam", "Jordan")
+  - Avoid showing the user's real email, phone number, or contacts in any screenshot

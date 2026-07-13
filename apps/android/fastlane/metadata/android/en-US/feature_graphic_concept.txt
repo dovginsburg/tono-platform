@@ -1,0 +1,36 @@
+FEATURE GRAPHIC — TONO (1024x500 PNG)
+
+CONCEPT: A single iMessage-style chat bubble dominates the center of the canvas. Inside the bubble: a draft message in plain sans-serif (e.g., "Sorry for the late reply — I should have gotten back to you sooner."). To the right of the bubble, three "rewrite" bubbles fan out at slight angles, each in a distinct accent color:
+  - Warmer (soft coral)
+  - Clearer (cool blue)
+  - Safer (muted green)
+
+A small risk badge floats above the original bubble: a circle with "RISK: LOW" or a subtle "✓" check mark.
+
+Above the chat bubbles, large bold headline (top-left aligned): "SAY WHAT YOU MEAN."
+Below the bubbles, smaller text: "Land how you intend."
+
+BACKGROUND: Soft off-white (#F7F7F5) or very light gradient from top to bottom — not pure white, not dark. The point is to feel like a calm writing surface.
+
+BRAND: Small Tono wordmark in bottom-right corner. No Tono app icon on the feature graphic — the icon lives in the app listing separately.
+
+TYPOGRAPHY: Modern sans-serif (Inter, SF Pro, or similar). Headline at ~72pt bold. Sub-headline at ~28pt regular. Message text inside bubbles at ~32pt. High contrast, accessibility-friendly.
+
+DO NOT INCLUDE: Phone mockups, screenshots, hands, gradient mesh backgrounds, AI brain imagery, generic stock illustrations, more than three rewrite suggestions (cluttered), pricing text.
+
+REASONING: Play Store feature graphics render at many sizes — readability at 1:1 on desktop and tiny on mobile. One bubble + three rewrites + one short headline works at every size. The chat-bubble metaphor immediately communicates "this is about messages" without requiring the user to read.
+
+COLOR PALETTE (suggested):
+  - Background: #F7F7F5
+  - Primary text: #1A1A1A
+  - Original bubble: white with #1A1A1A border
+  - Warmer: #F4A89A
+  - Clearer: #7AA9D9
+  - Safer: #8FBF9C
+  - Risk badge: #1A1A1A background, #FFFFFF text
+
+PRODUCTION NOTES:
+  - Generate at 1024x500 px
+  - Keep all critical content within the safe zone (avoid 24px margin on all sides — Play Store may crop edges)
+  - Export as PNG, sRGB, no alpha channel
+  - File size should be under 1 MB for Play Store (recommend ~150-300 KB)

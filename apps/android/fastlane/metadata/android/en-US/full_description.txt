@@ -1,0 +1,40 @@
+Tono is the AI tone coach that lives inside your keyboard. Draft a message, tap Coach, and Tono rewrites it on four axes — warmer, clearer, funnier, safer — with a risk badge so you know what might land badly before you hit send. One tap to swap in the version you actually meant.
+
+Built for the messages you draft and stare at: the cold outreach you don't want to sound desperate in. The feedback to a direct report you don't want to sound harsh in. The text to your partner you don't want to sound defensive in. The message in a hard moment you don't want to send wrong.
+
+WHY TONO
+• Pre-send rewrites, not post-send regrets. You see the alternatives before anyone reads the message.
+• Four tone axes, not one "make it nicer" button. Warmer / Clearer / Funnier / Safer — pick the register that matches the recipient.
+• Risk badge flags messages likely to read as aggressive, passive-aggressive, or unclear — before you send.
+• Style memory learns your voice over time so rewrites sound like you, not a chatbot.
+• Per-recipient coaching adapts to the person you're writing to.
+• Works in any app that uses the keyboard — Messages, WhatsApp, Gmail, Slack, LinkedIn, Notes, browser forms, anywhere.
+
+HOW IT WORKS
+1. Enable Tono as a keyboard in Settings → System → Languages & Input → On-screen keyboard.
+2. Open any app and start typing. Draft your message as you normally would.
+3. Tap the Coach button. Tono returns a risk score plus 4 rewrites.
+4. Tap the rewrite you want. It replaces your draft in the input field. Send.
+
+WHAT YOU STAY IN CONTROL OF
+• Your draft text is sent to Tono's server for analysis and immediately discarded. We never store message content.
+• You choose which rewrite — if any — to insert.
+• "Help improve Tono" is opt-out. Off by default is one toggle away in Settings.
+• Style memory and per-recipient profiles live on your device.
+
+BUILT FOR
+• Neurodivergent senders (ADHD, autism, AuDHD) who know what they mean but struggle to make text sound like it.
+• Founders and operators writing cold outreach, investor updates, and difficult internal feedback.
+• Managers giving sensitive 1:1 feedback where the wrong word costs trust.
+• Anyone who has stared at a draft, deleted it, retyped it three times, and still hit send nervous.
+
+PRICING
+Free: 10 Coach runs per day, all four tone axes, offline heuristics.
+Pro: Unlimited Coach runs, style memory, per-recipient coaching, weekly writing digest. Cancel anytime.
+
+WHAT WE DON'T DO
+• No ads. No data brokers. No model training on your messages.
+• No background reading of your other apps.
+• No selling or sharing of your writing with anyone.
+
+Say what you mean. Land how you intend.

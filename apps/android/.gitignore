@@ -1,0 +1,14 @@
+# Local build state
+.gradle/
+**/build/
+
+# Signing material — never commit
+keystore.properties
+*.keystore
+*.jks
+
+# Local IDE/OS files
+.idea/
+*.iml
+.DS_Store
+local.properties
