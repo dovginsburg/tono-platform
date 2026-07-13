@@ -16,13 +16,10 @@
 //                              the v1.0 PRIMARY entry point. Directs the
 //                              user to the share sheet's "Edit Actions" menu.
 //
-//   3. "Quick setup"         — bundles the TonoRewrite.shortcut file inside
-//                              the app and presents the system Share Sheet
-//                              (UIActivityViewController). User picks
-//                              "Add to Shortcuts" / AirDrop / Save to Files
-//                              and the shortcut is installed into their
-//                              Shortcuts library. Works offline, no URL,
-//                              no publish step.
+//   3. "Tono Rewrite"        — explicitly marked Coming soon until a signed,
+//                              importable artifact and public install URL are
+//                              verified. The Share Sheet extension remains a
+//                              separate entry point.
 //
 // "Skip" closes the sheet. Each tile marks itself complete when its action
 // runs; the user can mark done manually if they configured out-of-band.
@@ -30,82 +27,104 @@
 import SwiftUI
 import UIKit
 
-// TODO: move to .xcconfig
-private let kTonoRewriteShortcutURL = "https://bndbgpqbpzukrbhukrbhquztj.supabase.co/storage/v1/object/public/shortcuts/TonoRewrite.shortcut"
-
 struct OnboardingEntryPointsView: View {
     let onDone: () -> Void
 
+    @Environment(\.scenePhase) private var scenePhase
     @State private var keyboardDone = false
     @State private var shareExtDone = false
-    @State private var shortcutDone = false
-    @State private var showShortcutShareSheet = false
+    @AppStorage("tono.onboarding.awaitingSettingsReturn") private var awaitingSettingsReturn = false
+    @State private var showSettingsGuidance = false
+    @State private var keyboardCheckMessage: String?
+    @State private var scrollTarget: Int?
     // Email identity (added 2026-07-03)
     @State private var emailDone = false
     @State private var showEmailSheet = false
-    @State private var otpForSignIn = ""
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    header
-                    tile(
-                        number: 1,
-                        icon: "keyboard",
-                        title: "Set as keyboard",
-                        detail: keyboardDetail,
-                        isDone: keyboardDone,
-                        buttonLabel: "Open iOS Settings",
-                        buttonAction: openSettings
-                    )
-                    tile(
-                        number: 2,
-                        icon: "square.and.arrow.up",
-                        title: "Use from any app",
-                        detail: shareExtDetail,
-                        isDone: shareExtDone,
-                        buttonLabel: "Show me how",
-                        buttonAction: markShareExtDone
-                    )
-                    tile(
-                        number: 3,
-                        icon: "bolt.fill",
-                        title: "Quick setup",
-                        detail: shortcutDetail,
-                        isDone: shortcutDone,
-                        buttonLabel: shortcutDone ? "Installed ✓" : "Install Shortcut",
-                        buttonAction: installShortcut
-                    )
-                    tile(
-                        number: 4,
-                        icon: "envelope.fill",
-                        title: "Sign in with email",
-                        detail: emailDetail,
-                        isDone: emailDone,
-                        buttonLabel: emailDone ? "Signed in ✓" : "Sign in",
-                        buttonAction: { showEmailSheet = true }
-                    )
-                    Spacer(minLength: 8)
-                    Text("Tap any combination. Skip the rest with the button below.")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .center)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        header
+                        tile(
+                            number: 1,
+                            icon: "keyboard",
+                            title: "Set up Tono Keyboard",
+                            detail: keyboardDetail,
+                            isDone: keyboardDone,
+                            buttonLabel: "Open iOS Settings",
+                            buttonAction: { showSettingsGuidance = true }
+                        )
+                        if !keyboardDone {
+                            VStack(alignment: .leading, spacing: 8) {
+                                if let message = keyboardCheckMessage {
+                                    Text(message)
+                                        .font(.footnote)
+                                        .foregroundColor(.secondary)
+                                }
+                                Button("Verify Setup Manually") {
+                                    completeKeyboardStep()
+                                }
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                .foregroundColor(.purple)
+                            }
+                            .padding(.horizontal, 16)
+                        }
+                        tile(
+                            number: 2,
+                            icon: "square.and.arrow.up",
+                            title: "Use from any app",
+                            detail: shareExtDetail,
+                            isDone: shareExtDone,
+                            buttonLabel: "Show me how",
+                            buttonAction: markShareExtDone
+                        )
+                        tile(
+                            number: 3,
+                            icon: "bolt.fill",
+                            title: "Tono Rewrite Shortcut — Coming soon",
+                            detail: shortcutDetail,
+                            isDone: false,
+                            buttonLabel: nil,
+                            buttonAction: nil
+                        )
+                        tile(
+                            number: 4,
+                            icon: "envelope.fill",
+                            title: "Sign in with email",
+                            detail: emailDetail,
+                            isDone: emailDone,
+                            buttonLabel: emailDone ? "Signed in ✓" : "Sign in",
+                            buttonAction: { showEmailSheet = true }
+                        )
+                        Spacer(minLength: 8)
+                        Text("Set up any available option now, or continue and finish later in Settings.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                        Button("Continue to Tono", action: finish)
+                            .font(.system(size: 16, weight: .semibold, design: .rounded))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color.purple)
+                            .foregroundColor(.white)
+                            .clipShape(Capsule())
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 12)
                 }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 12)
+                .onChange(of: scrollTarget) { target in
+                    guard let target else { return }
+                    withAnimation { proxy.scrollTo(target, anchor: .top) }
+                    DispatchQueue.main.async { scrollTarget = nil }
+                }
             }
             .navigationTitle("Welcome to Tono")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Skip", action: finish)
-                }
-            }
-            .sheet(isPresented: $showShortcutShareSheet) {
-                if let url = Bundle.main.url(forResource: "TonoRewrite", withExtension: "shortcut") {
-                    ActivityViewController(items: [url])
-                        .ignoresSafeArea()
+                    Button("Skip for now", action: finish)
                 }
             }
             .sheet(isPresented: $showEmailSheet) {
@@ -117,6 +136,19 @@ struct OnboardingEntryPointsView: View {
                     onCancel: { showEmailSheet = false }
                 )
             }
+            .alert("Return to Tono after enabling the keyboard", isPresented: $showSettingsGuidance) {
+                Button("Not now", role: .cancel) {}
+                Button("Open Settings", action: openSettings)
+            } message: {
+                Text("iOS Settings cannot reopen Tono automatically. Add Tono under Keyboards, choose Full Access if you want online coaching, then return to Tono from the App Switcher. iOS does not let apps verify the Full Access switch.")
+            }
+        }
+        .onAppear { refreshKeyboardStatus(afterSettings: awaitingSettingsReturn) }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active { refreshKeyboardStatus(afterSettings: awaitingSettingsReturn) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            refreshKeyboardStatus(afterSettings: awaitingSettingsReturn)
         }
     }
 
@@ -126,7 +158,7 @@ struct OnboardingEntryPointsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Tono works with your keyboard, not instead of it.")
                 .font(.system(size: 22, weight: .bold, design: .rounded))
-            Text("Pick how you want to use Tono. You can do all three, just one, or skip and configure later in Settings.")
+            Text("Pick how you want to use Tono. Set up the keyboard, Share Sheet, or email now; the Shortcut is not available yet, and you can finish any step later in Settings.")
                 .font(.system(size: 14, design: .rounded))
                 .foregroundColor(.secondary)
         }
@@ -134,11 +166,10 @@ struct OnboardingEntryPointsView: View {
     }
 
     private var keyboardDetail: String {
-        // v1.0: keyboard is enabled. Apple has no special-approval gate; the
-        // only step the user needs to do is flip "Allow Full Access" on in
-        // Settings → General → Keyboard → Tono (so Tono can reach its
-        // backend for tone analysis).
-        "Settings → General → Keyboard → Keyboards → Add New Keyboard → Tono. Then tap Tono in the keyboard list → enable \"Allow Full Access\" (so Tono can reach its backend for tone analysis)."
+        // iOS exposes no public API that identifies a specific enabled
+        // third-party keyboard or reports its Full Access switch. We can only
+        // auto-confirm Tono after the extension writes its App Group marker.
+        "1. Enable Tono Keyboard\n2. Allow Full Access for Coach (optional for basic typing)\n3. Try Tono with the globe key\n\nSettings → General → Keyboard → Keyboards → Add New Keyboard → Tono. Return to Tono from the App Switcher when finished."
     }
 
     private var shareExtDetail: String {
@@ -146,7 +177,7 @@ struct OnboardingEntryPointsView: View {
     }
 
     private var shortcutDetail: String {
-        "One-tap install. The Tono Shortcut shows up in the top row of your Share Sheet. Tap any text → Share → Tono Rewrite → rewrite is on your clipboard."
+        "Coming soon. There is no verified public Tono Rewrite Shortcut install link yet. The Share Sheet extension above remains available separately."
     }
 
     private var emailDetail: String {
@@ -161,8 +192,8 @@ struct OnboardingEntryPointsView: View {
         title: String,
         detail: String,
         isDone: Bool,
-        buttonLabel: String,
-        buttonAction: @escaping () -> Void
+        buttonLabel: String?,
+        buttonAction: (() -> Void)?
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
@@ -189,7 +220,7 @@ struct OnboardingEntryPointsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            if !isDone {
+            if !isDone, let buttonLabel, let buttonAction {
                 Button(action: buttonAction) {
                     HStack(spacing: 6) {
                         Text(buttonLabel)
@@ -209,58 +240,59 @@ struct OnboardingEntryPointsView: View {
         .padding(16)
         .background(Color(.secondarySystemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 14))
+        .id(number)
     }
 
     // MARK: - Actions
 
     private func openSettings() {
         guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
-        UIApplication.shared.open(url)
-        // We can't detect when the user returns. Let them mark done manually
-        // by tapping the tile header — for v1.0 informational tile, this is
-        // fine. v1.1 will flip on App Group polling like HomeView does.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            keyboardDone = true
+        keyboardCheckMessage = "After enabling Tono, return here from the App Switcher."
+        UIApplication.shared.open(url) { success in
+            DispatchQueue.main.async {
+                awaitingSettingsReturn = success
+                if !success {
+                    keyboardCheckMessage = "Settings didn't open. Open Settings → General → Keyboard → Keyboards, then return here."
+                }
+            }
         }
+    }
+
+    private func refreshKeyboardStatus(afterSettings: Bool) {
+        if SharedStore.defaults.bool(forKey: SharedKeys.keyboardLoaded) {
+            completeKeyboardStep()
+            return
+        }
+        guard afterSettings else { return }
+        awaitingSettingsReturn = false
+        // Public UITextInputMode exposes language, but no extension bundle ID.
+        // `primaryLanguage == nil` is only a hint that some third-party
+        // keyboard is available; it cannot prove that keyboard is Tono.
+        let hasThirdPartyKeyboard = UITextInputMode.activeInputModes.contains {
+            $0.primaryLanguage == nil
+        }
+        keyboardCheckMessage = hasThirdPartyKeyboard
+            ? "A third-party keyboard is available, but iOS does not identify it or expose Full Access. Switch to Tono with the globe key, then use Verify Setup Manually."
+            : "iOS does not let Tono confirm the keyboard or Full Access switch. If Tono is listed in Settings, try it with the globe key, then verify manually."
+    }
+
+    private func completeKeyboardStep() {
+        guard !keyboardDone else { return }
+        keyboardDone = true
+        awaitingSettingsReturn = false
+        keyboardCheckMessage = nil
+        scrollTarget = 2
     }
 
     private func markShareExtDone() {
         shareExtDone = true
-    }
-
-    private func installShortcut() {
-        let encodedURL = kTonoRewriteShortcutURL.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? kTonoRewriteShortcutURL
-        guard let shortcutURL = URL(string: "shortcuts://import-workflow?url=\(encodedURL)&name=Tono%20Rewrite") else {
-            showShortcutShareSheet = true
-            return
-        }
-        if UIApplication.shared.canOpenURL(shortcutURL) {
-            UIApplication.shared.open(shortcutURL) { success in
-                if success {
-                    DispatchQueue.main.async { self.shortcutDone = true }
-                }
-            }
-        } else {
-            showShortcutShareSheet = true
-        }
+        scrollTarget = 4
     }
 
     private func finish() {
         SharedStore.defaults.set(true, forKey: SharedKeys.entryPointsOnboardingDone)
         onDone()
     }
-}
-
-// MARK: - Share Sheet wrapper
-
-private struct ActivityViewController: UIViewControllerRepresentable {
-    let items: [Any]
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
-    }
-
-    func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
 }
 
 // MARK: - SharedKeys additions
@@ -395,8 +427,10 @@ private struct EmailSignInSheet: View {
             do {
                 _ = try await TonoBackend.shared.requestEmailLink(email: email.lowercased())
                 step = .enterOTP
+            } catch let error as TonoBackendError {
+                errorMessage = requestErrorMessage(error)
             } catch {
-                errorMessage = "Couldn't send code. Try again."
+                errorMessage = "Email sign-in couldn't connect. Try again."
             }
         }
     }
@@ -416,11 +450,59 @@ private struct EmailSignInSheet: View {
                 if case .tooManyDevices(let cur, let max) = e {
                     errorMessage = "This email is on \(cur) devices (max \(max)). Contact support if you need more."
                 } else {
-                    errorMessage = "Invalid or expired code. Try again."
+                    errorMessage = verificationErrorMessage(e)
                 }
             } catch {
                 errorMessage = "Couldn't verify code. Try again."
             }
+        }
+    }
+
+    private func requestErrorMessage(_ error: TonoBackendError) -> String {
+        switch error {
+        case .offline:
+            return "You're offline. Connect to the internet and try again."
+        case .network:
+            return "Can't reach Tono right now. Check your connection and try again."
+        case .http(let status, _):
+            switch status {
+            case 400, 422:
+                return "Enter a valid email address."
+            case 404:
+                return "Email sign-in isn't available in this version yet."
+            case 429:
+                return "Too many code requests. Wait a few minutes and try again."
+            case 503:
+                return "Email delivery is temporarily unavailable. Try again later."
+            default:
+                return "Tono's sign-in service had a problem. Try again later."
+            }
+        default:
+            return "Email sign-in couldn't start. Try again."
+        }
+    }
+
+    private func verificationErrorMessage(_ error: TonoBackendError) -> String {
+        switch error {
+        case .offline:
+            return "You're offline. Connect to the internet and try again."
+        case .network:
+            return "Can't reach Tono right now. Check your connection and try again."
+        case .http(let status, _):
+            switch status {
+            case 400, 422:
+                return "Invalid or expired code. Request a new code and try again."
+            case 404:
+                return "Email sign-in isn't available in this version yet."
+            case 429:
+                return "Too many attempts. Wait a few minutes, then request a new code."
+            case 503:
+                return "Email sign-in is temporarily unavailable. Try again later."
+            default:
+                return "Tono's sign-in service had a problem. Try again later."
+            }
+        default:
+            return "Couldn't verify the code. Try again."
         }
     }
 }

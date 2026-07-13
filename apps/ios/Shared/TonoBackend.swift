@@ -265,13 +265,13 @@ public final class TonoBackend: @unchecked Sendable {
     }
 
     // ── Email identity (added 2026-07-03) ──────────────────────────────────
-    // Send a 6-digit OTP to `email`. Always succeeds (server doesn't leak
-    // whether the email exists). User receives the code in their inbox,
-    // types it back into the iOS app, which calls `verifyEmailOTP`.
+    // Send a 6-digit OTP to `email`. A successful request uses the same safe
+    // response regardless of account state. Operational failures remain
+    // explicit so the app never claims delivery when email is unavailable.
     @discardableResult
     public func requestEmailLink(email: String) async throws -> [String: Any] {
         let body: [String: Any] = ["email": email]
-        return try await postObject(path: "/v1/auth/request-link", json: body)
+        return try await postObject(path: "/v1/auth/request-link", json: body, authorize: false)
     }
 
     /// Verify the 6-digit OTP. On success, the backend:
@@ -295,6 +295,7 @@ public final class TonoBackend: @unchecked Sendable {
         let resp: [String: Any] = try await postObject(
             path: "/v1/auth/verify-otp",
             json: body,
+            authorize: false
         )
         // Persist the new api_token (per-device, server-issued).
         if let token = resp["api_token"] as? String, !token.isEmpty {
@@ -697,15 +698,25 @@ public final class TonoBackend: @unchecked Sendable {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         req.httpBody = try JSONSerialization.data(withJSONObject: json)
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: req)
+        } catch let urlError as URLError where urlError.code == .notConnectedToInternet {
+            throw TonoBackendError.offline
+        } catch let urlError as URLError {
+            throw TonoBackendError.network(urlError.localizedDescription)
+        } catch {
+            throw TonoBackendError.network(error.localizedDescription)
+        }
         guard let http = response as? HTTPURLResponse else {
             throw TonoBackendError.network("no response")
         }
         if !(200...299).contains(http.statusCode) {
             // Decode the error body — server returns {"detail": {...}} for our
             // 403 too_many_devices, or {"detail": "..."} for 401.
-            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let detail = obj["detail"] {
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                let detail = obj["detail"] ?? obj["error"]
                 if let dict = detail as? [String: Any], let err = dict["error"] as? String {
                     if err == "too_many_devices",
                        let cur = dict["current"] as? Int,
@@ -713,7 +724,12 @@ public final class TonoBackend: @unchecked Sendable {
                         throw TonoBackendError.tooManyDevices(current: cur, max: max)
                     }
                 }
-                throw TonoBackendError.http(http.statusCode, "\(detail)")
+                if let dict = detail as? [String: Any], let message = dict["message"] as? String {
+                    throw TonoBackendError.http(http.statusCode, message)
+                }
+                if let message = detail as? String {
+                    throw TonoBackendError.http(http.statusCode, message)
+                }
             }
             throw TonoBackendError.http(http.statusCode, "request failed")
         }
