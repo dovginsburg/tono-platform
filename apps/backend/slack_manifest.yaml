@@ -11,23 +11,29 @@ display_information:
       /tono reply: <prior message> // <your draft>
 
     Results are ephemeral (only you see them), so there's no noise in the channel.
+    Click a "Post this rewrite" button to share your chosen rewrite back to the
+    channel/thread.
 
 features:
   slash_commands:
     - command: /tono
-      url: https://YOUR_HOST/slack/command
+      url: https://api.tonoit.com/slack/command
       description: Analyze tone and get rewrite suggestions for a draft message
       usage_hint: "<your draft> or reply: <prior message> // <your draft>"
       should_escape: false
 
 oauth_config:
   redirect_urls:
-    - https://YOUR_HOST/slack/oauth
+    - https://api.tonoit.com/slack/oauth
   scopes:
     bot:
       - commands
+      - chat:write
 
 settings:
+  interactivity:
+    is_enabled: true
+    request_url: https://api.tonoit.com/slack/interaction
   org_deploy_enabled: false
   socket_mode_enabled: false
   token_rotation_enabled: false

@@ -51,6 +51,54 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_token ON users(api_token);
 CREATE INDEX IF NOT EXISTS idx_users_stripe_customer ON users(stripe_customer_id);
 
+-- A device (row in `users` above) is anonymous by default. Signing in with
+-- Apple/Google upserts a row here and sets `users.account_id`, so Pro status
+-- and identity travel with the person rather than the install. Plan/
+-- subscription fields are duplicated from `users` deliberately: once an
+-- account exists it is the source of truth for billing, and `users` keeps
+-- its own copy only for the anonymous (never-signed-in) case.
+CREATE TABLE IF NOT EXISTS accounts (
+    id                      TEXT PRIMARY KEY,
+    apple_sub               TEXT UNIQUE,
+    google_sub              TEXT UNIQUE,
+    email                   TEXT,
+    plan                    TEXT NOT NULL DEFAULT 'free',
+    stripe_customer_id      TEXT,
+    stripe_subscription_id  TEXT,
+    subscription_status     TEXT,
+    subscription_renews_at  TEXT,
+    coupon_pro_expires_at   TEXT,
+    -- Free-tier daily allowance, pooled across every device linked to this
+    -- account — see consume_rewrite. Same shape as users.daily_count/
+    -- daily_day, deliberately: a device with no account_id still counts
+    -- against ITS OWN columns of the same name on `users`.
+    daily_count             INTEGER NOT NULL DEFAULT 0,
+    daily_day               TEXT,
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_accounts_apple_sub ON accounts(apple_sub);
+CREATE INDEX IF NOT EXISTS idx_accounts_google_sub ON accounts(google_sub);
+CREATE INDEX IF NOT EXISTS idx_accounts_stripe_customer ON accounts(stripe_customer_id);
+
+-- A passkey (WebAuthn credential) is what makes Face ID / Touch ID /
+-- Windows Hello / Android biometric unlock work as a *login* method on
+-- web and desktop: the browser/OS handles the biometric prompt and only
+-- ever gives us back a signed assertion, never the biometric itself.
+-- credential_id is base64url-encoded (WebAuthn's own encoding), so it's
+-- TEXT despite being derived from bytes.
+CREATE TABLE IF NOT EXISTS webauthn_credentials (
+    credential_id   TEXT PRIMARY KEY,
+    account_id      TEXT NOT NULL REFERENCES accounts(id),
+    public_key      BLOB NOT NULL,
+    sign_count      INTEGER NOT NULL DEFAULT 0,
+    transports      TEXT,
+    nickname        TEXT,
+    created_at      TEXT NOT NULL,
+    last_used_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_webauthn_account ON webauthn_credentials(account_id);
+
 CREATE TABLE IF NOT EXISTS usage_log (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     device_id     TEXT NOT NULL,
@@ -158,6 +206,69 @@ _DEFAULT_FLAGS = [
 ]
 
 
+class AccountConflictError(Exception):
+    """Raised when linking a provider identity or passkey would silently
+    merge two distinct accounts. Callers (server.py) should surface this as
+    a 409 — merging accounts is a decision a person confirms explicitly,
+    never something inferred from a login attempt."""
+
+
+def _plan_grants_pro(plan: str, subscription_status: Optional[str], coupon_pro_expires_at: Optional[str]) -> bool:
+    if plan == "pro" and subscription_status in ("active", "trialing"):
+        return True
+    if coupon_pro_expires_at:
+        try:
+            exp = dt.datetime.fromisoformat(coupon_pro_expires_at)
+            if exp > dt.datetime.now(dt.timezone.utc):
+                return True
+        except ValueError:
+            pass
+    return False
+
+
+@dataclass
+class Account:
+    """A signed-in person, spanning every device they've linked via Apple/
+    Google sign-in. Plan/subscription live here once an account exists —
+    see the `accounts` table comment in SCHEMA for why they're duplicated
+    on `users` too."""
+
+    id: str
+    apple_sub: Optional[str]
+    google_sub: Optional[str]
+    email: Optional[str]
+    plan: str
+    stripe_customer_id: Optional[str]
+    stripe_subscription_id: Optional[str]
+    subscription_status: Optional[str]
+    subscription_renews_at: Optional[str]
+    coupon_pro_expires_at: Optional[str]
+    created_at: str
+    updated_at: str
+    daily_count: int = 0
+    daily_day: Optional[str] = None
+
+    @property
+    def is_pro(self) -> bool:
+        return _plan_grants_pro(self.plan, self.subscription_status, self.coupon_pro_expires_at)
+
+
+@dataclass
+class WebAuthnCredential:
+    """One registered passkey. `public_key` is the raw COSE-encoded key
+    bytes py_webauthn hands back from registration — needed to verify every
+    future login assertion from this credential."""
+
+    credential_id: str  # base64url
+    account_id: str
+    public_key: bytes
+    sign_count: int
+    transports: list[str]
+    nickname: Optional[str]
+    created_at: str
+    last_used_at: Optional[str]
+
+
 @dataclass
 class User:
     device_id: str
@@ -172,19 +283,22 @@ class User:
     created_at: str
     updated_at: str
     coupon_pro_expires_at: Optional[str] = None
+    account_id: Optional[str] = None
+    account: Optional[Account] = None
 
     @property
     def is_pro(self) -> bool:
-        if self.plan == "pro" and self.subscription_status in ("active", "trialing"):
-            return True
-        if self.coupon_pro_expires_at:
-            try:
-                exp = dt.datetime.fromisoformat(self.coupon_pro_expires_at)
-                if exp > dt.datetime.now(dt.timezone.utc):
-                    return True
-            except ValueError:
-                pass
-        return False
+        # A linked account is the source of truth once one exists — a
+        # device that signed in inherits Pro from the account even if that
+        # particular device never itself had a Stripe subscription.
+        if self.account is not None:
+            return self.account.is_pro
+        return _plan_grants_pro(self.plan, self.subscription_status, self.coupon_pro_expires_at)
+
+    @property
+    def plan_resolved(self) -> str:
+        """`plan`, but resolved through the linked account when present."""
+        return self.account.plan if self.account is not None else self.plan
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +333,9 @@ class Store:
             "ALTER TABLE users ADD COLUMN subscription_status TEXT",
             "ALTER TABLE users ADD COLUMN subscription_renews_at TEXT",
             "ALTER TABLE users ADD COLUMN coupon_pro_expires_at TEXT",
+            "ALTER TABLE users ADD COLUMN account_id TEXT REFERENCES accounts(id)",
+            "ALTER TABLE accounts ADD COLUMN daily_count INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE accounts ADD COLUMN daily_day TEXT",
         ):
             with contextlib.suppress(sqlite3.OperationalError):
                 self._conn.execute(stmt)
@@ -238,8 +355,14 @@ class Store:
         if self._closed:
             return
         self._closed = True
+        # wait=True matters: log_usage() fire-and-forgets onto this executor
+        # (callers don't block on it), so a queued write can still be
+        # in-flight when shutdown starts. Closing self._conn out from under
+        # that write is a use-after-close race in the sqlite3 C extension —
+        # observed as an intermittent segfault, not a clean exception,
+        # because it's a native crash rather than a Python-level error.
         with contextlib.suppress(Exception):
-            self._executor.shutdown(wait=False)
+            self._executor.shutdown(wait=True)
         with contextlib.suppress(Exception):
             self._conn.close()
 
@@ -305,12 +428,23 @@ class Store:
 
         return self._run(_do).result()
 
+    def _attach_account(self, cur: sqlite3.Cursor, user: User) -> User:
+        """Populate `user.account` when the device is linked to one. Called
+        inline (same cursor/thread) rather than through another `_run` — this
+        already runs on the DB executor thread."""
+        if user.account_id:
+            cur.execute("SELECT * FROM accounts WHERE id = ?", (user.account_id,))
+            acct_row = cur.fetchone()
+            if acct_row:
+                user.account = _row_to_account(acct_row)
+        return user
+
     def get_by_token(self, token: str) -> Optional[User]:
         def _do() -> Optional[User]:
             cur = self._conn.cursor()
             cur.execute("SELECT * FROM users WHERE api_token = ?", (token,))
             row = cur.fetchone()
-            return _row_to_user(row) if row else None
+            return self._attach_account(cur, _row_to_user(row)) if row else None
 
         return self._run(_do).result()
 
@@ -319,7 +453,7 @@ class Store:
             cur = self._conn.cursor()
             cur.execute("SELECT * FROM users WHERE device_id = ?", (device_id,))
             row = cur.fetchone()
-            return _row_to_user(row) if row else None
+            return self._attach_account(cur, _row_to_user(row)) if row else None
 
         return self._run(_do).result()
 
@@ -340,6 +474,15 @@ class Store:
             self._conn.execute(
                 "UPDATE users SET stripe_customer_id=?, updated_at=? WHERE device_id=?",
                 (customer_id, _now_iso(), device_id),
+            )
+
+        self._run(_do).result()
+
+    def attach_account_stripe_customer(self, account_id: str, customer_id: str) -> None:
+        def _do() -> None:
+            self._conn.execute(
+                "UPDATE accounts SET stripe_customer_id=?, updated_at=? WHERE id=?",
+                (customer_id, _now_iso(), account_id),
             )
 
         self._run(_do).result()
@@ -375,39 +518,291 @@ class Store:
 
         self._run(_do).result()
 
+    # ---- accounts (Apple/Google sign-in) ----
+
+    def upsert_account_by_provider(
+        self,
+        provider: str,
+        sub: str,
+        email: Optional[str] = None,
+        *,
+        link_into_account_id: Optional[str] = None,
+    ) -> Account:
+        """Find the account for this Apple/Google subject, creating one on
+        first sign-in. Idempotent — signing in again with the same subject
+        just returns the existing account (updating email if it changed).
+
+        ``link_into_account_id`` is the calling device's *current* account
+        (if it's already signed in) — pass it so that adding a second
+        provider (e.g. "also let me sign in with Google") attaches to the
+        SAME account instead of silently creating a stray second one. If
+        that subject already belongs to a *different* account, raises
+        AccountConflictError rather than merging two accounts that may
+        each have their own history — merging is a decision a person
+        should confirm explicitly, not something we do for them.
+        """
+        assert provider in ("apple", "google"), f"unknown provider: {provider}"
+        column = f"{provider}_sub"
+
+        def _do() -> Account:
+            cur = self._conn.cursor()
+            cur.execute(f"SELECT * FROM accounts WHERE {column} = ?", (sub,))
+            row = cur.fetchone()
+            now = _now_iso()
+
+            if row:
+                if link_into_account_id and row["id"] != link_into_account_id:
+                    raise AccountConflictError(
+                        f"this {provider} identity is already linked to a different account"
+                    )
+                if email and email != row["email"]:
+                    cur.execute(
+                        "UPDATE accounts SET email = ?, updated_at = ? WHERE id = ?",
+                        (email, now, row["id"]),
+                    )
+                    cur.execute("SELECT * FROM accounts WHERE id = ?", (row["id"],))
+                    row = cur.fetchone()
+                return _row_to_account(row)
+
+            if link_into_account_id:
+                # First time we've seen this identity, and the calling device
+                # is already signed in — attach the provider to that account
+                # (an upgrade, "add another way to sign in") instead of
+                # minting a new one.
+                cur.execute("SELECT * FROM accounts WHERE id = ?", (link_into_account_id,))
+                existing = cur.fetchone()
+                if not existing:
+                    raise AccountConflictError(f"account {link_into_account_id} does not exist")
+                cur.execute(
+                    f"""UPDATE accounts
+                           SET {column} = ?, email = COALESCE(email, ?), updated_at = ?
+                         WHERE id = ?""",
+                    (sub, email, now, link_into_account_id),
+                )
+                cur.execute("SELECT * FROM accounts WHERE id = ?", (link_into_account_id,))
+                return _row_to_account(cur.fetchone())
+
+            account_id = str(uuid.uuid4())
+            cur.execute(
+                f"""INSERT INTO accounts (id, {column}, email, plan, created_at, updated_at)
+                    VALUES (?, ?, ?, 'free', ?, ?)""",
+                (account_id, sub, email, now, now),
+            )
+            cur.execute("SELECT * FROM accounts WHERE id = ?", (account_id,))
+            return _row_to_account(cur.fetchone())
+
+        return self._run(_do).result()
+
+    def get_account(self, account_id: str) -> Optional[Account]:
+        def _do() -> Optional[Account]:
+            cur = self._conn.cursor()
+            cur.execute("SELECT * FROM accounts WHERE id = ?", (account_id,))
+            row = cur.fetchone()
+            return _row_to_account(row) if row else None
+
+        return self._run(_do).result()
+
+    def link_device_to_account(self, device_id: str, account_id: str) -> None:
+        """Attach this device to an account. Safe to call repeatedly (e.g.
+        re-signing-in on the same device) and safe to call from multiple
+        devices for the same account — that's the whole point: every linked
+        device shares the account's Pro status from then on."""
+
+        def _do() -> None:
+            self._conn.execute(
+                "UPDATE users SET account_id = ?, updated_at = ? WHERE device_id = ?",
+                (account_id, _now_iso(), device_id),
+            )
+
+        self._run(_do).result()
+
+    def update_account_subscription(
+        self,
+        *,
+        account_id: Optional[str] = None,
+        customer_id: Optional[str] = None,
+        subscription_id: Optional[str],
+        status: Optional[str],
+        renews_at: Optional[str],
+    ) -> None:
+        """Account-level counterpart of `update_subscription` — what
+        apps/backend/Backend/payments.py's webhook handler calls when a
+        subscription is tied to a signed-in account, so it covers every
+        device linked to that account rather than just the one that
+        started checkout. Falls back to `customer_id` lookup the same way
+        the device-level method does, for webhook events that don't carry
+        our metadata (e.g. a Billing Portal-initiated cancellation)."""
+        assert account_id or customer_id, "need account_id or customer_id"
+
+        def _do() -> None:
+            cur = self._conn.cursor()
+            where = "id = ?" if account_id else "stripe_customer_id = ?"
+            arg = account_id or customer_id
+            plan = "pro" if status in ("active", "trialing") else "free"
+            cur.execute(
+                f"""
+                UPDATE accounts
+                   SET plan = ?,
+                       stripe_subscription_id = ?,
+                       subscription_status = ?,
+                       subscription_renews_at = ?,
+                       updated_at = ?
+                 WHERE {where}
+                """,
+                (plan, subscription_id, status, renews_at, _now_iso(), arg),
+            )
+
+        self._run(_do).result()
+
+    # ---- passkeys (WebAuthn) ----
+
+    def create_bare_account(self) -> Account:
+        """A brand-new account with no Apple/Google identity — passkey
+        registration can be someone's *first* sign-up, not just an addition
+        to an existing Apple/Google account."""
+
+        def _do() -> Account:
+            cur = self._conn.cursor()
+            account_id = str(uuid.uuid4())
+            now = _now_iso()
+            cur.execute(
+                "INSERT INTO accounts (id, plan, created_at, updated_at) VALUES (?, 'free', ?, ?)",
+                (account_id, now, now),
+            )
+            cur.execute("SELECT * FROM accounts WHERE id = ?", (account_id,))
+            return _row_to_account(cur.fetchone())
+
+        return self._run(_do).result()
+
+    def add_webauthn_credential(
+        self,
+        *,
+        credential_id: str,
+        account_id: str,
+        public_key: bytes,
+        sign_count: int,
+        transports: Optional[list[str]] = None,
+        nickname: Optional[str] = None,
+    ) -> None:
+        def _do() -> None:
+            self._conn.execute(
+                """INSERT INTO webauthn_credentials
+                       (credential_id, account_id, public_key, sign_count, transports, nickname, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    credential_id,
+                    account_id,
+                    public_key,
+                    sign_count,
+                    json.dumps(transports or []),
+                    nickname,
+                    _now_iso(),
+                ),
+            )
+
+        self._run(_do).result()
+
+    def get_webauthn_credential(self, credential_id: str) -> Optional[WebAuthnCredential]:
+        def _do() -> Optional[WebAuthnCredential]:
+            cur = self._conn.cursor()
+            cur.execute("SELECT * FROM webauthn_credentials WHERE credential_id = ?", (credential_id,))
+            row = cur.fetchone()
+            return _row_to_webauthn_credential(row) if row else None
+
+        return self._run(_do).result()
+
+    def list_webauthn_credentials(self, account_id: str) -> list[WebAuthnCredential]:
+        def _do() -> list[WebAuthnCredential]:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT * FROM webauthn_credentials WHERE account_id = ? ORDER BY created_at", (account_id,)
+            )
+            return [_row_to_webauthn_credential(r) for r in cur.fetchall()]
+
+        return self._run(_do).result()
+
+    def update_webauthn_sign_count(self, credential_id: str, new_count: int) -> None:
+        def _do() -> None:
+            self._conn.execute(
+                "UPDATE webauthn_credentials SET sign_count = ?, last_used_at = ? WHERE credential_id = ?",
+                (new_count, _now_iso(), credential_id),
+            )
+
+        self._run(_do).result()
+
+    def delete_webauthn_credential(self, credential_id: str, account_id: str) -> bool:
+        """Scoped to account_id so one account can't delete another's
+        credential by guessing/enumerating credential_id values."""
+
+        def _do() -> bool:
+            cur = self._conn.execute(
+                "DELETE FROM webauthn_credentials WHERE credential_id = ? AND account_id = ?",
+                (credential_id, account_id),
+            )
+            return cur.rowcount > 0
+
+        return self._run(_do).result()
+
     # ---- rate limit ----
 
     def consume_rewrite(self, device_id: str) -> tuple[bool, int, int]:
+        """Check + increment the daily free-tier counter.
+
+        Anonymous devices count against their own `users.daily_count` row,
+        exactly as before accounts existed. A device linked to an account
+        counts against `accounts.daily_count` instead — pooled across every
+        device linked to that account, so a free user's 10/day is one
+        shared allowance across their phone, laptop, etc., not 10 per
+        device. `table`/`key_col` below are fixed internal literals (never
+        user input), picking which row anchors the quota.
+        """
+
         def _do() -> tuple[bool, int, int]:
             cur = self._conn.cursor()
             cur.execute(
-                "SELECT plan, subscription_status, coupon_pro_expires_at, daily_count, daily_day FROM users WHERE device_id = ?",
+                "SELECT plan, subscription_status, coupon_pro_expires_at, daily_count, daily_day, account_id "
+                "FROM users WHERE device_id = ?",
                 (device_id,),
             )
             row = cur.fetchone()
             if not row:
                 return (False, 0, 0)
-            if row["plan"] == "pro" and row["subscription_status"] in ("active", "trialing"):
-                return (True, row["daily_count"], -1)
-            if row["coupon_pro_expires_at"] and row["coupon_pro_expires_at"] > _now_iso():
-                return (True, row["daily_count"], -1)
+
+            if row["account_id"]:
+                cur.execute(
+                    "SELECT plan, subscription_status, coupon_pro_expires_at, daily_count, daily_day "
+                    "FROM accounts WHERE id = ?",
+                    (row["account_id"],),
+                )
+                quota_row = cur.fetchone()
+                table, key_col, key_val = "accounts", "id", row["account_id"]
+            else:
+                quota_row = row
+                table, key_col, key_val = "users", "device_id", device_id
+
+            if quota_row["plan"] == "pro" and quota_row["subscription_status"] in ("active", "trialing"):
+                return (True, quota_row["daily_count"], -1)
+            if quota_row["coupon_pro_expires_at"] and quota_row["coupon_pro_expires_at"] > _now_iso():
+                return (True, quota_row["daily_count"], -1)
+
             today = _today_utc()
-            used = row["daily_count"] if row["daily_day"] == today else 0
+            used = quota_row["daily_count"] if quota_row["daily_day"] == today else 0
             limit = int(os.environ.get("FREE_DAILY_LIMIT", "10"))
             if used >= limit:
                 return (False, used, limit)
+
             cur.execute("BEGIN IMMEDIATE")
             try:
-                if row["daily_day"] != today:
+                if quota_row["daily_day"] != today:
                     cur.execute(
-                        "UPDATE users SET daily_count=1, daily_day=?, updated_at=? WHERE device_id=?",
-                        (today, _now_iso(), device_id),
+                        f"UPDATE {table} SET daily_count=1, daily_day=?, updated_at=? WHERE {key_col}=?",
+                        (today, _now_iso(), key_val),
                     )
                     used = 1
                 else:
                     cur.execute(
-                        "UPDATE users SET daily_count=daily_count+1, updated_at=? WHERE device_id=?",
-                        (_now_iso(), device_id),
+                        f"UPDATE {table} SET daily_count=daily_count+1, updated_at=? WHERE {key_col}=?",
+                        (_now_iso(), key_val),
                     )
                     used += 1
                 cur.execute("COMMIT")
@@ -951,6 +1346,42 @@ def _row_to_user(row: sqlite3.Row | dict) -> User:
         created_at=d.get("created_at") or "",
         updated_at=d.get("updated_at") or "",
         coupon_pro_expires_at=d.get("coupon_pro_expires_at"),
+        account_id=d.get("account_id"),
+    )
+
+
+def _row_to_account(row: sqlite3.Row | dict) -> Account:
+    d = dict(row)
+    return Account(
+        id=d["id"],
+        apple_sub=d.get("apple_sub"),
+        google_sub=d.get("google_sub"),
+        email=d.get("email"),
+        plan=d.get("plan") or "free",
+        stripe_customer_id=d.get("stripe_customer_id"),
+        stripe_subscription_id=d.get("stripe_subscription_id"),
+        subscription_status=d.get("subscription_status"),
+        subscription_renews_at=d.get("subscription_renews_at"),
+        coupon_pro_expires_at=d.get("coupon_pro_expires_at"),
+        created_at=d.get("created_at") or "",
+        updated_at=d.get("updated_at") or "",
+        daily_count=d.get("daily_count") or 0,
+        daily_day=d.get("daily_day"),
+    )
+
+
+def _row_to_webauthn_credential(row: sqlite3.Row | dict) -> WebAuthnCredential:
+    d = dict(row)
+    raw_transports = d.get("transports")
+    return WebAuthnCredential(
+        credential_id=d["credential_id"],
+        account_id=d["account_id"],
+        public_key=bytes(d["public_key"]),
+        sign_count=d.get("sign_count") or 0,
+        transports=json.loads(raw_transports) if raw_transports else [],
+        nickname=d.get("nickname"),
+        created_at=d.get("created_at") or "",
+        last_used_at=d.get("last_used_at"),
     )
 
 

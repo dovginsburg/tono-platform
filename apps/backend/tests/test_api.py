@@ -209,7 +209,7 @@ def test_api_analyze_pro_unlimited(client, monkeypatch):
     """Pro users never get rate-limited. We bypass Stripe by manually
     setting the user's plan via the store + DB."""
 
-    from Backend.store import get_store
+    from backend.store import get_store
 
     reg = _register(client)
     store = get_store()
@@ -246,7 +246,7 @@ def test_token_rotation_revokes_old_token(client):
     v0.2. We verify the store path directly + that an old token 401s
     after rotation."""
 
-    from Backend.store import get_store
+    from backend.store import get_store
 
     reg = _register(client)
     old = reg["api_token"]
@@ -458,7 +458,7 @@ def test_user_flag_override_non_controllable_rejected(client):
 
 def test_pro_gated_flag(client):
     """custom_axes returns True only for Pro users."""
-    from Backend.store import get_store
+    from backend.store import get_store
 
     reg = _register(client)
     headers = _auth(reg["api_token"])

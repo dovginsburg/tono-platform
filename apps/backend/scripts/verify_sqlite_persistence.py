@@ -2,7 +2,7 @@
 """Verify that SQLite data persists across Railway deploys.
 
 Usage:
-    TONO_BACKEND_URL=https://tono-backend-production.railway.app \
+    TONO_BACKEND_URL=https://api.tonoit.com \
     TONO_API_TOKEN=<bearer-token> \
     python3 verify_sqlite_persistence.py
 

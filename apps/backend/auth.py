@@ -68,14 +68,9 @@ def optional_current_user(
     store: StoreDep,
 ) -> Optional[User]:
     """Like ``current_user`` but returns ``None`` instead of raising 401
-    when the request has no / invalid bearer token.
-
-    Used by endpoints that serve both the iOS app (authenticated) and
-    the public website (anonymous checkout — see /v1/checkout). The iOS
-    flow is unchanged; the website calls /v1/checkout with no
-    Authorization header and we mint a Stripe-hosted Checkout Session
-    that collects the buyer's email.
-    """
+    when the request has no / invalid bearer token. Used by endpoints that
+    serve both the iOS app (authenticated) and the public website
+    (anonymous checkout — see /v1/checkout)."""
     if not creds or not creds.credentials:
         return None
     return store.get_by_token(creds.credentials)

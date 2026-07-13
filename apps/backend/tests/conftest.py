@@ -7,28 +7,28 @@ suite runs without any real LLM keys.
 
 from __future__ import annotations
 
-import importlib
 import os
 import sys
-import tempfile
 from typing import Iterator
 
 import pytest
 
 
 def _purge_backend_modules() -> None:
-    """Remove every cached Backend.* module so the next ``import``
-    rebuilds the chain with fresh module-level globals (especially
-    ``Backend.store._store``).
+    """Remove every cached backend.* (or Backend.* on case-insensitive FS)
+    module so the next ``import`` rebuilds the chain with fresh module-level
+    globals (especially ``backend.store._store``).
 
     The fragile bit: ``from .store import get_store`` in another
     module binds the *function*, but ``get_store.__globals__`` is the
-    ``Backend.store.__dict__`` snapshot at import time. If we don't
-    purge ``Backend.store``, callers keep using the old module's
-    singleton and any closed store stays around forever."""
-
+    ``backend.store.__dict__`` snapshot at import time. If we don't
+    purge ``backend.store``, callers keep using the old module's
+    singleton and any closed store stays around forever.
+    """
     for name in list(sys.modules):
-        if name == "Backend" or name.startswith("Backend."):
+        if name in ("Backend", "backend") or name.startswith(
+            ("Backend.", "backend.")
+        ):
             del sys.modules[name]
 
 
@@ -41,6 +41,19 @@ def _isolate_db(tmp_path, monkeypatch) -> Iterator[str]:
 
     _purge_backend_modules()
 
+    # Reset the rate-limit buckets between tests. Without this, a test that
+    # hits /v1/register 5 times leaks its IP into the next test's "auth"
+    # scope, masking real failures (test pollution). The buckets are
+    # module-level state in backend.rate_limit; resetting them per-test
+    # gives each test a clean IP rate-limit state.
+    try:
+        import backend.rate_limit as _rl
+        _rl._ip_buckets.clear()
+        _rl._keyed_buckets.clear()
+    except (ImportError, AttributeError):
+        # Module not yet imported (no rate_limit.py in older branches).
+        pass
+
     yield db_path
 
 
@@ -51,7 +64,7 @@ def client():
     from fastapi.testclient import TestClient
 
     # Import after env is set + modules are purged so they re-init cleanly.
-    from Backend.server import app
+    from backend.server import app
 
     with TestClient(app) as c:
         yield c

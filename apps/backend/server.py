@@ -43,23 +43,36 @@ from typing import Annotated, Any, Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import payments, slack
+from . import passkeys, payments, slack, social_auth
 from .analyze import (
     AnalyzeRequest,
     RewriteSuggestion,
     ToneAnalysis,
     mock_analyze,
     openai_analyze,
-    stream_openai_analyze,
     anthropic_analyze,
-    stream_anthropic_analyze,
     build_user_prompt,
 )
 from .auth import CurrentUser, StoreDep, current_user
-from .store import Store, User, get_store
+from .store import AccountConflictError, Store, User, get_store
+
+# Locales the LLM providers can respond in. Defines the BCP-47 code → display
+# name mapping for the /v1/locales endpoint AND for any client that wants to
+# pick a language. Lives here (not in analyze.py) because we deliberately did
+# not pull in Claude's analyze.py changes — we only need the locale *names*
+# for /v1/locales; per-request locale handling stays the same.
+SUPPORTED_LOCALES: dict[str, str] = {
+    "en": "English",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "ja": "Japanese",
+    "pt-BR": "Brazilian Portuguese",
+    "ar": "Arabic",
+}
 
 logging.basicConfig(
     level=os.environ.get("TONO_LOG_LEVEL", "INFO"),
@@ -76,16 +89,6 @@ _DRAFT_MAX_CHARS = int(os.environ.get("DRAFT_MAX_CHARS", "2000"))
 _IP_RATE_LIMIT = int(os.environ.get("IP_RATE_LIMIT_PER_MIN", "20"))
 _ip_windows: dict[str, collections.deque] = {}
 _ip_lock = threading.Lock()
-
-
-def _sse_headers():
-    """Headers for Server-Sent Events."""
-    return {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-        "X-Accel-Buffering": "no",
-    }
 
 
 def _get_client_ip(request: Request) -> str:
@@ -108,8 +111,8 @@ def _check_ip_rate(ip: str) -> bool:
         return True
 
 
-def _analysis_cache_key(text: str, axes: list[str], voice: str | None) -> str:
-    raw = f"{text}|{','.join(sorted(axes))}|{voice or ''}"
+def _analysis_cache_key(text: str, axes: list[str], voice: str | None, locale: str) -> str:
+    raw = f"{text}|{','.join(sorted(axes))}|{voice or ''}|{locale}"
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
@@ -138,6 +141,10 @@ class ApiAnalyzeRequest(BaseModel):
     mode: Literal["coach", "read"] = Field(
         default="coach",
         description="coach = analyze a draft you're about to send; read = interpret a message you received.",
+    )
+    locale: str = Field(
+        default="en",
+        description="BCP-47 locale for the response language, e.g. 'en', 'es', 'fr', 'de', 'ja', 'pt-BR', 'ar'.",
     )
 
 
@@ -188,8 +195,6 @@ async def _lifespan(_: "FastAPI"):
         get_store().close()
 
 
-
-
 app = FastAPI(
     title="Tono backend",
     version="0.3.0",
@@ -200,15 +205,24 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 
+# CORS: needed by browser-based clients (apps/web, apps/desktop's renderer)
+# that call this API directly with no server-side proxy in front of them.
+# Native clients (iOS/Android/Slack) don't go through a browser so they're
+# unaffected either way. Comma-separated allowlist; "*" (default) is fine
+# for the public /v1/analyze passthrough but should be locked down to real
+# origins in production once apps/web has a deployed domain.
+_CORS_ORIGINS = [
+    o.strip()
+    for o in os.environ.get("CORS_ALLOWED_ORIGINS", "*").split(",")
+    if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_CORS_ORIGINS,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -234,8 +248,6 @@ async def http_exc_handler(_: Request, exc: HTTPException) -> JSONResponse:
         content=body,
         headers=exc.headers,
     )
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -321,30 +333,42 @@ async def health() -> dict[str, Any]:
         "stripe_configured": bool(os.environ.get("STRIPE_SECRET_KEY")),
         "slack_configured": bool(os.environ.get("SLACK_CLIENT_ID")),
         "free_daily_limit": int(os.environ.get("FREE_DAILY_LIMIT", "10")),
-        "api_key_len": len(os.environ.get("ANTHROPIC_API_KEY", "")),
-        "api_key_start": os.environ.get("ANTHROPIC_API_KEY", "")[:10],
     }
 
 
-@app.post("/v1/analyze", response_model=None)
-async def v1_analyze(req: AnalyzeRequest, request: Request):
+@app.get("/v1/whoami")
+async def v1_whoami(request: Request) -> dict[str, Any]:
+    """Public debug endpoint. Returns the client's apparent IP and a server
+    timestamp so iOS / curl callers can sanity-check routing, proxies, and
+    clock skew. No auth required, no PII stored.
+
+    Ported forward from the pre-Path-A server (kept for iOS routing
+    sanity-checks during the account-layer migration).
+    """
+    import datetime as dt
+    return {
+        "client_ip": _get_client_ip(request),
+        "xff": request.headers.get("X-Forwarded-For", ""),
+        "ua": request.headers.get("User-Agent", ""),
+        "ts": int(time.time()),
+        "iso": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
+@app.get("/v1/locales")
+async def list_locales() -> dict[str, Any]:
+    """Locales the LLM providers can respond in. Clients use this to build
+    a language switcher without hardcoding the list."""
+    return {"locales": [{"code": k, "name": v} for k, v in SUPPORTED_LOCALES.items()]}
+
+
+@app.post("/v1/analyze", response_model=ToneAnalysis)
+async def v1_analyze(req: AnalyzeRequest) -> dict[str, Any]:
     """Unauthenticated passthrough kept for backward compatibility with
     the iOS Playground tab and integration tests. No rate limit, no
     billing — the caller pays the LLM cost directly.
-
-    Supports SSE streaming when client sends Accept: text/event-stream.
     """
     provider = os.environ.get("TONO_PROVIDER", "mock")
-    wants_stream = (request.headers.get("accept", "")).lower().find("text/event-stream") >= 0
-
-    if wants_stream and provider in ("anthropic", "openai"):
-        stream_fn = stream_anthropic_analyze if provider == "anthropic" else stream_openai_analyze
-
-        async def _stream():
-            async for event in stream_fn(req):
-                yield event
-        return StreamingResponse(_stream(), media_type="text/event-stream", headers=_sse_headers())
-
     if provider == "mock":
         return mock_analyze(req)
     if provider == "openai":
@@ -362,7 +386,7 @@ async def v1_analyze(req: AnalyzeRequest, request: Request):
 class RegisterRequest(BaseModel):
     device_id: Optional[str] = None
     app_version: Optional[str] = None
-    platform: Optional[str] = None  # "ios" | "android" | "macos"
+    platform: Optional[str] = None  # "ios" | "android" | "macos" | "windows" | "web" | "slack"
 
 
 class RegisterResponse(BaseModel):
@@ -391,31 +415,118 @@ class MeResponse(BaseModel):
     daily_limit: int  # -1 = unlimited
     subscription_status: Optional[str]
     subscription_renews_at: Optional[str]
+    account_id: Optional[str] = None
 
 
 @app.get("/v1/me", response_model=MeResponse)
 def me(user: CurrentUser, store: StoreDep) -> MeResponse:
     today = _today_utc()
-    used = user.daily_count if user.daily_day == today else 0
+    # Once a device is linked to an account, the account is the source of
+    # truth for plan/subscription/daily usage — see User.is_pro /
+    # User.plan_resolved, and Store.consume_rewrite for why the counter
+    # itself lives on the account row once signed in (pooled across every
+    # device linked to it, not reset per device).
+    quota_source = user.account if user.account else user
+    used = quota_source.daily_count if quota_source.daily_day == today else 0
     limit = -1 if user.is_pro else int(os.environ.get("FREE_DAILY_LIMIT", "10"))
+    subscription_status = user.account.subscription_status if user.account else user.subscription_status
+    subscription_renews_at = user.account.subscription_renews_at if user.account else user.subscription_renews_at
     return MeResponse(
         device_id=user.device_id,
-        plan=user.plan,
+        plan=user.plan_resolved,
         is_pro=user.is_pro,
         used_today=used,
         daily_limit=limit,
-        subscription_status=user.subscription_status,
-        subscription_renews_at=user.subscription_renews_at,
+        subscription_status=subscription_status,
+        subscription_renews_at=subscription_renews_at,
+        account_id=user.account_id,
     )
 
 
-@app.post("/api/analyze", response_model=None)
+# ---------------------------------------------------------------------------
+# Account sign-in (Apple / Google) — links the calling device to an account
+# so Pro status and identity travel across every device that signs in.
+# ---------------------------------------------------------------------------
+
+
+class AppleSignInRequest(BaseModel):
+    identity_token: str
+    # False (default): plain sign-in — resolve/create the account for this
+    # identity and point the calling device at it, switching away from
+    # whatever account the device was previously linked to if any. This is
+    # ordinary login (including "log in as someone else on this device")
+    # and never conflicts.
+    # True: explicit "add this as another way to sign in to MY CURRENT
+    # account" — requires the device to already be signed in, and 409s if
+    # the identity already belongs to a different account. Only pass this
+    # from an authenticated "linked accounts" settings screen, never from
+    # a login screen.
+    link: bool = False
+
+
+class GoogleSignInRequest(BaseModel):
+    id_token: str
+    link: bool = False
+
+
+class SignInResponse(BaseModel):
+    account_id: str
+    plan: str
+    is_pro: bool
+    email: Optional[str] = None
+
+
+def _resolve_provider_signin(
+    store: Store, user: User, provider: str, sub: str, email: Optional[str], link: bool
+):
+    """Shared by /v1/auth/apple and /v1/auth/google. `link=False` (plain
+    sign-in) always succeeds and switches the calling device to whichever
+    account owns this identity — creating one on first use. `link=True`
+    requires the device to already be signed in and refuses (409) to
+    attach an identity that already belongs to someone else's account."""
+    if link and not user.account_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "sign in before linking another provider")
+    try:
+        account = store.upsert_account_by_provider(
+            provider, sub, email, link_into_account_id=user.account_id if link else None
+        )
+    except AccountConflictError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
+    store.link_device_to_account(user.device_id, account.id)
+    return account
+
+
+@app.post("/v1/auth/apple", response_model=SignInResponse)
+async def auth_apple(
+    body: AppleSignInRequest,
+    user: CurrentUser,
+    store: StoreDep,
+    verifier: Annotated[social_auth.IdentityVerifier, Depends(social_auth.get_apple_verifier)],
+) -> SignInResponse:
+    claims = await verifier(body.identity_token)
+    account = _resolve_provider_signin(store, user, "apple", claims.sub, claims.email, body.link)
+    return SignInResponse(account_id=account.id, plan=account.plan, is_pro=account.is_pro, email=account.email)
+
+
+@app.post("/v1/auth/google", response_model=SignInResponse)
+async def auth_google(
+    body: GoogleSignInRequest,
+    user: CurrentUser,
+    store: StoreDep,
+    verifier: Annotated[social_auth.IdentityVerifier, Depends(social_auth.get_google_verifier)],
+) -> SignInResponse:
+    claims = await verifier(body.id_token)
+    account = _resolve_provider_signin(store, user, "google", claims.sub, claims.email, body.link)
+    return SignInResponse(account_id=account.id, plan=account.plan, is_pro=account.is_pro, email=account.email)
+
+
+@app.post("/api/analyze", response_model=ApiAnalyzeResponse)
 async def api_analyze(
     body: ApiAnalyzeRequest,
     request: Request,
     user: CurrentUser,
     store: StoreDep,
-):
+) -> ApiAnalyzeResponse:
     """The keyboard's primary endpoint. Authenticated, rate-limited,
     server holds the LLM API key.
     """
@@ -440,19 +551,25 @@ async def api_analyze(
     axes = body.axes or store.global_axis_ranking(days=30)
 
     # Cache lookup — hits don't consume the daily allowance.
-    cache_key = _analysis_cache_key(body.text, axes, body.preferred_voice) if provider != "mock" else None
+    cache_key = (
+        _analysis_cache_key(body.text, axes, body.preferred_voice, body.locale)
+        if provider != "mock"
+        else None
+    )
     if cache_key:
         cached = store.get_cached_response(cache_key)
         if cached:
             today = _today_utc()
-            snap_used = user.daily_count if user.daily_day == today else 0
+            # Pooled on the account once signed in — see consume_rewrite.
+            quota_source = user.account if user.account else user
+            snap_used = quota_source.daily_count if quota_source.daily_day == today else 0
             snap_limit = -1 if user.is_pro else int(os.environ.get("FREE_DAILY_LIMIT", "10"))
             store.log_usage(
                 user.device_id, "/api/analyze", 200, provider="cache",
                 drafts_chars=len(body.text),
             )
             return ApiAnalyzeResponse(
-                **cached, used_today=snap_used, daily_limit=snap_limit, plan=user.plan
+                **cached, used_today=snap_used, daily_limit=snap_limit, plan=user.plan_resolved
             )
 
     # Rate limit BEFORE we call the LLM so a bad actor can't burn $.
@@ -478,30 +595,8 @@ async def api_analyze(
         context_hints=body.context_hints,
         thread_context=body.thread_context,
         mode=body.mode,
+        locale=body.locale,
     )
-
-    # Streaming path: if client accepts SSE and provider supports it, stream
-    wants_stream = (request.headers.get("accept", "")).lower().find("text/event-stream") >= 0
-    if wants_stream and provider in ("anthropic", "openai"):
-        # Increment the counter now (we'll log usage after stream completes)
-        # For streaming, we already consumed the rewrite above, so used/limit are set
-        stream_fn = stream_anthropic_analyze if provider == "anthropic" else stream_openai_analyze
-
-        async def _stream_and_log():
-            """Wrapper that yields SSE events and logs usage at the end."""
-            async for event in stream_fn(internal):
-                yield event
-            # Log successful usage after stream completes
-            store.log_usage(
-                user.device_id, "/api/analyze", 200, provider=provider,
-                drafts_chars=len(body.text),
-            )
-
-        return StreamingResponse(
-            _stream_and_log(),
-            media_type="text/event-stream",
-            headers=_sse_headers(),
-        )
 
     try:
         if provider == "mock":
@@ -532,7 +627,7 @@ async def api_analyze(
         user.device_id, "/api/analyze", 200, provider=provider,
         drafts_chars=len(body.text),
     )
-    return ApiAnalyzeResponse(**result, used_today=used, daily_limit=limit, plan=user.plan)
+    return ApiAnalyzeResponse(**result, used_today=used, daily_limit=limit, plan=user.plan_resolved)
 
 
 @app.post("/v1/event/axis", status_code=204)
@@ -991,6 +1086,7 @@ def admin_create_coupon(
 
 app.include_router(payments.router)
 app.include_router(slack.router)
+app.include_router(passkeys.router)
 
 
 # ---------------------------------------------------------------------------

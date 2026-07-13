@@ -1,8 +1,8 @@
 """Stripe Checkout + webhook handling for Tono Pro.
 
-Pricing (from SCOPE.md §5; updated commit 3421b51):
-  - $3/mo consumer Pro
-  - $29/yr annual
+Pricing (updated 2026-07-08 to match tono-web punch list):
+  - $3.99/mo consumer Pro
+  - $39.99/yr annual
 
 The endpoint surface:
   POST /v1/checkout           -> create a Stripe Checkout Session
@@ -256,15 +256,28 @@ async def stripe_webhook(
     etype = event["type"]
     obj = event["data"]["object"]
 
-    if etype in (
-        "checkout.session.completed",
-        "customer.subscription.created",
-        "customer.subscription.updated",
-        "customer.subscription.deleted",
-    ):
-        _handle_subscription_event(store, etype, obj)
-    else:
-        logger.info("Stripe webhook: ignoring type=%s", etype)
+    # The whole post-idempotency path is best-effort. ANY internal
+    # failure (missing metadata, an exception in _handle_subscription_event,
+    # an unreachable Stripe API call, a missing user row) must still return
+    # 2xx to Stripe — otherwise Stripe retries every hour for 3 days and
+    # then disables the endpoint. We log the error so it's still visible
+    # in the deploy logs.
+    try:
+        if etype in (
+            "checkout.session.completed",
+            "customer.subscription.created",
+            "customer.subscription.updated",
+            "customer.subscription.deleted",
+        ):
+            _handle_subscription_event(store, etype, obj)
+        else:
+            # We intentionally ACK every event type we don't handle
+            # (invoice.*, customer.created, etc.) so Stripe stops
+            # retrying them. They were being returned 2xx by accident
+            # before — keep that contract.
+            logger.info("Stripe webhook: ignoring type=%s", etype)
+    except Exception as e:
+        logger.exception("Stripe webhook handler error for type=%s event=%s: %s", etype, event.get("id"), e)
 
     return {"received": True}
 
@@ -296,10 +309,25 @@ def _handle_subscription_event(store: Store, etype: str, obj: dict) -> None:
         customer_id = obj.get("customer")
         subscription_id = obj.get("subscription")
         # Pull the subscription to get the real status + renewal date.
+        # This is the call most likely to fail in production (network
+        # glitch, Stripe API outage, expired test/live key after a
+        # dashboard config change). Fall back to the checkout session's
+        # own status so we still record the event instead of 500-ing.
         if subscription_id:
-            sub = stripe.Subscription.retrieve(subscription_id)
-            status_str = sub.get("status")
-            renews_at = _iso(sub.get("current_period_end"))
+            try:
+                sub = stripe.Subscription.retrieve(subscription_id)
+                status_str = sub.get("status")
+                renews_at = _iso(sub.get("current_period_end"))
+            except Exception as e:
+                logger.warning(
+                    "Stripe Subscription.retrieve(%s) failed during "
+                    "checkout.session.completed; falling back to session "
+                    "status. err=%s",
+                    subscription_id,
+                    e,
+                )
+                status_str = obj.get("status") or "active"
+                renews_at = _iso(obj.get("current_period_end"))
         else:
             status_str = "active"
     else:
@@ -311,12 +339,31 @@ def _handle_subscription_event(store: Store, etype: str, obj: dict) -> None:
 
     if status_str == "canceled" or etype == "customer.subscription.deleted":
         # Treat deletions as immediate downgrade.
+        # Skip cleanly if we have nothing to look the row up by — Stripe
+        # sends deletion events for subscriptions we never wrote to (e.g.
+        # from a previous deployment, or a different app sharing the
+        # account). 500-ing on those makes Stripe disable the endpoint.
+        if not device_id and not customer_id:
+            logger.info(
+                "Stripe webhook: subscription event has no tono_device_id "
+                "and no customer id; skipping (event type=%s).",
+                etype,
+            )
+            return
         store.update_subscription(
             device_id=device_id,
             customer_id=customer_id,
             subscription_id=None,
             status="canceled",
             renews_at=None,
+        )
+        return
+
+    if not device_id and not customer_id:
+        logger.info(
+            "Stripe webhook: subscription event has no tono_device_id "
+            "and no customer id; skipping (event type=%s).",
+            etype,
         )
         return
 

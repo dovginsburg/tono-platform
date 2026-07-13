@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import time
 from urllib.parse import urlencode
 
@@ -22,7 +23,7 @@ import pytest
 
 def _post_command(client, text: str = "", user_id: str = "U123", **extra) -> dict:
     """POST a Slack slash-command payload and return the JSON body."""
-    payload = {"text": text, "user_id": user_id, "team_id": "T999", **extra}
+    payload = {"text": text, "user_id": user_id, "team_id": "T999", "response_url": "https://hooks.slack.com/commands/T999/123", **extra}
     body = urlencode(payload).encode()
     r = client.post(
         "/slack/command",
@@ -46,35 +47,35 @@ def _make_signature(secret: str, body: bytes, ts: int | None = None) -> tuple[st
 
 
 def test_parse_plain_draft():
-    from Backend.slack import _parse_command_text
+    from backend.slack import _parse_command_text
     draft, ctx = _parse_command_text("Hello world")
     assert draft == "Hello world"
     assert ctx is None
 
 
 def test_parse_slash_separator():
-    from Backend.slack import _parse_command_text
+    from backend.slack import _parse_command_text
     draft, ctx = _parse_command_text("Prior message // My draft here")
     assert draft == "My draft here"
     assert ctx == "Prior message"
 
 
 def test_parse_reply_prefix_with_separator():
-    from Backend.slack import _parse_command_text
+    from backend.slack import _parse_command_text
     draft, ctx = _parse_command_text("reply: thanks for the update // Got it, will follow up.")
     assert draft == "Got it, will follow up."
     assert ctx == "thanks for the update"
 
 
 def test_parse_reply_prefix_no_separator():
-    from Backend.slack import _parse_command_text
+    from backend.slack import _parse_command_text
     draft, ctx = _parse_command_text("reply: Got it, will follow up.")
     assert draft == "Got it, will follow up."
     assert ctx is None
 
 
 def test_parse_empty_context_treated_as_none():
-    from Backend.slack import _parse_command_text
+    from backend.slack import _parse_command_text
     draft, ctx = _parse_command_text("  // My draft")
     assert draft == "My draft"
     assert ctx is None
@@ -146,7 +147,7 @@ def test_command_rate_limit(client, monkeypatch):
         if mod == "Backend.slack" or mod.startswith("Backend.slack"):
             del sys.modules[mod]
 
-    from Backend.slack import _check_slack_user_rate, _slack_user_windows
+    from backend.slack import _check_slack_user_rate, _slack_user_windows
     _slack_user_windows.clear()
 
     # Exhaust limit manually
@@ -157,7 +158,7 @@ def test_command_rate_limit(client, monkeypatch):
 
 def test_command_rate_limit_endpoint(client, monkeypatch):
     """Rate-limit block is returned as an ephemeral message."""
-    import Backend.slack as slack_mod
+    import backend.slack as slack_mod
     from collections import deque
 
     slack_mod._SLACK_RATE_LIMIT = 1
@@ -176,7 +177,7 @@ def test_command_rate_limit_endpoint(client, monkeypatch):
 def test_command_rejects_invalid_signature(client, monkeypatch):
     monkeypatch.setenv("SLACK_SIGNING_SECRET", "test_secret_abc")
 
-    import Backend.slack as slack_mod
+    import backend.slack as slack_mod
     slack_mod._signing_secret = lambda: "test_secret_abc"
 
     payload = urlencode({"text": "hello", "user_id": "U1", "team_id": "T1"}).encode()
@@ -196,7 +197,7 @@ def test_command_accepts_valid_signature(client, monkeypatch):
     secret = "test_valid_secret"
     monkeypatch.setenv("SLACK_SIGNING_SECRET", secret)
 
-    import Backend.slack as slack_mod
+    import backend.slack as slack_mod
     slack_mod._signing_secret = lambda: secret
 
     payload = urlencode({"text": "hi", "user_id": "U2", "team_id": "T1"}).encode()
@@ -212,3 +213,129 @@ def test_command_accepts_valid_signature(client, monkeypatch):
     )
     assert r.status_code == 200
     assert r.json()["response_type"] == "ephemeral"
+
+
+# ---------------------------------------------------------------------------
+# Rich Block Kit output (risk badges + rewrite buttons)
+# ---------------------------------------------------------------------------
+
+
+def test_blocks_include_risk_badge_and_perception(client):
+    data = _post_command(client, text="Need this ASAP.")
+    assert "blocks" in data
+    blocks = data["blocks"]
+    header_text = blocks[0]["text"]["text"]
+    assert "RISK" in header_text
+    # Risk badge emoji should appear
+    assert any(emoji in header_text for emoji in ("🟢", "🟡", "🔴"))
+
+
+def test_blocks_include_risk_reason_and_flags(client):
+    data = _post_command(client, text="as per my last message, can you get this done?")
+    blocks = data["blocks"]
+    # Look for context block with details
+    context_blocks = [b for b in blocks if b["type"] == "context"]
+    assert len(context_blocks) >= 1
+    details = context_blocks[0]["elements"][0]["text"]
+    assert "Risk reason:" in details or "Flags:" in details
+
+
+def test_blocks_include_rewrite_buttons(client):
+    data = _post_command(client, text="Can you get this done by end of day?")
+    blocks = data["blocks"]
+    action_blocks = [b for b in blocks if b["type"] == "actions"]
+    assert len(action_blocks) >= 1
+    button = action_blocks[0]["elements"][0]
+    assert button["type"] == "button"
+    assert "Post this rewrite" in button["text"]["text"]
+    # Value should contain axis info
+    assert button["action_id"].startswith("tono_rewrite_")
+    assert "value" in button
+
+
+def test_blocks_axis_risk_delta_shown(client):
+    data = _post_command(client, text="as per my last message")
+    blocks = data["blocks"]
+    # Find suggestion blocks
+    suggestion_blocks = [b for b in blocks if b["type"] == "section" and "*" in b["text"]["text"]]
+    # At least one should show risk delta arrow if there are suggestions
+    texts = [b["text"]["text"] for b in suggestion_blocks]
+    assert any("→" in t for t in texts) or any(emoji in t for t in texts for emoji in ("🟢", "🟡", "🔴"))
+
+
+# ---------------------------------------------------------------------------
+# Interactivity endpoint (/slack/interaction)
+# ---------------------------------------------------------------------------
+
+
+def test_interaction_rejects_invalid_signature(client, monkeypatch):
+    monkeypatch.setenv("SLACK_SIGNING_SECRET", "test_secret_abc")
+    import backend.slack as slack_mod
+    slack_mod._signing_secret = lambda: "test_secret_abc"
+
+    payload = urlencode({"payload": json.dumps({"type": "block_actions"})}).encode()
+    r = client.post(
+        "/slack/interaction",
+        content=payload,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "X-Slack-Request-Timestamp": str(int(time.time())),
+            "X-Slack-Signature": "v0=badsignature",
+        },
+    )
+    assert r.status_code == 401
+
+
+def test_interaction_accepts_valid_signature_noop_for_unknown_action(client, monkeypatch):
+    secret = "test_valid_secret"
+    monkeypatch.setenv("SLACK_SIGNING_SECRET", secret)
+    import backend.slack as slack_mod
+    slack_mod._signing_secret = lambda: secret
+
+    payload_dict = {
+        "type": "block_actions",
+        "actions": [{"action_id": "unknown_action", "value": "{}"}],
+    }
+    body = urlencode({"payload": json.dumps(payload_dict)}).encode()
+    ts, sig = _make_signature(secret, body)
+    r = client.post(
+        "/slack/interaction",
+        content=body,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "X-Slack-Request-Timestamp": ts,
+            "X-Slack-Signature": sig,
+        },
+    )
+    assert r.status_code == 200
+
+
+def test_interaction_posts_rewrite_from_button(client, monkeypatch):
+    secret = "test_valid_secret"
+    monkeypatch.setenv("SLACK_SIGNING_SECRET", secret)
+    import backend.slack as slack_mod
+    slack_mod._signing_secret = lambda: secret
+
+    payload_dict = {
+        "type": "block_actions",
+        "actions": [{
+            "action_id": "tono_rewrite_safer",
+            "value": json.dumps({
+                "response_url": "https://hooks.slack.com/commands/T123/456",
+                "axis": "safer",
+                "text": "Following up on my last note, can you get this done?",
+            }),
+        }],
+    }
+    body = urlencode({"payload": json.dumps(payload_dict)}).encode()
+    ts, sig = _make_signature(secret, body)
+    r = client.post(
+        "/slack/interaction",
+        content=body,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "X-Slack-Request-Timestamp": ts,
+            "X-Slack-Signature": sig,
+        },
+    )
+    assert r.status_code == 200
