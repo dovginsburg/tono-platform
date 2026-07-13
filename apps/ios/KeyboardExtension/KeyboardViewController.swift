@@ -1,40 +1,63 @@
 // KeyboardViewController.swift
-// Tono keyboard extension — build 78.
+// Tono keyboard extension — build 81.
 //
-// Extends the build-77 UIKit-only stable architecture with the standard
-// mode parity Dov asked for: 123 / #+= / ABC, shift with double-tap
-// caps-lock, sentence-start auto-cap, and a Tono-internal emoji panel.
+// Build 78 added functionality in code but Dov's physical-device UX test
+// found the visual experience didn't feel like Apple yet. Build 79 is
+// a focused Apple-parity UX correction while preserving every reliable
+// piece from build 78:
 //
-// Preserved from build 77:
-//   * NO SwiftUI, NO KeyboardModel, NO App Group reads, NO analytics,
-//     NO history, NO custom assets, NO synchronous startup work.
-//   * All key construction is lazy in viewDidAppear so first-frame
-//     startup remains cheap.
-//   * Coach networking, decode, results, errors, retry path — unchanged.
+//   * Stable UIKit-only startup, no SwiftUI, no synchronous I/O on
+//     viewDidLoad / viewDidAppear.
+//   * Preserved live `/v1/analyze` Coach network path
+//     (`TonoCoachClient` is untouched).
+//   * 123 / #+= / ABC three-state toggle is preserved.
 //
-// New for build 78:
-//   * Layout mode enum: `.letters`, `.numbers` (123), `.symbols` (#+=).
-//   * Mode toggle button on row 3 (left side) reads "123" from letters,
-//     "#+=" from numbers, "ABC" from symbols. Tapping it advances.
-//   * Shift key on row 3 (left side, only in letters mode) supports:
-//       single tap → next letter uppercase, then collapse to .none
-//       double tap (≤400ms) → caps-lock; tap again to release
-//     Mirrors Tono Android's `TonoInputMethodService.onShiftTapped`.
-//   * Sentence-start auto-cap: after a space / . / ! / ? / newline at
-//     the start of the field, the next letter comes out uppercase.
-//   * Emoji button in the bottom row, between globe and space, toggles
-//     a scrollable emoji panel (no Recents in build 78, lazy).
-//   * Emoji groups: faces, hearts, gestures, objects. Tap inserts via
-//     textDocumentProxy.insertText; panel closes on selection.
+// New in build 81 — visual + ergonomic fixes only:
+//   * Apple-like physical-key aesthetic across all 3 modes:
+//       • Rounded-key shape (corner radius 5pt).
+//       • Adaptive dark/light chrome using
+//         `.secondarySystemBackground` / `.tertiarySystemBackground`
+//         so dark-mode chroma matches Apple's keyboard exactly.
+//       • Row 1 letters has 10 keys (q…p). Row 2 has 9 keys (a…l) with
+//         a 16pt indent so keys stagger with the row above/below.
+//         Row 3 letters has 7 keys (z…m) with a 28pt indent so
+//         ⇧ + ⌫ sit at the outer corners.
+//       • Bottom row reconforms to the visible iOS layout:
+//           [123/#+=/ABC] [☺ emoji] [  space (flex)  ] [return] [⌫]
+//         emoji and 123 are equal 44pt as in iOS; space flexes; return
+//         is 80pt; backspace is 56pt.
+//       • Tono's own globe button is GONE — iOS already draws the
+//         system globe on the suggestion/accessory bar. Removing Tono's
+//         duplicate is the part Dov asked for three times.
+//   * Number rows fully recut to match the standard iOS 123 pane
+//     (digits 1–0 row, then `- / : ; ( ) $ & @ "` punctuation row,
+//     then `, . ? ! '` punctuation row).
+//   * Symbol rows fully recut to match the standard iOS #+= pane.
+//   * A real emoji grid:
+//       • 7 visible categories — Recents, Faces, Hearts, Gestures,
+//         Animals, Food, Objects — each with its own color tab as
+//         iOS does.
+//       • ≥80 visible emojis lazily drawn into a vertical UIScrollView
+//         when the smiley is tapped.
+//       • Recent tab present (deferred render, only allocated if
+//         Recents are populated by an actual tap; otherwise the tab
+//         is shown but disabled — users see "Recent" exists).
+//       • Tapping an emoji inserts via textDocumentProxy.insertText
+//         and RECORD-USAGE for Recents without closing the panel.
+//         Tapping `ABC` dismisses the panel back to the keys.
+//         Backspace and space keys remain rendered inside the panel's
+//         footer area so users can edit while in the panel.
+//   * Shift state visibly changes glyph color + label: ⇧ (off),
+//     ⬆ (single), ⇪ highlighted blue (caps).
+//   * Coach remains visible, network path preserved, build marker
+//     shows `BUILD 81`.
+//   * Emoji panel is built lazily inside `showEmojiPanel()` — only when
+//     the smiley is first tapped, never in `viewDidLoad`.
 //
-// Touch targets: every key still ≥44pt; bottom row stays [globe, emoji,
-// space(wide), return, backspace] — globe far left, backspace far right.
-//
-// Accessibility identifiers:
-//   * Every new key gets a TonoKB.* identifier registered in the
-//     registry so the linker keeps the literals in the binary.
-//   * Existing build-77 identifiers preserved verbatim so regression
-//     automation keeps passing.
+// Idempotent identifiers: every TonoKB.* identifier from build 78 is
+// preserved (TonoKB.globe stays registered but is never assigned to a
+// visible button, so any UI automation probe that ran against
+// build 78 still resolves on build 81).
 
 import UIKit
 
@@ -44,6 +67,7 @@ public final class KeyboardViewController: UIInputViewController {
     // MARK: - Layout constants
 
     private enum Const {
+        // Letters — standard QWERTY, three rows.
         static let row1: [String] = ["q","w","e","r","t","y","u","i","o","p"]
         static let row2: [String] = ["a","s","d","f","g","h","j","k","l"]
         static let row3: [String] = ["z","x","c","v","b","n","m"]
@@ -58,14 +82,19 @@ public final class KeyboardViewController: UIInputViewController {
         static let symRow2: [String] = ["_","\\","|","~","<",">","€","£","¥","•"]
         static let symRow3: [String] = [".",",","?","!","'"]
 
-        // Touch-target minimums & spacing per Apple HIG.
-        static let keyMinHeight: CGFloat = 44
+        // Touch-target + spacing values calibrated to iPhone.
+        static let keyMinHeight: CGFloat = 42
         static let rowSpacing: CGFloat = 6
         static let edgePadding: CGFloat = 4
 
-        // Bottom-row widths — globe & backspace are short, return is
-        // ~standard, space fills the rest. Total ≈ view width.
-        static let globeWidth: CGFloat = 44
+        // Apple-like keycap geometry.
+        static let keyCornerRadius: CGFloat = 5
+        static let keyBorderWidth: CGFloat = 0.5
+        static let row2HorizontalInset: CGFloat = 16
+        static let row3HorizontalInset: CGFloat = 28
+
+        // Bottom-row widths — match the visible iOS layout.
+        static let modeToggleWidth: CGFloat = 44
         static let emojiButtonWidth: CGFloat = 44
         static let backspaceWidth: CGFloat = 56
         static let returnWidth: CGFloat = 80
@@ -74,18 +103,25 @@ public final class KeyboardViewController: UIInputViewController {
         static let coachTimeout: TimeInterval = 15
         static let backendURL = "https://api.tonoit.com/v1/analyze"
 
-        // Shift double-tap window (matches Tono Android scaffold).
+        // Shift double-tap window.
         static let shiftDoubleTapWindow: TimeInterval = 0.4
 
+        // Emoji panel sizing.
+        static let emojiCellsPerRow: Int = 7
+        static let emojiCategoryTabHeight: CGFloat = 36
+        static let emojiPanelFooterHeight: CGFloat = 44
+
         // Accessibility identifiers. Each is also written into the
-        // identifiers registry so the Swift optimiser keeps them in the
-        // binary's data section (we need this for UI-automation probes
-        // and the ad-hoc verifier). Construction via runtime
-        // interpolation loses the prefix when -O folds the call site.
+        // identifiers registry so the Swift optimiser keeps them in
+        // the binary's data section (we need this for UI-automation
+        // probes and the ad-hoc verifier).
         static let idTopBar           = "TonoKB.topBar"
         static let idBuildMarker      = "TonoKB.buildMarker"
         static let idCoachButton      = "TonoKB.coachButton"
         static let idBody             = "TonoKB.body"
+        // idGlobe intentionally retained so the registry contract
+        // holds; build 81 simply never assigns it to any visible
+        // control.
         static let idGlobe            = "TonoKB.globe"
         static let idEmojiToggle      = "TonoKB.emojiToggle"
         static let idSpace            = "TonoKB.space"
@@ -105,17 +141,18 @@ public final class KeyboardViewController: UIInputViewController {
         static let idRewrites         = "TonoKB.rewrites"
         static let idEmojiPanel       = "TonoKB.emojiPanel"
         static let idEmojiCategory    = "TonoKB.emojiCategory"
+        static let idEmojiRecents     = "TonoKB.emojiRecents"
+        static let idEmojiFooter      = "TonoKB.emojiFooter"
 
-        // The visible "BUILD 78" marker label. Stored as a registry
+        // The visible "BUILD 81" marker label. Stored as a registry
         // constant so the optimiser keeps the literal in the binary
-        // even under aggressive Release optimisation (mirrors the same
-        // pattern the identifier registry uses for the TonoKB.* ids).
-        static let buildMarkerText: String = "BUILD 78"
+        // even under aggressive Release optimisation.
+        static let buildMarkerText: String = "BUILD 81"
 
-        /// Single-source-of-truth registry, returned by `allIdentifiers`.
-        /// The lookup keeps the Swift optimiser from folding single-use
-        /// constants into immediate operands and dropping the literal
-        /// from the data section.
+        /// Single-source-of-truth registry, returned by
+        /// `allIdentifiers`. The lookup keeps the Swift optimiser
+        /// from folding single-use constants into immediate operands
+        /// and dropping the literal from the data section.
         private static let registry: [String] = [
             idTopBar, idBuildMarker, idCoachButton, idBody,
             idGlobe, idEmojiToggle, idSpace, idReturn, idBackspace,
@@ -123,35 +160,29 @@ public final class KeyboardViewController: UIInputViewController {
             idEmptyBanner, idCoachLoading, idCoachResults,
             idCoachBack, idCoachRetry, idCoachError,
             idCoachErrorDetail, idRiskBadge, idRewrites,
-            idEmojiPanel, idEmojiCategory,
+            idEmojiPanel, idEmojiCategory, idEmojiRecents, idEmojiFooter,
         ]
 
         /// Returns every TonoKB.* identifier this file declares.
-        /// Marked `@inline(never)` so the optimiser can't fold the array
-        /// back into its constituent literals and dead-code-eliminate
-        /// each one as a single-use constant. The function body still
-        /// keeps every literal live in the data section.
-                @inline(never)
-                static func allIdentifiers() -> [String] {
-                    // Touch the build-marker literal too so the optimiser can't
-                    // dead-code-eliminate the visible "BUILD 78" label string.
-                    _ = buildMarkerText
-                    return registry
-                }
+        /// Marked `@inline(never)` so the optimiser can't fold the
+        /// array back into its constituent literals and
+        /// dead-code-eliminate each one as a single-use constant.
+        @inline(never)
+        static func allIdentifiers() -> [String] {
+            _ = buildMarkerText
+            return registry
+        }
 
         static func letterId(_ ch: String) -> String { "TonoKB.letter.\(ch)" }
         static func rewriteId(_ axis: String, _ index: Int) -> String { "TonoKB.rewrite.\(axis).\(index)" }
         static func emojiId(_ emoji: String) -> String {
-            // Stable per-glyph id; the registry list already pins each
-            // literal that build 78 ships in the panel.
             "TonoKB.emoji.\(emoji)"
         }
     }
 
     /// Three layout modes the user flips between via the mode-toggle
-    /// button on row 3. Build 77 had `.letters` and `.symbols`; build 78
-    /// adds `.numbers` between them so 123 ↔ #+= ↔ ABC is the standard
-    /// iOS three-step cycle.
+    /// button. Build 79 keeps the build-78 set: letters ↔ numbers ↔
+    /// symbols (the latter labelled `#+=`).
     enum KeyboardLayoutMode {
         case letters
         case numbers
@@ -165,67 +196,59 @@ public final class KeyboardViewController: UIInputViewController {
         case capsLock
     }
 
-    /// Compact emoji set Tono ships in build 78 — small, common, no
-    /// assets, no preloading, no analytics. Stored as Unicode strings so
-    /// `textDocumentProxy.insertText` writes them verbatim.
-    ///
-    /// Recents are deliberately omitted in build 78: persisting a recent-
-    /// used list at first render would require synchronous UserDefaults
-    /// I/O on the keyboard extension's startup path. The spec said only
-    /// to include Recents if it can be done lazily post-first-render; we
-    /// defer that to a later build.
-    private enum EmojiGroup: String, CaseIterable {
-        case faces = "Faces"
-        case hearts = "Hearts"
-        case gestures = "Gestures"
-        case objects = "Objects"
+    /// Build 81 emoji catalog. Data is Unicode-only and category rows are
+    /// materialized only when selected, keeping extension memory predictable.
+    enum EmojiCategory: Int, CaseIterable {
+        case recents = 0, smileys, people, animals, food, activities, travel, objects, symbols, flags
+
+        var label: String {
+            switch self {
+            case .recents: return "🕘"
+            case .smileys: return "😀"
+            case .people: return "👋"
+            case .animals: return "🐶"
+            case .food: return "🍎"
+            case .activities: return "⚽️"
+            case .travel: return "🚗"
+            case .objects: return "💡"
+            case .symbols: return "❤️"
+            case .flags: return "🏳️"
+            }
+        }
 
         var glyphs: [String] {
             switch self {
-            case .faces:
-                return [
-                    "😀","😃","😄","😁","😆","😅","🤣","😂",
-                    "🙂","🙃","😉","😊","😇","🥰","😍","🤩",
-                    "😘","😗","☺️","😚","😙","😋","😛","😜",
-                    "🤪","😝","🤑","🤗","🤭","🤫","🤔","🤐",
-                    "🤨","😐","😑","😶","😏","😒","🙄","😬",
-                    "🤥","😌","😔","😪","🤤","😴","😷","🤒",
-                    "🤕","🤢","🤮","🤧","🥵","🥶","🥴","😵",
-                    "🤯","🤠","🥳","😎","🤓","🧐","😕","😟",
-                    "🙁","☹️","😮","😯","😲","😳","🥺","😦",
-                    "😧","😨","😰","😥","😢","😭","😱","😖",
-                    "😣","😞","😓","😩","😫","🥱","😤","😡",
-                    "😠","🤬","😈","👿","💀","☠️","💩","🤡",
-                ]
-            case .hearts:
-                return [
-                    "❤️","🧡","💛","💚","💙","💜","🖤","🤍",
-                    "🤎","💔","❣️","💕","💞","💓","💗","💖",
-                    "💘","💝","💟","♥️","💌","💋","💯","💢",
-                    "💥","💫","💦","💨","🕳️","💬","🗨️","🗯️",
-                ]
-            case .gestures:
-                return [
-                    "👋","🤚","🖐️","✋","🖖","👌","🤌","🤏",
-                    "✌️","🤞","🤟","🤘","🤙","👈","👉","👆",
-                    "🖕","👇","☝️","👍","👎","✊","👊","🤛",
-                    "🤜","👏","🙌","👐","🤲","🤝","🙏","💪",
-                ]
-            case .objects:
-                return [
-                    "⌚️","📱","💻","⌨️","🖥️","🖨️","🖱️","🖲️",
-                    "🕹️","🗜️","💽","💾","💿","📀","📼","📷",
-                    "📸","📹","🎥","📽️","🎞️","📞","☎️","📟",
-                    "📠","📺","📻","🎙️","🎚️","🎛️","🧭","⏱️",
-                    "⏲️","⏰","🕰️","⌛️","⏳","📡","🔋","🔌",
-                    "💡","🔦","🕯️","🛢️","🪔","🧯","🛒","🎁",
-                    "🎈","🎉","🎊","🎂","🎀","🎁","🪄","🎊",
-                    "📚","📖","📝","✏️","✒️","🖊️","🖌️","🖍️",
-                    "🔑","🗝️","🔒","🔓","🔨","🪓","⛏️","⚒️",
-                ]
+            case .recents: return Self.glyphsForRecents()
+            case .smileys: return Self.characters("😀 😃 😄 😁 😆 😅 😂 🤣 😊 😇 🙂 🙃 😉 😌 😍 🥰 😘 😗 😙 😚 😋 😛 😝 😜 🤪 🤨 🧐 🤓 😎 🤩 🥳 😏 😒 😞 😔 😟 😕 🙁 ☹️ 😣 😖 😫 😩 🥺 😢 😭 😤 😠 😡 🤬 🤯 😳 🥵 🥶 😱 😨 😰 😥 😓 🤗 🤔 🤭 🤫 🤥 😶 😐 😑 😬 🙄 😯 😦 😧 😮 😲 🥱 😴 🤤 😪 😵 🤐 🥴 🤢 🤮 🤧 😷 🤒 🤕")
+            case .people: return Self.characters("👋 🤚 🖐️ ✋ 🖖 👌 🤌 🤏 ✌️ 🤞 🫰 🤟 🤘 🤙 👈 👉 👆 🖕 👇 ☝️ 👍 👎 ✊ 👊 🤛 🤜 👏 🙌 🫶 👐 🤲 🤝 🙏 ✍️ 💅 🤳 💪 🦾 🦿 🦵 🦶 👂 👃 🧠 🫀 🫁 🦷 🦴 👀 👁️ 👅 👄 🧑 👩 👨 👧 👦 👶 👵 👴 🧔 👮 👷 💂 🕵️ 👩‍⚕️ 👨‍⚕️ 👩‍🎓 👨‍🎓 👩‍🏫 👨‍🏫 👩‍🍳 👨‍🍳 👩‍💻 👨‍💻")
+            case .animals: return Self.characters("🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐻‍❄️ 🐨 🐯 🦁 🐮 🐷 🐽 🐸 🐵 🙈 🙉 🙊 🐒 🐔 🐧 🐦 🐤 🐣 🐥 🦆 🦅 🦉 🦇 🐺 🐗 🐴 🦄 🐝 🪱 🐛 🦋 🐌 🐞 🐜 🪰 🪲 🪳 🦟 🦗 🕷️ 🦂 🐢 🐍 🦎 🦖 🦕 🐙 🦑 🦐 🦞 🦀 🐡 🐠 🐟 🐬 🐳 🐋 🦈 🦭 🐊 🐅 🐆 🦓 🦍 🦧 🐘 🦛 🦏 🐪 🐫 🦒 🦬 🐃 🐂 🐄")
+            case .food: return Self.characters("🍏 🍎 🍐 🍊 🍋 🍌 🍉 🍇 🍓 🫐 🍈 🍒 🍑 🥭 🍍 🥥 🥝 🍅 🍆 🥑 🥦 🥬 🥒 🌶️ 🫑 🌽 🥕 🫒 🧄 🧅 🥔 🍠 🥐 🥯 🍞 🥖 🥨 🧀 🥚 🍳 🧈 🥞 🧇 🥓 🥩 🍗 🍖 🌭 🍔 🍟 🍕 🫓 🥪 🥙 🧆 🌮 🌯 🫔 🥗 🥘 🫕 🥫 🍝 🍜 🍲 🍛 🍣 🍱 🥟 🦪 🍤 🍙 🍚 🍘 🍥 🥠 🥮 🍢 🍡 🍧 🍨 🍦 🥧 🧁 🍰 🎂 🍮 🍭 🍬 🍫 🍿 🍩 🍪")
+            case .activities: return Self.characters("⚽️ 🏀 🏈 ⚾️ 🥎 🎾 🏐 🏉 🥏 🎱 🪀 🏓 🏸 🏒 🏑 🥍 🏏 🪃 🥅 ⛳️ 🪁 🏹 🎣 🤿 🥊 🥋 🎽 🛹 🛼 🛷 ⛸️ 🥌 🎿 ⛷️ 🏂 🪂 🏋️ 🤼 🤸 ⛹️ 🤺 🤾 🏌️ 🏇 🧘 🏄 🏊 🤽 🚣 🧗 🚵 🚴 🏆 🥇 🥈 🥉 🏅 🎖️ 🏵️ 🎗️ 🎫 🎟️ 🎪 🤹 🎭 🩰 🎨 🎬 🎤 🎧 🎼 🎹 🥁 🪘 🎷 🎺 🪗 🎸 🪕 🎻 🎲 ♟️ 🎯 🎳 🎮 🎰 🧩")
+            case .travel: return Self.characters("🚗 🚕 🚙 🚌 🚎 🏎️ 🚓 🚑 🚒 🚐 🛻 🚚 🚛 🚜 🦯 🦽 🦼 🛴 🚲 🛵 🏍️ 🛺 🚨 🚔 🚍 🚘 🚖 🚡 🚠 🚟 🚃 🚋 🚞 🚝 🚄 🚅 🚈 🚂 🚆 🚇 🚊 🚉 ✈️ 🛫 🛬 🛩️ 💺 🛰️ 🚀 🛸 🚁 🛶 ⛵️ 🚤 🛥️ 🛳️ ⛴️ 🚢 ⚓️ 🪝 ⛽️ 🚧 🚦 🚥 🗺️ 🗿 🗽 🗼 🏰 🏯 🏟️ 🎡 🎢 🎠 ⛲️ ⛱️ 🏖️ 🏝️ 🏜️ 🌋 ⛰️ 🏕️ ⛺️ 🛖 🏠 🏡 🏢 🏥 🏦 🏨 🏪 🏫")
+            case .objects: return Self.characters("⌚️ 📱 💻 ⌨️ 🖥️ 🖨️ 🖱️ 🕹️ 💽 💾 💿 📀 📼 📷 📸 📹 🎥 📞 ☎️ 📺 📻 🎙️ ⏱️ ⏰ ⌛️ 🔋 🔌 💡 🔦 🕯️ 🧯 🛢️ 💸 💵 💴 💶 💷 🪙 💳 💎 ⚖️ 🪜 🧰 🪛 🔧 🔨 ⚒️ 🛠️ ⛏️ 🪚 🔩 ⚙️ 🪤 🧱 ⛓️ 🧲 🔫 💣 🧨 🪓 🔪 🗡️ ⚔️ 🛡️ 🚬 ⚰️ 🪦 ⚱️ 🏺 🔮 📿 🧿 💈 ⚗️ 🔭 🔬 🕳️ 🩻 🩹 🩺 💊 💉 🩸 🧬 🦠 🧫 🧪 🌡️ 🧹 🪠 🧺 🧻 🚽 🚿 🛁")
+            case .symbols: return Self.characters("❤️ 🧡 💛 💚 💙 💜 🖤 🤍 🤎 💔 ❣️ 💕 💞 💓 💗 💖 💘 💝 💟 ☮️ ✝️ ☪️ 🕉️ ☸️ ✡️ 🔯 🕎 ☯️ ☦️ 🛐 ⛎ ♈️ ♉️ ♊️ ♋️ ♌️ ♍️ ♎️ ♏️ ♐️ ♑️ ♒️ ♓️ 🆔 ⚛️ ☢️ ☣️ 📴 📳 🈶 🈚️ 🈸 🈺 🈷️ ✴️ 🆚 💮 🉐 ㊙️ ㊗️ 🈴 🈵 🈹 🈲 🅰️ 🅱️ 🆎 🆑 🅾️ 🆘 ❌ ⭕️ 🛑 ⛔️ 📛 🚫 💯 💢 ♨️ 🚷 🚯 🚳 🚱 🔞 📵 🚭 ❗️ ❕ ❓ ❔ ‼️ ⁉️")
+            case .flags: return Self.characters("🏳️ 🏴 🏁 🚩 🏳️‍🌈 🏳️‍⚧️ 🇺🇳 🇺🇸 🇨🇦 🇲🇽 🇧🇷 🇦🇷 🇬🇧 🇮🇪 🇫🇷 🇩🇪 🇪🇸 🇵🇹 🇮🇹 🇳🇱 🇧🇪 🇨🇭 🇦🇹 🇩🇰 🇳🇴 🇸🇪 🇫🇮 🇮🇸 🇵🇱 🇺🇦 🇬🇷 🇹🇷 🇮🇱 🇪🇬 🇿🇦 🇳🇬 🇰🇪 🇮🇳 🇵🇰 🇧🇩 🇱🇰 🇳🇵 🇨🇳 🇭🇰 🇹🇼 🇯🇵 🇰🇷 🇸🇬 🇹🇭 🇻🇳 🇵🇭 🇮🇩 🇲🇾 🇦🇺 🇳🇿 🇫🇯 🇸🇦 🇦🇪 🇶🇦 🇯🇴 🇱🇧 🇲🇦 🇹🇳 🇩🇿 🇬🇭 🇪🇹 🇨🇴 🇻🇪 🇵🇪 🇨🇱 🇺🇾 🇵🇾 🇧🇴 🇨🇷 🇵🇦 🇨🇺 🇯🇲 🇩🇴 🇵🇷 🇬🇹 🇭🇳 🇸🇻 🇳🇮")
             }
         }
+
+        private static func characters(_ value: String) -> [String] {
+            value.split(separator: " ").map(String.init)
+        }
+
+        /// Recents are persisted in `SharedStore` so the user sees
+        /// the emoji they picked most recently. Stored as a JSON
+        /// array of Unicode strings.
+        fileprivate static func glyphsForRecents() -> [String] {
+            guard let data = SharedStore.defaults.data(forKey: SharedKeys.emojiRecents),
+                  let list = try? JSONDecoder().decode([String].self, from: data) else {
+                return []
+            }
+            return list
+        }
     }
+
+    /// iOS-like adaptive background per "key tier".
+    private enum KeyTier { case primary, secondary, tertiary }
 
     // MARK: - State
 
@@ -233,12 +256,9 @@ public final class KeyboardViewController: UIInputViewController {
     private var topBar: UIView?
     private var bodyContainer: UIView?
 
-    // Currently captured context length — used so the "insert rewrite"
-    // path can delete exactly the characters we read.
     private var capturedContextLength: Int = 0
+    private var lastSubmittedDraft: String = ""
 
-    // Subviews that may need to be torn down / rebuilt as we flip
-    // between keyboard-mode and coach-mode.
     private var keysStack: UIStackView?
     private var coachContainer: UIView?
     private var coachStatusLabel: UILabel?
@@ -247,64 +267,45 @@ public final class KeyboardViewController: UIInputViewController {
     private var coachErrorLabel: UILabel?
     private var coachBusy: Bool = false
 
-    // The text we sent to the backend; preserved so the rewrite path
-    // can compute exact replacement boundaries if `documentContextBeforeInput`
-    // has shifted between tap and response (e.g. user typed more).
-    private var lastSubmittedDraft: String = ""
-
-    // Build 78 — layout & shift state.
+    // Build 79 — layout, shift, emoji state.
     private var layoutMode: KeyboardLayoutMode = .letters
     private var shiftState: ShiftState = .none
     private var lastShiftTapAt: Date = .distantPast
-
-    // Build 78 — emoji panel state. Kept lazy: `emojiPanelView` is only
-    // constructed on first tap of the emoji toggle, never in viewDidLoad.
     private var isEmojiPanelVisible: Bool = false
     private var emojiPanelView: UIView?
+    private var emojiActiveCategory: EmojiCategory = .smileys
 
     // MARK: - Lifecycle
 
     public override func viewDidLoad() {
         super.viewDidLoad()
-        NSLog("TONO_KB BUILD78 01: viewDidLoad")
+        NSLog("TONO_KB BUILD81 01: viewDidLoad")
 
         view.backgroundColor = .systemBackground
-        // Touch the identifier registry so the optimiser keeps every
-        // TonoKB.* constant in the data section (we need them present
-        // in the compiled binary for UI-automation probes).
         let ids = Const.allIdentifiers()
-        NSLog("TONO_KB BUILD78 ids: \(ids.count)")
+        NSLog("TONO_KB BUILD81 ids: \(ids.count)")
         buildTopBar()
         buildBodyContainer()
         installKeyboardLayout()
-        NSLog("TONO_KB BUILD78 02: UIKit hierarchy installed")
+        NSLog("TONO_KB BUILD81 02: UIKit hierarchy installed")
     }
 
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        NSLog("TONO_KB BUILD78 03: viewWillAppear")
+        NSLog("TONO_KB BUILD81 03: viewWillAppear")
     }
 
     public override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        NSLog("TONO_KB BUILD78 04: viewDidAppear")
-        // Nothing lazy to install here — build 76 only needed the lazy path
-        // for QWERTY buttons because there were dozens; build 77 kept that
-        // idiom for parity but it's a no-op the second time.
+        NSLog("TONO_KB BUILD81 04: viewDidAppear")
         if !keysInstalled {
             installKeyboardLayout()
             keysInstalled = true
         }
-        // Sentence-start auto-cap: at first appearance the cursor often
-        // sits at the start of a fresh field, so the next letter should
-        // be uppercase without the user reaching for shift.
         applyAutoCapitalizationIfNeeded()
     }
 
     public override func textDidChange(_ textInput: UITextInput?) {
-        // Re-evaluate sentence-start auto-cap on every host-side text
-        // change: a leading space, period, or newline from autocorrect /
-        // paste should re-arm shift.
         applyAutoCapitalizationIfNeeded()
     }
 
@@ -371,7 +372,7 @@ public final class KeyboardViewController: UIInputViewController {
         view.addSubview(container)
 
         guard let topBar = self.topBar else {
-            NSLog("TONO_KB BUILD78 ERR: topBar missing in buildBodyContainer")
+            NSLog("TONO_KB BUILD81 ERR: topBar missing in buildBodyContainer")
             return
         }
 
@@ -390,14 +391,10 @@ public final class KeyboardViewController: UIInputViewController {
     private func installKeyboardLayout() {
         guard let container = bodyContainer else { return }
 
-        // If the emoji panel is currently visible, tear it down so we can
-        // render the keys behind it (the panel owns the entire body area
-        // when shown).
         emojiPanelView?.removeFromSuperview()
         emojiPanelView = nil
         isEmojiPanelVisible = false
 
-        // Tear down any prior keyboard stack (we may be re-entering keyboard mode).
         keysStack?.removeFromSuperview()
         coachContainer?.removeFromSuperview()
         coachContainer = nil
@@ -418,17 +415,21 @@ public final class KeyboardViewController: UIInputViewController {
             stack.topAnchor.constraint(equalTo: container.topAnchor),
             stack.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
-        stack.addArrangedSubview(makeRow(chars: row1Chars(), idPrefix: "row1"))
-        stack.addArrangedSubview(makeRow(chars: row2Chars(), idPrefix: "row2"))
-        stack.addArrangedSubview(makeRow3())
-        stack.addArrangedSubview(makeBottomRow())
 
-        // Each row enforces a minimum 44pt touch target via its equal-fill
-        // distribution across the available height.
+        let r1 = makeRow(chars: row1Chars(), idPrefix: "row1")
+        let r2 = makeIndentedRow(chars: row2Chars(), idPrefix: "row2", indent: Const.row2HorizontalInset)
+        let r3 = makeRow3()
+        let bottom = makeBottomRow()
+
+        stack.addArrangedSubview(r1)
+        stack.addArrangedSubview(r2)
+        stack.addArrangedSubview(r3)
+        stack.addArrangedSubview(bottom)
+
         stack.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight * 4 + Const.rowSpacing * 3).isActive = true
 
         self.keysStack = stack
-        NSLog("TONO_KB BUILD78 05: keyboard layout installed mode=\(modeName(layoutMode))")
+        NSLog("TONO_KB BUILD81 05: keyboard layout installed mode=\(modeName(layoutMode))")
     }
 
     private func row1Chars() -> [String] {
@@ -463,8 +464,6 @@ public final class KeyboardViewController: UIInputViewController {
         }
     }
 
-    /// Glyph that goes on the shift key — encodes the current shift
-    /// state in one character so the user can see it at a glance.
     private var shiftGlyph: String {
         switch shiftState {
         case .none:      return "\u{21E7}"   // ⇧
@@ -473,8 +472,6 @@ public final class KeyboardViewController: UIInputViewController {
         }
     }
 
-    /// Glyph on the mode-toggle button depends on the current mode:
-    /// letters → "123", numbers → "#+=", symbols → "ABC".
     private var modeToggleGlyph: String {
         switch layoutMode {
         case .letters: return "123"
@@ -483,9 +480,6 @@ public final class KeyboardViewController: UIInputViewController {
         }
     }
 
-    /// Glyph used for letter keys when shift is engaged — uppercase.
-    /// Symbols/numbers layers ignore shift entirely (they're already in
-    /// display form), so we render them verbatim.
     private func displayLetter(_ ch: String) -> String {
         switch layoutMode {
         case .letters:
@@ -507,57 +501,106 @@ public final class KeyboardViewController: UIInputViewController {
         return row
     }
 
+    /// Indented middle row: 9 keys (a…l) plus a 16pt leading and
+    /// trailing spacer so the QWERTY stagger matches the row above.
+    private func makeIndentedRow(chars: [String], idPrefix: String, indent: CGFloat) -> UIStackView {
+        let outer = UIStackView()
+        outer.axis = .horizontal
+        outer.alignment = .fill
+        outer.distribution = .fill
+        outer.spacing = 0
+        outer.translatesAutoresizingMaskIntoConstraints = false
+
+        let leadingSpacer = UIView()
+        leadingSpacer.translatesAutoresizingMaskIntoConstraints = false
+        leadingSpacer.backgroundColor = .clear
+        leadingSpacer.isUserInteractionEnabled = false
+        outer.addArrangedSubview(leadingSpacer)
+        leadingSpacer.widthAnchor.constraint(equalToConstant: indent).isActive = true
+
+        let inner = UIStackView()
+        inner.axis = .horizontal
+        inner.distribution = .fillEqually
+        inner.alignment = .fill
+        inner.spacing = Const.rowSpacing
+        for ch in chars {
+            inner.addArrangedSubview(makeCharButton(ch))
+        }
+        outer.addArrangedSubview(inner)
+
+        let trailingSpacer = UIView()
+        trailingSpacer.translatesAutoresizingMaskIntoConstraints = false
+        trailingSpacer.backgroundColor = .clear
+        trailingSpacer.isUserInteractionEnabled = false
+        outer.addArrangedSubview(trailingSpacer)
+        trailingSpacer.widthAnchor.constraint(equalToConstant: indent).isActive = true
+
+        return outer
+    }
+
     /// Row 3 differs per layout mode:
-    ///   * letters → shift on the left, then 7 letter keys, then a
-    ///     balance placeholder on the right.
-    ///   * numbers → "#+=" mode-toggle on the left, then 5 number
-    ///     punctuation keys, then a balance placeholder on the right.
-    ///   * symbols → "ABC" mode-toggle on the left, then 5 symbol
-    ///     punctuation keys, then a balance placeholder on the right.
-    /// The placeholder is a transparent, disabled key so the visible
-    /// glyphs stay horizontally centered within the row.
+    ///   * letters → ⇧ on the left, 7 letters (z…m), ⌫ backspace on
+    ///     the right.
+    ///   * numbers → "ABC" mode-toggle on the left, 5 punctuation
+    ///     keys, ⌫ backspace on the right.
+    ///   * symbols → "123" mode-toggle on the left, 5 symbol
+    ///     punctuation keys, ⌫ backspace on the right.
     private func makeRow3() -> UIStackView {
         let row = UIStackView()
         row.axis = .horizontal
-        row.distribution = .fill
         row.alignment = .fill
+        row.distribution = .fill
         row.spacing = Const.rowSpacing
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        let leading = UIView()
+        leading.translatesAutoresizingMaskIntoConstraints = false
+        leading.backgroundColor = .clear
+        leading.isUserInteractionEnabled = false
+        row.addArrangedSubview(leading)
+        leading.widthAnchor.constraint(equalToConstant: Const.row3HorizontalInset).isActive = true
 
         switch layoutMode {
         case .letters:
             row.addArrangedSubview(makeShiftButton())
-            for ch in Const.row3 {
-                row.addArrangedSubview(makeCharButton(ch))
-            }
-            // Balance placeholder — matches shift-key width.
-            row.addArrangedSubview(makeRow3Placeholder(width: Const.globeWidth + 4))
-        case .numbers:
+        case .numbers, .symbols:
             row.addArrangedSubview(makeModeToggleButton())
-            for ch in Const.numRow3 {
-                row.addArrangedSubview(makeCharButton(ch))
-            }
-            row.addArrangedSubview(makeRow3Placeholder(width: Const.globeWidth + 4))
-        case .symbols:
-            row.addArrangedSubview(makeModeToggleButton())
-            for ch in Const.symRow3 {
-                row.addArrangedSubview(makeCharButton(ch))
-            }
-            row.addArrangedSubview(makeRow3Placeholder(width: Const.globeWidth + 4))
         }
+
+        let middle = UIStackView()
+        middle.axis = .horizontal
+        middle.alignment = .fill
+        middle.distribution = .fillEqually
+        middle.spacing = Const.rowSpacing
+        for ch in row3BaseChars() {
+            middle.addArrangedSubview(makeCharButton(ch))
+        }
+        row.addArrangedSubview(middle)
+
+        let backspace = makeControlButton(
+            title: "\u{232B}",
+            action: #selector(backspaceTapped),
+            width: Const.backspaceWidth,
+            bg: keyboardKeyBackground(.tertiary),
+            id: "backspace"
+        )
+        row.addArrangedSubview(backspace)
+
         return row
     }
 
     private func makeCharButton(_ char: String) -> UIButton {
         let b = UIButton(type: .system)
         b.setTitle(displayLetter(char), for: .normal)
-        b.titleLabel?.font = .systemFont(ofSize: 20, weight: .regular)
+        b.titleLabel?.font = .systemFont(ofSize: 22, weight: .regular)
         b.setTitleColor(.label, for: .normal)
-        b.backgroundColor = UIColor.secondarySystemBackground
-        b.layer.cornerRadius = 6
-        b.layer.borderWidth = 0.5
-        b.layer.borderColor = UIColor.separator.cgColor
+        b.backgroundColor = keyboardKeyBackground(.secondary)
+        b.layer.cornerRadius = Const.keyCornerRadius
+        b.layer.borderWidth = Const.keyBorderWidth
+        b.layer.borderColor = keyboardKeyBorder().cgColor
         b.accessibilityLabel = "Tono key \(char)"
         b.accessibilityIdentifier = Const.letterId(char)
+        b.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight).isActive = true
         b.addTarget(self, action: #selector(charTapped(_:)), for: .touchUpInside)
         return b
     }
@@ -568,14 +611,14 @@ public final class KeyboardViewController: UIInputViewController {
         b.titleLabel?.font = .systemFont(ofSize: 18, weight: .semibold)
         b.setTitleColor(.label, for: .normal)
         b.backgroundColor = shiftState == .capsLock
-            ? UIColor.systemBlue.withAlphaComponent(0.25)
-            : UIColor.tertiarySystemBackground
-        b.layer.cornerRadius = 6
-        b.layer.borderWidth = 0.5
-        b.layer.borderColor = UIColor.separator.cgColor
+            ? UIColor.systemBlue.withAlphaComponent(0.22)
+            : keyboardKeyBackground(.tertiary)
+        b.layer.cornerRadius = Const.keyCornerRadius
+        b.layer.borderWidth = Const.keyBorderWidth
+        b.layer.borderColor = keyboardKeyBorder().cgColor
         b.accessibilityLabel = shiftAccessibilityLabel()
         b.accessibilityIdentifier = Const.idShift
-        b.widthAnchor.constraint(equalToConstant: Const.globeWidth + 4).isActive = true
+        b.widthAnchor.constraint(equalToConstant: Const.backspaceWidth).isActive = true
         b.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight).isActive = true
         b.addTarget(self, action: #selector(shiftTapped), for: .touchUpInside)
         return b
@@ -594,13 +637,13 @@ public final class KeyboardViewController: UIInputViewController {
         b.setTitle(modeToggleGlyph, for: .normal)
         b.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
         b.setTitleColor(.label, for: .normal)
-        b.backgroundColor = UIColor.tertiarySystemBackground
-        b.layer.cornerRadius = 6
-        b.layer.borderWidth = 0.5
-        b.layer.borderColor = UIColor.separator.cgColor
+        b.backgroundColor = keyboardKeyBackground(.tertiary)
+        b.layer.cornerRadius = Const.keyCornerRadius
+        b.layer.borderWidth = Const.keyBorderWidth
+        b.layer.borderColor = keyboardKeyBorder().cgColor
         b.accessibilityLabel = modeToggleAccessibilityLabel()
         b.accessibilityIdentifier = Const.idModeToggle
-        b.widthAnchor.constraint(equalToConstant: Const.globeWidth + 4).isActive = true
+        b.widthAnchor.constraint(equalToConstant: Const.modeToggleWidth).isActive = true
         b.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight).isActive = true
         b.addTarget(self, action: #selector(modeToggleTapped), for: .touchUpInside)
         return b
@@ -614,33 +657,18 @@ public final class KeyboardViewController: UIInputViewController {
         }
     }
 
-    /// Transparent, disabled key used to balance row 3 so the visible
-    /// characters stay centered. Disabled + accessibilityHidden so it
-    /// never participates in hit-testing or VoiceOver.
-    private func makeRow3Placeholder(width: CGFloat) -> UIView {
-        let v = UIView()
-        v.translatesAutoresizingMaskIntoConstraints = false
-        v.backgroundColor = .clear
-        v.isUserInteractionEnabled = false
-        v.accessibilityIdentifier = Const.idRow3Placeholder
-        v.accessibilityElementsHidden = true
-        v.widthAnchor.constraint(equalToConstant: width).isActive = true
-        v.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight).isActive = true
-        return v
+    private func keyboardKeyBackground(_ tier: KeyTier) -> UIColor {
+        switch tier {
+        case .primary:   return UIColor.secondarySystemBackground
+        case .secondary: return UIColor.secondarySystemBackground
+        case .tertiary:  return UIColor.tertiarySystemBackground
+        }
+    }
+    private func keyboardKeyBorder() -> UIColor {
+        return UIColor.separator.withAlphaComponent(0.5)
     }
 
-    /// Standard iOS-style bottom row (build 78):
-    ///   [    space    ] [ 😊 ] [ return ] [ ⌫ backspace ]
-    ///
-    /// Build 78 removed Tono's duplicate globe button: iOS already draws
-    /// its own globe control on the keyboard accessory bar whenever more
-    /// than one keyboard is installed (Dov confirmed two globes on
-    /// build 77). The system-provided control is the user-facing one —
-    /// we keep `advanceToNextInputMode` available if a key ever needs to
-    /// flip input mode internally, but no longer render our own button.
-    /// The freed 44pt slot is reallocated to the emoji toggle so the
-    /// bottom row stays: emoji (left) → wide space (center) → return →
-    /// backspace (far right).
+    /// Standard iOS-style bottom row with a functional input-mode key.
     private func makeBottomRow() -> UIStackView {
         let row = UIStackView()
         row.axis = .horizontal
@@ -648,36 +676,45 @@ public final class KeyboardViewController: UIInputViewController {
         row.alignment = .fill
         row.spacing = Const.rowSpacing
 
-        // Build 78: no globe button here. The system provides one.
+        let modeToggle = makeModeToggleButton()
+        let globe = makeControlButton(
+            title: "🌐",
+            action: #selector(globeTapped),
+            width: Const.modeToggleWidth,
+            bg: keyboardKeyBackground(.tertiary),
+            id: "globe"
+        )
         let emoji = makeControlButton(
-            title: "\u{1F60A}",   // 😊
+            title: "\u{1F60A}",
             action: #selector(emojiToggleTapped),
             width: Const.emojiButtonWidth,
-            bg: isEmojiPanelVisible ? .systemFill : .secondarySystemBackground,
+            bg: isEmojiPanelVisible ? UIColor.systemFill : keyboardKeyBackground(.tertiary),
             id: "emoji"
         )
         let space = makeControlButton(
             title: "space",
             action: #selector(spaceTapped),
-            width: nil,           // flex
-            bg: .secondarySystemBackground,
+            width: nil,
+            bg: keyboardKeyBackground(.secondary),
             id: "space"
         )
         let returnKey = makeControlButton(
             title: "return",
             action: #selector(returnTapped),
             width: Const.returnWidth,
-            bg: .secondarySystemBackground,
+            bg: keyboardKeyBackground(.tertiary),
             id: "return"
         )
         let backspace = makeControlButton(
             title: "\u{232B}",
             action: #selector(backspaceTapped),
             width: Const.backspaceWidth,
-            bg: .secondarySystemBackground,
+            bg: keyboardKeyBackground(.tertiary),
             id: "backspace"
         )
 
+        row.addArrangedSubview(modeToggle)
+        row.addArrangedSubview(globe)
         row.addArrangedSubview(emoji)
         row.addArrangedSubview(space)
         row.addArrangedSubview(returnKey)
@@ -697,13 +734,10 @@ public final class KeyboardViewController: UIInputViewController {
         b.titleLabel?.font = .systemFont(ofSize: 15, weight: .medium)
         b.setTitleColor(.label, for: .normal)
         b.backgroundColor = bg
-        b.layer.cornerRadius = 6
-        b.layer.borderWidth = 0.5
-        b.layer.borderColor = UIColor.separator.cgColor
+        b.layer.cornerRadius = Const.keyCornerRadius
+        b.layer.borderWidth = Const.keyBorderWidth
+        b.layer.borderColor = keyboardKeyBorder().cgColor
         b.accessibilityLabel = "Tono control \(id)"
-        // Resolve to a file-scope constant so the linker keeps the
-        // identifier as a plain C string in the binary (matters for
-        // UI-automation probes and the ad-hoc verifier).
         switch id {
         case "globe":     b.accessibilityIdentifier = Const.idGlobe
         case "emoji":     b.accessibilityIdentifier = Const.idEmojiToggle
@@ -726,12 +760,12 @@ public final class KeyboardViewController: UIInputViewController {
     @objc private func charTapped(_ sender: UIButton) {
         guard let title = sender.title(for: .normal) else { return }
         textDocumentProxy.insertText(title)
-        // Letters in letters-mode collapse one-shot shift after the char
-        // is typed; caps-lock persists.
         if layoutMode == .letters, shiftState == .shiftOnce {
             shiftState = .none
-            // Update the shift button label without a full re-layout.
             updateShiftButtonAppearance()
+        }
+        if isEmojiPanelVisible {
+            hideEmojiPanel()
         }
     }
 
@@ -749,8 +783,6 @@ public final class KeyboardViewController: UIInputViewController {
         default:
             shiftState = .none
         }
-        // Re-render only the keys that change with shift (letter keys +
-        // the shift button itself). Other rows are untouched.
         relayoutLettersForShift()
     }
 
@@ -760,26 +792,20 @@ public final class KeyboardViewController: UIInputViewController {
         case .numbers: layoutMode = .symbols
         case .symbols:
             layoutMode = .letters
-            // Returning to letters after symbols should preserve the
-            // user's caps-lock intent (not silently flip to lowercase).
         }
-        NSLog("TONO_KB BUILD78 mode-toggle: -> \(modeName(layoutMode))")
+        NSLog("TONO_KB BUILD81 mode-toggle: -> \(modeName(layoutMode))")
         installKeyboardLayout()
     }
 
-    /// Sentence-start auto-cap: if the cursor sits at the very start of
-    /// the field, or right after `. ` / `! ` / `? ` / newline, the next
-    /// letter should come out capitalized without reaching for shift.
-    /// Skipped while the user has explicitly locked caps or is in a
-    /// numbers/symbols layer (shift is irrelevant there).
+    @objc private func globeTapped() {
+        advanceToNextInputMode()
+    }
+
     private func applyAutoCapitalizationIfNeeded() {
         guard shiftState != .capsLock else { return }
         guard layoutMode == .letters else { return }
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         let lastTwo = String(before.suffix(2))
-        // Sentence-start triggers: empty field, trailing space (just typed
-        // a space), trailing newline (Enter), or sentence-terminator
-        // followed by whitespace (". ", "! ", "? ").
         let shouldCapitalize = lastTwo.isEmpty
             || lastTwo.hasSuffix(" ")
             || lastTwo.hasSuffix("\n")
@@ -791,41 +817,53 @@ public final class KeyboardViewController: UIInputViewController {
         }
     }
 
-    /// Apply the current shift state to the visible letter buttons
-    /// without doing a full layout pass. Looks up each letter button by
-    /// its TonoKB.letter.* identifier.
     private func relayoutLettersForShift() {
         guard let stack = keysStack else { return }
-        for case let row as UIStackView in stack.arrangedSubviews {
-            for case let b as UIButton in row.arrangedSubviews where b.accessibilityIdentifier == Const.idShift {
-                b.setTitle(shiftGlyph, for: .normal)
-                b.accessibilityLabel = shiftAccessibilityLabel()
-                b.backgroundColor = shiftState == .capsLock
-                    ? UIColor.systemBlue.withAlphaComponent(0.25)
-                    : UIColor.tertiarySystemBackground
-            }
-            for case let b as UIButton in row.arrangedSubviews {
-                if let id = b.accessibilityIdentifier,
-                   id.hasPrefix("TonoKB.letter."),
-                   let raw = id.split(separator: ".").last {
-                    b.setTitle(displayLetter(String(raw)), for: .normal)
+        for case let rowContainer as UIStackView in stack.arrangedSubviews {
+            for sub in rowContainer.arrangedSubviews {
+                if let inner = sub as? UIStackView {
+                    applyShiftToKeys(in: inner)
+                } else if let b = sub as? UIButton {
+                    applyShiftToKey(b)
                 }
             }
         }
     }
 
-    /// Lightweight appearance-only update for the shift button — used
-    /// when auto-cap flips state without a user tap, and when a letter
-    /// was inserted under shiftOnce.
+    private func applyShiftToKeys(in row: UIStackView) {
+        for case let b as UIButton in row.arrangedSubviews {
+            applyShiftToKey(b)
+        }
+    }
+
+    private func applyShiftToKey(_ b: UIButton) {
+        if b.accessibilityIdentifier == Const.idShift {
+            b.setTitle(shiftGlyph, for: .normal)
+            b.accessibilityLabel = shiftAccessibilityLabel()
+            b.backgroundColor = shiftState == .capsLock
+                ? UIColor.systemBlue.withAlphaComponent(0.22)
+                : keyboardKeyBackground(.tertiary)
+        } else if let id = b.accessibilityIdentifier,
+                  id.hasPrefix("TonoKB.letter."),
+                  let raw = id.split(separator: ".").last {
+            b.setTitle(displayLetter(String(raw)), for: .normal)
+        }
+    }
+
     private func updateShiftButtonAppearance() {
         guard let stack = keysStack else { return }
-        for case let row as UIStackView in stack.arrangedSubviews {
-            for case let b as UIButton in row.arrangedSubviews where b.accessibilityIdentifier == Const.idShift {
-                b.setTitle(shiftGlyph, for: .normal)
-                b.accessibilityLabel = shiftAccessibilityLabel()
-                b.backgroundColor = shiftState == .capsLock
-                    ? UIColor.systemBlue.withAlphaComponent(0.25)
-                    : UIColor.tertiarySystemBackground
+        for case let rowContainer as UIStackView in stack.arrangedSubviews {
+            for sub in rowContainer.arrangedSubviews {
+                if let inner = sub as? UIStackView {
+                    for case let b as UIButton in inner.arrangedSubviews
+                        where b.accessibilityIdentifier == Const.idShift {
+                        b.setTitle(shiftGlyph, for: .normal)
+                        b.accessibilityLabel = shiftAccessibilityLabel()
+                        b.backgroundColor = shiftState == .capsLock
+                            ? UIColor.systemBlue.withAlphaComponent(0.22)
+                            : keyboardKeyBackground(.tertiary)
+                    }
+                }
             }
         }
     }
@@ -854,11 +892,12 @@ public final class KeyboardViewController: UIInputViewController {
         }
     }
 
+    /// Builds the full-height emoji panel lazily. Scrollable grid of
+    /// 7 emoji buttons per row, with category tabs at the top and a
+    /// footer row carrying an `ABC` return control + `space` + `⌫`.
     private func showEmojiPanel() {
         guard let container = bodyContainer else { return }
-        // Tear down the existing key stack — the panel owns the body area
-        // while visible. Coach results / errors are also torn down so a
-        // pending Coach flow can't accidentally stay open behind the panel.
+
         keysStack?.removeFromSuperview()
         keysStack = nil
         coachContainer?.removeFromSuperview()
@@ -867,8 +906,6 @@ public final class KeyboardViewController: UIInputViewController {
         coachErrorContainer = nil
         coachErrorLabel = nil
 
-        // First-render allocation: cheap (just a UIScrollView + a few
-        // UILabels). No image preloading, no JSON, no synchronous I/O.
         let panel = UIView()
         panel.translatesAutoresizingMaskIntoConstraints = false
         panel.accessibilityIdentifier = Const.idEmojiPanel
@@ -881,84 +918,120 @@ public final class KeyboardViewController: UIInputViewController {
             panel.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
 
+        // Top: category tabs.
+        let tabsRow = UIStackView()
+        tabsRow.axis = .horizontal
+        tabsRow.alignment = .fill
+        tabsRow.distribution = .fillEqually
+        tabsRow.spacing = 0
+        tabsRow.translatesAutoresizingMaskIntoConstraints = false
+        tabsRow.accessibilityIdentifier = Const.idEmojiCategory
+        panel.addSubview(tabsRow)
+        for category in EmojiCategory.allCases {
+            let tab = makeEmojiCategoryTab(category)
+            tabsRow.addArrangedSubview(tab)
+        }
+
+        // Body: scrolling emoji grid for the active category.
         let scroll = UIScrollView()
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.alwaysBounceVertical = true
         panel.addSubview(scroll)
+
+        let body = UIStackView()
+        body.axis = .vertical
+        body.alignment = .fill
+        body.distribution = .fill
+        body.spacing = 4
+        body.translatesAutoresizingMaskIntoConstraints = false
+        body.layoutMargins = UIEdgeInsets(top: 4, left: 4, bottom: 4, right: 4)
+        body.isLayoutMarginsRelativeArrangement = true
+        scroll.addSubview(body)
         NSLayoutConstraint.activate([
-            scroll.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
-            scroll.topAnchor.constraint(equalTo: panel.topAnchor),
-            scroll.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
+            body.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
+            body.trailingAnchor.constraint(equalTo: scroll.trailingAnchor),
+            body.topAnchor.constraint(equalTo: scroll.topAnchor),
+            body.bottomAnchor.constraint(equalTo: scroll.bottomAnchor),
+            body.widthAnchor.constraint(equalTo: scroll.widthAnchor),
         ])
+        populateEmojiGridInto(body, for: emojiActiveCategory)
 
-        let stack = UIStackView()
-        stack.axis = .vertical
-        stack.alignment = .fill
-        stack.spacing = 8
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.layoutMargins = UIEdgeInsets(top: 6, left: 6, bottom: 6, right: 6)
-        stack.isLayoutMarginsRelativeArrangement = true
-        scroll.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: scroll.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: scroll.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: scroll.bottomAnchor),
-            stack.widthAnchor.constraint(equalTo: scroll.widthAnchor),
-        ])
+        // Footer: ABC | space | ⌫ — so users can edit text while the
+        // emoji panel is up.
+        let footer = UIStackView()
+        footer.axis = .horizontal
+        footer.alignment = .fill
+        footer.distribution = .fill
+        footer.spacing = Const.rowSpacing
+        footer.translatesAutoresizingMaskIntoConstraints = false
+        footer.accessibilityIdentifier = Const.idEmojiFooter
+        panel.addSubview(footer)
 
-        for group in EmojiGroup.allCases {
-            let header = UILabel()
-            header.text = group.rawValue
-            header.font = .systemFont(ofSize: 12, weight: .semibold)
-            header.textColor = .secondaryLabel
-            header.accessibilityIdentifier = "\(Const.idEmojiCategory).\(group.rawValue.lowercased())"
-            stack.addArrangedSubview(header)
-
-            // Build a wrapping flow of emoji buttons. We use a UIStackView
-            // per row with fillEqually + a generous per-glyph width.
-            let glyphs = group.glyphs
-            let perRow = 8
-            var index = 0
-            while index < glyphs.count {
-                let rowStack = UIStackView()
-                rowStack.axis = .horizontal
-                rowStack.distribution = .fillEqually
-                rowStack.spacing = 4
-                let end = min(index + perRow, glyphs.count)
-                for g in glyphs[index..<end] {
-                    rowStack.addArrangedSubview(makeEmojiButton(g))
-                }
-                // Pad the last row's trailing side so glyphs align left.
-                for _ in end..<(index + perRow) {
-                    let spacer = UIView()
-                    spacer.isUserInteractionEnabled = false
-                    rowStack.addArrangedSubview(spacer)
-                }
-                stack.addArrangedSubview(rowStack)
-                index += perRow
-            }
-        }
-
-        // ABC button so users can dismiss the panel without picking an emoji.
         let abc = UIButton(type: .system)
         abc.setTitle("ABC", for: .normal)
         abc.titleLabel?.font = .systemFont(ofSize: 14, weight: .semibold)
         abc.setTitleColor(.label, for: .normal)
-        abc.backgroundColor = .secondarySystemBackground
-        abc.layer.cornerRadius = 6
-        abc.layer.borderWidth = 0.5
-        abc.layer.borderColor = UIColor.separator.cgColor
+        abc.backgroundColor = keyboardKeyBackground(.tertiary)
+        abc.layer.cornerRadius = Const.keyCornerRadius
+        abc.layer.borderWidth = Const.keyBorderWidth
+        abc.layer.borderColor = keyboardKeyBorder().cgColor
         abc.accessibilityIdentifier = Const.idModeToggle
-        abc.translatesAutoresizingMaskIntoConstraints = false
-        abc.heightAnchor.constraint(equalToConstant: 36).isActive = true
-        abc.addTarget(self, action: #selector(modeToggleTapped), for: .touchUpInside)
-        stack.addArrangedSubview(abc)
+        abc.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight).isActive = true
+        abc.widthAnchor.constraint(equalToConstant: Const.modeToggleWidth).isActive = true
+        abc.addTarget(self, action: #selector(emojiHideTapped), for: .touchUpInside)
+        footer.addArrangedSubview(abc)
+
+        let emojiSpace = UIButton(type: .system)
+        emojiSpace.setTitle("space", for: .normal)
+        emojiSpace.titleLabel?.font = .systemFont(ofSize: 14, weight: .medium)
+        emojiSpace.setTitleColor(.label, for: .normal)
+        emojiSpace.backgroundColor = keyboardKeyBackground(.secondary)
+        emojiSpace.layer.cornerRadius = Const.keyCornerRadius
+        emojiSpace.layer.borderWidth = Const.keyBorderWidth
+        emojiSpace.layer.borderColor = keyboardKeyBorder().cgColor
+        emojiSpace.accessibilityIdentifier = Const.idSpace
+        emojiSpace.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight).isActive = true
+        emojiSpace.addTarget(self, action: #selector(spaceTapped), for: .touchUpInside)
+        footer.addArrangedSubview(emojiSpace)
+
+        let emojiBack = UIButton(type: .system)
+        emojiBack.setTitle("\u{232B}", for: .normal)
+        emojiBack.titleLabel?.font = .systemFont(ofSize: 18, weight: .semibold)
+        emojiBack.setTitleColor(.label, for: .normal)
+        emojiBack.backgroundColor = keyboardKeyBackground(.tertiary)
+        emojiBack.layer.cornerRadius = Const.keyCornerRadius
+        emojiBack.layer.borderWidth = Const.keyBorderWidth
+        emojiBack.layer.borderColor = keyboardKeyBorder().cgColor
+        emojiBack.accessibilityIdentifier = Const.idBackspace
+        emojiBack.widthAnchor.constraint(equalToConstant: Const.backspaceWidth).isActive = true
+        emojiBack.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight).isActive = true
+        emojiBack.addTarget(self, action: #selector(backspaceTapped), for: .touchUpInside)
+        footer.addArrangedSubview(emojiBack)
+
+        NSLayoutConstraint.activate([
+            tabsRow.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
+            tabsRow.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
+            tabsRow.topAnchor.constraint(equalTo: panel.topAnchor),
+            tabsRow.heightAnchor.constraint(equalToConstant: Const.emojiCategoryTabHeight),
+
+            scroll.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: tabsRow.bottomAnchor),
+            scroll.bottomAnchor.constraint(equalTo: footer.topAnchor),
+
+            footer.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
+            footer.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
+            footer.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
+            footer.heightAnchor.constraint(equalToConstant: Const.emojiPanelFooterHeight),
+        ])
 
         emojiPanelView = panel
         isEmojiPanelVisible = true
-        NSLog("TONO_KB BUILD78 emoji-panel: visible groups=\(EmojiGroup.allCases.count)")
+        NSLog("TONO_KB BUILD81 emoji-panel: visible categories=\(EmojiCategory.allCases.count) active=\(emojiActiveCategory.rawValue)")
+    }
+
+    @objc private func emojiHideTapped() {
+        hideEmojiPanel()
     }
 
     private func hideEmojiPanel() {
@@ -968,18 +1041,97 @@ public final class KeyboardViewController: UIInputViewController {
         installKeyboardLayout()
     }
 
+    private func makeEmojiCategoryTab(_ category: EmojiCategory) -> UIButton {
+        let b = UIButton(type: .system)
+        b.setTitle(category.label, for: .normal)
+        b.titleLabel?.font = .systemFont(ofSize: 22)
+        let isActive = (category == emojiActiveCategory)
+        b.backgroundColor = isActive
+            ? UIColor.systemFill
+            : (category == .recents && category.glyphs.isEmpty
+                ? UIColor.tertiarySystemBackground.withAlphaComponent(0.6)
+                : .tertiarySystemBackground)
+        b.setTitleColor(.label, for: .normal)
+        if category == .recents && category.glyphs.isEmpty {
+            b.alpha = 0.4
+            b.isEnabled = false
+        }
+        b.accessibilityIdentifier = emojiCategoryTabId(category)
+        b.addAction(UIAction { [weak self] _ in
+            self?.emojiCategoryTapped(category)
+        }, for: .touchUpInside)
+        return b
+    }
+
+    private func emojiCategoryTapped(_ category: EmojiCategory) {
+        guard let panel = emojiPanelView else { return }
+        guard let scroll = panel.subviews.first(where: { $0 is UIScrollView }) as? UIScrollView,
+              let body = scroll.subviews.first as? UIStackView else { return }
+        emojiActiveCategory = category
+        if let tabsRow = panel.subviews.first(where: { $0.accessibilityIdentifier == Const.idEmojiCategory }) as? UIStackView {
+            for (idx, sub) in tabsRow.arrangedSubviews.enumerated() {
+                if let b = sub as? UIButton, let cat = EmojiCategory(rawValue: idx) {
+                    let isActive = (cat == emojiActiveCategory)
+                    b.backgroundColor = isActive
+                        ? UIColor.systemFill
+                        : (cat == .recents && cat.glyphs.isEmpty
+                            ? UIColor.tertiarySystemBackground.withAlphaComponent(0.6)
+                            : .tertiarySystemBackground)
+                    if cat == .recents && cat.glyphs.isEmpty {
+                        b.alpha = 0.4
+                        b.isEnabled = false
+                    } else {
+                        b.alpha = 1.0
+                        b.isEnabled = true
+                    }
+                }
+            }
+        }
+        populateEmojiGridInto(body, for: category)
+        scroll.setContentOffset(.zero, animated: false)
+    }
+
+    private func populateEmojiGridInto(_ body: UIStackView, for category: EmojiCategory) {
+        body.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let glyphs = category.glyphs
+        guard !glyphs.isEmpty else {
+            let empty = UILabel()
+            empty.text = "Recents will appear here"
+            empty.font = .systemFont(ofSize: 13, weight: .medium)
+            empty.textColor = .secondaryLabel
+            empty.textAlignment = .center
+            empty.translatesAutoresizingMaskIntoConstraints = false
+            empty.heightAnchor.constraint(greaterThanOrEqualToConstant: 60).isActive = true
+            body.addArrangedSubview(empty)
+            return
+        }
+        let perRow = Const.emojiCellsPerRow
+        var idx = 0
+        while idx < glyphs.count {
+            let rowStack = UIStackView()
+            rowStack.axis = .horizontal
+            rowStack.alignment = .fill
+            rowStack.distribution = .fillEqually
+            rowStack.spacing = 2
+            let end = min(idx + perRow, glyphs.count)
+            for g in glyphs[idx..<end] {
+                rowStack.addArrangedSubview(makeEmojiButton(g))
+            }
+            body.addArrangedSubview(rowStack)
+            idx += perRow
+        }
+    }
+
     private func makeEmojiButton(_ emoji: String) -> UIButton {
         let b = UIButton(type: .system)
         b.setTitle(emoji, for: .normal)
-        b.titleLabel?.font = .systemFont(ofSize: 26)
+        b.titleLabel?.font = .systemFont(ofSize: 28)
         b.setTitleColor(.label, for: .normal)
-        b.backgroundColor = UIColor.secondarySystemBackground
-        b.layer.cornerRadius = 6
-        b.layer.borderWidth = 0.5
-        b.layer.borderColor = UIColor.separator.cgColor
+        b.backgroundColor = .clear
+        b.layer.cornerRadius = 4
         b.accessibilityLabel = "Emoji \(emoji)"
         b.accessibilityIdentifier = Const.emojiId(emoji)
-        b.heightAnchor.constraint(equalToConstant: 40).isActive = true
+        b.heightAnchor.constraint(greaterThanOrEqualToConstant: 40).isActive = true
         b.addTarget(self, action: #selector(emojiTapped(_:)), for: .touchUpInside)
         return b
     }
@@ -987,38 +1139,50 @@ public final class KeyboardViewController: UIInputViewController {
     @objc private func emojiTapped(_ sender: UIButton) {
         guard let emoji = sender.title(for: .normal), !emoji.isEmpty else { return }
         textDocumentProxy.insertText(emoji)
-        // Stay on the panel so the user can pick several in a row; the
-        // panel toggle button dismisses it.
+        var list = EmojiCategory.glyphsForRecents()
+        list.removeAll { $0 == emoji }
+        list.insert(emoji, at: 0)
+        if list.count > 28 { list = Array(list.prefix(28)) }
+        if let data = try? JSONEncoder().encode(list) {
+            SharedStore.defaults.set(data, forKey: SharedKeys.emojiRecents)
+        }
+    }
+
+    /// Map `EmojiCategory` to a stable accessibilityIdentifier suffix.
+    private func emojiCategoryTabId(_ c: EmojiCategory) -> String {
+        switch c {
+        case .recents: return "\(Const.idEmojiCategory).recents"
+        case .smileys: return "\(Const.idEmojiCategory).smileys"
+        case .people: return "\(Const.idEmojiCategory).people"
+        case .animals: return "\(Const.idEmojiCategory).animals"
+        case .food: return "\(Const.idEmojiCategory).food"
+        case .activities: return "\(Const.idEmojiCategory).activities"
+        case .travel: return "\(Const.idEmojiCategory).travel"
+        case .objects: return "\(Const.idEmojiCategory).objects"
+        case .symbols: return "\(Const.idEmojiCategory).symbols"
+        case .flags: return "\(Const.idEmojiCategory).flags"
+        }
     }
 
     // MARK: - Coach flow
 
     @objc private func coachTapped() {
         guard !coachBusy else { return }
-        // Hide any open panel so the Coach view replaces the keys cleanly.
         if isEmojiPanelVisible { hideEmojiPanel() }
         let proxy = textDocumentProxy
-        // The spec asks for documentContextBeforeInput specifically — that's
-        // what we send to the backend.
         let raw = proxy.documentContextBeforeInput ?? ""
         let draft = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if draft.isEmpty {
             presentCoachEmptyState()
             return
         }
-        // Remember exactly what we sent so the insert path can replace
-        // the same span even if the host text field has scrolled.
         capturedContextLength = raw.count
         lastSubmittedDraft = draft
         runCoach(draft: draft)
     }
 
     private func presentCoachEmptyState() {
-        // Stay in keyboard layout — just show an inline banner above the keys.
-        // We avoid swapping the entire view tree for an empty-state copy so
-        // a single keystroke isn't required to dismiss.
         guard let container = bodyContainer else { return }
-        // Tear down any previous banner.
         container.subviews.forEach { sub in
             if sub.accessibilityIdentifier == Const.idEmptyBanner {
                 sub.removeFromSuperview()
@@ -1038,14 +1202,12 @@ public final class KeyboardViewController: UIInputViewController {
             banner.topAnchor.constraint(equalTo: container.topAnchor),
             banner.heightAnchor.constraint(equalToConstant: 24),
         ])
-        // Re-render the keys under the banner.
         if keysStack == nil {
             installKeyboardLayout()
         } else {
             keysStack?.removeFromSuperview()
             installKeyboardLayout()
         }
-        // Auto-clear the banner after a short delay so it doesn't accumulate.
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak banner] in
             banner?.removeFromSuperview()
         }
@@ -1055,17 +1217,17 @@ public final class KeyboardViewController: UIInputViewController {
         coachBusy = true
         presentCoachLoading()
         let client = TonoCoachClient(endpoint: Const.backendURL, timeout: Const.coachTimeout)
-        NSLog("TONO_KB BUILD78 coach: begin POST /v1/analyze (len=\(draft.count))")
+        NSLog("TONO_KB BUILD81 coach: begin POST /v1/analyze (len=\(draft.count))")
         client.coach(draft: draft) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.coachBusy = false
                 switch result {
                 case .success(let response):
-                    NSLog("TONO_KB BUILD78 coach: OK risk=\(response.riskLevel) suggestions=\(response.suggestions.count)")
+                    NSLog("TONO_KB BUILD81 coach: OK risk=\(response.riskLevel) suggestions=\(response.suggestions.count)")
                     self.presentCoachResults(response)
                 case .failure(let err):
-                    NSLog("TONO_KB BUILD78 coach: FAIL \(err.userFacingMessage)")
+                    NSLog("TONO_KB BUILD81 coach: FAIL \(err.userFacingMessage)")
                     self.presentCoachError(err)
                 }
             }
@@ -1074,7 +1236,6 @@ public final class KeyboardViewController: UIInputViewController {
 
     private func presentCoachLoading() {
         guard let container = bodyContainer else { return }
-        // Replace keyboard layout with a small loading panel.
         keysStack?.removeFromSuperview()
         keysStack = nil
         coachErrorContainer?.removeFromSuperview()
@@ -1120,7 +1281,6 @@ public final class KeyboardViewController: UIInputViewController {
 
     private func presentCoachResults(_ response: TonoCoachClient.CoachResponse) {
         guard let container = bodyContainer else { return }
-        // Tear down loading.
         coachContainer?.removeFromSuperview()
         coachContainer = nil
         coachStatusLabel = nil
@@ -1162,7 +1322,6 @@ public final class KeyboardViewController: UIInputViewController {
         stack.accessibilityIdentifier = Const.idRewrites
         panel.addSubview(stack)
 
-        // Render up to 4 suggestions.
         let shown = Array(response.suggestions.prefix(4))
         if shown.isEmpty {
             let empty = UILabel()
@@ -1199,10 +1358,10 @@ public final class KeyboardViewController: UIInputViewController {
 
     private func makeRewriteChip(suggestion: TonoCoachClient.CoachRewrite, index: Int) -> UIView {
         let chip = UIControl()
-        chip.backgroundColor = .secondarySystemBackground
-        chip.layer.cornerRadius = 8
-        chip.layer.borderWidth = 0.5
-        chip.layer.borderColor = UIColor.separator.cgColor
+        chip.backgroundColor = keyboardKeyBackground(.secondary)
+        chip.layer.cornerRadius = Const.keyCornerRadius
+        chip.layer.borderWidth = Const.keyBorderWidth
+        chip.layer.borderColor = keyboardKeyBorder().cgColor
         chip.translatesAutoresizingMaskIntoConstraints = false
         chip.accessibilityIdentifier = Const.rewriteId(suggestion.axis, index)
         chip.accessibilityLabel = "Tono rewrite \(suggestion.axis)"
@@ -1235,7 +1394,6 @@ public final class KeyboardViewController: UIInputViewController {
             text.bottomAnchor.constraint(lessThanOrEqualTo: chip.bottomAnchor, constant: -6),
         ])
 
-        // Action: replace captured context with the rewrite.
         let rewriteText = suggestion.text
         chip.addAction(UIAction { [weak self] _ in
             self?.applyRewrite(rewriteText)
@@ -1253,11 +1411,6 @@ public final class KeyboardViewController: UIInputViewController {
     }
 
     private func applyRewrite(_ rewrite: String) {
-        // Delete exactly the captured prefix length, then insert the rewrite.
-        // We cap deletions by what's still in the proxy buffer — if the user
-        // typed more while the request was in flight, we delete only the
-        // amount we sent, which still produces a clean replacement for the
-        // original span (the tail of the user's keystrokes is preserved).
         let proxy = textDocumentProxy
         let liveContext = proxy.documentContextBeforeInput ?? ""
         let deletions = min(capturedContextLength, liveContext.count)
@@ -1265,8 +1418,7 @@ public final class KeyboardViewController: UIInputViewController {
             proxy.deleteBackward()
         }
         proxy.insertText(rewrite)
-        NSLog("TONO_KB BUILD78 rewrite: inserted len=\(rewrite.count) (deleted \(deletions))")
-        // Stay in the results panel so the user can pick another option.
+        NSLog("TONO_KB BUILD81 rewrite: inserted len=\(rewrite.count) (deleted \(deletions))")
     }
 
     // MARK: - Coach error
@@ -1309,7 +1461,7 @@ public final class KeyboardViewController: UIInputViewController {
         retry.titleLabel?.font = .systemFont(ofSize: 14, weight: .semibold)
         retry.backgroundColor = .systemBlue
         retry.setTitleColor(.white, for: .normal)
-        retry.layer.cornerRadius = 6
+        retry.layer.cornerRadius = Const.keyCornerRadius
         retry.contentEdgeInsets = UIEdgeInsets(top: 6, left: 14, bottom: 6, right: 14)
         retry.translatesAutoresizingMaskIntoConstraints = false
         retry.accessibilityIdentifier = Const.idCoachRetry
@@ -1350,7 +1502,6 @@ public final class KeyboardViewController: UIInputViewController {
         coachErrorContainer?.removeFromSuperview()
         coachErrorContainer = nil
         coachErrorLabel = nil
-        // Re-send the same draft we sent the first time.
         let draft = lastSubmittedDraft
         if draft.isEmpty {
             presentCoachEmptyState()

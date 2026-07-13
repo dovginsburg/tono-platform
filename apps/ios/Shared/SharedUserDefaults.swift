@@ -95,6 +95,11 @@ public enum SharedKeys {
     // the user has actually used. Distinct from `lastRewriteVoice` which
     // stores a single string for the widget snapshot.
     public static let recentRewrites = "tc.recentRewrites"
+
+    // Emoji picker "Recent" ring buffer (last ~28 picked emojis).
+    // JSON-encoded [String] of Unicode glyphs; read lazily by the
+    // keyboard extension when the emoji panel mounts (never on startup).
+    public static let emojiRecents = "tc.emojiRecents"
 }
 
 public enum SharedStore {
