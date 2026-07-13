@@ -172,6 +172,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         let keyboardType: Int
         let returnKeyType: Int
         let keyboardAppearance: Int
+        let resolvedInterfaceStyle: Int
         let autocapitalizationType: Int
         let autocorrectionType: Int
         let spellCheckingType: Int
@@ -525,6 +526,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             keyboardType: hostKeyboardType.rawValue,
             returnKeyType: hostReturnKeyType.rawValue,
             keyboardAppearance: hostKeyboardAppearance.rawValue,
+            resolvedInterfaceStyle: resolvedKeyboardInterfaceStyle.rawValue,
             autocapitalizationType: hostAutocapitalizationType.rawValue,
             autocorrectionType: hostAutocorrectionType.rawValue,
             spellCheckingType: hostSpellCheckingType.rawValue,
@@ -567,17 +569,20 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         }
     }
 
+    private var resolvedKeyboardInterfaceStyle: UIUserInterfaceStyle {
+        TonoKeyboardAppearanceResolver.resolve(
+            hostAppearance: hostKeyboardAppearance,
+            extensionStyle: traitCollection.userInterfaceStyle,
+            systemStyle: UIScreen.main.traitCollection.userInterfaceStyle
+        )
+    }
+
     private func applyKeyboardAppearance(_ appearance: UIKeyboardAppearance) {
-        switch appearance {
-        case .dark:
-            overrideUserInterfaceStyle = .dark
-        case .light:
-            overrideUserInterfaceStyle = .light
-        case .default, .alert:
-            overrideUserInterfaceStyle = .unspecified
-        @unknown default:
-            overrideUserInterfaceStyle = .unspecified
-        }
+        overrideUserInterfaceStyle = TonoKeyboardAppearanceResolver.resolve(
+            hostAppearance: appearance,
+            extensionStyle: traitCollection.userInterfaceStyle,
+            systemStyle: UIScreen.main.traitCollection.userInterfaceStyle
+        )
     }
 
     private var quickCharactersForKeyboardType: [String] {

@@ -1,5 +1,31 @@
 import UIKit
 
+/// Resolves the appearance boundary between a host text field and the keyboard
+/// extension. Messages reports `.default` in both appearances, while the
+/// extension process can retain a light trait even when the device is dark.
+/// For `.default`, the device/window-system trait is therefore authoritative;
+/// the extension trait is only a fallback when the system style is unspecified.
+enum TonoKeyboardAppearanceResolver {
+    static func resolve(
+        hostAppearance: UIKeyboardAppearance,
+        extensionStyle: UIUserInterfaceStyle,
+        systemStyle: UIUserInterfaceStyle
+    ) -> UIUserInterfaceStyle {
+        switch hostAppearance {
+        case .dark:
+            return .dark
+        case .light:
+            return .light
+        case .default, .alert:
+            if systemStyle != .unspecified { return systemStyle }
+            return extensionStyle
+        @unknown default:
+            if systemStyle != .unspecified { return systemStyle }
+            return extensionStyle
+        }
+    }
+}
+
 /// Measured keyboard geometry for the Tono extension. The extension owns the
 /// suggestion/Coach strip and four typing rows; iOS owns any lower system
 /// input-mode area. Values are intentionally close to Apple's portrait

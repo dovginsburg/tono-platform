@@ -31,6 +31,45 @@ final class KeyboardVisualStyleTests: XCTestCase {
         )
     }
 
+    func testDefaultHostAppearanceUsesSystemDarkWhenExtensionTraitsStayLight() {
+        let resolved = TonoKeyboardAppearanceResolver.resolve(
+            hostAppearance: .default,
+            extensionStyle: .light,
+            systemStyle: .dark
+        )
+
+        XCTAssertEqual(resolved, .dark)
+    }
+
+    func testDefaultHostAppearanceKeepsSystemLightUnchanged() {
+        let resolved = TonoKeyboardAppearanceResolver.resolve(
+            hostAppearance: .default,
+            extensionStyle: .light,
+            systemStyle: .light
+        )
+
+        XCTAssertEqual(resolved, .light)
+    }
+
+    func testExplicitHostAppearanceWinsOverSystemAppearance() {
+        XCTAssertEqual(
+            TonoKeyboardAppearanceResolver.resolve(
+                hostAppearance: .light,
+                extensionStyle: .dark,
+                systemStyle: .dark
+            ),
+            .light
+        )
+        XCTAssertEqual(
+            TonoKeyboardAppearanceResolver.resolve(
+                hostAppearance: .dark,
+                extensionStyle: .light,
+                systemStyle: .light
+            ),
+            .dark
+        )
+    }
+
     func testCoachPaletteKeepsWhiteTextAtAccessibleContrastInEveryStateAndAppearance() {
         for style in [UIUserInterfaceStyle.light, .dark] {
             let traits = UITraitCollection(userInterfaceStyle: style)
