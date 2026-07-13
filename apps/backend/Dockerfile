@@ -2,16 +2,19 @@ FROM python:3.11-slim
 
 ARG TONO_CANONICAL_SHA=unknown
 ARG TONO_SCHEMA_REVISION=legacy-sqlite-unversioned
+ARG TONO_CONTRACT_SHA256=unknown
 
 LABEL org.opencontainers.image.revision="${TONO_CANONICAL_SHA}" \
-      com.tonoit.schema-revision="${TONO_SCHEMA_REVISION}"
+      com.tonoit.schema-revision="${TONO_SCHEMA_REVISION}" \
+      com.tonoit.contract-sha256="${TONO_CONTRACT_SHA256}"
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     TONO_CANONICAL_SHA="${TONO_CANONICAL_SHA}" \
-    TONO_SCHEMA_REVISION="${TONO_SCHEMA_REVISION}"
+    TONO_SCHEMA_REVISION="${TONO_SCHEMA_REVISION}" \
+    TONO_CONTRACT_SHA256="${TONO_CONTRACT_SHA256}"
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends build-essential \

@@ -25,4 +25,4 @@ python3 -m venv .venv && .venv/bin/pip install -r apps/backend/requirements.txt
 
 No production secret or production deployment is required by these commands. CI runs source hygiene, full-history secret scanning, API contract drift checks, backend tests/image build, web build, Android tests/build, and iOS simulator build.
 
-Provenance and donor decisions are documented in `docs/provenance/`.
+Provenance and donor decisions are documented in `docs/provenance/`. Canonical remote ownership, exact-SHA staging deploys, rollback handles, and the ban on developer-checkout/dashboard deploys are documented in `docs/provenance/canonical-release.md`.

@@ -51,6 +51,17 @@ def test_health(client):
     assert j["stripe_configured"] is False
 
 
+def test_build_provenance_is_public_and_immutable(client):
+    r = client.get("/build-provenance.json")
+    assert r.status_code == 200
+    assert r.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert set(r.json()) == {
+        "canonical_sha",
+        "contract_sha256",
+        "schema_revision",
+    }
+
+
 def test_v1_analyze_unauthenticated_still_works(client):
     """The original passthrough is preserved for the iOS Playground tab."""
 

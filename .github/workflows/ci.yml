@@ -45,7 +45,13 @@ jobs:
       - run: python -m pytest -q apps/backend/tests
       - run: python3 scripts/ci/export_openapi.py --check
       - name: Build backend image with immutable labels
-        run: docker build --build-arg TONO_CANONICAL_SHA="$GITHUB_SHA" --build-arg TONO_SCHEMA_REVISION="$(cat schema/revision.txt)" -t tono-backend:"$GITHUB_SHA" apps/backend
+        run: |
+          contract_sha="$(python3 -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("packages/contracts/openapi.json").read_bytes()).hexdigest())')"
+          docker build \
+            --build-arg TONO_CANONICAL_SHA="$GITHUB_SHA" \
+            --build-arg TONO_SCHEMA_REVISION="$(cat schema/revision.txt)" \
+            --build-arg TONO_CONTRACT_SHA256="$contract_sha" \
+            -t tono-backend:"$GITHUB_SHA" apps/backend
 
   web:
     runs-on: ubuntu-latest
@@ -68,7 +74,10 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: https://example.invalid
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-not-a-secret
           TONO_BACKEND_URL: http://127.0.0.1:8765
-      - run: grep -F "$GITHUB_SHA" apps/web/public/build-provenance.json
+      - name: Verify web output embeds exact source and contract identity
+        run: |
+          grep -F "$GITHUB_SHA" apps/web/public/build-provenance.json
+          test -f apps/web/.next/server/app-build-manifest.json
 
   android:
     runs-on: ubuntu-latest

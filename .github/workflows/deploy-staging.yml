@@ -1,0 +1,162 @@
+name: Deploy canonical staging by SHA
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full 40-character canonical commit SHA to deploy
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  DEPLOY_SHA: ${{ inputs.sha }}
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+  VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+  RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+  RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+  RAILWAY_STAGING_ENVIRONMENT: ${{ vars.RAILWAY_STAGING_ENVIRONMENT }}
+  RAILWAY_BACKEND_SERVICE: ${{ vars.RAILWAY_BACKEND_SERVICE }}
+
+concurrency:
+  group: tono-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy-staging:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Validate immutable SHA input
+        shell: bash
+        run: |
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "sha must be a full lowercase 40-character commit SHA" >&2
+            exit 2
+          }
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+
+      - name: Prove exact reviewed checkout
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$DEPLOY_SHA" origin/main
+          python3 scripts/ci/verify_source.py
+          test -z "$(git status --porcelain)"
+
+      - name: Generate immutable provenance
+        run: python3 scripts/ci/prepare_provenance.py --sha "$DEPLOY_SHA"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Build web artifact
+        working-directory: apps/web
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://example.invalid
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: staging-build-placeholder-not-a-secret
+          TONO_BACKEND_URL: https://example.invalid
+          TONO_CANONICAL_SHA: ${{ inputs.sha }}
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build backend artifact
+        shell: bash
+        run: |
+          contract_sha="$(jq -r .contract_sha256 build/provenance.json)"
+          docker build \
+            --build-arg TONO_CANONICAL_SHA="$DEPLOY_SHA" \
+            --build-arg TONO_SCHEMA_REVISION="$(cat schema/revision.txt)" \
+            --build-arg TONO_CONTRACT_SHA256="$contract_sha" \
+            --tag tono-backend:"$DEPLOY_SHA" \
+            apps/backend
+          docker save tono-backend:"$DEPLOY_SHA" -o build/backend-image.tar
+          tar -C apps/web -czf build/web-build.tar.gz .next public package.json package-lock.json
+
+      - name: Write immutable artifact manifest
+        shell: bash
+        run: |
+          jq -n \
+            --arg canonical_sha "$DEPLOY_SHA" \
+            --arg contract_sha256 "$(jq -r .contract_sha256 build/provenance.json)" \
+            --arg schema_revision "$(jq -r .schema_revision build/provenance.json)" \
+            --arg backend_artifact_sha256 "$(sha256sum build/backend-image.tar | cut -d' ' -f1)" \
+            --arg web_artifact_sha256 "$(sha256sum build/web-build.tar.gz | cut -d' ' -f1)" \
+            '{canonical_sha:$canonical_sha,contract_sha256:$contract_sha256,schema_revision:$schema_revision,backend_artifact_sha256:$backend_artifact_sha256,web_artifact_sha256:$web_artifact_sha256}' \
+            > build/release-manifest.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tono-staging-${{ inputs.sha }}
+          if-no-files-found: error
+          retention-days: 90
+          path: |
+            build/provenance.json
+            build/release-manifest.json
+            build/backend-image.tar
+            build/web-build.tar.gz
+
+      - name: Require staging provider configuration
+        shell: bash
+        run: |
+          for name in VERCEL_ORG_ID VERCEL_PROJECT_ID VERCEL_TOKEN RAILWAY_TOKEN RAILWAY_PROJECT_ID RAILWAY_STAGING_ENVIRONMENT RAILWAY_BACKEND_SERVICE; do
+            test -n "${!name:-}" || { echo "Missing staging setting: $name" >&2; exit 1; }
+          done
+
+      - name: Deploy immutable Vercel preview
+        id: vercel
+        working-directory: apps/web
+        shell: bash
+        run: |
+          npx --yes vercel@55 pull --yes --environment=preview --token="$VERCEL_TOKEN"
+          TONO_CANONICAL_SHA="$DEPLOY_SHA" npx --yes vercel@55 build --token="$VERCEL_TOKEN"
+          npx --yes vercel@55 deploy --prebuilt --skip-domain --token="$VERCEL_TOKEN" \
+            --meta canonicalSha="$DEPLOY_SHA" \
+            --meta contractSha256="$(jq -r .contract_sha256 ../../build/provenance.json)" \
+            --format=json > ../../build/vercel-deployment.json
+          jq -r '.url // .deploymentUrl' ../../build/vercel-deployment.json
+
+      - name: Deploy exact backend checkout to Railway staging
+        id: railway
+        shell: bash
+        run: |
+          npm install --global @railway/cli@5.23.0
+          railway up apps/backend --path-as-root \
+            --project "$RAILWAY_PROJECT_ID" \
+            --environment "$RAILWAY_STAGING_ENVIRONMENT" \
+            --service "$RAILWAY_BACKEND_SERVICE" \
+            --detach --json \
+            --message "canonical-sha=$DEPLOY_SHA" > build/railway-deployment.json
+          jq . build/railway-deployment.json
+
+      - name: Record rollback handles
+        shell: bash
+        run: |
+          jq -s '.[0] * {vercel: .[1], railway: .[2]}' \
+            build/release-manifest.json \
+            build/vercel-deployment.json \
+            build/railway-deployment.json \
+            > build/deployment-record.json
+          jq . build/deployment-record.json >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tono-staging-deployment-record-${{ inputs.sha }}
+          if-no-files-found: error
+          retention-days: 90
+          path: |
+            build/deployment-record.json
+            build/vercel-deployment.json
+            build/railway-deployment.json
