@@ -21,7 +21,6 @@
 		1F625673B188289A9DEBCA36 /* ContactsSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E33B6F18B213E414885CCCA /* ContactsSync.swift */; };
 		2006FA0CC979F68A4F917014 /* MockToneAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C69903847843E133412E1E5 /* MockToneAnalyzer.swift */; };
 		20D1B23B844C847F7AB362C3 /* RecipientMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58D322318012F6E3758FBE16 /* RecipientMemory.swift */; };
-		23A3E4C163772E883646FE96 /* TonoShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 1AEE8A1C65E51602F4AD7330 /* TonoShare.appex */; };
 		255C57EC2FEFADD136CC95C4 /* MessagesViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C15A6D1DB3DF8DFB596C677 /* MessagesViewController.swift */; };
 		26A32AFB6BA4EE68D7300F89 /* PlaygroundView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 217A3D33DCC3DE654CA907C5 /* PlaygroundView.swift */; };
 		2A1053919D15380BA5597C24 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9B37E5A81C027DBCC41C8EA9 /* Assets.xcassets */; };
@@ -34,6 +33,7 @@
 		3CF8925783573B502B4DCB28 /* RecipientMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58D322318012F6E3758FBE16 /* RecipientMemory.swift */; };
 		43690A23F2E1A83FE74F3466 /* TonoBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80AB8E621E4EDC9A59A7258D /* TonoBackend.swift */; };
 		44FC072890D0B17F577A883D /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43F09AE9F3AE432DC080F0A2 /* ShareViewController.swift */; };
+		4A7F52C5EC4E98E266267D4E /* ContactsAccessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 045FE2F8B15471B8BFD56595 /* ContactsAccessTests.swift */; };
 		4C8023DED2667EAE03930F5B /* TonoAnalytics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92219FEC38B911DE3D75FC8F /* TonoAnalytics.swift */; };
 		511B5CB9D0506AE3B0B7BA9A /* RecipientMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58D322318012F6E3758FBE16 /* RecipientMemory.swift */; };
 		51381AED82774B5C91E484A7 /* CoachView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B88FDB62F52944069CC31478 /* CoachView.swift */; };
@@ -90,6 +90,7 @@
 		D2A8474984B2140EEA2F01AE /* DraftHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6B4784B7C394FD81347488C /* DraftHistory.swift */; };
 		DE7FE19B2535A1D6751A7E8D /* DigestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EDBB4F550AF48643771E5BF /* DigestView.swift */; };
 		E02AFD0E8D1E9CC00AD34BBC /* StyleMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78AA6203719949C25622DA78 /* StyleMemory.swift */; };
+		E2FEC8AFD0699311EBBE9AF0 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1590C6120760B6DE05CC4AB9 /* Foundation.framework */; };
 		E65BC7E31EB304D12B39B900 /* FeatureFlags.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8F4E5BEB850F3FDD9485F10 /* FeatureFlags.swift */; };
 		EE4DDFD2295E0A5D078895EF /* FeatureFlags.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8F4E5BEB850F3FDD9485F10 /* FeatureFlags.swift */; };
 		F004E54C4B033273348E9C80 /* DraftHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6B4784B7C394FD81347488C /* DraftHistory.swift */; };
@@ -105,12 +106,12 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
-		0C20C361BB156D648EE24E78 /* PBXContainerItemProxy */ = {
+		1F33D11E336D4CB3E5BECA57 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 1121AB054D8122B413A4D902 /* Project object */;
 			proxyType = 1;
-			remoteGlobalIDString = E55677B30636D321CFE4401C;
-			remoteInfo = TonoShare;
+			remoteGlobalIDString = EBE86B011C11AB11A09CEBA7;
+			remoteInfo = Tono;
 		};
 		33E236150B1B9D53217E34D0 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -143,6 +144,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		045FE2F8B15471B8BFD56595 /* ContactsAccessTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ContactsAccessTests.swift; sourceTree = "<group>"; };
 		1590C6120760B6DE05CC4AB9 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		1A5B6B766BC79F63A5B21178 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		1AEE8A1C65E51602F4AD7330 /* TonoShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TonoShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -164,6 +166,8 @@
 		65C4FC72401862C2052D7F44 /* KeyboardRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardRootView.swift; sourceTree = "<group>"; };
 		664006D51FBA77935CCA67AA /* AnthropicToneAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnthropicToneAnalyzer.swift; sourceTree = "<group>"; };
 		6EDBB4F550AF48643771E5BF /* DigestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DigestView.swift; sourceTree = "<group>"; };
+		6EE5759E683FD2ECA633D8FC /* TonoCoachClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoCoachClient.swift; sourceTree = "<group>"; };
+		72F34A74CA0D8E1405ADDD51 /* TonoTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TonoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		772DD67FA1CD9CF09D426AF5 /* SharedUserDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedUserDefaults.swift; sourceTree = "<group>"; };
 		78AA6203719949C25622DA78 /* StyleMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StyleMemory.swift; sourceTree = "<group>"; };
 		7FCE9DA4E023C12BADC4BC12 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
@@ -178,7 +182,6 @@
 		A8341350101744023555C179 /* StoreKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreKitManager.swift; sourceTree = "<group>"; };
 		A834BA4FC850457268EEDDD3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		AA287EC754705B7065C31935 /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
-		6EE5759E683FD2ECA633D8FC /* TonoCoachClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoCoachClient.swift; sourceTree = "<group>"; };
 		B3861F3AF2390477CF4D567E /* CoachDraftIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachDraftIntent.swift; sourceTree = "<group>"; };
 		B44BF0A224058437A1D2B6CB /* OnboardingEntryPointsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = OnboardingEntryPointsView.swift; sourceTree = "<group>"; };
 		B88FDB62F52944069CC31478 /* CoachView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachView.swift; sourceTree = "<group>"; };
@@ -196,6 +199,14 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		9BCE4C10CBD4D5988A75E7A8 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E2FEC8AFD0699311EBBE9AF0 /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		9D247B13BFCB3905F1E10846 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -235,6 +246,15 @@
 			path = ShareExtension;
 			sourceTree = "<group>";
 		};
+		7CCA65BB1F5C2B14CEB12B39 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				045FE2F8B15471B8BFD56595 /* ContactsAccessTests.swift */,
+			);
+			name = Tests;
+			path = Tests;
+			sourceTree = "<group>";
+		};
 		85162E95710B256C36998CB0 /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -242,6 +262,7 @@
 				C8209946856E4958F336751B /* TonoKeyboard.appex */,
 				1AEE8A1C65E51602F4AD7330 /* TonoShare.appex */,
 				2850931F0F01200197FC84B7 /* TonoMessagesExtension.appex */,
+				72F34A74CA0D8E1405ADDD51 /* TonoTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -281,6 +302,7 @@
 				479D001D9C445208035C867C /* ShareExtension */,
 				F4F4FEBFB84AA754F33B2FB1 /* Frameworks */,
 				C706D182BC8DEB550685C04B /* TonoMessagesExtension */,
+				7CCA65BB1F5C2B14CEB12B39 /* Tests */,
 			);
 			sourceTree = "<group>";
 		};
@@ -354,6 +376,24 @@
 			productName = TonoKeyboard;
 			productReference = C8209946856E4958F336751B /* TonoKeyboard.appex */;
 			productType = "com.apple.product-type.app-extension";
+		};
+		4FFC5912FA8F8157CBF6C7F2 /* TonoTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 86CCEE6B2FC40DE963213BE1 /* Build configuration list for PBXNativeTarget "TonoTests" */;
+			buildPhases = (
+				542F06D016A6163B466BBAE0 /* Sources */,
+				9BCE4C10CBD4D5988A75E7A8 /* Frameworks */,
+				02FB7340D575F451CF1FD243 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				E5A1C5B849F4CD1936B33170 /* PBXTargetDependency */,
+			);
+			name = TonoTests;
+			productName = TonoTests;
+			productReference = 72F34A74CA0D8E1405ADDD51 /* TonoTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 		5E7AA4C8F391BA513B44CF06 /* TonoMessagesExtension */ = {
 			isa = PBXNativeTarget;
@@ -436,11 +476,19 @@
 				222A4BB5BC4EFDC252F76C97 /* TonoKeyboard */,
 				E55677B30636D321CFE4401C /* TonoShare */,
 				5E7AA4C8F391BA513B44CF06 /* TonoMessagesExtension */,
+				4FFC5912FA8F8157CBF6C7F2 /* TonoTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		02FB7340D575F451CF1FD243 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		7C4F0096C14DBA55982704C9 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -547,6 +595,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		542F06D016A6163B466BBAE0 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4A7F52C5EC4E98E266267D4E /* ContactsAccessTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		B14A7AE140AC5BFF7F33A4C8 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -622,11 +678,11 @@
 			target = 5E7AA4C8F391BA513B44CF06 /* TonoMessagesExtension */;
 			targetProxy = 8ECA4C5AF7D3FCA10D2AFD56 /* PBXContainerItemProxy */;
 		};
-		FFC71A5C3202DC1BF2D4D114 /* PBXTargetDependency */ = {
+		E5A1C5B849F4CD1936B33170 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			name = TonoShare;
-			target = E55677B30636D321CFE4401C /* TonoShare */;
-			targetProxy = 0C20C361BB156D648EE24E78 /* PBXContainerItemProxy */;
+			name = Tono;
+			target = EBE86B011C11AB11A09CEBA7 /* Tono */;
+			targetProxy = 1F33D11E336D4CB3E5BECA57 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -848,6 +904,37 @@
 			};
 			name = Release;
 		};
+		502E412BC9DC2EA661B39ABD /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGNING_ALLOWED = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tonoit.app.tests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Tono.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Tono";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		7875F3B753DF61F300D72CC8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGNING_ALLOWED = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tonoit.app.tests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Tono.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Tono";
+			};
+			name = Debug;
+		};
 		7E5F63BDC78AE30936EA5725 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -964,6 +1051,15 @@
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
+		};
+		86CCEE6B2FC40DE963213BE1 /* Build configuration list for PBXNativeTarget "TonoTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				502E412BC9DC2EA661B39ABD /* Release */,
+				7875F3B753DF61F300D72CC8 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
 		};
 		BFD2AB0D0932FE828387F141 /* Build configuration list for PBXProject "Tono" */ = {
 			isa = XCConfigurationList;

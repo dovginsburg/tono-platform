@@ -19,7 +19,6 @@ struct SettingsView: View {
     @State private var usageError:        String?
     @State private var recipients:        [Recipient] = []
     @State private var showAddRecipient:  Bool       = false
-    @State private var showContactPicker: Bool       = false
     @State private var promoCode:         String     = ""
     @State private var promoError:        String?
     @State private var promoSuccess:      String?
@@ -374,8 +373,13 @@ struct SettingsView: View {
                 }
             }
             Button("Add manually") { showAddRecipient = true }
-            Button("Import from Contacts") { showContactPicker = true }
-            Text("When you pick a recipient, their voice hint is sent to the model.")
+            NavigationLink {
+                ContactsAccessView()
+            } label: {
+                Label("Contacts Access & Import", systemImage: "person.crop.circle.badge.checkmark")
+            }
+            .accessibilityHint("Review Contacts permission, manage limited access, or import recipients.")
+            Text("Recipient profiles stay in Tono’s local App Group. Only a chosen recipient’s voice hint is sent with a coaching request.")
                 .font(.caption).foregroundColor(.secondary)
         }
         .sheet(isPresented: $showAddRecipient) {
@@ -384,14 +388,7 @@ struct SettingsView: View {
                 recipients = RecipientMemory.all()
             }
         }
-        .sheet(isPresented: $showContactPicker) {
-            ContactPicker { imported in
-                for r in imported where !recipients.contains(where: { $0.label == r.label }) {
-                    RecipientMemory.add(r)
-                }
-                recipients = RecipientMemory.all()
-            }
-        }
+        .onAppear { recipients = RecipientMemory.all() }
     }
 
     private var axesSection: some View {
