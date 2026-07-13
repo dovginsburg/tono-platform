@@ -21,11 +21,20 @@ import os
 import pytest
 
 
-def _register(client, device_id: str | None = None) -> dict:
+def _register(
+    client,
+    device_id: str | None = None,
+    *,
+    device_credential: str | None = None,
+    bearer_token: str | None = None,
+) -> dict:
     body = {"platform": "ios", "app_version": "0.2.0"}
     if device_id:
         body["device_id"] = device_id
-    r = client.post("/v1/register", json=body)
+    if device_credential:
+        body["device_credential"] = device_credential
+    headers = _auth(bearer_token) if bearer_token else None
+    r = client.post("/v1/register", json=body, headers=headers)
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -109,12 +118,90 @@ def test_register_then_me(client):
     assert me["daily_limit"] == 3  # FREE_DAILY_LIMIT in conftest
 
 
-def test_register_idempotent(client):
+def test_register_idempotent_with_device_credential(client):
     a = _register(client)
-    b = _register(client, device_id=a["device_id"])
+    b = _register(
+        client,
+        device_id=a["device_id"],
+        device_credential=a["device_credential"],
+    )
     assert a["device_id"] == b["device_id"]
-    # Token stays stable on re-register of the same device_id.
     assert a["api_token"] == b["api_token"]
+    assert b["device_credential"] is None
+
+
+def test_public_device_id_alone_cannot_retrieve_token(client):
+    registered = _register(client)
+    response = client.post(
+        "/v1/register",
+        json={"device_id": registered["device_id"], "platform": "ios"},
+    )
+    assert response.status_code == 409
+    assert registered["api_token"] not in response.text
+
+
+def test_register_rejects_non_uuid_identifier(client):
+    response = client.post(
+        "/v1/register",
+        json={"device_id": "caller-controlled-id", "platform": "ios"},
+    )
+    assert response.status_code == 422
+
+
+def test_concurrent_duplicate_registration_is_stable(client):
+    from concurrent.futures import ThreadPoolExecutor
+
+    registered = _register(client)
+    body = {
+        "device_id": registered["device_id"],
+        "device_credential": registered["device_credential"],
+        "platform": "ios",
+    }
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        responses = list(executor.map(lambda _: client.post("/v1/register", json=body), range(8)))
+    assert {response.status_code for response in responses} == {200}
+    assert {response.json()["api_token"] for response in responses} == {registered["api_token"]}
+
+
+def test_legacy_bearer_migration_rotates_with_bounded_grace(client):
+    from backend.store import get_store
+
+    registered = _register(client)
+    store = get_store()
+    store._conn.execute(
+        "UPDATE users SET device_credential_hash=NULL WHERE device_id=?",
+        (registered["device_id"],),
+    )
+    migrated = _register(
+        client,
+        registered["device_id"],
+        bearer_token=registered["api_token"],
+    )
+    assert migrated["api_token"] != registered["api_token"]
+    assert migrated["device_credential"]
+    assert client.get("/v1/me", headers=_auth(registered["api_token"])).status_code == 200
+    store._conn.execute(
+        "UPDATE users SET previous_api_token_expires_at=? WHERE device_id=?",
+        ("2000-01-01T00:00:00+00:00", registered["device_id"]),
+    )
+    assert client.get("/v1/me", headers=_auth(registered["api_token"])).status_code == 401
+    assert client.get("/v1/me", headers=_auth(migrated["api_token"])).status_code == 200
+
+
+def test_register_rate_limit_is_scoped_per_ip(client, monkeypatch):
+    from backend import server
+
+    monkeypatch.setitem(server.rate_limit.RATE_SCOPES, "register", 2)
+    for _ in range(2):
+        assert client.post("/v1/register", json={"platform": "ios"}).status_code == 200
+    blocked = client.post("/v1/register", json={"platform": "ios"})
+    assert blocked.status_code == 429
+    assert blocked.headers["Retry-After"] == "60"
+    assert client.post(
+        "/v1/register",
+        headers={"X-Forwarded-For": "198.51.100.25"},
+        json={"platform": "ios"},
+    ).status_code == 200
 
 
 def test_me_requires_bearer(client):

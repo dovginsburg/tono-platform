@@ -81,6 +81,8 @@ public enum SharedKeychain {
 public enum KeychainKeys {
     public static let apiToken = "apiToken"
     public static let deviceID = "deviceID"
+    /// High-entropy proof for re-registering an existing public device id.
+    public static let deviceCredential = "deviceCredential"
     /// Direct LLM API key (legacy; only used when bypassing the backend proxy).
     /// Migrated out of UserDefaults on first launch.
     public static let apiKey   = "apiKey"

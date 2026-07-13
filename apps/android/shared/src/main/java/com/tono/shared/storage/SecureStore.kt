@@ -11,6 +11,7 @@ import androidx.security.crypto.MasterKey
 object KeychainKeys {
     const val API_TOKEN = "apiToken"
     const val DEVICE_ID = "deviceID"
+    const val DEVICE_CREDENTIAL = "deviceCredential"
     const val API_KEY   = "apiKey"
 }
 

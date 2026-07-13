@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import hashlib
 import json
 import os
 import secrets
@@ -38,6 +39,9 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     device_id            TEXT PRIMARY KEY,
     api_token            TEXT NOT NULL UNIQUE,
+    device_credential_hash TEXT,
+    previous_api_token     TEXT,
+    previous_api_token_expires_at TEXT,
     plan                 TEXT NOT NULL DEFAULT 'free',
     stripe_customer_id   TEXT,
     stripe_subscription_id TEXT,
@@ -213,6 +217,10 @@ class AccountConflictError(Exception):
     never something inferred from a login attempt."""
 
 
+class DeviceRegistrationProofError(Exception):
+    """An existing public device id was presented without its secret proof."""
+
+
 def _plan_grants_pro(plan: str, subscription_status: Optional[str], coupon_pro_expires_at: Optional[str]) -> bool:
     if plan == "pro" and subscription_status in ("active", "trialing"):
         return True
@@ -301,6 +309,13 @@ class User:
         return self.account.plan if self.account is not None else self.plan
 
 
+@dataclass
+class DeviceRegistration:
+    user: User
+    device_credential: Optional[str] = None
+    migrated_legacy_token: bool = False
+
+
 # ---------------------------------------------------------------------------
 # Store
 # ---------------------------------------------------------------------------
@@ -336,9 +351,15 @@ class Store:
             "ALTER TABLE users ADD COLUMN account_id TEXT REFERENCES accounts(id)",
             "ALTER TABLE accounts ADD COLUMN daily_count INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE accounts ADD COLUMN daily_day TEXT",
+            "ALTER TABLE users ADD COLUMN device_credential_hash TEXT",
+            "ALTER TABLE users ADD COLUMN previous_api_token TEXT",
+            "ALTER TABLE users ADD COLUMN previous_api_token_expires_at TEXT",
         ):
             with contextlib.suppress(sqlite3.OperationalError):
                 self._conn.execute(stmt)
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_users_previous_token ON users(previous_api_token)"
+        )
         self._seed_feature_flags()
 
     def _seed_feature_flags(self) -> None:
@@ -400,31 +421,87 @@ class Store:
 
     # ---- user / device ----
 
-    def register_device(self, device_id: Optional[str] = None) -> User:
+    def register_device(
+        self,
+        device_id: Optional[str] = None,
+        *,
+        device_credential: Optional[str] = None,
+        bearer_token: Optional[str] = None,
+        legacy_grace_seconds: int = 86400,
+    ) -> DeviceRegistration:
         now = _now_iso()
 
-        def _do() -> User:
+        def _do() -> DeviceRegistration:
             cur = self._conn.cursor()
             if device_id:
                 cur.execute("SELECT * FROM users WHERE device_id = ?", (device_id,))
                 row = cur.fetchone()
                 if row:
-                    if not row["api_token"]:
-                        token = _new_token()
-                        cur.execute(
-                            "UPDATE users SET api_token=?, updated_at=? WHERE device_id=?",
-                            (token, now, device_id),
+                    credential_hash = row["device_credential_hash"]
+                    credential_ok = bool(
+                        credential_hash
+                        and device_credential
+                        and secrets.compare_digest(
+                            credential_hash,
+                            _hash_device_credential(device_credential),
                         )
-                        return _row_to_user({**dict(row), "api_token": token, "updated_at": now})
-                    return _row_to_user(row)
+                    )
+                    if credential_ok:
+                        return DeviceRegistration(user=_row_to_user(row))
+
+                    legacy_ok = bool(
+                        bearer_token
+                        and not credential_hash
+                        and secrets.compare_digest(row["api_token"], bearer_token)
+                    )
+                    if legacy_ok:
+                        credential = _new_device_credential()
+                        token = _new_token()
+                        expires_at = (
+                            dt.datetime.now(dt.timezone.utc)
+                            + dt.timedelta(seconds=max(0, legacy_grace_seconds))
+                        ).isoformat()
+                        cur.execute(
+                            """UPDATE users
+                                  SET api_token=?, device_credential_hash=?,
+                                      previous_api_token=?, previous_api_token_expires_at=?,
+                                      updated_at=?
+                                WHERE device_id=? AND api_token=?
+                                  AND device_credential_hash IS NULL""",
+                            (
+                                token,
+                                _hash_device_credential(credential),
+                                row["api_token"],
+                                expires_at,
+                                now,
+                                device_id,
+                                bearer_token,
+                            ),
+                        )
+                        if cur.rowcount != 1:
+                            raise DeviceRegistrationProofError()
+                        cur.execute("SELECT * FROM users WHERE device_id = ?", (device_id,))
+                        return DeviceRegistration(
+                            user=_row_to_user(cur.fetchone()),
+                            device_credential=credential,
+                            migrated_legacy_token=True,
+                        )
+                    raise DeviceRegistrationProofError()
+
             did = device_id or str(uuid.uuid4())
             token = _new_token()
+            credential = _new_device_credential()
             cur.execute(
-                "INSERT INTO users (device_id, api_token, plan, created_at, updated_at) VALUES (?, ?, 'free', ?, ?)",
-                (did, token, now, now),
+                """INSERT INTO users
+                       (device_id, api_token, device_credential_hash, plan, created_at, updated_at)
+                     VALUES (?, ?, ?, 'free', ?, ?)""",
+                (did, token, _hash_device_credential(credential), now, now),
             )
             cur.execute("SELECT * FROM users WHERE device_id = ?", (did,))
-            return _row_to_user(cur.fetchone())
+            return DeviceRegistration(
+                user=_row_to_user(cur.fetchone()),
+                device_credential=credential,
+            )
 
         return self._run(_do).result()
 
@@ -442,7 +519,13 @@ class Store:
     def get_by_token(self, token: str) -> Optional[User]:
         def _do() -> Optional[User]:
             cur = self._conn.cursor()
-            cur.execute("SELECT * FROM users WHERE api_token = ?", (token,))
+            cur.execute(
+                """SELECT * FROM users
+                     WHERE api_token = ?
+                        OR (previous_api_token = ?
+                            AND previous_api_token_expires_at > ?)""",
+                (token, token, _now_iso()),
+            )
             row = cur.fetchone()
             return self._attach_account(cur, _row_to_user(row)) if row else None
 
@@ -462,7 +545,10 @@ class Store:
             cur = self._conn.cursor()
             token = _new_token()
             cur.execute(
-                "UPDATE users SET api_token=?, updated_at=? WHERE device_id=?",
+                """UPDATE users
+                      SET api_token=?, previous_api_token=NULL,
+                          previous_api_token_expires_at=NULL, updated_at=?
+                    WHERE device_id=?""",
                 (token, _now_iso(), device_id),
             )
             return token if cur.rowcount else None
@@ -1387,6 +1473,14 @@ def _row_to_webauthn_credential(row: sqlite3.Row | dict) -> WebAuthnCredential:
 
 def _new_token() -> str:
     return secrets.token_urlsafe(32)
+
+
+def _new_device_credential() -> str:
+    return secrets.token_urlsafe(48)
+
+
+def _hash_device_credential(credential: str) -> str:
+    return hashlib.sha256(credential.encode("utf-8")).hexdigest()
 
 
 def _now_iso() -> str:

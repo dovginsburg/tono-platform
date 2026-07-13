@@ -225,7 +225,9 @@ public final class TonoBackend: @unchecked Sendable {
         SharedKeychain.migrateFromDefaults(key: KeychainKeys.deviceID, defaultsKey: SharedKeys.deviceID)
         SharedKeychain.migrateFromDefaults(key: KeychainKeys.apiKey,   defaultsKey: SharedKeys.apiKey)
 
-        if SharedKeychain.get(KeychainKeys.apiToken) != nil,
+        let existingToken = SharedKeychain.get(KeychainKeys.apiToken)
+        let existingCredential = SharedKeychain.get(KeychainKeys.deviceCredential)
+        if existingToken != nil, existingCredential != nil,
            let me = try? await me() {
             return me
         }
@@ -238,20 +240,34 @@ public final class TonoBackend: @unchecked Sendable {
             return fresh
         }()
 
-        struct Req: Encodable { let device_id: String; let platform: String; let app_version: String }
+        struct Req: Encodable {
+            let device_id: String
+            let device_credential: String?
+            let platform: String
+            let app_version: String
+        }
         struct Resp: Decodable {
             let device_id: String
             let api_token: String
+            let device_credential: String?
             let plan: String
             let is_pro: Bool
         }
         let resp: Resp = try await post(
             path: "/v1/register",
-            body: Req(device_id: did, platform: platform, app_version: appVersion),
-            authorize: false
+            body: Req(
+                device_id: did,
+                device_credential: existingCredential,
+                platform: platform,
+                app_version: appVersion
+            ),
+            authorize: existingToken != nil
         )
         SharedKeychain.set(resp.device_id, forKey: KeychainKeys.deviceID)
         SharedKeychain.set(resp.api_token, forKey: KeychainKeys.apiToken)
+        if let credential = resp.device_credential, !credential.isEmpty {
+            SharedKeychain.set(credential, forKey: KeychainKeys.deviceCredential)
+        }
         // Wipe any residual plain-text credentials from UserDefaults.
         SharedStore.defaults.removeObject(forKey: SharedKeys.apiKey)
         SharedStore.defaults.removeObject(forKey: SharedKeys.provider)

@@ -46,7 +46,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import passkeys, payments, slack, social_auth
+from . import passkeys, payments, rate_limit, slack, social_auth
 from .analyze import (
     AnalyzeRequest,
     CANONICAL_COACH_AXES,
@@ -60,7 +60,7 @@ from .analyze import (
     enforce_coach_contract,
 )
 from .auth import CurrentUser, StoreDep, current_user
-from .store import AccountConflictError, Store, User, get_store
+from .store import AccountConflictError, DeviceRegistrationProofError, Store, User, get_store
 
 # Locales the LLM providers can respond in. Defines the BCP-47 code → display
 # name mapping for the /v1/locales endpoint AND for any client that wants to
@@ -401,24 +401,56 @@ async def v1_analyze(req: AnalyzeRequest, request: Request) -> dict[str, Any]:
 
 
 class RegisterRequest(BaseModel):
-    device_id: Optional[str] = None
-    app_version: Optional[str] = None
-    platform: Optional[str] = None  # "ios" | "android" | "macos" | "windows" | "web" | "slack"
+    device_id: Optional[uuid.UUID] = None
+    device_credential: Optional[str] = Field(default=None, min_length=43, max_length=256)
+    app_version: Optional[str] = Field(default=None, max_length=64)
+    platform: Optional[Literal["ios", "android", "macos", "windows", "web", "slack"]] = None
 
 
 class RegisterResponse(BaseModel):
     device_id: str
     api_token: str
+    device_credential: Optional[str] = None
     plan: str
     is_pro: bool
 
 
 @app.post("/v1/register", response_model=RegisterResponse)
-def register(body: RegisterRequest, store: StoreDep) -> RegisterResponse:
-    user = store.register_device(body.device_id)
+def register(body: RegisterRequest, request: Request, store: StoreDep) -> RegisterResponse:
+    ip = _get_client_ip(request)
+    allowed, _ = rate_limit.check_ip_rate(
+        "register", ip, rate_limit.RATE_SCOPES["register"]
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="registration rate limit exceeded",
+            headers={"Retry-After": "60"},
+        )
+
+    authorization = request.headers.get("Authorization", "")
+    scheme, _, supplied_token = authorization.partition(" ")
+    bearer_token = supplied_token if scheme.lower() == "bearer" else None
+    try:
+        registration = store.register_device(
+            str(body.device_id) if body.device_id else None,
+            device_credential=body.device_credential,
+            bearer_token=bearer_token,
+            legacy_grace_seconds=int(
+                os.environ.get("TONO_LEGACY_TOKEN_GRACE_SECONDS", "86400")
+            ),
+        )
+    except DeviceRegistrationProofError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="device registration requires recovery proof",
+        ) from exc
+
+    user = registration.user
     return RegisterResponse(
         device_id=user.device_id,
         api_token=user.api_token,
+        device_credential=registration.device_credential,
         plan=user.plan,
         is_pro=user.is_pro,
     )
