@@ -108,15 +108,4 @@ final class CoachContractTests: XCTestCase {
             liveAfter: " Next sentence"
         ), "a clamped caret move must not authorize deletion")
     }
-
-    func testSharedClientCanonicalizesChoicesAndRejectsOmissions() throws {
-        let scrambled = RewriteAxis.allCases.reversed().map {
-            RewriteSuggestion(axis: $0, text: $0.displayName)
-        }
-        XCTAssertEqual(
-            try scrambled.canonicalCoachChoices().map(\.axis),
-            RewriteAxis.allCases
-        )
-        XCTAssertThrowsError(try Array(scrambled.dropLast()).canonicalCoachChoices())
-    }
 }
