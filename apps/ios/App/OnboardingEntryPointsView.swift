@@ -89,15 +89,27 @@ struct OnboardingEntryPointsView: View {
                             buttonLabel: nil,
                             buttonAction: nil
                         )
-                        tile(
-                            number: 4,
-                            icon: "envelope.fill",
-                            title: "Sign in with email",
-                            detail: emailDetail,
-                            isDone: emailDone,
-                            buttonLabel: emailDone ? "Signed in ✓" : "Sign in",
-                            buttonAction: { showEmailSheet = true }
-                        )
+                        if FeatureFlags.isEnabled(.emailSignIn) {
+                            tile(
+                                number: 4,
+                                icon: "envelope.fill",
+                                title: "Sign in with email",
+                                detail: emailDetail,
+                                isDone: emailDone,
+                                buttonLabel: emailDone ? "Signed in ✓" : "Sign in",
+                                buttonAction: { showEmailSheet = true }
+                            )
+                        } else {
+                            tile(
+                                number: 4,
+                                icon: "envelope.fill",
+                                title: "Email sign-in — Coming soon",
+                                detail: emailComingSoonDetail,
+                                isDone: false,
+                                buttonLabel: nil,
+                                buttonAction: nil
+                            )
+                        }
                         Spacer(minLength: 8)
                         Text("Set up any available option now, or continue and finish later in Settings.")
                             .font(.footnote)
@@ -158,7 +170,7 @@ struct OnboardingEntryPointsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Tono works with your keyboard, not instead of it.")
                 .font(.system(size: 22, weight: .bold, design: .rounded))
-            Text("Pick how you want to use Tono. Set up the keyboard, Share Sheet, or email now; the Shortcut is not available yet, and you can finish any step later in Settings.")
+            Text("Set up the keyboard or Share Sheet now. Shortcut and email sign-in are clearly marked until they are available, and you can finish any step later in Settings.")
                 .font(.system(size: 14, design: .rounded))
                 .foregroundColor(.secondary)
         }
@@ -169,7 +181,7 @@ struct OnboardingEntryPointsView: View {
         // iOS exposes no public API that identifies a specific enabled
         // third-party keyboard or reports its Full Access switch. We can only
         // auto-confirm Tono after the extension writes its App Group marker.
-        "1. Enable Tono Keyboard\n2. Allow Full Access for Coach (optional for basic typing)\n3. Try Tono with the globe key\n\nSettings → General → Keyboard → Keyboards → Add New Keyboard → Tono. Return to Tono from the App Switcher when finished."
+        "1. Enable Keyboard\n2. Allow Full Access for Coach (optional for basic typing)\n3. Try Tono with the globe key\n\nSettings → General → Keyboard → Keyboards → Add New Keyboard → Tono. Return to Tono from the App Switcher when finished."
     }
 
     private var shareExtDetail: String {
@@ -184,6 +196,10 @@ struct OnboardingEntryPointsView: View {
         // v1.0: email is the durable identity — keeps your plan/subscription
         // across reinstalls, new phones, iPhone + iPad, and (future) web.
         "Use the same account on iPhone, iPad, and any future web. Recovers your subscription if you lose your phone. We email you a 6-digit code — no password to remember."
+    }
+
+    private var emailComingSoonDetail: String {
+        "Sign in coming soon. Email delivery is not available in this release, so there is no sign-in action yet. You can use Tono without an email account."
     }
 
     private func tile(

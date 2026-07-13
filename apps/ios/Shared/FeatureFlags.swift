@@ -25,6 +25,7 @@ public enum FeatureFlag: String, CaseIterable {
     case recipientMemory   = "recipient_memory"  // earns on-switch: core usage ≥ 10 sessions/week
     case widgetEnabled     = "widget_enabled"    // earns on-switch: keyboard is daily-active for user
     case siriEnabled       = "siri_enabled"      // earns on-switch: after widget adoption ≥ 30%
+    case emailSignIn       = "email_sign_in"     // enable only after OTP delivery is deployed
 
     // ── Default OFF (not a consumer product line) ─────────────────────────
     case slackEnabled      = "slack_enabled"     // B2B/Slack stays off in consumer builds
@@ -35,7 +36,7 @@ public enum FeatureFlag: String, CaseIterable {
     /// Default value used before the first network fetch.
     public var defaultValue: Bool {
         switch self {
-        case .customAxes, .recipientMemory, .widgetEnabled, .siriEnabled, .slackEnabled:
+        case .customAxes, .recipientMemory, .widgetEnabled, .siriEnabled, .emailSignIn, .slackEnabled:
             return false
         default:
             return true
@@ -76,8 +77,9 @@ public enum FeatureFlag: String, CaseIterable {
         case .memoryContextHints:    return "Use memory in rewrites"
         case .recipientMemory:       return "Per-recipient style memory"
         case .widgetEnabled:         return "Home screen widget"
-        case .siriEnabled:           return "Siri Shortcuts"
-        case .slackEnabled:          return "Slack integration"
+        case .siriEnabled:         return "Siri Shortcuts"
+        case .emailSignIn:         return "Email sign-in"
+        case .slackEnabled:        return "Slack integration"
         case .improveTono:           return "Help improve Tono"
         }
     }
