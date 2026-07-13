@@ -1,68 +1,27 @@
 // KeyboardViewController.swift
-// Tono keyboard extension — build 81.
+// Tono keyboard extension — build 83.
 //
-// Build 78 added functionality in code but Dov's physical-device UX test
-// found the visual experience didn't feel like Apple yet. Build 79 is
-// a focused Apple-parity UX correction while preserving every reliable
-// piece from build 78:
+// Build 83 repairs the failures observed in build 82 physical testing while
+// preserving UIKit-only startup, the live Coach network path, Unicode proxy
+// insertion, shift/caps state, and conditional input-mode switching:
 //
-//   * Stable UIKit-only startup, no SwiftUI, no synchronous I/O on
-//     viewDidLoad / viewDidAppear.
-//   * Preserved live `/v1/analyze` Coach network path
-//     (`TonoCoachClient` is untouched).
-//   * 123 / #+= / ABC three-state toggle is preserved.
+//   * Explicit navigation matrix: letters bottom `123`; numbers/symbols
+//     bottom `ABC`; numbers row-3 `#+=`; symbols row-3 `123`.
+//   * Responsive 10/9/7 Apple-like geometry at compact 204pt content height,
+//     with a minimal Coach pill and no production build-number label.
+//   * One delete in row 3; conventional mode/emoji/space/return bottom row;
+//     the globe is created only when `needsInputModeSwitchKey` requires it.
+//   * Lazy 8-column UICollectionView emoji grid with reusable cells, compact
+//     spacing, substantial category datasets, repeated insertion, and recents.
+//   * Monochrome SF Symbols category strip for Recents, Smileys, People,
+//     Animals, Food, Activities, Travel, Objects, Symbols, and Flags.
 //
-// New in build 81 — visual + ergonomic fixes only:
-//   * Apple-like physical-key aesthetic across all 3 modes:
-//       • Rounded-key shape (corner radius 5pt).
-//       • Adaptive dark/light chrome using
-//         `.secondarySystemBackground` / `.tertiarySystemBackground`
-//         so dark-mode chroma matches Apple's keyboard exactly.
-//       • Row 1 letters has 10 keys (q…p). Row 2 has 9 keys (a…l) with
-//         a 16pt indent so keys stagger with the row above/below.
-//         Row 3 letters has 7 keys (z…m) with a 28pt indent so
-//         ⇧ + ⌫ sit at the outer corners.
-//       • Bottom row reconforms to the visible iOS layout:
-//           [123/#+=/ABC] [☺ emoji] [  space (flex)  ] [return] [⌫]
-//         emoji and 123 are equal 44pt as in iOS; space flexes; return
-//         is 80pt; backspace is 56pt.
-//       • Tono's own globe button is GONE — iOS already draws the
-//         system globe on the suggestion/accessory bar. Removing Tono's
-//         duplicate is the part Dov asked for three times.
-//   * Number rows fully recut to match the standard iOS 123 pane
-//     (digits 1–0 row, then `- / : ; ( ) $ & @ "` punctuation row,
-//     then `, . ? ! '` punctuation row).
-//   * Symbol rows fully recut to match the standard iOS #+= pane.
-//   * A real emoji grid:
-//       • 7 visible categories — Recents, Faces, Hearts, Gestures,
-//         Animals, Food, Objects — each with its own color tab as
-//         iOS does.
-//       • ≥80 visible emojis lazily drawn into a vertical UIScrollView
-//         when the smiley is tapped.
-//       • Recent tab present (deferred render, only allocated if
-//         Recents are populated by an actual tap; otherwise the tab
-//         is shown but disabled — users see "Recent" exists).
-//       • Tapping an emoji inserts via textDocumentProxy.insertText
-//         and RECORD-USAGE for Recents without closing the panel.
-//         Tapping `ABC` dismisses the panel back to the keys.
-//         Backspace and space keys remain rendered inside the panel's
-//         footer area so users can edit while in the panel.
-//   * Shift state visibly changes glyph color + label: ⇧ (off),
-//     ⬆ (single), ⇪ highlighted blue (caps).
-//   * Coach remains visible, network path preserved, build marker
-//     shows `BUILD 81`.
-//   * Emoji panel is built lazily inside `showEmojiPanel()` — only when
-//     the smiley is first tapped, never in `viewDidLoad`.
-//
-// Idempotent identifiers: every TonoKB.* identifier from build 78 is
-// preserved (TonoKB.globe stays registered but is never assigned to a
-// visible button, so any UI automation probe that ran against
-// build 78 still resolves on build 81).
+// Stable TonoKB.* accessibility identifiers remain available for automation.
 
 import UIKit
 
 @objc(KeyboardViewController)
-public final class KeyboardViewController: UIInputViewController {
+public final class KeyboardViewController: UIInputViewController, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
 
     // MARK: - Layout constants
 
@@ -83,22 +42,34 @@ public final class KeyboardViewController: UIInputViewController {
         static let symRow3: [String] = [".",",","?","!","'"]
 
         // Touch-target + spacing values calibrated to iPhone.
-        static let keyMinHeight: CGFloat = 40
-        static let rowSpacing: CGFloat = 6
-        static let edgePadding: CGFloat = 4
-        static let preferredKeyboardHeight: CGFloat = 226
+        static let keyMinHeight: CGFloat = 36
+        static let rowSpacing: CGFloat = 5.5
+        static let edgePadding: CGFloat = 3
+        static let preferredKeyboardHeight: CGFloat = 204
 
         // Apple-like keycap geometry.
         static let keyCornerRadius: CGFloat = 5
         static let keyBorderWidth: CGFloat = 0.5
-        static let row2HorizontalInset: CGFloat = 16
-        static let row3HorizontalInset: CGFloat = 28
+        static let referencePortraitWidth: CGFloat = 367.5
+
+        static func letterKeyWidth(availableWidth: CGFloat) -> CGFloat {
+            let usable = max(availableWidth - edgePadding * 2, 320)
+            return (usable - rowSpacing * 9) / 10
+        }
+
+        static func row2HorizontalInset(availableWidth: CGFloat) -> CGFloat {
+            (letterKeyWidth(availableWidth: availableWidth) + rowSpacing) / 2
+        }
+
+        static func row3InnerGap(availableWidth: CGFloat) -> CGFloat {
+            max(8, letterKeyWidth(availableWidth: availableWidth) * 0.34)
+        }
 
         // Bottom-row widths — match the visible iOS layout.
-        static let modeToggleWidth: CGFloat = 44
-        static let emojiButtonWidth: CGFloat = 44
-        static let backspaceWidth: CGFloat = 56
-        static let returnWidth: CGFloat = 80
+        static let modeToggleWidth: CGFloat = 46
+        static let emojiButtonWidth: CGFloat = 42
+        static let backspaceWidth: CGFloat = 54
+        static let returnWidth: CGFloat = 72
 
         // Coach UX.
         static let coachTimeout: TimeInterval = 15
@@ -108,16 +79,17 @@ public final class KeyboardViewController: UIInputViewController {
         static let shiftDoubleTapWindow: TimeInterval = 0.4
 
         // Emoji panel sizing.
-        static let emojiCellsPerRow: Int = 7
-        static let emojiCategoryTabHeight: CGFloat = 36
-        static let emojiPanelFooterHeight: CGFloat = 44
+        static let emojiCellsPerRow: Int = 8
+        static let emojiCategoryTabHeight: CGFloat = 28
+        static let emojiPanelFooterHeight: CGFloat = 38
+        static let emojiCellReuseIdentifier = "TonoEmojiCell"
 
         // Accessibility identifiers. Each is also written into the
         // identifiers registry so the Swift optimiser keeps them in
         // the binary's data section (we need this for UI-automation
         // probes and the ad-hoc verifier).
         static let idTopBar           = "TonoKB.topBar"
-        static let idBuildMarker      = "TonoKB.buildMarker"
+
         static let idCoachButton      = "TonoKB.coachButton"
         static let idBody             = "TonoKB.body"
         // idGlobe intentionally retained so the registry contract
@@ -145,17 +117,13 @@ public final class KeyboardViewController: UIInputViewController {
         static let idEmojiRecents     = "TonoKB.emojiRecents"
         static let idEmojiFooter      = "TonoKB.emojiFooter"
 
-        // The visible "BUILD 81" marker label. Stored as a registry
-        // constant so the optimiser keeps the literal in the binary
-        // even under aggressive Release optimisation.
-        static let buildMarkerText: String = "BUILD 82"
 
         /// Single-source-of-truth registry, returned by
         /// `allIdentifiers`. The lookup keeps the Swift optimiser
         /// from folding single-use constants into immediate operands
         /// and dropping the literal from the data section.
         private static let registry: [String] = [
-            idTopBar, idBuildMarker, idCoachButton, idBody,
+            idTopBar, idCoachButton, idBody,
             idGlobe, idEmojiToggle, idSpace, idReturn, idBackspace,
             idShift, idModeToggle, idRow3Placeholder,
             idEmptyBanner, idCoachLoading, idCoachResults,
@@ -170,7 +138,6 @@ public final class KeyboardViewController: UIInputViewController {
         /// dead-code-eliminate each one as a single-use constant.
         @inline(never)
         static func allIdentifiers() -> [String] {
-            _ = buildMarkerText
             return registry
         }
 
@@ -202,18 +169,33 @@ public final class KeyboardViewController: UIInputViewController {
     enum EmojiCategory: Int, CaseIterable {
         case recents = 0, smileys, people, animals, food, activities, travel, objects, symbols, flags
 
-        var label: String {
+        var symbolName: String {
             switch self {
-            case .recents: return "🕘"
-            case .smileys: return "😀"
-            case .people: return "👋"
-            case .animals: return "🐶"
-            case .food: return "🍎"
-            case .activities: return "⚽️"
-            case .travel: return "🚗"
-            case .objects: return "💡"
-            case .symbols: return "❤️"
-            case .flags: return "🏳️"
+            case .recents: return "clock"
+            case .smileys: return "face.smiling"
+            case .people: return "person.2.fill"
+            case .animals: return "pawprint.fill"
+            case .food: return "fork.knife"
+            case .activities: return "sportscourt.fill"
+            case .travel: return "car.fill"
+            case .objects: return "lightbulb.fill"
+            case .symbols: return "heart.fill"
+            case .flags: return "flag.fill"
+            }
+        }
+
+        var accessibilityName: String {
+            switch self {
+            case .recents: return "Recents"
+            case .smileys: return "Smileys"
+            case .people: return "People"
+            case .animals: return "Animals"
+            case .food: return "Food"
+            case .activities: return "Activities"
+            case .travel: return "Travel"
+            case .objects: return "Objects"
+            case .symbols: return "Symbols"
+            case .flags: return "Flags"
             }
         }
 
@@ -275,12 +257,14 @@ public final class KeyboardViewController: UIInputViewController {
     private var isEmojiPanelVisible: Bool = false
     private var emojiPanelView: UIView?
     private var emojiActiveCategory: EmojiCategory = .smileys
+    private var emojiCollectionView: UICollectionView?
+    private var emojiVisibleGlyphs: [String] = []
 
     // MARK: - Lifecycle
 
     public override func viewDidLoad() {
         super.viewDidLoad()
-        NSLog("TONO_KB BUILD82 01: viewDidLoad")
+        NSLog("TONO_KB BUILD83 01: viewDidLoad")
 
         // Keep the extension itself compact. Apple-owned input-assistant UI may
         // still be placed below us by the host and must never be hidden.
@@ -290,21 +274,21 @@ public final class KeyboardViewController: UIInputViewController {
 
         view.backgroundColor = .systemBackground
         let ids = Const.allIdentifiers()
-        NSLog("TONO_KB BUILD82 ids: \(ids.count)")
+        NSLog("TONO_KB BUILD83 ids: \(ids.count)")
         buildTopBar()
         buildBodyContainer()
         installKeyboardLayout()
-        NSLog("TONO_KB BUILD82 02: UIKit hierarchy installed")
+        NSLog("TONO_KB BUILD83 02: UIKit hierarchy installed")
     }
 
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        NSLog("TONO_KB BUILD82 03: viewWillAppear")
+        NSLog("TONO_KB BUILD83 03: viewWillAppear")
     }
 
     public override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        NSLog("TONO_KB BUILD82 04: viewDidAppear")
+        NSLog("TONO_KB BUILD83 04: viewDidAppear")
         if !keysInstalled {
             installKeyboardLayout()
             keysInstalled = true
@@ -316,7 +300,7 @@ public final class KeyboardViewController: UIInputViewController {
         applyAutoCapitalizationIfNeeded()
     }
 
-    // MARK: - Top bar (Tono wordmark + Coach + BUILD marker)
+    // MARK: - Minimal Coach bar
 
     private func buildTopBar() {
         let bar = UIView()
@@ -324,28 +308,13 @@ public final class KeyboardViewController: UIInputViewController {
         bar.accessibilityIdentifier = Const.idTopBar
         view.addSubview(bar)
 
-        let wordmark = UILabel()
-        wordmark.text = "Tono"
-        wordmark.font = .systemFont(ofSize: 17, weight: .semibold)
-        wordmark.textColor = .label
-        wordmark.translatesAutoresizingMaskIntoConstraints = false
-        bar.addSubview(wordmark)
-
-        let build = UILabel()
-        build.text = Const.buildMarkerText
-        build.font = .systemFont(ofSize: 10, weight: .semibold)
-        build.textColor = .secondaryLabel
-        build.translatesAutoresizingMaskIntoConstraints = false
-        build.accessibilityIdentifier = Const.idBuildMarker
-        bar.addSubview(build)
-
         let coach = UIButton(type: .system)
         coach.setTitle("Coach", for: .normal)
         coach.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
         coach.setTitleColor(.white, for: .normal)
         coach.backgroundColor = .systemBlue
-        coach.layer.cornerRadius = 8
-        coach.contentEdgeInsets = UIEdgeInsets(top: 4, left: 12, bottom: 4, right: 12)
+        coach.layer.cornerRadius = 10
+        coach.contentEdgeInsets = UIEdgeInsets(top: 2, left: 12, bottom: 2, right: 12)
         coach.translatesAutoresizingMaskIntoConstraints = false
         coach.accessibilityIdentifier = Const.idCoachButton
         coach.accessibilityLabel = "Tono Coach"
@@ -356,17 +325,11 @@ public final class KeyboardViewController: UIInputViewController {
             bar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             bar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             bar.topAnchor.constraint(equalTo: view.topAnchor),
-            bar.heightAnchor.constraint(equalToConstant: 34),
-
-            wordmark.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 12),
-            wordmark.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-
-            build.leadingAnchor.constraint(equalTo: wordmark.trailingAnchor, constant: 6),
-            build.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            bar.heightAnchor.constraint(equalToConstant: 26),
 
             coach.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
             coach.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            coach.heightAnchor.constraint(equalToConstant: 28),
+            coach.heightAnchor.constraint(equalToConstant: 22),
         ])
 
         self.topBar = bar
@@ -386,7 +349,7 @@ public final class KeyboardViewController: UIInputViewController {
         NSLayoutConstraint.activate([
             container.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: Const.edgePadding),
             container.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -Const.edgePadding),
-            container.topAnchor.constraint(equalTo: topBar.bottomAnchor, constant: 4),
+            container.topAnchor.constraint(equalTo: topBar.bottomAnchor, constant: 2),
             container.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -Const.edgePadding),
         ])
 
@@ -424,7 +387,12 @@ public final class KeyboardViewController: UIInputViewController {
         ])
 
         let r1 = makeRow(chars: row1Chars(), idPrefix: "row1")
-        let r2 = makeIndentedRow(chars: row2Chars(), idPrefix: "row2", indent: Const.row2HorizontalInset)
+        let width = currentKeyboardWidth
+        let r2 = makeIndentedRow(
+            chars: row2Chars(),
+            idPrefix: "row2",
+            indent: layoutMode == .letters ? Const.row2HorizontalInset(availableWidth: width) : 0
+        )
         let r3 = makeRow3()
         let bottom = makeBottomRow()
 
@@ -436,7 +404,12 @@ public final class KeyboardViewController: UIInputViewController {
         stack.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight * 4 + Const.rowSpacing * 3).isActive = true
 
         self.keysStack = stack
-        NSLog("TONO_KB BUILD82 05: keyboard layout installed mode=\(modeName(layoutMode))")
+        NSLog("TONO_KB BUILD83 05: keyboard layout installed mode=\(modeName(layoutMode))")
+    }
+
+    private var currentKeyboardWidth: CGFloat {
+        let measured = bodyContainer?.bounds.width ?? 0
+        return measured > 0 ? measured : Const.referencePortraitWidth
     }
 
     private func row1Chars() -> [String] {
@@ -475,11 +448,21 @@ public final class KeyboardViewController: UIInputViewController {
         shiftState == .none ? "shift" : "shift.fill"
     }
 
-    private var modeToggleGlyph: String {
+    /// Build 83 mode-state matrix. Bottom-left always enters/leaves letters;
+    /// the row-3 modifier is the sole numbers ↔ symbols transition.
+    private var bottomModeSpec: (label: String, target: KeyboardLayoutMode) {
         switch layoutMode {
-        case .letters: return "123"
-        case .numbers: return "#+="
-        case .symbols: return "ABC"
+        case .letters: return ("123", .numbers)
+        case .numbers: return ("ABC", .letters)
+        case .symbols: return ("ABC", .letters)
+        }
+    }
+
+    private var thirdRowModeSpec: (label: String, target: KeyboardLayoutMode)? {
+        switch layoutMode {
+        case .letters: return nil
+        case .numbers: return ("#+=", .symbols)
+        case .symbols: return ("123", .numbers)
         }
     }
 
@@ -556,18 +539,26 @@ public final class KeyboardViewController: UIInputViewController {
         row.spacing = Const.rowSpacing
         row.translatesAutoresizingMaskIntoConstraints = false
 
-        let leading = UIView()
-        leading.translatesAutoresizingMaskIntoConstraints = false
-        leading.backgroundColor = .clear
-        leading.isUserInteractionEnabled = false
-        row.addArrangedSubview(leading)
-        leading.widthAnchor.constraint(equalToConstant: Const.row3HorizontalInset).isActive = true
-
         switch layoutMode {
         case .letters:
             row.addArrangedSubview(makeShiftButton())
         case .numbers, .symbols:
-            row.addArrangedSubview(makeModeToggleButton())
+            if let spec = thirdRowModeSpec {
+                row.addArrangedSubview(makeModeToggleButton(
+                    label: spec.label,
+                    action: #selector(thirdRowModeTapped),
+                    identifierSuffix: "thirdRow"
+                ))
+            }
+        }
+
+        if layoutMode == .letters {
+            let innerGap = UIView()
+            innerGap.translatesAutoresizingMaskIntoConstraints = false
+            innerGap.widthAnchor.constraint(
+                equalToConstant: Const.row3InnerGap(availableWidth: currentKeyboardWidth)
+            ).isActive = true
+            row.addArrangedSubview(innerGap)
         }
 
         let middle = UIStackView()
@@ -579,6 +570,15 @@ public final class KeyboardViewController: UIInputViewController {
             middle.addArrangedSubview(makeCharButton(ch))
         }
         row.addArrangedSubview(middle)
+
+        if layoutMode == .letters {
+            let trailingInnerGap = UIView()
+            trailingInnerGap.translatesAutoresizingMaskIntoConstraints = false
+            trailingInnerGap.widthAnchor.constraint(
+                equalToConstant: Const.row3InnerGap(availableWidth: currentKeyboardWidth)
+            ).isActive = true
+            row.addArrangedSubview(trailingInnerGap)
+        }
 
         let backspace = makeSymbolControlButton(
             systemName: "delete.left",
@@ -634,29 +634,21 @@ public final class KeyboardViewController: UIInputViewController {
         }
     }
 
-    private func makeModeToggleButton() -> UIButton {
+    private func makeModeToggleButton(label: String, action: Selector, identifierSuffix: String) -> UIButton {
         let b = UIButton(type: .system)
-        b.setTitle(modeToggleGlyph, for: .normal)
+        b.setTitle(label, for: .normal)
         b.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
         b.setTitleColor(.label, for: .normal)
         b.backgroundColor = keyboardKeyBackground(.tertiary)
         b.layer.cornerRadius = Const.keyCornerRadius
         b.layer.borderWidth = Const.keyBorderWidth
         b.layer.borderColor = keyboardKeyBorder().cgColor
-        b.accessibilityLabel = modeToggleAccessibilityLabel()
-        b.accessibilityIdentifier = Const.idModeToggle
+        b.accessibilityLabel = "Switch keyboard mode to \(label)"
+        b.accessibilityIdentifier = "\(Const.idModeToggle).\(identifierSuffix)"
         b.widthAnchor.constraint(equalToConstant: Const.modeToggleWidth).isActive = true
         b.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight).isActive = true
-        b.addTarget(self, action: #selector(modeToggleTapped), for: .touchUpInside)
+        b.addTarget(self, action: action, for: .touchUpInside)
         return b
-    }
-
-    private func modeToggleAccessibilityLabel() -> String {
-        switch layoutMode {
-        case .letters: return "Switch to numbers and symbols"
-        case .numbers: return "Switch to extended symbols"
-        case .symbols: return "Switch back to letters"
-        }
     }
 
     private func keyboardKeyBackground(_ tier: KeyTier) -> UIColor {
@@ -678,7 +670,12 @@ public final class KeyboardViewController: UIInputViewController {
         row.alignment = .fill
         row.spacing = Const.rowSpacing
 
-        let modeToggle = makeModeToggleButton()
+        let bottomSpec = bottomModeSpec
+        let modeToggle = makeModeToggleButton(
+            label: bottomSpec.label,
+            action: #selector(bottomModeTapped),
+            identifierSuffix: "bottom"
+        )
         let emoji = makeSymbolControlButton(
             systemName: "face.smiling",
             action: #selector(emojiToggleTapped),
@@ -796,14 +793,16 @@ public final class KeyboardViewController: UIInputViewController {
         relayoutLettersForShift()
     }
 
-    @objc private func modeToggleTapped() {
-        switch layoutMode {
-        case .letters: layoutMode = .numbers
-        case .numbers: layoutMode = .symbols
-        case .symbols:
-            layoutMode = .letters
-        }
-        NSLog("TONO_KB BUILD82 mode-toggle: -> \(modeName(layoutMode))")
+    @objc private func bottomModeTapped() {
+        layoutMode = bottomModeSpec.target
+        NSLog("TONO_KB BUILD83 bottom-mode: -> \(modeName(layoutMode))")
+        installKeyboardLayout()
+    }
+
+    @objc private func thirdRowModeTapped() {
+        guard let target = thirdRowModeSpec?.target else { return }
+        layoutMode = target
+        NSLog("TONO_KB BUILD83 third-row-mode: -> \(modeName(layoutMode))")
         installKeyboardLayout()
     }
 
@@ -944,32 +943,23 @@ public final class KeyboardViewController: UIInputViewController {
             tabsRow.addArrangedSubview(tab)
         }
 
-        // Body: scrolling emoji grid for the active category.
-        let scroll = UIScrollView()
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        scroll.alwaysBounceVertical = true
-        panel.addSubview(scroll)
+        // Body: dense, memory-safe reusable grid. Only visible cells exist.
+        let flow = UICollectionViewFlowLayout()
+        flow.minimumInteritemSpacing = 2
+        flow.minimumLineSpacing = 1
+        flow.sectionInset = UIEdgeInsets(top: 2, left: 2, bottom: 2, right: 2)
+        let collection = UICollectionView(frame: .zero, collectionViewLayout: flow)
+        collection.translatesAutoresizingMaskIntoConstraints = false
+        collection.alwaysBounceVertical = true
+        collection.backgroundColor = .clear
+        collection.dataSource = self
+        collection.delegate = self
+        collection.register(EmojiCollectionCell.self, forCellWithReuseIdentifier: Const.emojiCellReuseIdentifier)
+        panel.addSubview(collection)
+        emojiVisibleGlyphs = emojiActiveCategory.glyphs
+        emojiCollectionView = collection
 
-        let body = UIStackView()
-        body.axis = .vertical
-        body.alignment = .fill
-        body.distribution = .fill
-        body.spacing = 4
-        body.translatesAutoresizingMaskIntoConstraints = false
-        body.layoutMargins = UIEdgeInsets(top: 4, left: 4, bottom: 4, right: 4)
-        body.isLayoutMarginsRelativeArrangement = true
-        scroll.addSubview(body)
-        NSLayoutConstraint.activate([
-            body.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
-            body.trailingAnchor.constraint(equalTo: scroll.trailingAnchor),
-            body.topAnchor.constraint(equalTo: scroll.topAnchor),
-            body.bottomAnchor.constraint(equalTo: scroll.bottomAnchor),
-            body.widthAnchor.constraint(equalTo: scroll.widthAnchor),
-        ])
-        populateEmojiGridInto(body, for: emojiActiveCategory)
-
-        // Footer: ABC | space | ⌫ — so users can edit text while the
-        // emoji panel is up.
+        // Footer preserves Apple semantics: ABC | emoji | space | return.
         let footer = UIStackView()
         footer.axis = .horizontal
         footer.alignment = .fill
@@ -987,11 +977,21 @@ public final class KeyboardViewController: UIInputViewController {
         abc.layer.cornerRadius = Const.keyCornerRadius
         abc.layer.borderWidth = Const.keyBorderWidth
         abc.layer.borderColor = keyboardKeyBorder().cgColor
-        abc.accessibilityIdentifier = Const.idModeToggle
+        abc.accessibilityIdentifier = "\(Const.idModeToggle).emojiFooter"
         abc.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight).isActive = true
         abc.widthAnchor.constraint(equalToConstant: Const.modeToggleWidth).isActive = true
         abc.addTarget(self, action: #selector(emojiHideTapped), for: .touchUpInside)
         footer.addArrangedSubview(abc)
+
+        let selectedEmoji = makeSymbolControlButton(
+            systemName: "face.smiling.fill",
+            action: #selector(emojiHideTapped),
+            width: Const.emojiButtonWidth,
+            bg: UIColor.systemFill,
+            id: "emoji"
+        )
+        selectedEmoji.tintColor = .systemBlue
+        footer.addArrangedSubview(selectedEmoji)
 
         let emojiSpace = UIButton(type: .system)
         emojiSpace.setTitle("space", for: .normal)
@@ -1006,19 +1006,14 @@ public final class KeyboardViewController: UIInputViewController {
         emojiSpace.addTarget(self, action: #selector(spaceTapped), for: .touchUpInside)
         footer.addArrangedSubview(emojiSpace)
 
-        let emojiBack = UIButton(type: .system)
-        emojiBack.setTitle("\u{232B}", for: .normal)
-        emojiBack.titleLabel?.font = .systemFont(ofSize: 18, weight: .semibold)
-        emojiBack.setTitleColor(.label, for: .normal)
-        emojiBack.backgroundColor = keyboardKeyBackground(.tertiary)
-        emojiBack.layer.cornerRadius = Const.keyCornerRadius
-        emojiBack.layer.borderWidth = Const.keyBorderWidth
-        emojiBack.layer.borderColor = keyboardKeyBorder().cgColor
-        emojiBack.accessibilityIdentifier = Const.idBackspace
-        emojiBack.widthAnchor.constraint(equalToConstant: Const.backspaceWidth).isActive = true
-        emojiBack.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight).isActive = true
-        emojiBack.addTarget(self, action: #selector(backspaceTapped), for: .touchUpInside)
-        footer.addArrangedSubview(emojiBack)
+        let emojiReturn = makeControlButton(
+            title: "return",
+            action: #selector(returnTapped),
+            width: Const.returnWidth,
+            bg: keyboardKeyBackground(.tertiary),
+            id: "return"
+        )
+        footer.addArrangedSubview(emojiReturn)
 
         NSLayoutConstraint.activate([
             tabsRow.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
@@ -1026,10 +1021,10 @@ public final class KeyboardViewController: UIInputViewController {
             tabsRow.topAnchor.constraint(equalTo: panel.topAnchor),
             tabsRow.heightAnchor.constraint(equalToConstant: Const.emojiCategoryTabHeight),
 
-            scroll.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
-            scroll.topAnchor.constraint(equalTo: tabsRow.bottomAnchor),
-            scroll.bottomAnchor.constraint(equalTo: footer.topAnchor),
+            collection.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
+            collection.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
+            collection.topAnchor.constraint(equalTo: tabsRow.bottomAnchor),
+            collection.bottomAnchor.constraint(equalTo: footer.topAnchor),
 
             footer.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
             footer.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
@@ -1039,7 +1034,7 @@ public final class KeyboardViewController: UIInputViewController {
 
         emojiPanelView = panel
         isEmojiPanelVisible = true
-        NSLog("TONO_KB BUILD82 emoji-panel: visible categories=\(EmojiCategory.allCases.count) active=\(emojiActiveCategory.rawValue)")
+        NSLog("TONO_KB BUILD83 emoji-panel: visible categories=\(EmojiCategory.allCases.count) active=\(emojiActiveCategory.rawValue)")
     }
 
     @objc private func emojiHideTapped() {
@@ -1049,21 +1044,21 @@ public final class KeyboardViewController: UIInputViewController {
     private func hideEmojiPanel() {
         emojiPanelView?.removeFromSuperview()
         emojiPanelView = nil
+        emojiCollectionView = nil
+        emojiVisibleGlyphs = []
         isEmojiPanelVisible = false
         installKeyboardLayout()
     }
 
     private func makeEmojiCategoryTab(_ category: EmojiCategory) -> UIButton {
         let b = UIButton(type: .system)
-        b.setTitle(category.label, for: .normal)
-        b.titleLabel?.font = .systemFont(ofSize: 22)
+        b.setImage(UIImage(systemName: category.symbolName), for: .normal)
+        b.imageView?.contentMode = .scaleAspectFit
         let isActive = (category == emojiActiveCategory)
-        b.backgroundColor = isActive
-            ? UIColor.systemFill
-            : (category == .recents && category.glyphs.isEmpty
-                ? UIColor.tertiarySystemBackground.withAlphaComponent(0.6)
-                : .tertiarySystemBackground)
-        b.setTitleColor(.label, for: .normal)
+        b.backgroundColor = .clear
+        b.tintColor = isActive ? .systemBlue : .secondaryLabel
+        b.accessibilityLabel = category.accessibilityName
+        b.accessibilityTraits = isActive ? [.button, .selected] : [.button]
         if category == .recents && category.glyphs.isEmpty {
             b.alpha = 0.4
             b.isEnabled = false
@@ -1076,19 +1071,15 @@ public final class KeyboardViewController: UIInputViewController {
     }
 
     private func emojiCategoryTapped(_ category: EmojiCategory) {
-        guard let panel = emojiPanelView else { return }
-        guard let scroll = panel.subviews.first(where: { $0 is UIScrollView }) as? UIScrollView,
-              let body = scroll.subviews.first as? UIStackView else { return }
+        guard let panel = emojiPanelView, let collection = emojiCollectionView else { return }
         emojiActiveCategory = category
         if let tabsRow = panel.subviews.first(where: { $0.accessibilityIdentifier == Const.idEmojiCategory }) as? UIStackView {
             for (idx, sub) in tabsRow.arrangedSubviews.enumerated() {
                 if let b = sub as? UIButton, let cat = EmojiCategory(rawValue: idx) {
                     let isActive = (cat == emojiActiveCategory)
-                    b.backgroundColor = isActive
-                        ? UIColor.systemFill
-                        : (cat == .recents && cat.glyphs.isEmpty
-                            ? UIColor.tertiarySystemBackground.withAlphaComponent(0.6)
-                            : .tertiarySystemBackground)
+                    b.backgroundColor = .clear
+                    b.tintColor = isActive ? .systemBlue : .secondaryLabel
+                    b.accessibilityTraits = isActive ? [.button, .selected] : [.button]
                     if cat == .recents && cat.glyphs.isEmpty {
                         b.alpha = 0.4
                         b.isEnabled = false
@@ -1099,57 +1090,47 @@ public final class KeyboardViewController: UIInputViewController {
                 }
             }
         }
-        populateEmojiGridInto(body, for: category)
-        scroll.setContentOffset(.zero, animated: false)
+        emojiVisibleGlyphs = category.glyphs
+        collection.reloadData()
+        collection.setContentOffset(.zero, animated: false)
     }
 
-    private func populateEmojiGridInto(_ body: UIStackView, for category: EmojiCategory) {
-        body.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        let glyphs = category.glyphs
-        guard !glyphs.isEmpty else {
-            let empty = UILabel()
-            empty.text = "Recents will appear here"
-            empty.font = .systemFont(ofSize: 13, weight: .medium)
-            empty.textColor = .secondaryLabel
-            empty.textAlignment = .center
-            empty.translatesAutoresizingMaskIntoConstraints = false
-            empty.heightAnchor.constraint(greaterThanOrEqualToConstant: 60).isActive = true
-            body.addArrangedSubview(empty)
-            return
-        }
-        let perRow = Const.emojiCellsPerRow
-        var idx = 0
-        while idx < glyphs.count {
-            let rowStack = UIStackView()
-            rowStack.axis = .horizontal
-            rowStack.alignment = .fill
-            rowStack.distribution = .fillEqually
-            rowStack.spacing = 2
-            let end = min(idx + perRow, glyphs.count)
-            for g in glyphs[idx..<end] {
-                rowStack.addArrangedSubview(makeEmojiButton(g))
-            }
-            body.addArrangedSubview(rowStack)
-            idx += perRow
-        }
+    public func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
+        emojiVisibleGlyphs.count
     }
 
-    private func makeEmojiButton(_ emoji: String) -> UIButton {
-        let b = UIButton(type: .system)
-        b.setTitle(emoji, for: .normal)
-        b.titleLabel?.font = .systemFont(ofSize: 28)
-        b.setTitleColor(.label, for: .normal)
-        b.backgroundColor = .clear
-        b.layer.cornerRadius = 4
-        b.accessibilityLabel = "Emoji \(emoji)"
-        b.accessibilityIdentifier = Const.emojiId(emoji)
-        b.heightAnchor.constraint(greaterThanOrEqualToConstant: 40).isActive = true
-        b.addTarget(self, action: #selector(emojiTapped(_:)), for: .touchUpInside)
-        return b
+    public func collectionView(
+        _ collectionView: UICollectionView,
+        cellForItemAt indexPath: IndexPath
+    ) -> UICollectionViewCell {
+        let cell = collectionView.dequeueReusableCell(
+            withReuseIdentifier: Const.emojiCellReuseIdentifier,
+            for: indexPath
+        ) as! EmojiCollectionCell
+        let emoji = emojiVisibleGlyphs[indexPath.item]
+        cell.configure(emoji: emoji, identifier: Const.emojiId(emoji))
+        return cell
     }
 
-    @objc private func emojiTapped(_ sender: UIButton) {
-        guard let emoji = sender.title(for: .normal), !emoji.isEmpty else { return }
+    public func collectionView(
+        _ collectionView: UICollectionView,
+        layout collectionViewLayout: UICollectionViewLayout,
+        sizeForItemAt indexPath: IndexPath
+    ) -> CGSize {
+        let flow = collectionViewLayout as! UICollectionViewFlowLayout
+        let horizontalInsets = flow.sectionInset.left + flow.sectionInset.right
+        let gaps = CGFloat(Const.emojiCellsPerRow - 1) * flow.minimumInteritemSpacing
+        let width = floor((collectionView.bounds.width - horizontalInsets - gaps) / CGFloat(Const.emojiCellsPerRow))
+        return CGSize(width: width, height: 34)
+    }
+
+    public func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+        guard emojiVisibleGlyphs.indices.contains(indexPath.item) else { return }
+        insertEmoji(emojiVisibleGlyphs[indexPath.item])
+    }
+
+    private func insertEmoji(_ emoji: String) {
+        guard !emoji.isEmpty else { return }
         textDocumentProxy.insertText(emoji)
         var list = EmojiCategory.glyphsForRecents()
         list.removeAll { $0 == emoji }
@@ -1520,5 +1501,46 @@ public final class KeyboardViewController: UIInputViewController {
         } else {
             runCoach(draft: draft)
         }
+    }
+}
+
+/// Reusable emoji cell: the collection view owns only enough labels for the
+/// visible viewport, rather than materializing hundreds of UIButtons.
+private final class EmojiCollectionCell: UICollectionViewCell {
+    private let glyphLabel = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        glyphLabel.translatesAutoresizingMaskIntoConstraints = false
+        glyphLabel.font = .systemFont(ofSize: 27)
+        glyphLabel.textAlignment = .center
+        glyphLabel.adjustsFontSizeToFitWidth = true
+        glyphLabel.minimumScaleFactor = 0.8
+        contentView.addSubview(glyphLabel)
+        NSLayoutConstraint.activate([
+            glyphLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            glyphLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            glyphLabel.topAnchor.constraint(equalTo: contentView.topAnchor),
+            glyphLabel.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+        ])
+        isAccessibilityElement = true
+        accessibilityTraits = .button
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        glyphLabel.text = nil
+        accessibilityLabel = nil
+        accessibilityIdentifier = nil
+    }
+
+    func configure(emoji: String, identifier: String) {
+        glyphLabel.text = emoji
+        accessibilityLabel = "Emoji \(emoji)"
+        accessibilityIdentifier = identifier
     }
 }
