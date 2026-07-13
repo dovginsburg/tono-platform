@@ -77,7 +77,7 @@ jobs:
       - name: Verify web output embeds exact source and contract identity
         run: |
           grep -F "$GITHUB_SHA" apps/web/public/build-provenance.json
-          test -f apps/web/.next/server/app-build-manifest.json
+          test -f apps/web/.next/BUILD_ID
 
   android:
     runs-on: ubuntu-latest
