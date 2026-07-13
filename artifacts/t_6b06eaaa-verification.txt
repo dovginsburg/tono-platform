@@ -1,0 +1,43 @@
+Tono build 86 verification — task t_6b06eaaa
+
+Original contract/autocorrect fix (commit 10ab72c)
+Backend command: python -m pytest -q
+Result: 110 passed in 4.83s
+Simulator XCTest command: xcodebuild test -project Tono.xcodeproj -scheme Tono -destination 'platform=iOS Simulator,id=A034F0C4-F573-49D2-99AC-F7DEB1500294' CODE_SIGNING_ALLOWED=NO
+Result: TEST SUCCEEDED — 23 tests, 0 failures
+xcresult: /Users/Ezra/Library/Developer/Xcode/DerivedData/Tono-dhyvmakrjwnvftcnhxulkafbcnuy/Logs/Test/Test-Tono-2026.07.13_11-03-56--0400.xcresult
+
+Visual parity follow-up (uncommitted review candidate)
+Build command: xcodebuild build-for-testing -project Tono.xcodeproj -scheme Tono -destination 'platform=iOS Simulator,id=A034F0C4-F573-49D2-99AC-F7DEB1500294' CODE_SIGNING_ALLOWED=NO
+Result: TEST BUILD SUCCEEDED. This compiles the app, keyboard extension, and new KeyboardVisualStyleTests without executing Gary's own tests; Sherlock must run them independently.
+
+Native Apple reference
+Device: iPhone 17 Pro simulator, iOS 26.5, 402×874pt at 3×.
+Synthetic draft: “Hey, I need help with something!”
+Screenshot: artifacts/t_6b06eaaa-native-apple-keyboard-light.png
+Measured from the screenshot: full native keyboard region ≈334pt including the Apple-owned globe/dictation area; suggestion + typing content ≈256pt; keycaps ≈43–44pt high; vertical row gaps ≈8–11pt; letter font ≈22pt; corner radius ≈5pt; shadow offset ≈1pt.
+
+Tono parity specification
+Compact portrait width (<390pt): 252pt owned content.
+Regular portrait width (390–429pt): 256pt owned content.
+Large portrait width (>=430pt): 264pt owned content.
+Typing rows: 44pt minimum touch/key height, 8pt gaps, 4pt edge inset, 22pt key font, 5pt radius, 1pt shadow offset.
+Coach strip: 46pt; visible Coach control: 36pt centered in the strip. Coach no longer shrinks ordinary typing rows.
+Specification renders: artifacts/t_6b06eaaa-tono-keyboard-spec-light.png and artifacts/t_6b06eaaa-tono-keyboard-spec-dark.png.
+
+Coach semantic-violet contrast against white text (WCAG relative luminance)
+Light normal #5E1F78: 10.81:1
+Dark normal #8D4CB3: 5.50:1
+Light pressed #451258: 14.18:1
+Dark pressed #713090: 8.31:1
+Disabled #76617D: 5.56:1
+All states exceed the 4.5:1 AA threshold. Ordinary keys, suggestions, mode controls, space, return, shift, emoji, and delete remain system-neutral.
+
+Artifact SHA-256
+build86 host-app screenshot: d442041ee260a16556abacd12dcbaa753fad6a3cbb4083a6af864f3ecae67bf5
+native Apple reference: 2798bb3633f4f734d825adf1c6d2a36d327b0d7dffc2ce9b601a144fa027c7a3
+Tono dark specification: a4205517522cd4ff2370512e5d55d20cca3af5b788eec6c5febdf7b195562195
+Tono light specification: d739cd35f37cc5189ca44061d536987f41b28b2f4871440f7395fee1ef9c4579
+
+Review gate
+The simulator accepted and launched com.tonoit.app.keyboard and logged “keyboard layout installed mode=letters,” but direct defaults-based keyboard switching did not expose the extension view in the screenshot. No runtime Tono-keyboard screenshot is claimed. Sherlock must cycle to Tono through the simulator UI, capture actual light/dark normal/pressed/disabled states, compare geometry against the native reference, and run the full test suite before approval.

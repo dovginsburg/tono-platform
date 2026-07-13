@@ -6,8 +6,8 @@
 //
 //   * Explicit navigation matrix: letters bottom `123`; numbers/symbols
 //     bottom `ABC`; numbers row-3 `#+=`; symbols row-3 `123`.
-//   * Responsive 10/9/7 Apple-like geometry at compact 204pt content height,
-//     with a minimal Coach pill and no production build-number label.
+//   * Responsive 10/9/7 Apple-parity geometry with full 44pt typing targets,
+//     an accessible semantic-violet Coach action, and no build-number label.
 //   * One delete in row 3; conventional mode/emoji/space/return bottom row;
 //     the globe is created only when `needsInputModeSwitchKey` requires it.
 //   * Lazy 8-column UICollectionView emoji grid with reusable cells, compact
@@ -40,15 +40,16 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         static let symRow2: [String] = ["_","\\","|","~","<",">","€","£","¥","•"]
         static let symRow3: [String] = [".",",","?","!","'"]
 
-        // Touch-target + spacing values calibrated to iPhone.
-        static let keyMinHeight: CGFloat = 36
-        static let rowSpacing: CGFloat = 5.5
-        static let edgePadding: CGFloat = 3
-        static let preferredKeyboardHeight: CGFloat = 204
-        static let coachResultsKeyboardHeight: CGFloat = 276 // >= 250: four readable result cards.
+        // Keyboard geometry has one measured source of truth. Width-dependent
+        // content height is applied by `currentVisualMetrics`; these baseline
+        // values cover key construction before the first layout pass.
+        static let baselineMetrics = TonoKeyboardMetrics.portrait(availableWidth: 402)
+        static let keyMinHeight = baselineMetrics.keyMinHeight
+        static let rowSpacing = baselineMetrics.rowSpacing
+        static let edgePadding = baselineMetrics.edgePadding
 
         // Apple-like keycap geometry.
-        static let keyCornerRadius: CGFloat = 5
+        static let keyCornerRadius = baselineMetrics.keyCornerRadius
         static let keyBorderWidth: CGFloat = 0.5
         static let referencePortraitWidth: CGFloat = 367.5
 
@@ -288,6 +289,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private var spellingToken: SpellingToken?
     private var autocorrectionRecord: AutoCorrectionRecord?
     private weak var candidateStack: UIStackView?
+    private weak var coachButton: TonoCoachButton?
     private var candidateValues: [String] = []
 
     // MARK: - Lifecycle
@@ -296,9 +298,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         super.viewDidLoad()
         NSLog("TONO_KB BUILD86 01: viewDidLoad")
 
-        // Keep the extension itself compact. Apple-owned input-assistant UI may
+        // Preserve Apple's typing-row scale. Apple-owned input-assistant UI may
         // still be placed below us by the host and must never be hidden.
-        let height = view.heightAnchor.constraint(equalToConstant: Const.preferredKeyboardHeight)
+        let height = view.heightAnchor.constraint(equalToConstant: currentVisualMetrics.preferredContentHeight)
         height.priority = .defaultHigh
         height.isActive = true
         preferredHeightConstraint = height
@@ -349,6 +351,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         guard width > 0 else { return }
         let changed = lastLayoutWidth.map { abs($0 - width) > 0.5 } ?? true
         lastLayoutWidth = width
+        if coachResultsStack == nil {
+            preferredHeightConstraint?.constant = currentVisualMetrics.preferredContentHeight
+        }
         guard changed, keysInstalled, !isRebuildingLayout, coachContainer == nil else { return }
         if isEmojiPanelVisible { showEmojiPanel() } else { installKeyboardLayout() }
     }
@@ -410,13 +415,12 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         bar.accessibilityIdentifier = Const.idTopBar
         view.addSubview(bar)
 
-        let coach = UIButton(type: .system)
+        let coach = TonoCoachButton(type: .custom)
         coach.setTitle("Coach", for: .normal)
         coach.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
-        coach.setTitleColor(.white, for: .normal)
-        coach.backgroundColor = .systemBlue
-        coach.layer.cornerRadius = 10
-        coach.contentEdgeInsets = UIEdgeInsets(top: 2, left: 12, bottom: 2, right: 12)
+        coach.layer.cornerRadius = Const.keyCornerRadius
+        coach.layer.masksToBounds = true
+        coach.contentEdgeInsets = UIEdgeInsets(top: 6, left: 14, bottom: 6, right: 14)
         coach.translatesAutoresizingMaskIntoConstraints = false
         coach.accessibilityIdentifier = Const.idCoachButton
         coach.accessibilityLabel = "Tono Coach"
@@ -452,20 +456,21 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             bar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             bar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             bar.topAnchor.constraint(equalTo: view.topAnchor),
-            bar.heightAnchor.constraint(equalToConstant: 26),
+            bar.heightAnchor.constraint(equalToConstant: Const.baselineMetrics.topBarHeight),
 
             coach.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
             coach.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            coach.heightAnchor.constraint(equalToConstant: 22),
+            coach.heightAnchor.constraint(equalToConstant: Const.baselineMetrics.coachControlHeight),
 
             candidates.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 3),
             candidates.trailingAnchor.constraint(equalTo: coach.leadingAnchor, constant: -5),
-            candidates.topAnchor.constraint(equalTo: bar.topAnchor, constant: 2),
-            candidates.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -2),
+            candidates.topAnchor.constraint(equalTo: bar.topAnchor, constant: 4),
+            candidates.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -4),
         ])
 
         self.topBar = bar
         self.candidateStack = candidates
+        self.coachButton = coach
     }
 
     private func buildBodyContainer() {
@@ -597,7 +602,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         isRebuildingLayout = true
         defer { isRebuildingLayout = false }
         cancelTransientInteractions()
-        preferredHeightConstraint?.constant = Const.preferredKeyboardHeight
+        preferredHeightConstraint?.constant = currentVisualMetrics.preferredContentHeight
 
         emojiPanelView?.removeFromSuperview()
         emojiPanelView = nil
@@ -650,6 +655,10 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private var currentKeyboardWidth: CGFloat {
         let measured = bodyContainer?.bounds.width ?? 0
         return measured > 0 ? measured : Const.referencePortraitWidth
+    }
+
+    private var currentVisualMetrics: TonoKeyboardMetrics {
+        TonoKeyboardMetrics.portrait(availableWidth: currentKeyboardWidth)
     }
 
     private func row1Chars() -> [String] {
@@ -841,7 +850,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private func makeCharButton(_ char: String) -> UIButton {
         let b = KeyboardButton(frame: .zero)
         b.setTitle(displayLetter(char), for: .normal)
-        b.titleLabel?.font = .systemFont(ofSize: 22, weight: .regular)
+        b.titleLabel?.font = .systemFont(ofSize: Const.baselineMetrics.keyFontSize, weight: .regular)
         b.setTitleColor(.label, for: .normal)
         b.normalBackgroundColor = keyboardKeyBackground(.secondary)
         b.layer.cornerRadius = Const.keyCornerRadius
@@ -1598,7 +1607,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         emojiPanelView?.removeFromSuperview()
         emojiPanelView = nil
         emojiCollectionView = nil
-        preferredHeightConstraint?.constant = Const.preferredKeyboardHeight
+        preferredHeightConstraint?.constant = currentVisualMetrics.preferredContentHeight
 
         keysStack?.removeFromSuperview()
         keysStack = nil
@@ -1908,6 +1917,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private func runCoach(draft: String) {
         cancelTransientInteractions()
         coachBusy = true
+        coachButton?.isEnabled = false
         presentCoachLoading()
         let client = TonoCoachClient(endpoint: Const.backendURL, timeout: Const.coachTimeout)
         NSLog("TONO_KB BUILD86 coach: begin POST /v1/analyze (len=\(draft.count))")
@@ -1915,6 +1925,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.coachBusy = false
+                self.coachButton?.isEnabled = true
                 switch result {
                 case .success(let response):
                     NSLog("TONO_KB BUILD86 coach: OK risk=\(response.riskLevel) suggestions=\(response.suggestions.count)")
@@ -1930,7 +1941,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private func presentCoachLoading() {
         guard let container = bodyContainer else { return }
         cancelTransientInteractions()
-        preferredHeightConstraint?.constant = Const.preferredKeyboardHeight
+        preferredHeightConstraint?.constant = currentVisualMetrics.preferredContentHeight
         keysStack?.removeFromSuperview()
         keysStack = nil
         coachErrorContainer?.removeFromSuperview()
@@ -1977,7 +1988,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private func presentCoachResults(_ response: TonoCoachClient.CoachResponse) {
         guard let container = bodyContainer else { return }
         cancelTransientInteractions()
-        preferredHeightConstraint?.constant = Const.coachResultsKeyboardHeight
+        preferredHeightConstraint?.constant = currentVisualMetrics.coachResultsContentHeight
         coachContainer?.removeFromSuperview()
         coachContainer = nil
         coachStatusLabel = nil
@@ -2150,7 +2161,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private func presentCoachError(_ err: TonoCoachClient.CoachError) {
         guard let container = bodyContainer else { return }
         cancelTransientInteractions()
-        preferredHeightConstraint?.constant = Const.preferredKeyboardHeight
+        preferredHeightConstraint?.constant = currentVisualMetrics.preferredContentHeight
         coachContainer?.removeFromSuperview()
         coachContainer = nil
         coachStatusLabel = nil
@@ -2182,12 +2193,11 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         detail.accessibilityIdentifier = Const.idCoachErrorDetail
         panel.addSubview(detail)
 
-        let retry = UIButton(type: .system)
+        let retry = TonoCoachButton(type: .custom)
         retry.setTitle("Retry", for: .normal)
         retry.titleLabel?.font = .systemFont(ofSize: 14, weight: .semibold)
-        retry.backgroundColor = .systemBlue
-        retry.setTitleColor(.white, for: .normal)
         retry.layer.cornerRadius = Const.keyCornerRadius
+        retry.layer.masksToBounds = true
         retry.contentEdgeInsets = UIEdgeInsets(top: 6, left: 14, bottom: 6, right: 14)
         retry.translatesAutoresizingMaskIntoConstraints = false
         retry.accessibilityIdentifier = Const.idCoachRetry
@@ -2247,10 +2257,11 @@ private final class KeyboardButton: UIButton {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
+        let metrics = TonoKeyboardMetrics.portrait(availableWidth: UIScreen.main.bounds.width)
         layer.shadowColor = UIColor.black.cgColor
-        layer.shadowOpacity = 0.16
-        layer.shadowRadius = 0.5
-        layer.shadowOffset = CGSize(width: 0, height: 1)
+        layer.shadowOpacity = metrics.keyShadowOpacity
+        layer.shadowRadius = metrics.keyShadowRadius
+        layer.shadowOffset = metrics.keyShadowOffset
         adjustsImageWhenHighlighted = false
     }
 
@@ -2267,24 +2278,12 @@ private final class KeyboardButton: UIButton {
             backgroundColor = isHighlighted
                 ? normalBackgroundColor?.withAlphaComponent(0.68)
                 : normalBackgroundColor
-            layer.shadowOpacity = isHighlighted ? 0.04 : 0.16
+            let metrics = TonoKeyboardMetrics.portrait(availableWidth: UIScreen.main.bounds.width)
+            layer.shadowOpacity = isHighlighted ? 0.04 : metrics.keyShadowOpacity
             transform = isHighlighted
                 ? CGAffineTransform(translationX: 0, y: 1)
                 : .identity
         }
-    }
-}
-
-private extension UIColor {
-    convenience init(hexRGB: String) {
-        var value: UInt64 = 0
-        Scanner(string: hexRGB).scanHexInt64(&value)
-        self.init(
-            red: CGFloat((value >> 16) & 0xFF) / 255,
-            green: CGFloat((value >> 8) & 0xFF) / 255,
-            blue: CGFloat(value & 0xFF) / 255,
-            alpha: 1
-        )
     }
 }
 
