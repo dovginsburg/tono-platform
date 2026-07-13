@@ -1,9 +1,9 @@
 // KeyboardViewController.swift
-// Tono keyboard extension — build 83.
+// Tono keyboard extension — build 84.
 //
-// Build 83 repairs the failures observed in build 82 physical testing while
-// preserving UIKit-only startup, the live Coach network path, Unicode proxy
-// insertion, shift/caps state, and conditional input-mode switching:
+// Build 84 preserves the build-83 geometry and emoji repairs while adding
+// Apple-like typing behavior. UIKit-only startup, the live Coach network path,
+// Unicode insertion, and conditional input-mode switching remain intact:
 //
 //   * Explicit navigation matrix: letters bottom `123`; numbers/symbols
 //     bottom `ABC`; numbers row-3 `#+=`; symbols row-3 `123`.
@@ -21,7 +21,7 @@
 import UIKit
 
 @objc(KeyboardViewController)
-public final class KeyboardViewController: UIInputViewController, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
+public final class KeyboardViewController: UIInputViewController, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout, UIInputViewAudioFeedback {
 
     // MARK: - Layout constants
 
@@ -46,6 +46,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         static let rowSpacing: CGFloat = 5.5
         static let edgePadding: CGFloat = 3
         static let preferredKeyboardHeight: CGFloat = 204
+        static let coachResultsKeyboardHeight: CGFloat = 276 // >= 250: four readable result cards.
 
         // Apple-like keycap geometry.
         static let keyCornerRadius: CGFloat = 5
@@ -75,8 +76,10 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         static let coachTimeout: TimeInterval = 15
         static let backendURL = "https://api.tonoit.com/v1/analyze"
 
-        // Shift double-tap window.
-        static let shiftDoubleTapWindow: TimeInterval = 0.4
+        // Delete fires once immediately, then repeats with a bounded ramp.
+        static let deleteRepeatInitialDelay: TimeInterval = 0.5
+        static let deleteRepeatInterval: TimeInterval = 0.105
+        static let deleteRepeatMinimumInterval: TimeInterval = 0.055
 
         // Emoji panel sizing.
         static let emojiCellsPerRow: Int = 8
@@ -159,9 +162,17 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     /// Letter-key shift state. Symbols/numbers ignore shift entirely.
     enum ShiftState {
-        case none
-        case shiftOnce
+        case lowercase
+        case oneShotUppercase
         case capsLock
+    }
+
+    private struct HostConfiguration: Equatable {
+        let keyboardType: Int
+        let returnKeyType: Int
+        let keyboardAppearance: Int
+        let autocapitalizationType: Int
+        let needsGlobe: Bool
     }
 
     /// Build 81 emoji catalog. Data is Unicode-only and category rows are
@@ -238,6 +249,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private var keysInstalled = false
     private var topBar: UIView?
     private var bodyContainer: UIView?
+    private var preferredHeightConstraint: NSLayoutConstraint?
 
     private var capturedContextLength: Int = 0
     private var lastSubmittedDraft: String = ""
@@ -252,8 +264,18 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     // Build 79 — layout, shift, emoji state.
     private var layoutMode: KeyboardLayoutMode = .letters
-    private var shiftState: ShiftState = .none
-    private var lastShiftTapAt: Date = .distantPast
+    private var shiftState: ShiftState = .lowercase
+    private var shiftWasAutomatic = false
+    private weak var shiftButton: UIButton?
+    private weak var returnButton: UIButton?
+    private var hostConfiguration: HostConfiguration?
+    private var isRebuildingLayout = false
+    private var lastLayoutWidth: CGFloat?
+    private var deleteRepeatWorkItem: DispatchWorkItem?
+    private var deleteRepeatGeneration = 0
+    private var deleteRepeatCount = 0
+    private weak var previewOwner: UIButton?
+    private var keyPreview: UIView?
     private var isEmojiPanelVisible: Bool = false
     private var emojiPanelView: UIView?
     private var emojiActiveCategory: EmojiCategory = .smileys
@@ -264,40 +286,102 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     public override func viewDidLoad() {
         super.viewDidLoad()
-        NSLog("TONO_KB BUILD83 01: viewDidLoad")
+        NSLog("TONO_KB BUILD84 01: viewDidLoad")
 
         // Keep the extension itself compact. Apple-owned input-assistant UI may
         // still be placed below us by the host and must never be hidden.
         let height = view.heightAnchor.constraint(equalToConstant: Const.preferredKeyboardHeight)
         height.priority = .defaultHigh
         height.isActive = true
+        preferredHeightConstraint = height
 
         view.backgroundColor = .systemBackground
         let ids = Const.allIdentifiers()
-        NSLog("TONO_KB BUILD83 ids: \(ids.count)")
+        NSLog("TONO_KB BUILD84 ids: \(ids.count)")
         buildTopBar()
         buildBodyContainer()
+        updateHostConfiguration(rebuildIfNeeded: false)
         installKeyboardLayout()
-        NSLog("TONO_KB BUILD83 02: UIKit hierarchy installed")
+        keysInstalled = true
+        NSLog("TONO_KB BUILD84 02: UIKit hierarchy installed")
     }
 
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        NSLog("TONO_KB BUILD83 03: viewWillAppear")
+        NSLog("TONO_KB BUILD84 03: viewWillAppear")
     }
 
     public override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        NSLog("TONO_KB BUILD83 04: viewDidAppear")
-        if !keysInstalled {
-            installKeyboardLayout()
-            keysInstalled = true
-        }
+        NSLog("TONO_KB BUILD84 04: viewDidAppear")
+        refreshHostConfigurationIfNeeded()
         applyAutoCapitalizationIfNeeded()
     }
 
     public override func textDidChange(_ textInput: UITextInput?) {
-        applyAutoCapitalizationIfNeeded()
+        refreshHostConfigurationIfNeeded()
+        DispatchQueue.main.async { [weak self] in
+            self?.refreshHostConfigurationIfNeeded()
+            self?.applyAutoCapitalizationIfNeeded()
+        }
+    }
+
+    public override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        let width = bodyContainer?.bounds.width ?? 0
+        guard width > 0 else { return }
+        let changed = lastLayoutWidth.map { abs($0 - width) > 0.5 } ?? true
+        lastLayoutWidth = width
+        guard changed, keysInstalled, !isRebuildingLayout, coachContainer == nil else { return }
+        if isEmojiPanelVisible { showEmojiPanel() } else { installKeyboardLayout() }
+    }
+
+    public override func viewWillTransition(
+        to size: CGSize,
+        with coordinator: UIViewControllerTransitionCoordinator
+    ) {
+        cancelTransientInteractions()
+        super.viewWillTransition(to: size, with: coordinator)
+        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+            guard let self = self else { return }
+            self.lastLayoutWidth = nil
+            self.view.setNeedsLayout()
+        }
+    }
+
+    public override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        guard previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle
+                || previousTraitCollection?.preferredContentSizeCategory != traitCollection.preferredContentSizeCategory
+        else { return }
+        cancelTransientInteractions()
+        refreshHostConfigurationIfNeeded()
+    }
+
+    public override func viewWillDisappear(_ animated: Bool) {
+        cancelTransientInteractions()
+        super.viewWillDisappear(animated)
+    }
+
+    public override func viewDidDisappear(_ animated: Bool) {
+        cancelTransientInteractions()
+        super.viewDidDisappear(animated)
+    }
+
+    deinit {
+        cancelDeleteRepeat()
+        dismissKeyPreview()
+    }
+
+    public var enableInputClicksWhenVisible: Bool { true }
+
+    private func playInputClick() {
+        UIDevice.current.playInputClick()
+    }
+
+    private func cancelTransientInteractions() {
+        cancelDeleteRepeat()
+        dismissKeyPreview()
     }
 
     // MARK: - Minimal Coach bar
@@ -342,7 +426,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         view.addSubview(container)
 
         guard let topBar = self.topBar else {
-            NSLog("TONO_KB BUILD82 ERR: topBar missing in buildBodyContainer")
+            NSLog("TONO_KB BUILD84 ERR: topBar missing in buildBodyContainer")
             return
         }
 
@@ -356,10 +440,105 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         self.bodyContainer = container
     }
 
+    // MARK: - Host-field traits
+
+    private var hostKeyboardType: UIKeyboardType {
+        textDocumentProxy.keyboardType ?? .default
+    }
+
+    private var hostReturnKeyType: UIReturnKeyType {
+        textDocumentProxy.returnKeyType ?? .default
+    }
+
+    private var hostKeyboardAppearance: UIKeyboardAppearance {
+        textDocumentProxy.keyboardAppearance ?? .default
+    }
+
+    private var hostAutocapitalizationType: UITextAutocapitalizationType {
+        textDocumentProxy.autocapitalizationType ?? .sentences
+    }
+
+    private var currentHostConfiguration: HostConfiguration {
+        HostConfiguration(
+            keyboardType: hostKeyboardType.rawValue,
+            returnKeyType: hostReturnKeyType.rawValue,
+            keyboardAppearance: hostKeyboardAppearance.rawValue,
+            autocapitalizationType: hostAutocapitalizationType.rawValue,
+            needsGlobe: needsInputModeSwitchKey
+        )
+    }
+
+    private func refreshHostConfigurationIfNeeded() {
+        updateHostConfiguration(rebuildIfNeeded: true)
+    }
+
+    private func updateHostConfiguration(rebuildIfNeeded: Bool) {
+        let previous = hostConfiguration
+        let next = currentHostConfiguration
+        guard previous != next else { return }
+        hostConfiguration = next
+        applyKeyboardAppearance(hostKeyboardAppearance)
+
+        if previous?.keyboardType != next.keyboardType {
+            layoutMode = initialMode(for: hostKeyboardType)
+        }
+        guard rebuildIfNeeded, keysInstalled, !isRebuildingLayout,
+              coachContainer == nil else { return }
+        if isEmojiPanelVisible {
+            showEmojiPanel()
+        } else {
+            installKeyboardLayout()
+        }
+    }
+
+    private func initialMode(for keyboardType: UIKeyboardType) -> KeyboardLayoutMode {
+        switch keyboardType {
+        case .numbersAndPunctuation, .numberPad, .decimalPad, .asciiCapableNumberPad:
+            return .numbers
+        case .default, .asciiCapable, .URL, .emailAddress, .twitter, .webSearch,
+             .phonePad, .namePhonePad:
+            return .letters
+        @unknown default:
+            return .letters
+        }
+    }
+
+    private func applyKeyboardAppearance(_ appearance: UIKeyboardAppearance) {
+        switch appearance {
+        case .dark:
+            overrideUserInterfaceStyle = .dark
+        case .light:
+            overrideUserInterfaceStyle = .light
+        case .default, .alert:
+            overrideUserInterfaceStyle = .unspecified
+        @unknown default:
+            overrideUserInterfaceStyle = .unspecified
+        }
+    }
+
+    private var quickCharactersForKeyboardType: [String] {
+        switch hostKeyboardType {
+        case .URL: return ["/", "."]
+        case .emailAddress: return ["@", "."]
+        case .twitter: return ["@", "#"]
+        case .webSearch: return ["."]
+        case .default, .asciiCapable, .numbersAndPunctuation, .numberPad,
+             .phonePad, .namePhonePad, .decimalPad, .asciiCapableNumberPad:
+            return []
+        @unknown default:
+            return []
+        }
+    }
+
     // MARK: - Keyboard layout (UIKit QWERTY + iOS-style bottom row)
 
     private func installKeyboardLayout() {
         guard let container = bodyContainer else { return }
+        guard !isRebuildingLayout else { return }
+        isRebuildingLayout = true
+        defer { isRebuildingLayout = false }
+        cancelTransientInteractions()
+        preferredHeightConstraint?.constant = Const.preferredKeyboardHeight
 
         emojiPanelView?.removeFromSuperview()
         emojiPanelView = nil
@@ -371,6 +550,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachResultsStack = nil
         coachErrorContainer = nil
         coachErrorLabel = nil
+        shiftButton = nil
+        returnButton = nil
 
         let stack = UIStackView()
         stack.axis = .vertical
@@ -404,7 +585,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         stack.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight * 4 + Const.rowSpacing * 3).isActive = true
 
         self.keysStack = stack
-        NSLog("TONO_KB BUILD83 05: keyboard layout installed mode=\(modeName(layoutMode))")
+        NSLog("TONO_KB BUILD84 05: keyboard layout installed mode=\(modeName(layoutMode))")
     }
 
     private var currentKeyboardWidth: CGFloat {
@@ -445,10 +626,10 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     private var shiftSymbolName: String {
-        shiftState == .none ? "shift" : "shift.fill"
+        shiftState == .lowercase ? "shift" : "shift.fill"
     }
 
-    /// Build 83 mode-state matrix. Bottom-left always enters/leaves letters;
+    /// Build 84 mode-state matrix. Bottom-left always enters/leaves letters;
     /// the row-3 modifier is the sole numbers ↔ symbols transition.
     private var bottomModeSpec: (label: String, target: KeyboardLayoutMode) {
         switch layoutMode {
@@ -469,7 +650,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private func displayLetter(_ ch: String) -> String {
         switch layoutMode {
         case .letters:
-            return shiftState == .none ? ch : ch.uppercased()
+            return shiftState == .lowercase ? ch : ch.uppercased()
         case .numbers, .symbols:
             return ch
         }
@@ -582,10 +763,16 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
         let backspace = makeSymbolControlButton(
             systemName: "delete.left",
-            action: #selector(backspaceTapped),
+            action: nil,
             width: Const.backspaceWidth,
             bg: keyboardKeyBackground(.tertiary),
             id: "backspace"
+        )
+        backspace.addTarget(self, action: #selector(backspaceTouchDown), for: .touchDown)
+        backspace.addTarget(
+            self,
+            action: #selector(backspaceTouchEnded),
+            for: [.touchUpInside, .touchUpOutside, .touchCancel, .touchDragExit]
         )
         row.addArrangedSubview(backspace)
 
@@ -593,26 +780,32 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     private func makeCharButton(_ char: String) -> UIButton {
-        let b = UIButton(type: .system)
+        let b = KeyboardButton(frame: .zero)
         b.setTitle(displayLetter(char), for: .normal)
         b.titleLabel?.font = .systemFont(ofSize: 22, weight: .regular)
         b.setTitleColor(.label, for: .normal)
-        b.backgroundColor = keyboardKeyBackground(.secondary)
+        b.normalBackgroundColor = keyboardKeyBackground(.secondary)
         b.layer.cornerRadius = Const.keyCornerRadius
         b.layer.borderWidth = Const.keyBorderWidth
         b.layer.borderColor = keyboardKeyBorder().cgColor
-        b.accessibilityLabel = "Tono key \(char)"
+        b.accessibilityLabel = char.uppercased()
         b.accessibilityIdentifier = Const.letterId(char)
         b.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight).isActive = true
+        b.addTarget(self, action: #selector(characterTouchDown(_:)), for: .touchDown)
         b.addTarget(self, action: #selector(charTapped(_:)), for: .touchUpInside)
+        b.addTarget(
+            self,
+            action: #selector(characterTouchEnded(_:)),
+            for: [.touchUpInside, .touchUpOutside, .touchCancel, .touchDragExit]
+        )
         return b
     }
 
     private func makeShiftButton() -> UIButton {
-        let b = UIButton(type: .system)
+        let b = KeyboardButton(frame: .zero)
         b.setImage(UIImage(systemName: shiftSymbolName), for: .normal)
         b.tintColor = shiftState == .capsLock ? .systemBlue : .label
-        b.backgroundColor = shiftState == .capsLock
+        b.normalBackgroundColor = shiftState == .capsLock
             ? UIColor.systemBlue.withAlphaComponent(0.22)
             : keyboardKeyBackground(.tertiary)
         b.layer.cornerRadius = Const.keyCornerRadius
@@ -622,24 +815,35 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         b.accessibilityIdentifier = Const.idShift
         b.widthAnchor.constraint(equalToConstant: Const.backspaceWidth).isActive = true
         b.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight).isActive = true
-        b.addTarget(self, action: #selector(shiftTapped), for: .touchUpInside)
+        let singleTap = UITapGestureRecognizer(target: self, action: #selector(shiftSingleTapped))
+        let doubleTap = UITapGestureRecognizer(target: self, action: #selector(shiftDoubleTapped))
+        doubleTap.numberOfTapsRequired = 2
+        singleTap.require(toFail: doubleTap)
+        b.addGestureRecognizer(singleTap)
+        b.addGestureRecognizer(doubleTap)
+        b.accessibilityActivationHandler = { [weak self] in
+            self?.shiftSingleTapped()
+            return self != nil
+        }
+        shiftButton = b
+        applyShiftToKey(b)
         return b
     }
 
     private func shiftAccessibilityLabel() -> String {
         switch shiftState {
-        case .none:      return "Shift"
-        case .shiftOnce: return "Shift on, next letter capital"
+        case .lowercase:        return "Shift, Off"
+        case .oneShotUppercase: return "Shift, On"
         case .capsLock:  return "Caps lock on, tap to release"
         }
     }
 
     private func makeModeToggleButton(label: String, action: Selector, identifierSuffix: String) -> UIButton {
-        let b = UIButton(type: .system)
+        let b = KeyboardButton(frame: .zero)
         b.setTitle(label, for: .normal)
         b.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
         b.setTitleColor(.label, for: .normal)
-        b.backgroundColor = keyboardKeyBackground(.tertiary)
+        b.normalBackgroundColor = keyboardKeyBackground(.tertiary)
         b.layer.cornerRadius = Const.keyCornerRadius
         b.layer.borderWidth = Const.keyBorderWidth
         b.layer.borderColor = keyboardKeyBorder().cgColor
@@ -690,34 +894,49 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             bg: keyboardKeyBackground(.secondary),
             id: "space"
         )
-        let returnKey = makeControlButton(
-            title: "return",
-            action: #selector(returnTapped),
-            width: Const.returnWidth,
-            bg: keyboardKeyBackground(.tertiary),
-            id: "return"
-        )
+        let returnKey = makeReturnButton()
         row.addArrangedSubview(modeToggle)
         // UIInputViewController owns this decision. Never render an
         // unconditional globe beside Apple-owned input controls.
         if needsInputModeSwitchKey {
-            row.addArrangedSubview(makeSymbolControlButton(
-                systemName: "globe",
-                action: #selector(globeTapped),
-                width: Const.modeToggleWidth,
-                bg: keyboardKeyBackground(.tertiary),
-                id: "globe"
-            ))
+            row.addArrangedSubview(makeGlobeButton(systemName: "globe"))
         }
         row.addArrangedSubview(emoji)
+        for character in quickCharactersForKeyboardType {
+            row.addArrangedSubview(makeQuickCharacterButton(character))
+        }
         row.addArrangedSubview(space)
         row.addArrangedSubview(returnKey)
         return row
     }
 
+    private func makeGlobeButton(systemName: String) -> UIButton {
+        let button = makeSymbolControlButton(
+            systemName: systemName,
+            action: nil,
+            width: Const.modeToggleWidth,
+            bg: keyboardKeyBackground(.tertiary),
+            id: "globe"
+        )
+        button.addTarget(self, action: #selector(globeEvent(_:with:)), for: .allTouchEvents)
+        return button
+    }
+
+    private func makeQuickCharacterButton(_ character: String) -> UIButton {
+        let button = makeControlButton(
+            title: character,
+            action: #selector(quickCharacterTapped(_:)),
+            width: 32,
+            bg: keyboardKeyBackground(.secondary),
+            id: "quick.\(character)"
+        )
+        button.accessibilityLabel = character
+        return button
+    }
+
     private func makeSymbolControlButton(
         systemName: String,
-        action: Selector,
+        action: Selector?,
         width: CGFloat?,
         bg: UIColor,
         id: String
@@ -731,20 +950,20 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     private func makeControlButton(
         title: String,
-        action: Selector,
+        action: Selector?,
         width: CGFloat?,
         bg: UIColor,
         id: String
     ) -> UIButton {
-        let b = UIButton(type: .system)
+        let b = KeyboardButton(frame: .zero)
         b.setTitle(title, for: .normal)
         b.titleLabel?.font = .systemFont(ofSize: 15, weight: .medium)
         b.setTitleColor(.label, for: .normal)
-        b.backgroundColor = bg
+        b.normalBackgroundColor = bg
         b.layer.cornerRadius = Const.keyCornerRadius
         b.layer.borderWidth = Const.keyBorderWidth
         b.layer.borderColor = keyboardKeyBorder().cgColor
-        b.accessibilityLabel = "Tono control \(id)"
+        b.accessibilityLabel = controlAccessibilityLabel(for: id, title: title)
         switch id {
         case "globe":     b.accessibilityIdentifier = Const.idGlobe
         case "emoji":     b.accessibilityIdentifier = Const.idEmojiToggle
@@ -753,7 +972,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         case "backspace": b.accessibilityIdentifier = Const.idBackspace
         default:          b.accessibilityIdentifier = "TonoKB.\(id)"
         }
-        b.addTarget(self, action: action, for: .touchUpInside)
+        if let action = action {
+            b.addTarget(self, action: action, for: .touchUpInside)
+        }
         b.translatesAutoresizingMaskIntoConstraints = false
         if let width = width {
             b.widthAnchor.constraint(equalToConstant: width).isActive = true
@@ -762,67 +983,172 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         return b
     }
 
+    private func controlAccessibilityLabel(for id: String, title: String) -> String {
+        switch id {
+        case "globe": return "Next keyboard"
+        case "emoji": return "Emoji"
+        case "space": return "Space"
+        case "return": return returnKeySpec.accessibilityLabel
+        case "backspace": return "Delete"
+        default: return title.isEmpty ? id : title
+        }
+    }
+
+    private var returnKeySpec: (title: String, accessibilityLabel: String) {
+        switch hostReturnKeyType {
+        case .default: return ("return", "Return")
+        case .go: return ("go", "Go")
+        case .google: return ("Google", "Google")
+        case .join: return ("join", "Join")
+        case .next: return ("next", "Next")
+        case .route: return ("route", "Route")
+        case .search: return ("search", "Search")
+        case .send: return ("send", "Send")
+        case .yahoo: return ("Yahoo", "Yahoo")
+        case .done: return ("done", "Done")
+        case .emergencyCall: return ("emergency call", "Emergency call")
+        case .continue: return ("continue", "Continue")
+        @unknown default: return ("return", "Return")
+        }
+    }
+
+    private var returnKeyIsEmphasized: Bool {
+        switch hostReturnKeyType {
+        case .go, .search, .send, .done, .continue, .emergencyCall:
+            return true
+        case .default, .google, .join, .next, .route, .yahoo:
+            return false
+        @unknown default:
+            return false
+        }
+    }
+
+    private func makeReturnButton() -> UIButton {
+        let spec = returnKeySpec
+        let button = makeControlButton(
+            title: spec.title,
+            action: #selector(returnTapped),
+            width: Const.returnWidth,
+            bg: returnKeyIsEmphasized ? .systemBlue : keyboardKeyBackground(.tertiary),
+            id: "return"
+        )
+        button.accessibilityLabel = spec.accessibilityLabel
+        if returnKeyIsEmphasized { button.setTitleColor(.white, for: .normal) }
+        if hostReturnKeyType == .emergencyCall {
+            button.titleLabel?.font = .systemFont(ofSize: 11, weight: .semibold)
+            button.titleLabel?.numberOfLines = 2
+            button.titleLabel?.textAlignment = .center
+        }
+        returnButton = button
+        return button
+    }
+
     // MARK: - Key actions
 
     @objc private func charTapped(_ sender: UIButton) {
         guard let title = sender.title(for: .normal) else { return }
         textDocumentProxy.insertText(title)
-        if layoutMode == .letters, shiftState == .shiftOnce {
-            shiftState = .none
+        playInputClick()
+        if layoutMode == .letters, shiftState == .oneShotUppercase {
+            shiftState = .lowercase
+            shiftWasAutomatic = false
             updateShiftButtonAppearance()
         }
-        if isEmojiPanelVisible {
-            hideEmojiPanel()
+        DispatchQueue.main.async { [weak self] in
+            self?.applyAutoCapitalizationIfNeeded()
         }
     }
 
-    @objc private func shiftTapped() {
-        let now = Date()
-        let isDoubleTap = now.timeIntervalSince(lastShiftTapAt) < Const.shiftDoubleTapWindow
-        lastShiftTapAt = now
+    @objc private func characterTouchDown(_ sender: UIButton) {
+        showKeyPreview(for: sender)
+    }
+
+    @objc private func characterTouchEnded(_ sender: UIButton) {
+        if previewOwner === sender { dismissKeyPreview() }
+    }
+
+    @objc private func shiftSingleTapped() {
+        shiftWasAutomatic = false
         switch shiftState {
-        case .shiftOnce where isDoubleTap:
-            shiftState = .capsLock
         case .capsLock:
-            shiftState = .none
-        case .none:
-            shiftState = .shiftOnce
-        default:
-            shiftState = .none
+            shiftState = .lowercase
+        case .lowercase:
+            shiftState = .oneShotUppercase
+        case .oneShotUppercase:
+            shiftState = .lowercase
         }
         relayoutLettersForShift()
+        playInputClick()
+    }
+
+    @objc private func shiftDoubleTapped() {
+        shiftWasAutomatic = false
+        shiftState = shiftState == .capsLock ? .lowercase : .capsLock
+        relayoutLettersForShift()
+        playInputClick()
     }
 
     @objc private func bottomModeTapped() {
+        cancelTransientInteractions()
         layoutMode = bottomModeSpec.target
-        NSLog("TONO_KB BUILD83 bottom-mode: -> \(modeName(layoutMode))")
+        NSLog("TONO_KB BUILD84 bottom-mode: -> \(modeName(layoutMode))")
         installKeyboardLayout()
     }
 
     @objc private func thirdRowModeTapped() {
+        cancelTransientInteractions()
         guard let target = thirdRowModeSpec?.target else { return }
         layoutMode = target
-        NSLog("TONO_KB BUILD83 third-row-mode: -> \(modeName(layoutMode))")
+        NSLog("TONO_KB BUILD84 third-row-mode: -> \(modeName(layoutMode))")
         installKeyboardLayout()
     }
 
-    @objc private func globeTapped() {
-        advanceToNextInputMode()
+    @objc private func globeEvent(_ sender: UIButton, with event: UIEvent) {
+        cancelTransientInteractions()
+        handleInputModeList(from: sender, with: event)
     }
 
     private func applyAutoCapitalizationIfNeeded() {
         guard shiftState != .capsLock else { return }
         guard layoutMode == .letters else { return }
+        if shiftState == .oneShotUppercase, !shiftWasAutomatic { return }
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
-        let lastTwo = String(before.suffix(2))
-        let shouldCapitalize = lastTwo.isEmpty
-            || lastTwo.hasSuffix(" ")
-            || lastTwo.hasSuffix("\n")
-            || lastTwo.range(of: #"[.!?]\s$"#, options: .regularExpression) != nil
-        let next: ShiftState = shouldCapitalize ? .shiftOnce : .none
+        let shouldCapitalize = automaticCapitalizationRecommended(
+            policy: hostAutocapitalizationType,
+            context: before
+        )
+        let next: ShiftState = shouldCapitalize ? .oneShotUppercase : .lowercase
         if shiftState != next {
             shiftState = next
-            updateShiftButtonAppearance()
+            relayoutLettersForShift()
+        }
+        shiftWasAutomatic = shouldCapitalize
+    }
+
+    private func automaticCapitalizationRecommended(
+        policy: UITextAutocapitalizationType,
+        context: String
+    ) -> Bool {
+        switch policy {
+        case .none:
+            return false
+        case .allCharacters:
+            return true
+        case .words:
+            return context.isEmpty || context.last?.isWhitespace == true
+        case .sentences:
+            if context.isEmpty || context.hasSuffix("\n") { return true }
+            let trimmed = context.replacingOccurrences(
+                of: #"\s+$"#,
+                with: "",
+                options: .regularExpression
+            )
+            guard trimmed.count < context.count else { return false }
+            if trimmed.isEmpty { return true }
+            guard let last = trimmed.last else { return false }
+            return ".!?".contains(last)
+        @unknown default:
+            return false
         }
     }
 
@@ -850,7 +1176,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             b.setImage(UIImage(systemName: shiftSymbolName), for: .normal)
             b.tintColor = shiftState == .capsLock ? .systemBlue : .label
             b.accessibilityLabel = shiftAccessibilityLabel()
-            b.backgroundColor = shiftState == .capsLock
+            b.accessibilityValue = shiftState == .capsLock ? "Caps Lock" : (shiftState == .lowercase ? "Off" : "On")
+            b.accessibilityTraits = shiftState == .lowercase ? [.button] : [.button, .selected]
+            (b as? KeyboardButton)?.normalBackgroundColor = shiftState == .capsLock
                 ? UIColor.systemBlue.withAlphaComponent(0.22)
                 : keyboardKeyBackground(.tertiary)
         } else if let id = b.accessibilityIdentifier,
@@ -861,36 +1189,99 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     private func updateShiftButtonAppearance() {
-        guard let stack = keysStack else { return }
-        for case let rowContainer as UIStackView in stack.arrangedSubviews {
-            for sub in rowContainer.arrangedSubviews {
-                if let inner = sub as? UIStackView {
-                    for case let b as UIButton in inner.arrangedSubviews
-                        where b.accessibilityIdentifier == Const.idShift {
-                        b.setImage(UIImage(systemName: shiftSymbolName), for: .normal)
-            b.tintColor = shiftState == .capsLock ? .systemBlue : .label
-                        b.accessibilityLabel = shiftAccessibilityLabel()
-                        b.backgroundColor = shiftState == .capsLock
-                            ? UIColor.systemBlue.withAlphaComponent(0.22)
-                            : keyboardKeyBackground(.tertiary)
-                    }
-                }
-            }
-        }
+        guard let button = shiftButton else { return }
+        applyShiftToKey(button)
     }
 
     @objc private func spaceTapped() {
         textDocumentProxy.insertText(" ")
-        applyAutoCapitalizationIfNeeded()
+        playInputClick()
+        DispatchQueue.main.async { [weak self] in self?.applyAutoCapitalizationIfNeeded() }
     }
 
-    @objc private func backspaceTapped() {
+    @objc private func quickCharacterTapped(_ sender: UIButton) {
+        guard let character = sender.title(for: .normal), !character.isEmpty else { return }
+        textDocumentProxy.insertText(character)
+        playInputClick()
+        DispatchQueue.main.async { [weak self] in self?.applyAutoCapitalizationIfNeeded() }
+    }
+
+    @objc private func backspaceTouchDown() {
+        cancelDeleteRepeat()
         textDocumentProxy.deleteBackward()
+        playInputClick()
+        deleteRepeatCount = 0
+        let generation = deleteRepeatGeneration
+        scheduleDeleteRepeat(after: Const.deleteRepeatInitialDelay, generation: generation)
+    }
+
+    @objc private func backspaceTouchEnded() {
+        cancelDeleteRepeat()
+        DispatchQueue.main.async { [weak self] in self?.applyAutoCapitalizationIfNeeded() }
+    }
+
+    private func scheduleDeleteRepeat(after delay: TimeInterval, generation: Int) {
+        let item = DispatchWorkItem { [weak self] in
+            guard let self = self, generation == self.deleteRepeatGeneration else { return }
+            self.textDocumentProxy.deleteBackward()
+            self.playInputClick()
+            self.deleteRepeatCount += 1
+            let accelerated = Const.deleteRepeatInterval - Double(self.deleteRepeatCount) * 0.004
+            let next = max(Const.deleteRepeatMinimumInterval, accelerated)
+            self.scheduleDeleteRepeat(after: next, generation: generation)
+        }
+        deleteRepeatWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+    }
+
+    private func cancelDeleteRepeat() {
+        deleteRepeatGeneration &+= 1
+        deleteRepeatWorkItem?.cancel()
+        deleteRepeatWorkItem = nil
+        deleteRepeatCount = 0
     }
 
     @objc private func returnTapped() {
         textDocumentProxy.insertText("\n")
-        applyAutoCapitalizationIfNeeded()
+        playInputClick()
+        DispatchQueue.main.async { [weak self] in self?.applyAutoCapitalizationIfNeeded() }
+    }
+
+    private func showKeyPreview(for button: UIButton) {
+        dismissKeyPreview()
+        guard let title = button.title(for: .normal), !title.isEmpty else { return }
+        let bubble = UIView(frame: CGRect(x: 0, y: 0, width: 48, height: 62))
+        bubble.backgroundColor = UIColor.secondarySystemBackground
+        bubble.layer.cornerRadius = 8
+        bubble.layer.borderWidth = Const.keyBorderWidth
+        bubble.layer.borderColor = keyboardKeyBorder().cgColor
+        bubble.layer.shadowColor = UIColor.black.cgColor
+        bubble.layer.shadowOpacity = 0.18
+        bubble.layer.shadowRadius = 2
+        bubble.layer.shadowOffset = CGSize(width: 0, height: 1)
+        bubble.isUserInteractionEnabled = false
+
+        let label = UILabel(frame: bubble.bounds)
+        label.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        label.text = title
+        label.textAlignment = .center
+        label.textColor = .label
+        label.font = .systemFont(ofSize: 28, weight: .regular)
+        bubble.addSubview(label)
+
+        let keyFrame = button.convert(button.bounds, to: view)
+        let proposedX = keyFrame.midX - bubble.bounds.width / 2
+        bubble.frame.origin.x = min(max(2, proposedX), max(2, view.bounds.width - bubble.bounds.width - 2))
+        bubble.frame.origin.y = max(0, keyFrame.minY - bubble.bounds.height + 7)
+        view.addSubview(bubble)
+        previewOwner = button
+        keyPreview = bubble
+    }
+
+    private func dismissKeyPreview() {
+        keyPreview?.removeFromSuperview()
+        keyPreview = nil
+        previewOwner = nil
     }
 
     // MARK: - Emoji panel
@@ -904,10 +1295,15 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     /// Builds the full-height emoji panel lazily. Scrollable grid of
-    /// 7 emoji buttons per row, with category tabs at the top and a
+    /// 8 reusable emoji cells per row, with category tabs at the top and a
     /// footer row carrying an `ABC` return control + `space` + `⌫`.
     private func showEmojiPanel() {
         guard let container = bodyContainer else { return }
+        cancelTransientInteractions()
+        emojiPanelView?.removeFromSuperview()
+        emojiPanelView = nil
+        emojiCollectionView = nil
+        preferredHeightConstraint?.constant = Const.preferredKeyboardHeight
 
         keysStack?.removeFromSuperview()
         keysStack = nil
@@ -969,19 +1365,24 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         footer.accessibilityIdentifier = Const.idEmojiFooter
         panel.addSubview(footer)
 
-        let abc = UIButton(type: .system)
+        let abc = KeyboardButton(frame: .zero)
         abc.setTitle("ABC", for: .normal)
         abc.titleLabel?.font = .systemFont(ofSize: 14, weight: .semibold)
         abc.setTitleColor(.label, for: .normal)
-        abc.backgroundColor = keyboardKeyBackground(.tertiary)
+        abc.normalBackgroundColor = keyboardKeyBackground(.tertiary)
         abc.layer.cornerRadius = Const.keyCornerRadius
         abc.layer.borderWidth = Const.keyBorderWidth
         abc.layer.borderColor = keyboardKeyBorder().cgColor
         abc.accessibilityIdentifier = "\(Const.idModeToggle).emojiFooter"
+        abc.accessibilityLabel = "Letters"
         abc.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight).isActive = true
         abc.widthAnchor.constraint(equalToConstant: Const.modeToggleWidth).isActive = true
         abc.addTarget(self, action: #selector(emojiHideTapped), for: .touchUpInside)
         footer.addArrangedSubview(abc)
+
+        if needsInputModeSwitchKey {
+            footer.addArrangedSubview(makeGlobeButton(systemName: "globe"))
+        }
 
         let selectedEmoji = makeSymbolControlButton(
             systemName: "face.smiling.fill",
@@ -993,26 +1394,23 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         selectedEmoji.tintColor = .systemBlue
         footer.addArrangedSubview(selectedEmoji)
 
-        let emojiSpace = UIButton(type: .system)
+        let emojiSpace = KeyboardButton(frame: .zero)
         emojiSpace.setTitle("space", for: .normal)
         emojiSpace.titleLabel?.font = .systemFont(ofSize: 14, weight: .medium)
         emojiSpace.setTitleColor(.label, for: .normal)
-        emojiSpace.backgroundColor = keyboardKeyBackground(.secondary)
+        emojiSpace.normalBackgroundColor = keyboardKeyBackground(.secondary)
         emojiSpace.layer.cornerRadius = Const.keyCornerRadius
         emojiSpace.layer.borderWidth = Const.keyBorderWidth
         emojiSpace.layer.borderColor = keyboardKeyBorder().cgColor
         emojiSpace.accessibilityIdentifier = Const.idSpace
+        emojiSpace.accessibilityLabel = "Space"
         emojiSpace.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight).isActive = true
         emojiSpace.addTarget(self, action: #selector(spaceTapped), for: .touchUpInside)
         footer.addArrangedSubview(emojiSpace)
 
-        let emojiReturn = makeControlButton(
-            title: "return",
-            action: #selector(returnTapped),
-            width: Const.returnWidth,
-            bg: keyboardKeyBackground(.tertiary),
-            id: "return"
-        )
+        let returnKeySpec = self.returnKeySpec
+        let emojiReturn = makeReturnButton()
+        emojiReturn.accessibilityLabel = returnKeySpec.accessibilityLabel
         footer.addArrangedSubview(emojiReturn)
 
         NSLayoutConstraint.activate([
@@ -1034,7 +1432,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
         emojiPanelView = panel
         isEmojiPanelVisible = true
-        NSLog("TONO_KB BUILD83 emoji-panel: visible categories=\(EmojiCategory.allCases.count) active=\(emojiActiveCategory.rawValue)")
+        NSLog("TONO_KB BUILD84 emoji-panel: visible categories=\(EmojiCategory.allCases.count) active=\(emojiActiveCategory.rawValue)")
     }
 
     @objc private func emojiHideTapped() {
@@ -1042,6 +1440,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     private func hideEmojiPanel() {
+        cancelTransientInteractions()
         emojiPanelView?.removeFromSuperview()
         emojiPanelView = nil
         emojiCollectionView = nil
@@ -1132,6 +1531,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private func insertEmoji(_ emoji: String) {
         guard !emoji.isEmpty else { return }
         textDocumentProxy.insertText(emoji)
+        playInputClick()
         var list = EmojiCategory.glyphsForRecents()
         list.removeAll { $0 == emoji }
         list.insert(emoji, at: 0)
@@ -1161,6 +1561,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     @objc private func coachTapped() {
         guard !coachBusy else { return }
+        cancelTransientInteractions()
         if isEmojiPanelVisible { hideEmojiPanel() }
         let proxy = textDocumentProxy
         let raw = proxy.documentContextBeforeInput ?? ""
@@ -1207,20 +1608,21 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     private func runCoach(draft: String) {
+        cancelTransientInteractions()
         coachBusy = true
         presentCoachLoading()
         let client = TonoCoachClient(endpoint: Const.backendURL, timeout: Const.coachTimeout)
-        NSLog("TONO_KB BUILD82 coach: begin POST /v1/analyze (len=\(draft.count))")
+        NSLog("TONO_KB BUILD84 coach: begin POST /v1/analyze (len=\(draft.count))")
         client.coach(draft: draft) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.coachBusy = false
                 switch result {
                 case .success(let response):
-                    NSLog("TONO_KB BUILD82 coach: OK risk=\(response.riskLevel) suggestions=\(response.suggestions.count)")
+                    NSLog("TONO_KB BUILD84 coach: OK risk=\(response.riskLevel) suggestions=\(response.suggestions.count)")
                     self.presentCoachResults(response)
                 case .failure(let err):
-                    NSLog("TONO_KB BUILD82 coach: FAIL \(err.userFacingMessage)")
+                    NSLog("TONO_KB BUILD84 coach: FAIL \(err.userFacingMessage)")
                     self.presentCoachError(err)
                 }
             }
@@ -1229,6 +1631,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     private func presentCoachLoading() {
         guard let container = bodyContainer else { return }
+        cancelTransientInteractions()
+        preferredHeightConstraint?.constant = Const.preferredKeyboardHeight
         keysStack?.removeFromSuperview()
         keysStack = nil
         coachErrorContainer?.removeFromSuperview()
@@ -1274,6 +1678,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     private func presentCoachResults(_ response: TonoCoachClient.CoachResponse) {
         guard let container = bodyContainer else { return }
+        cancelTransientInteractions()
+        preferredHeightConstraint?.constant = Const.coachResultsKeyboardHeight
         coachContainer?.removeFromSuperview()
         coachContainer = nil
         coachStatusLabel = nil
@@ -1291,7 +1697,10 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
         let title = UILabel()
         title.text = "Tono · \(response.riskDisplayName)"
-        title.font = .systemFont(ofSize: 14, weight: .semibold)
+        title.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(
+            for: .systemFont(ofSize: 14, weight: .semibold)
+        )
+        title.adjustsFontForContentSizeCategory = true
         title.textColor = .label
         title.numberOfLines = 1
         title.translatesAutoresizingMaskIntoConstraints = false
@@ -1310,7 +1719,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         stack.axis = .vertical
         stack.distribution = .fillEqually
         stack.alignment = .fill
-        stack.spacing = Const.rowSpacing
+        stack.spacing = 4
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.accessibilityIdentifier = Const.idRewrites
         panel.addSubview(stack)
@@ -1359,23 +1768,30 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         chip.accessibilityIdentifier = Const.rewriteId(suggestion.axis, index)
         chip.accessibilityLabel = "Tono rewrite \(suggestion.axis)"
 
+        let style = coachAxisStyle(for: suggestion.axis)
         let axis = UILabel()
-        axis.text = suggestion.axis.uppercased()
-        axis.font = .systemFont(ofSize: 10, weight: .heavy)
-        axis.textColor = .systemBlue
+        axis.text = "● \(style.label)"
+        axis.font = UIFontMetrics(forTextStyle: .caption1).scaledFont(
+            for: .systemFont(ofSize: 11, weight: .bold)
+        )
+        axis.adjustsFontForContentSizeCategory = true
+        axis.textColor = style.color
         axis.translatesAutoresizingMaskIntoConstraints = false
         chip.addSubview(axis)
 
         let text = UILabel()
         text.text = suggestion.text
-        text.font = .systemFont(ofSize: 14, weight: .regular)
+        text.font = UIFontMetrics(forTextStyle: .body).scaledFont(
+            for: .systemFont(ofSize: 14, weight: .regular)
+        )
+        text.adjustsFontForContentSizeCategory = true
         text.textColor = .label
         text.numberOfLines = 2
         text.translatesAutoresizingMaskIntoConstraints = false
         chip.addSubview(text)
 
         NSLayoutConstraint.activate([
-            chip.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight),
+            chip.heightAnchor.constraint(greaterThanOrEqualToConstant: 48),
 
             axis.leadingAnchor.constraint(equalTo: chip.leadingAnchor, constant: 10),
             axis.topAnchor.constraint(equalTo: chip.topAnchor, constant: 6),
@@ -1394,7 +1810,24 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         return chip
     }
 
+    private func coachAxisStyle(for axis: String) -> (label: String, color: UIColor) {
+        switch axis {
+        case "warmer": return ("Warmer", coachDynamicColor(light: "B4234D", dark: "FF6B8A"))
+        case "clearer": return ("Clearer", coachDynamicColor(light: "006A8E", dark: "49C7F2"))
+        case "funnier": return ("Funnier", coachDynamicColor(light: "7A5100", dark: "FFC247"))
+        case "safer": return ("Safer", coachDynamicColor(light: "147A36", dark: "4CD471"))
+        default: return (axis.capitalized, .label)
+        }
+    }
+
+    private func coachDynamicColor(light: String, dark: String) -> UIColor {
+        UIColor { traits in
+            UIColor(hexRGB: traits.userInterfaceStyle == .dark ? dark : light)
+        }
+    }
+
     @objc private func backToKeysTapped() {
+        cancelTransientInteractions()
         coachContainer?.removeFromSuperview()
         coachContainer = nil
         coachResultsStack = nil
@@ -1411,13 +1844,15 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             proxy.deleteBackward()
         }
         proxy.insertText(rewrite)
-        NSLog("TONO_KB BUILD82 rewrite: inserted len=\(rewrite.count) (deleted \(deletions))")
+        NSLog("TONO_KB BUILD84 rewrite: inserted len=\(rewrite.count) (deleted \(deletions))")
     }
 
     // MARK: - Coach error
 
     private func presentCoachError(_ err: TonoCoachClient.CoachError) {
         guard let container = bodyContainer else { return }
+        cancelTransientInteractions()
+        preferredHeightConstraint?.constant = Const.preferredKeyboardHeight
         coachContainer?.removeFromSuperview()
         coachContainer = nil
         coachStatusLabel = nil
@@ -1501,6 +1936,57 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         } else {
             runCoach(draft: draft)
         }
+    }
+}
+
+/// Shared keycap press treatment. It changes in the same event frame as
+/// UIButton's highlighted state and always restores on UIKit cancellation.
+private final class KeyboardButton: UIButton {
+    var accessibilityActivationHandler: (() -> Bool)?
+    var normalBackgroundColor: UIColor? {
+        didSet { if !isHighlighted { backgroundColor = normalBackgroundColor } }
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        layer.shadowColor = UIColor.black.cgColor
+        layer.shadowOpacity = 0.16
+        layer.shadowRadius = 0.5
+        layer.shadowOffset = CGSize(width: 0, height: 1)
+        adjustsImageWhenHighlighted = false
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func accessibilityActivate() -> Bool {
+        accessibilityActivationHandler?() ?? super.accessibilityActivate()
+    }
+
+    override var isHighlighted: Bool {
+        didSet {
+            backgroundColor = isHighlighted
+                ? normalBackgroundColor?.withAlphaComponent(0.68)
+                : normalBackgroundColor
+            layer.shadowOpacity = isHighlighted ? 0.04 : 0.16
+            transform = isHighlighted
+                ? CGAffineTransform(translationX: 0, y: 1)
+                : .identity
+        }
+    }
+}
+
+private extension UIColor {
+    convenience init(hexRGB: String) {
+        var value: UInt64 = 0
+        Scanner(string: hexRGB).scanHexInt64(&value)
+        self.init(
+            red: CGFloat((value >> 16) & 0xFF) / 255,
+            green: CGFloat((value >> 8) & 0xFF) / 255,
+            blue: CGFloat(value & 0xFF) / 255,
+            alpha: 1
+        )
     }
 }
 

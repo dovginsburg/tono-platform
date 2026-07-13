@@ -65,7 +65,7 @@ public final class TonoCoachClient {
             case "low":    return "Looks okay"
             case "medium": return "Worth softening"
             case "high":   return "Could land wrong"
-            default:       return "Tono · \(riskLevel)"
+            default:       return riskLevel.capitalized
             }
         }
     }
@@ -198,8 +198,35 @@ public final class TonoCoachClient {
             perception: perception,
             subtext: subtext,
             reason: reason,
-            suggestions: suggestions,
+            suggestions: canonicalSuggestions(suggestions),
             flags: flags
         )
+    }
+
+    /// The keyboard has four fixed semantic result slots. Normalize backend
+    /// casing/whitespace, reject unsupported axes and blank/duplicate text,
+    /// then return at most one rewrite per axis in stable semantic order.
+    public static func canonicalSuggestions(_ raw: [CoachRewrite]) -> [CoachRewrite] {
+        let canonicalAxes = ["warmer", "clearer", "funnier", "safer"]
+        var byAxis: [String: CoachRewrite] = [:]
+        var seenTexts = Set<String>()
+
+        for rewrite in raw {
+            let axis = rewrite.axis.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let text = rewrite.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard canonicalAxes.contains(axis), byAxis[axis] == nil, !text.isEmpty else { continue }
+            let identity = text.folding(
+                options: [.caseInsensitive, .diacriticInsensitive],
+                locale: Locale(identifier: "en_US_POSIX")
+            )
+            guard seenTexts.insert(identity).inserted else { continue }
+            byAxis[axis] = CoachRewrite(
+                axis: axis,
+                text: text,
+                rationale: rewrite.rationale,
+                riskAfter: rewrite.riskAfter
+            )
+        }
+        return canonicalAxes.compactMap { byAxis[$0] }
     }
 }
