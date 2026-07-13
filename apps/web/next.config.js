@@ -1,3 +1,7 @@
+const { loadSupabaseDeployment } = require('./src/lib/supabase-deployment.cjs');
+
+const supabaseDeployment = loadSupabaseDeployment(process.env, { allowUnconfigured: true });
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -26,14 +30,13 @@ const nextConfig = {
       // Authenticated analyze (uses bearer token + rate limit)
       { source: '/api/analyze', destination: 'https://api.tonoit.com/api/analyze' },
 
-      // Supabase auth (OAuth + magic link + token refresh)
-      { source: '/auth/:path*', destination: 'https://bndbgpqbpzukrbhquztj.supabase.co/auth/v1/:path*' },
-
-      // Supabase PostgREST (only used if we read user metadata client-side)
-      { source: '/rest/:path*', destination: 'https://bndbgpqbpzukrbhquztj.supabase.co/rest/v1/:path*' },
-
-      // Supabase storage (for any avatar / asset reads in v1.x)
-      { source: '/storage/:path*', destination: 'https://bndbgpqbpzukrbhquztj.supabase.co/storage/v1/:path*' },
+      // Dedicated Tono Supabase project. The environment contract above fails
+      // closed when staging/production refs are shared or mismatched.
+      ...(supabaseDeployment ? [
+        { source: '/auth/:path*', destination: `${supabaseDeployment.url}/auth/v1/:path*` },
+        { source: '/rest/:path*', destination: `${supabaseDeployment.url}/rest/v1/:path*` },
+        { source: '/storage/:path*', destination: `${supabaseDeployment.url}/storage/v1/:path*` },
+      ] : []),
     ];
   },
 
