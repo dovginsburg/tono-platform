@@ -18,31 +18,28 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerSupabase } from '@/lib/supabase';
+import {
+  APP_ENTRY_PATH,
+  buildAppRedirect,
+  buildLoginRedirect,
+  sanitizeNextPath,
+} from '@/lib/auth-redirects';
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const code = url.searchParams.get('code');
-  const next = url.searchParams.get('next') ?? '/app/app';
+  const next = sanitizeNextPath(url.searchParams.get('next'));
   const error_description = url.searchParams.get('error_description');
 
-  // basePath-aware origin so redirect lands us on tonoit.com/app/...
-  // (Next.js doesn't expose the original host here directly; we read it
-  // from the request URL.)
-  const origin = `${url.protocol}//${url.host}`;
-
   if (error_description) {
-    return NextResponse.redirect(
-      `${origin}/app/login?error=${encodeURIComponent(error_description)}`
-    );
+    return NextResponse.redirect(buildLoginRedirect(next, process.env, error_description));
   }
 
   if (code) {
     const supabase = await createServerSupabase();
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (error) {
-      return NextResponse.redirect(
-        `${origin}/app/login?error=${encodeURIComponent(error.message)}`
-      );
+      return NextResponse.redirect(buildLoginRedirect(next, process.env, error.message));
     }
 
     // Mint a Tono api_token using the Supabase user_id as device_id.
@@ -95,9 +92,9 @@ export async function GET(request: Request) {
       console.error('[auth/callback] register error:', e);
     }
 
-    return NextResponse.redirect(`${origin}${next}`);
+    return NextResponse.redirect(buildAppRedirect(next));
   }
 
   // No code, no error — bounce to login
-  return NextResponse.redirect(`${origin}/app/login`);
+  return NextResponse.redirect(buildLoginRedirect(APP_ENTRY_PATH));
 }

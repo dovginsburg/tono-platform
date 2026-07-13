@@ -4,8 +4,9 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabase } from '@/lib/supabase';
 import { cookies } from 'next/headers';
+import { APP_ENTRY_PATH, buildLoginRedirect } from '@/lib/auth-redirects';
 
-export async function POST(request: Request) {
+export async function POST() {
   try {
     const supabase = await createServerSupabase();
     await supabase.auth.signOut();
@@ -17,6 +18,5 @@ export async function POST(request: Request) {
   cookieStore.delete('tono_api_token');
   cookieStore.delete('tono_plan');
 
-  const url = new URL(request.url);
-  return NextResponse.redirect(`${url.protocol}//${url.host}/app/login`);
+  return NextResponse.redirect(buildLoginRedirect(APP_ENTRY_PATH));
 }
