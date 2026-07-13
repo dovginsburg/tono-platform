@@ -1,3 +1,11 @@
+// Load keystore credentials from keystore.properties (gitignored) — never commit literal passwords
+import java.util.Properties
+val keystorePropsFile = rootProject.file("keystore.properties")
+val keystoreProps = Properties()
+if (keystorePropsFile.exists()) {
+    keystorePropsFile.inputStream().use { keystoreProps.load(it) }
+}
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -6,22 +14,23 @@ plugins {
 
 android {
     namespace = "com.tono.app"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.tono.app"
+        applicationId = "com.tono.myapp"
         minSdk = 26
-        targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        targetSdk = 35
+        // Bump on every build (parity with iOS MARKETING_VERSION fix on b3184ea)
+        versionCode = 13
+        versionName = "1.1"
     }
 
     signingConfigs {
         create("release") {
             storeFile = file("../tono-release.keystore")
-            storePassword = "tono2026"
-            keyAlias = "tono"
-            keyPassword = "tono2026"
+            storePassword = keystoreProps.getProperty("storePassword", "")
+            keyAlias = keystoreProps.getProperty("keyAlias", "tono")
+            keyPassword = keystoreProps.getProperty("keyPassword", "")
         }
     }
 
@@ -34,7 +43,7 @@ android {
             isMinifyEnabled = true
             signingConfig = signingConfigs.getByName("release")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            buildConfigField("String", "BACKEND_URL", "\"https://tono-backend-production.railway.app\"")
+            buildConfigField("String", "BACKEND_URL", "\"https://api.tonoit.com\"")
             lint {
                 abortOnError = false
             }
@@ -78,6 +87,8 @@ dependencies {
 
     // WorkManager — weekly digest background scheduling
     implementation("androidx.work:work-runtime-ktx:2.9.0")
+
+    testImplementation("junit:junit:4.13.2")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

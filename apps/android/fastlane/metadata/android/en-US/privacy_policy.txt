@@ -1,0 +1,70 @@
+PRIVACY POLICY — Tono
+
+Last updated: June 28, 2026
+
+Tono is built so the words you write stay your business. This policy describes, in plain language, what we collect, what we don't, and what choices you have.
+
+WHAT WE COLLECT
+
+Draft text — transient only
+When you tap Coach, the draft you're working on is sent to our server for analysis. It is processed, used to generate the rewrite suggestions, and then immediately discarded. We do not store your draft text. We do not log message content to disk. We do not retain copies for training, debugging, or any other purpose.
+
+Subscription status
+We store your plan (Free / Pro) and renewal date so the app can show you what you have access to. Payments are handled by Google Play Billing; we receive a tokenized subscription identifier, not your card details.
+
+Aggregate, content-free usage signals (only if you opt in)
+If you turn on "Help improve Tono" in Settings (on by default for new users, off by default for existing users until they re-confirm), we record only:
+  - Which rewrite axis you tapped (warmer / clearer / funnier / safer)
+  - Whether you inserted the suggestion or returned to your draft
+  - A coarse message-length bucket (short / medium / long — never the actual length or any words)
+We never record your draft, your rewrites, the recipient, the app you were typing in, or anything about who you were writing to. You can turn this off at any time in Settings; turning it off immediately stops any signal from leaving your device.
+
+Device identifier
+A device-scoped random ID is generated when you install Tono. It is used solely to enforce the free-tier daily Coach limit and to associate your subscription with your device. It is not linked to your name, email, phone number, advertising ID, or any other personal identifier. You can reset it by reinstalling the app.
+
+WHAT WE NEVER COLLECT
+
+  - Your name, email, phone number, or contacts (Tono does not ask for these)
+  - The content of your drafts or rewrites after analysis
+  - The names of the people you message or the apps you type in
+  - Your location, contacts list, photos, microphone, or camera
+  - Crash reports containing your message text (crash reports are stripped of any input field content before they leave your device)
+
+HOW WE USE WHAT WE COLLECT
+
+  - To generate the four rewrite axes and the risk badge
+  - To enforce the free-tier daily Coach limit
+  - To manage your subscription and billing status
+  - To improve rewrite quality across users, only via the aggregate, content-free signals described above (opt-in only)
+
+WHO WE SHARE WITH
+
+  - Google Play Billing — for subscription processing. Google receives only the data needed to bill you.
+  - Cloud inference provider — to run the AI model that generates rewrites. The provider receives your draft at request time, processes it, and returns the result. The provider is contractually prohibited from storing or training on your text.
+  - No one else. We do not sell your data. We do not share it with advertisers, analytics companies, data brokers, or social platforms.
+
+YOUR RIGHTS
+
+  - Delete your data: uninstalling the app deletes everything Tono stored on your device. To delete server-side data (subscription, device identifier, opt-in signals), email privacy@tonoit.com and we will delete within 30 days.
+  - Export your data: email privacy@tonoit.com and we will send you a copy of what we have within 30 days.
+  - Turn off "Help improve Tono": Settings → Preferences → Help improve Tono. Takes effect immediately.
+  - Turn off Style Memory: Settings → Style Memory → Clear. Local-only; clears instantly.
+
+CHILDREN
+
+Tono is not intended for children under 13. We do not knowingly collect data from children under 13. The keyboard extension is enabled by the device owner; if a child uses the device, the keyboard is under the owner's account and the owner's data choices.
+
+SECURITY
+
+All data in transit is encrypted with TLS 1.2 or higher. Drafts sent for analysis are processed in memory and discarded; they are not written to disk on our servers. Subscription and account data is stored encrypted at rest. Access to production systems requires hardware-key multi-factor authentication.
+
+CHANGES TO THIS POLICY
+
+If we change anything material, we will show an in-app notice and update the "Last updated" date above. Continued use after a material change means you accept the updated policy.
+
+CONTACT
+
+Questions, deletions, or complaints: privacy@tonoit.com
+Mailing address: Tono, Inc. (or current legal entity name), [street address on file]
+
+This policy is provided in English. Translations may be available in-app; in case of conflict, the English version governs.

@@ -17,13 +17,14 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.tono.app.billing.BillingProducts
+import com.tono.app.billing.PlayBillingManager
 import com.tono.shared.storage.SharedKeys
 import com.tono.shared.storage.SharedStore
 
@@ -34,9 +35,9 @@ private val Purple = Color(0xFF9B59B6)
 
 @Composable
 fun HomeScreen(onOpenKeyboardSettings: () -> Unit) {
-    val context = LocalContext.current
     var keyboardLoaded by remember { mutableStateOf(false) }
     var isRegistered by remember { mutableStateOf(false) }
+    val billing by PlayBillingManager.state.collectAsState()
 
     fun checkStatus() {
         keyboardLoaded = SharedStore.getBoolean(SharedKeys.KEYBOARD_LOADED)
@@ -99,7 +100,13 @@ fun HomeScreen(onOpenKeyboardSettings: () -> Unit) {
             Text("All four rewrite axes on the Tono keyboard.",
                 color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp)
             Spacer(Modifier.height(4.dp))
-            Text("Pro · \$5.99/mo or \$39.99/yr", color = Color.White.copy(alpha = 0.7f),
+            val monthly = billing.products.firstOrNull { it.id == BillingProducts.MONTHLY }
+            val yearly = billing.products.firstOrNull { it.id == BillingProducts.YEARLY }
+            val proPrice = if (monthly != null && yearly != null)
+                "Pro · ${monthly.formattedPrice}/mo or ${yearly.formattedPrice}/yr"
+            else
+                "Pro · pricing shown in Google Play"
+            Text(proPrice, color = Color.White.copy(alpha = 0.7f),
                 fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             Text("Unlimited rewrites, style memory, per-recipient coaching, weekly digest.",
                 color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp)

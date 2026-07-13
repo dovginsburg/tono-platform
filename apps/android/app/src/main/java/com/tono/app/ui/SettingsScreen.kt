@@ -1,5 +1,6 @@
 package com.tono.app.ui
 
+import android.app.Activity
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -11,6 +12,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.tono.app.billing.PlayBillingManager
 import com.tono.app.notifications.DigestScheduler
 import com.tono.shared.flags.FeatureFlag
 import com.tono.shared.flags.FeatureFlags
@@ -33,6 +35,7 @@ fun SettingsScreen(
     val scope   = rememberCoroutineScope()
     var me      by remember { mutableStateOf<TonoMe?>(null) }
     var meError by remember { mutableStateOf<String?>(null) }
+    val billing by PlayBillingManager.state.collectAsState()
 
     var voiceField  by remember { mutableStateOf(SharedStore.getString(SharedKeys.PREFERRED_VOICE) ?: "") }
     var memoryCount by remember { mutableIntStateOf(UserMemory.all().size) }
@@ -194,7 +197,7 @@ fun SettingsScreen(
         }
 
         // Plan section
-        val isPro = me?.isPro ?: SharedStore.getBoolean(SharedKeys.PRO_UNLOCKED)
+        val isPro = billing.isPro
         SettingsSection(title = "Plan") {
             Row(
                 Modifier
@@ -203,19 +206,73 @@ fun SettingsScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(if (isPro) "Pro ✓" else "Free", fontWeight = FontWeight.SemiBold)
-                if (!isPro) {
-                    Text("Upgrade in Google Play", color = Color.Gray, fontSize = 14.sp)
+                Text(
+                    if (isPro) "Verified" else "Google Play",
+                    color = Color.Gray,
+                    fontSize = 14.sp,
+                )
+            }
+            if (isPro) {
+                TextButton(
+                    onClick = { (context as? Activity)?.let(PlayBillingManager::manageSubscriptions) },
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                ) {
+                    Text("Manage subscription in Google Play →")
+                }
+            } else {
+                Text(
+                    "Free: 10 coaching sessions/day. Play displays the current local price before purchase.",
+                    color = Color.Gray,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+                billing.products.forEach { product ->
+                    Button(
+                        onClick = {
+                            (context as? Activity)?.let { activity ->
+                                PlayBillingManager.purchase(activity, product.id)
+                            }
+                        },
+                        enabled = !billing.isLoading,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                    ) {
+                        Text("${product.label} · ${product.formattedPrice}")
+                    }
                 }
             }
-            Text(
-                if (isPro)
-                    "Your Pro subscription is managed in Google Play → Subscriptions."
-                else
-                    "Free: 10 coaching sessions/day. Pro (\$5.99/mo or \$39.99/yr): unlimited rewrites, style memory, weekly digest.",
-                color    = Color.Gray,
-                fontSize = 12.sp,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-            )
+            if (billing.isLoading) {
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
+            billing.message?.let { message ->
+                Text(
+                    message,
+                    color = Color.Gray,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+            billing.error?.let { error ->
+                Text(
+                    error,
+                    color = MaterialTheme.colorScheme.error,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+            Row(Modifier.padding(horizontal = 8.dp)) {
+                TextButton(onClick = PlayBillingManager::restore, enabled = !billing.isLoading) {
+                    Text("Restore purchases")
+                }
+                TextButton(onClick = PlayBillingManager::refresh, enabled = !billing.isLoading) {
+                    Text("Retry")
+                }
+            }
         }
 
         // Privacy section

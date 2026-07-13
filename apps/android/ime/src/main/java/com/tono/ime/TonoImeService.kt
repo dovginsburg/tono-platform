@@ -4,16 +4,13 @@ import android.inputmethodservice.InputMethodService
 import android.text.InputType
 import android.view.View
 import android.view.inputmethod.EditorInfo
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.lifecycle.*
-import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.tono.ime.ui.KeyboardScreen
 import com.tono.shared.analytics.CrashReporter
 import com.tono.shared.storage.SharedKeys
@@ -85,20 +82,21 @@ class TonoImeService : InputMethodService(),
     override fun onCreateInputView(): View {
         return ComposeView(this).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
+            // An IME has no Activity/Fragment decor view to install these owners.
+            // Compose resolves them from the view tree before composition locals exist,
+            // so providing only LocalLifecycleOwner inside setContent still crashes.
+            setViewTreeLifecycleOwner(this@TonoImeService)
+            setViewTreeViewModelStoreOwner(this@TonoImeService)
+            setViewTreeSavedStateRegistryOwner(this@TonoImeService)
             setContent {
-                CompositionLocalProvider(
-                    LocalLifecycleOwner provides this@TonoImeService,
-                    LocalViewModelStoreOwner provides this@TonoImeService,
-                ) {
-                    KeyboardScreen(
-                        viewModel        = viewModel,
-                        draft            = viewModel.draft.value,
-                        onInsertText     = ::insertFullText,
-                        onDeleteBackward = { currentInputConnection?.deleteSurroundingText(1, 0) },
-                        onInsertSpace    = { currentInputConnection?.commitText(" ", 1) },
-                        onSwitchIme      = { switchToNextInputMethod(false) },
-                    )
-                }
+                KeyboardScreen(
+                    viewModel        = viewModel,
+                    draft            = viewModel.draft.value,
+                    onInsertText     = ::insertFullText,
+                    onDeleteBackward = { currentInputConnection?.deleteSurroundingText(1, 0) },
+                    onInsertSpace    = { currentInputConnection?.commitText(" ", 1) },
+                    onSwitchIme      = { switchToNextInputMethod(false) },
+                )
             }
         }
     }

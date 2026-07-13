@@ -77,8 +77,8 @@ object TonoBackend {
 
     val baseUrl: String get() {
         SharedStore.getString(SharedKeys.BACKEND_URL)?.takeIf { it.isNotBlank() }?.let { return it }
-        // Replace with your Railway URL after first deploy.
-        return "https://tono-backend-production.railway.app"
+        // Live production backend.
+        return "https://api.tonoit.com"
     }
 
     // MARK: - Public API
@@ -107,7 +107,28 @@ object TonoBackend {
         return me()
     }
 
-    suspend fun me(): TonoMe = get("/v1/me")
+    suspend fun me(): TonoMe = get<TonoMe>("/v1/me").also(::cacheAccountState)
+
+    /**
+     * Sends the opaque Play token to the backend for Google-side verification.
+     * The Android client never grants itself Pro from local Purchase state.
+     */
+    suspend fun syncGooglePlaySubscription(
+        packageName: String,
+        productId: String,
+        purchaseToken: String,
+    ): TonoMe {
+        @Serializable data class Req(
+            @SerialName("package_name") val packageName: String,
+            @SerialName("product_id") val productId: String,
+            @SerialName("purchase_token") val purchaseToken: String,
+        )
+        return post<Req, TonoMe>(
+            "/v1/google-play/subscription",
+            Req(packageName, productId, purchaseToken),
+            authorize = true,
+        ).also(::cacheAccountState)
+    }
 
     suspend fun analyze(
         text: String,
@@ -157,6 +178,11 @@ object TonoBackend {
     fun logAxisWin(axis: String, riskLevel: String) {
         @Serializable data class Req(val axis: String, val risk_level: String)
         fireAndForget("/v1/event/axis", Req(axis, riskLevel))
+    }
+
+    private fun cacheAccountState(me: TonoMe) {
+        SharedStore.putBoolean(SharedKeys.PRO_UNLOCKED, me.isPro)
+        SharedStore.putString(SharedKeys.REGISTERED_AT, System.currentTimeMillis().toString())
     }
 
     // MARK: - HTTP plumbing
