@@ -1,0 +1,1104 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		01B5DA16281CE5533AAA9E35 /* StoreKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8341350101744023555C179 /* StoreKitManager.swift */; };
+		038D31802AAA9BAC17E903DD /* TonoBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80AB8E621E4EDC9A59A7258D /* TonoBackend.swift */; };
+		064C6BE46F8BF7A326369F1B /* OpenAIToneAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F77E6FE218D103FFC22A1D7C /* OpenAIToneAnalyzer.swift */; };
+		07771916969E0C8C3D29726C /* TonoBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80AB8E621E4EDC9A59A7258D /* TonoBackend.swift */; };
+		09855EF291E1E11F38AA72AC /* OpenAIToneAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F77E6FE218D103FFC22A1D7C /* OpenAIToneAnalyzer.swift */; };
+		116DC2016276436A294530C8 /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20246E7AA254A3BFC26B2ED /* NotificationManager.swift */; };
+		12676D74075F792D0A79560B /* OpenAIToneAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F77E6FE218D103FFC22A1D7C /* OpenAIToneAnalyzer.swift */; };
+		1356CCBB3E9630970F4EDA61 /* UserMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF7D2CE21D5E50685F393B6E /* UserMemory.swift */; };
+		1A06E18F2984DDB350DFB704 /* TonoAnalytics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92219FEC38B911DE3D75FC8F /* TonoAnalytics.swift */; };
+		1C0E2FF825129467C4BE13C6 /* MetricKitReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 640260545EC970E83D72B3B0 /* MetricKitReporter.swift */; };
+		1CAA969882E6F9D9CC268124 /* TonoKeyboard.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C8209946856E4958F336751B /* TonoKeyboard.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		1F625673B188289A9DEBCA36 /* ContactsSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E33B6F18B213E414885CCCA /* ContactsSync.swift */; };
+		2006FA0CC979F68A4F917014 /* MockToneAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C69903847843E133412E1E5 /* MockToneAnalyzer.swift */; };
+		20D1B23B844C847F7AB362C3 /* RecipientMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58D322318012F6E3758FBE16 /* RecipientMemory.swift */; };
+		255C57EC2FEFADD136CC95C4 /* MessagesViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C15A6D1DB3DF8DFB596C677 /* MessagesViewController.swift */; };
+		26A32AFB6BA4EE68D7300F89 /* PlaygroundView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 217A3D33DCC3DE654CA907C5 /* PlaygroundView.swift */; };
+		2A1053919D15380BA5597C24 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9B37E5A81C027DBCC41C8EA9 /* Assets.xcassets */; };
+		2F986D1C30D60DF7044A1827 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FCE9DA4E023C12BADC4BC12 /* HomeView.swift */; };
+		3445E8532232C012E7274043 /* CoachDraftIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3861F3AF2390477CF4D567E /* CoachDraftIntent.swift */; };
+		3636B8D05701682C16720B5A /* SharedUserDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 772DD67FA1CD9CF09D426AF5 /* SharedUserDefaults.swift */; };
+		3781BE8282934F1F04FC4365 /* ContactsSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E33B6F18B213E414885CCCA /* ContactsSync.swift */; };
+		3B22A7CF6C642D6B952693E9 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1590C6120760B6DE05CC4AB9 /* Foundation.framework */; };
+		3C85BFB4E498791114E7670D /* AnthropicToneAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 664006D51FBA77935CCA67AA /* AnthropicToneAnalyzer.swift */; };
+		3CF8925783573B502B4DCB28 /* RecipientMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58D322318012F6E3758FBE16 /* RecipientMemory.swift */; };
+		43690A23F2E1A83FE74F3466 /* TonoBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80AB8E621E4EDC9A59A7258D /* TonoBackend.swift */; };
+		44FC072890D0B17F577A883D /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43F09AE9F3AE432DC080F0A2 /* ShareViewController.swift */; };
+		4A7F52C5EC4E98E266267D4E /* ContactsAccessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 045FE2F8B15471B8BFD56595 /* ContactsAccessTests.swift */; };
+		4C8023DED2667EAE03930F5B /* TonoAnalytics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92219FEC38B911DE3D75FC8F /* TonoAnalytics.swift */; };
+		511B5CB9D0506AE3B0B7BA9A /* RecipientMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58D322318012F6E3758FBE16 /* RecipientMemory.swift */; };
+		51381AED82774B5C91E484A7 /* CoachView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B88FDB62F52944069CC31478 /* CoachView.swift */; };
+		53164013FEB9099C4ACC2C71 /* MetricKitReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 640260545EC970E83D72B3B0 /* MetricKitReporter.swift */; };
+		58FF045E71513B824C5D593F /* DraftHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6B4784B7C394FD81347488C /* DraftHistory.swift */; };
+		5A3F5B2DEE787882EB6A04AC /* MemoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C73FA31B4F44D8110957849 /* MemoryView.swift */; };
+		5CC67FB528A79D66EC5DFD8A /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20246E7AA254A3BFC26B2ED /* NotificationManager.swift */; };
+		5F83779DF44BD910F21ACB5D /* TonoAnalytics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92219FEC38B911DE3D75FC8F /* TonoAnalytics.swift */; };
+		629905485734D49549C48A35 /* OnboardingEntryPointsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B44BF0A224058437A1D2B6CB /* OnboardingEntryPointsView.swift */; };
+		68F42FB269CC51E4E90CBC0E /* UserMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF7D2CE21D5E50685F393B6E /* UserMemory.swift */; };
+		6A419FF921198D93A073AB0E /* SharedKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 424F033D1993931EF9CFEF4D /* SharedKeychain.swift */; };
+		6E859BC8FB332A3E2B18687C /* AnthropicToneAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 664006D51FBA77935CCA67AA /* AnthropicToneAnalyzer.swift */; };
+		71DEA398DF3A4C434E4E57C1 /* SharedKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 424F033D1993931EF9CFEF4D /* SharedKeychain.swift */; };
+		7550DEA84F0587C8385AAFF3 /* ContactsSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E33B6F18B213E414885CCCA /* ContactsSync.swift */; };
+		79AC64BE1A2EA4D714325707 /* ToneEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F4E27FA018027D2D4B0C8AD /* ToneEngine.swift */; };
+		7F047DD75ED87391C5FF4865 /* ToneEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F4E27FA018027D2D4B0C8AD /* ToneEngine.swift */; };
+		7F66AA74371662296036B61E /* MockToneAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C69903847843E133412E1E5 /* MockToneAnalyzer.swift */; };
+		80B58A8D1033B49E59D0C8AD /* MockToneAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C69903847843E133412E1E5 /* MockToneAnalyzer.swift */; };
+		857FC116EAF1F727CFB420AA /* TonoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF0A4C99BE251A2D39F2EAC6 /* TonoApp.swift */; };
+		8638A0EAAAB038498BE22829 /* StoreKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8341350101744023555C179 /* StoreKitManager.swift */; };
+		879EE9AE45F41F898053C977 /* Tono.storekit in Resources */ = {isa = PBXBuildFile; fileRef = 3BEE71892FA8D9333320C272 /* Tono.storekit */; };
+		8ACBF3A843EA31B06E4FC8C4 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1590C6120760B6DE05CC4AB9 /* Foundation.framework */; };
+		8C7430C7B06EAF353BEA3E71 /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20246E7AA254A3BFC26B2ED /* NotificationManager.swift */; };
+		8EF5CEEF637E9023B58E83A3 /* UserMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF7D2CE21D5E50685F393B6E /* UserMemory.swift */; };
+		92808AE4BDF0F76D247ABF99 /* DraftHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6B4784B7C394FD81347488C /* DraftHistory.swift */; };
+		9503DD8444BD8855708ED2A0 /* CrashReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4673C08A34AA91DC050C1D33 /* CrashReporter.swift */; };
+		9C0313E9BB6AA4137CF9EEC9 /* CrashReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4673C08A34AA91DC050C1D33 /* CrashReporter.swift */; };
+		9C393F5231D04D19A6FBC3E2 /* StoreKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8341350101744023555C179 /* StoreKitManager.swift */; };
+		9E55776A112AE436BB508713 /* FeatureFlags.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8F4E5BEB850F3FDD9485F10 /* FeatureFlags.swift */; };
+		9FDCC2E3A74B2E8B15F196B2 /* ToneEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F4E27FA018027D2D4B0C8AD /* ToneEngine.swift */; };
+		A3D6E3007ACDF66C3251C56E /* OnboardingCalibrationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 600B6DD9AC9FC36C6BB8ED14 /* OnboardingCalibrationView.swift */; };
+		A46646633DFB0CD88599A352 /* StoreKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8341350101744023555C179 /* StoreKitManager.swift */; };
+		A4FDDCB7F7C0264C39FF6732 /* SharedUserDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 772DD67FA1CD9CF09D426AF5 /* SharedUserDefaults.swift */; };
+		A950D38EBA2B8E065632F65A /* ShareRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE2A01C91155C67976C8B54C /* ShareRootView.swift */; };
+		AC41C81596FDF580237DDAD9 /* AnthropicToneAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 664006D51FBA77935CCA67AA /* AnthropicToneAnalyzer.swift */; };
+		ACD65ABC66C16A8CF9A1228B /* AnthropicToneAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 664006D51FBA77935CCA67AA /* AnthropicToneAnalyzer.swift */; };
+		AF282DE8A0AFCB8E77D1DAD8 /* StyleMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78AA6203719949C25622DA78 /* StyleMemory.swift */; };
+		B27692745B9F58F19E3523F4 /* SharedUserDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 772DD67FA1CD9CF09D426AF5 /* SharedUserDefaults.swift */; };
+		B4D2FE13BAC21B8C41C5185C /* StyleMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78AA6203719949C25622DA78 /* StyleMemory.swift */; };
+		B4D890F33DE830A63EBF20DF /* TonoBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80AB8E621E4EDC9A59A7258D /* TonoBackend.swift */; };
+		BB880388F9F6609985D1B589 /* UserMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF7D2CE21D5E50685F393B6E /* UserMemory.swift */; };
+		BCE86246C1AA22B4751B06C8 /* MetricKitReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 640260545EC970E83D72B3B0 /* MetricKitReporter.swift */; };
+		BD9E5A023D82845158A938D9 /* SharedKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 424F033D1993931EF9CFEF4D /* SharedKeychain.swift */; };
+		BFB0ADF0440A3E8ECBC22AA3 /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20246E7AA254A3BFC26B2ED /* NotificationManager.swift */; };
+		C01F2575A616C9221BEB8360 /* TonoAnalytics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92219FEC38B911DE3D75FC8F /* TonoAnalytics.swift */; };
+		C0E707D6242E36DA94356BE9 /* KeyboardRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65C4FC72401862C2052D7F44 /* KeyboardRootView.swift */; };
+		C2C9DD7206A65B1579A5190A /* RecipientMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58D322318012F6E3758FBE16 /* RecipientMemory.swift */; };
+		C89EABB2DBA692A1FF5AC255 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 822A94BEAD307E044D2E1547 /* SettingsView.swift */; };
+		C9B979F056F3D84FB316577F /* SharedUserDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 772DD67FA1CD9CF09D426AF5 /* SharedUserDefaults.swift */; };
+		C9E4BE5B5759944FF1CF021C /* StyleMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78AA6203719949C25622DA78 /* StyleMemory.swift */; };
+		CAC1F787FB6D455F9E2ED646 /* ToneEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F4E27FA018027D2D4B0C8AD /* ToneEngine.swift */; };
+		CD6D8AD098B0C429CA71714F /* TonoRewrite.shortcut in Resources */ = {isa = PBXBuildFile; fileRef = D2F1EBC7FE4AC79BAE94EC0A /* TonoRewrite.shortcut */; };
+		CF1989803A58FE3D8C29F187 /* MockToneAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C69903847843E133412E1E5 /* MockToneAnalyzer.swift */; };
+		D2A8474984B2140EEA2F01AE /* DraftHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6B4784B7C394FD81347488C /* DraftHistory.swift */; };
+		DE7FE19B2535A1D6751A7E8D /* DigestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EDBB4F550AF48643771E5BF /* DigestView.swift */; };
+		E02AFD0E8D1E9CC00AD34BBC /* StyleMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78AA6203719949C25622DA78 /* StyleMemory.swift */; };
+		E2FEC8AFD0699311EBBE9AF0 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1590C6120760B6DE05CC4AB9 /* Foundation.framework */; };
+		E65BC7E31EB304D12B39B900 /* FeatureFlags.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8F4E5BEB850F3FDD9485F10 /* FeatureFlags.swift */; };
+		EE4DDFD2295E0A5D078895EF /* FeatureFlags.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8F4E5BEB850F3FDD9485F10 /* FeatureFlags.swift */; };
+		F004E54C4B033273348E9C80 /* DraftHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6B4784B7C394FD81347488C /* DraftHistory.swift */; };
+		F4A0614B2EA0F7930ECBBF73 /* CrashReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4673C08A34AA91DC050C1D33 /* CrashReporter.swift */; };
+		F651F52778CBA385717C1867 /* OpenAIToneAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F77E6FE218D103FFC22A1D7C /* OpenAIToneAnalyzer.swift */; };
+		F6EFD46D618CC03F0EF55311 /* ContactsSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E33B6F18B213E414885CCCA /* ContactsSync.swift */; };
+		F80D80989CF1FB77AC24BF28 /* SharedKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 424F033D1993931EF9CFEF4D /* SharedKeychain.swift */; };
+		F9F9FEC515BC480346923B7B /* CrashReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4673C08A34AA91DC050C1D33 /* CrashReporter.swift */; };
+		FD235F56501E8926FED5616B /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA287EC754705B7065C31935 /* KeyboardViewController.swift */; };
+		850000000000000000000001 /* SpellingCorrection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 850000000000000000000004 /* SpellingCorrection.swift */; };
+		850000000000000000000002 /* SpellingCorrection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 850000000000000000000004 /* SpellingCorrection.swift */; };
+		850000000000000000000003 /* SpellingCorrectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 850000000000000000000005 /* SpellingCorrectionTests.swift */; };
+		FD395AA136FAAF23914CA72A /* TonoCoachClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EE5759E683FD2ECA633D8FC /* TonoCoachClient.swift */; };
+		FE1397E60BD23EA5225588DB /* MetricKitReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 640260545EC970E83D72B3B0 /* MetricKitReporter.swift */; };
+		FED5706B3648E7E30CC10E3E /* FeatureFlags.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8F4E5BEB850F3FDD9485F10 /* FeatureFlags.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		1F33D11E336D4CB3E5BECA57 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1121AB054D8122B413A4D902 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = EBE86B011C11AB11A09CEBA7;
+			remoteInfo = Tono;
+		};
+		33E236150B1B9D53217E34D0 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1121AB054D8122B413A4D902 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 222A4BB5BC4EFDC252F76C97;
+			remoteInfo = TonoKeyboard;
+		};
+		8ECA4C5AF7D3FCA10D2AFD56 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1121AB054D8122B413A4D902 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 5E7AA4C8F391BA513B44CF06;
+			remoteInfo = TonoMessagesExtension;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		2683EAB09F60A8B296EAAE4A /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				1CAA969882E6F9D9CC268124 /* TonoKeyboard.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		045FE2F8B15471B8BFD56595 /* ContactsAccessTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ContactsAccessTests.swift; sourceTree = "<group>"; };
+		1590C6120760B6DE05CC4AB9 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		1A5B6B766BC79F63A5B21178 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		1AEE8A1C65E51602F4AD7330 /* TonoShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TonoShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		1B3DE7D6D3E9558EBAB94A9A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		217A3D33DCC3DE654CA907C5 /* PlaygroundView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaygroundView.swift; sourceTree = "<group>"; };
+		2850931F0F01200197FC84B7 /* TonoMessagesExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TonoMessagesExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		3BEE71892FA8D9333320C272 /* Tono.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = Tono.storekit; sourceTree = "<group>"; };
+		3C69903847843E133412E1E5 /* MockToneAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockToneAnalyzer.swift; sourceTree = "<group>"; };
+		3C73FA31B4F44D8110957849 /* MemoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryView.swift; sourceTree = "<group>"; };
+		424F033D1993931EF9CFEF4D /* SharedKeychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedKeychain.swift; sourceTree = "<group>"; };
+		43F09AE9F3AE432DC080F0A2 /* ShareViewController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
+		4673C08A34AA91DC050C1D33 /* CrashReporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrashReporter.swift; sourceTree = "<group>"; };
+		4C15A6D1DB3DF8DFB596C677 /* MessagesViewController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MessagesViewController.swift; sourceTree = "<group>"; };
+		4F4E27FA018027D2D4B0C8AD /* ToneEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToneEngine.swift; sourceTree = "<group>"; };
+		58D322318012F6E3758FBE16 /* RecipientMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipientMemory.swift; sourceTree = "<group>"; };
+		5B75EE54EB84F5BC90F85AA5 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		600B6DD9AC9FC36C6BB8ED14 /* OnboardingCalibrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingCalibrationView.swift; sourceTree = "<group>"; };
+		640260545EC970E83D72B3B0 /* MetricKitReporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricKitReporter.swift; sourceTree = "<group>"; };
+		65C4FC72401862C2052D7F44 /* KeyboardRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardRootView.swift; sourceTree = "<group>"; };
+		664006D51FBA77935CCA67AA /* AnthropicToneAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnthropicToneAnalyzer.swift; sourceTree = "<group>"; };
+		6EDBB4F550AF48643771E5BF /* DigestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DigestView.swift; sourceTree = "<group>"; };
+		6EE5759E683FD2ECA633D8FC /* TonoCoachClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoCoachClient.swift; sourceTree = "<group>"; };
+		72F34A74CA0D8E1405ADDD51 /* TonoTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TonoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		772DD67FA1CD9CF09D426AF5 /* SharedUserDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedUserDefaults.swift; sourceTree = "<group>"; };
+		78AA6203719949C25622DA78 /* StyleMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StyleMemory.swift; sourceTree = "<group>"; };
+		7FCE9DA4E023C12BADC4BC12 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		80AB8E621E4EDC9A59A7258D /* TonoBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoBackend.swift; sourceTree = "<group>"; };
+		822A94BEAD307E044D2E1547 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		8C71600DCEEEFF51AE070EA1 /* TonoMessagesExtension.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = TonoMessagesExtension.entitlements; sourceTree = "<group>"; };
+		92219FEC38B911DE3D75FC8F /* TonoAnalytics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoAnalytics.swift; sourceTree = "<group>"; };
+		9B37E5A81C027DBCC41C8EA9 /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		9D9F136CF6AC4D8B5AE810DB /* ShareExtension.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = ShareExtension.entitlements; sourceTree = "<group>"; };
+		9E33B6F18B213E414885CCCA /* ContactsSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactsSync.swift; sourceTree = "<group>"; };
+		A20246E7AA254A3BFC26B2ED /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
+		A8341350101744023555C179 /* StoreKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreKitManager.swift; sourceTree = "<group>"; };
+		A834BA4FC850457268EEDDD3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		AA287EC754705B7065C31935 /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
+		850000000000000000000004 /* SpellingCorrection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpellingCorrection.swift; sourceTree = "<group>"; };
+		850000000000000000000005 /* SpellingCorrectionTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SpellingCorrectionTests.swift; sourceTree = "<group>"; };
+		B3861F3AF2390477CF4D567E /* CoachDraftIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachDraftIntent.swift; sourceTree = "<group>"; };
+		B44BF0A224058437A1D2B6CB /* OnboardingEntryPointsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = OnboardingEntryPointsView.swift; sourceTree = "<group>"; };
+		B88FDB62F52944069CC31478 /* CoachView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachView.swift; sourceTree = "<group>"; };
+		B92542DA54DA284DBFA670F3 /* Tono.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Tono.entitlements; sourceTree = "<group>"; };
+		BE2A01C91155C67976C8B54C /* ShareRootView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ShareRootView.swift; sourceTree = "<group>"; };
+		C8209946856E4958F336751B /* TonoKeyboard.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TonoKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		D2F1EBC7FE4AC79BAE94EC0A /* TonoRewrite.shortcut */ = {isa = PBXFileReference; includeInIndex = 1; name = TonoRewrite.shortcut; path = ../shortcuts/TonoRewrite.shortcut; sourceTree = "<group>"; };
+		D8F4E5BEB850F3FDD9485F10 /* FeatureFlags.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeatureFlags.swift; sourceTree = "<group>"; };
+		DF0A4C99BE251A2D39F2EAC6 /* TonoApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoApp.swift; sourceTree = "<group>"; };
+		F56F7614BF83D1438A50A811 /* Tono.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Tono.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F6B4784B7C394FD81347488C /* DraftHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftHistory.swift; sourceTree = "<group>"; };
+		F77E6FE218D103FFC22A1D7C /* OpenAIToneAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAIToneAnalyzer.swift; sourceTree = "<group>"; };
+		FF0B5EB3DADDC595EEDC1B0B /* TonoKeyboard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TonoKeyboard.entitlements; sourceTree = "<group>"; };
+		FF7D2CE21D5E50685F393B6E /* UserMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserMemory.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		9BCE4C10CBD4D5988A75E7A8 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E2FEC8AFD0699311EBBE9AF0 /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		9D247B13BFCB3905F1E10846 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8ACBF3A843EA31B06E4FC8C4 /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EE16CB015C9A06DC917E5A70 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3B22A7CF6C642D6B952693E9 /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		33E1E6BE5BB070855A66276E /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				1590C6120760B6DE05CC4AB9 /* Foundation.framework */,
+			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
+		479D001D9C445208035C867C /* ShareExtension */ = {
+			isa = PBXGroup;
+			children = (
+				BE2A01C91155C67976C8B54C /* ShareRootView.swift */,
+				43F09AE9F3AE432DC080F0A2 /* ShareViewController.swift */,
+				1A5B6B766BC79F63A5B21178 /* Info.plist */,
+				9D9F136CF6AC4D8B5AE810DB /* ShareExtension.entitlements */,
+			);
+			name = ShareExtension;
+			path = ShareExtension;
+			sourceTree = "<group>";
+		};
+		7CCA65BB1F5C2B14CEB12B39 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				045FE2F8B15471B8BFD56595 /* ContactsAccessTests.swift */,
+				850000000000000000000005 /* SpellingCorrectionTests.swift */,
+			);
+			name = Tests;
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		85162E95710B256C36998CB0 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				F56F7614BF83D1438A50A811 /* Tono.app */,
+				C8209946856E4958F336751B /* TonoKeyboard.appex */,
+				1AEE8A1C65E51602F4AD7330 /* TonoShare.appex */,
+				2850931F0F01200197FC84B7 /* TonoMessagesExtension.appex */,
+				72F34A74CA0D8E1405ADDD51 /* TonoTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		8CDBA1B22180BBD9A85B4846 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				664006D51FBA77935CCA67AA /* AnthropicToneAnalyzer.swift */,
+				9E33B6F18B213E414885CCCA /* ContactsSync.swift */,
+				4673C08A34AA91DC050C1D33 /* CrashReporter.swift */,
+				F6B4784B7C394FD81347488C /* DraftHistory.swift */,
+				D8F4E5BEB850F3FDD9485F10 /* FeatureFlags.swift */,
+				640260545EC970E83D72B3B0 /* MetricKitReporter.swift */,
+				3C69903847843E133412E1E5 /* MockToneAnalyzer.swift */,
+				A20246E7AA254A3BFC26B2ED /* NotificationManager.swift */,
+				F77E6FE218D103FFC22A1D7C /* OpenAIToneAnalyzer.swift */,
+				58D322318012F6E3758FBE16 /* RecipientMemory.swift */,
+				424F033D1993931EF9CFEF4D /* SharedKeychain.swift */,
+				772DD67FA1CD9CF09D426AF5 /* SharedUserDefaults.swift */,
+				A8341350101744023555C179 /* StoreKitManager.swift */,
+				78AA6203719949C25622DA78 /* StyleMemory.swift */,
+				4F4E27FA018027D2D4B0C8AD /* ToneEngine.swift */,
+				92219FEC38B911DE3D75FC8F /* TonoAnalytics.swift */,
+				80AB8E621E4EDC9A59A7258D /* TonoBackend.swift */,
+				FF7D2CE21D5E50685F393B6E /* UserMemory.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		A9E49006F3866610734CF47E = {
+			isa = PBXGroup;
+			children = (
+				ACBF71996DDD904FF659BD91 /* App */,
+				E594C86840537BB4C84C76A5 /* KeyboardExtension */,
+				8CDBA1B22180BBD9A85B4846 /* Shared */,
+				85162E95710B256C36998CB0 /* Products */,
+				479D001D9C445208035C867C /* ShareExtension */,
+				F4F4FEBFB84AA754F33B2FB1 /* Frameworks */,
+				C706D182BC8DEB550685C04B /* TonoMessagesExtension */,
+				7CCA65BB1F5C2B14CEB12B39 /* Tests */,
+			);
+			sourceTree = "<group>";
+		};
+		ACBF71996DDD904FF659BD91 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				B3861F3AF2390477CF4D567E /* CoachDraftIntent.swift */,
+				B88FDB62F52944069CC31478 /* CoachView.swift */,
+				6EDBB4F550AF48643771E5BF /* DigestView.swift */,
+				7FCE9DA4E023C12BADC4BC12 /* HomeView.swift */,
+				A834BA4FC850457268EEDDD3 /* Info.plist */,
+				3C73FA31B4F44D8110957849 /* MemoryView.swift */,
+				600B6DD9AC9FC36C6BB8ED14 /* OnboardingCalibrationView.swift */,
+				217A3D33DCC3DE654CA907C5 /* PlaygroundView.swift */,
+				822A94BEAD307E044D2E1547 /* SettingsView.swift */,
+				B92542DA54DA284DBFA670F3 /* Tono.entitlements */,
+				3BEE71892FA8D9333320C272 /* Tono.storekit */,
+				DF0A4C99BE251A2D39F2EAC6 /* TonoApp.swift */,
+				9B37E5A81C027DBCC41C8EA9 /* Assets.xcassets */,
+				B44BF0A224058437A1D2B6CB /* OnboardingEntryPointsView.swift */,
+				D2F1EBC7FE4AC79BAE94EC0A /* TonoRewrite.shortcut */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		C706D182BC8DEB550685C04B /* TonoMessagesExtension */ = {
+			isa = PBXGroup;
+			children = (
+				4C15A6D1DB3DF8DFB596C677 /* MessagesViewController.swift */,
+				5B75EE54EB84F5BC90F85AA5 /* Info.plist */,
+				8C71600DCEEEFF51AE070EA1 /* TonoMessagesExtension.entitlements */,
+			);
+			name = TonoMessagesExtension;
+			path = TonoMessagesExtension;
+			sourceTree = "<group>";
+		};
+		E594C86840537BB4C84C76A5 /* KeyboardExtension */ = {
+			isa = PBXGroup;
+			children = (
+				1B3DE7D6D3E9558EBAB94A9A /* Info.plist */,
+				65C4FC72401862C2052D7F44 /* KeyboardRootView.swift */,
+				AA287EC754705B7065C31935 /* KeyboardViewController.swift */,
+				850000000000000000000004 /* SpellingCorrection.swift */,
+				6EE5759E683FD2ECA633D8FC /* TonoCoachClient.swift */,
+				FF0B5EB3DADDC595EEDC1B0B /* TonoKeyboard.entitlements */,
+			);
+			path = KeyboardExtension;
+			sourceTree = "<group>";
+		};
+		F4F4FEBFB84AA754F33B2FB1 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				33E1E6BE5BB070855A66276E /* iOS */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		222A4BB5BC4EFDC252F76C97 /* TonoKeyboard */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 2F49AF9FA1DFCDF43E2782DB /* Build configuration list for PBXNativeTarget "TonoKeyboard" */;
+			buildPhases = (
+				05C162B16AA3C81BE0137582 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = TonoKeyboard;
+			productName = TonoKeyboard;
+			productReference = C8209946856E4958F336751B /* TonoKeyboard.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		4FFC5912FA8F8157CBF6C7F2 /* TonoTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 86CCEE6B2FC40DE963213BE1 /* Build configuration list for PBXNativeTarget "TonoTests" */;
+			buildPhases = (
+				542F06D016A6163B466BBAE0 /* Sources */,
+				9BCE4C10CBD4D5988A75E7A8 /* Frameworks */,
+				02FB7340D575F451CF1FD243 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				E5A1C5B849F4CD1936B33170 /* PBXTargetDependency */,
+			);
+			name = TonoTests;
+			productName = TonoTests;
+			productReference = 72F34A74CA0D8E1405ADDD51 /* TonoTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		5E7AA4C8F391BA513B44CF06 /* TonoMessagesExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F4F7CD6211697F18BD99439A /* Build configuration list for PBXNativeTarget "TonoMessagesExtension" */;
+			buildPhases = (
+				B14A7AE140AC5BFF7F33A4C8 /* Sources */,
+				EE16CB015C9A06DC917E5A70 /* Frameworks */,
+				B40BD5D8E2C5075136E5B479 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = TonoMessagesExtension;
+			productName = TonoMessagesExtension;
+			productReference = 2850931F0F01200197FC84B7 /* TonoMessagesExtension.appex */;
+			productType = "com.apple.product-type.app-extension.messages";
+		};
+		E55677B30636D321CFE4401C /* TonoShare */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E33089BE6E3AA12DE429A5F8 /* Build configuration list for PBXNativeTarget "TonoShare" */;
+			buildPhases = (
+				2D49F73AE9CABD0DBABA334C /* Sources */,
+				9D247B13BFCB3905F1E10846 /* Frameworks */,
+				7C4F0096C14DBA55982704C9 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = TonoShare;
+			productName = TonoShare;
+			productReference = 1AEE8A1C65E51602F4AD7330 /* TonoShare.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		EBE86B011C11AB11A09CEBA7 /* Tono */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 715A8CF082BA07B995045773 /* Build configuration list for PBXNativeTarget "Tono" */;
+			buildPhases = (
+				D2CE6844E9064DDAEFE492B7 /* Sources */,
+				F81029E3912AE8AF7C3D8EBF /* Resources */,
+				2683EAB09F60A8B296EAAE4A /* Embed Foundation Extensions */,
+				57F72FA11337D8F77D2ABF56 /* Bump Build Number */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				60F1A31EA6DD29F24EB550A6 /* PBXTargetDependency */,
+				B89ED4E7E58BAF013BD4DF60 /* PBXTargetDependency */,
+			);
+			name = Tono;
+			productName = Tono;
+			productReference = F56F7614BF83D1438A50A811 /* Tono.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		1121AB054D8122B413A4D902 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 2650;
+			};
+			buildConfigurationList = BFD2AB0D0932FE828387F141 /* Build configuration list for PBXProject "Tono" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = A9E49006F3866610734CF47E;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 85162E95710B256C36998CB0 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				EBE86B011C11AB11A09CEBA7 /* Tono */,
+				222A4BB5BC4EFDC252F76C97 /* TonoKeyboard */,
+				E55677B30636D321CFE4401C /* TonoShare */,
+				5E7AA4C8F391BA513B44CF06 /* TonoMessagesExtension */,
+				4FFC5912FA8F8157CBF6C7F2 /* TonoTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		02FB7340D575F451CF1FD243 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7C4F0096C14DBA55982704C9 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B40BD5D8E2C5075136E5B479 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F81029E3912AE8AF7C3D8EBF /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				879EE9AE45F41F898053C977 /* Tono.storekit in Resources */,
+				2A1053919D15380BA5597C24 /* Assets.xcassets in Resources */,
+				CD6D8AD098B0C429CA71714F /* TonoRewrite.shortcut in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		57F72FA11337D8F77D2ABF56 /* Bump Build Number */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/App/Info.plist",
+				"$(SRCROOT)/KeyboardExtension/Info.plist",
+			);
+			name = "Bump Build Number";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "\"${SRCROOT}/Scripts/bump-build.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		05C162B16AA3C81BE0137582 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AC41C81596FDF580237DDAD9 /* AnthropicToneAnalyzer.swift in Sources */,
+				7550DEA84F0587C8385AAFF3 /* ContactsSync.swift in Sources */,
+				9503DD8444BD8855708ED2A0 /* CrashReporter.swift in Sources */,
+				58FF045E71513B824C5D593F /* DraftHistory.swift in Sources */,
+				FED5706B3648E7E30CC10E3E /* FeatureFlags.swift in Sources */,
+				C0E707D6242E36DA94356BE9 /* KeyboardRootView.swift in Sources */,
+				FD235F56501E8926FED5616B /* KeyboardViewController.swift in Sources */,
+				850000000000000000000001 /* SpellingCorrection.swift in Sources */,
+				FD395AA136FAAF23914CA72A /* TonoCoachClient.swift in Sources */,
+				53164013FEB9099C4ACC2C71 /* MetricKitReporter.swift in Sources */,
+				CF1989803A58FE3D8C29F187 /* MockToneAnalyzer.swift in Sources */,
+				BFB0ADF0440A3E8ECBC22AA3 /* NotificationManager.swift in Sources */,
+				F651F52778CBA385717C1867 /* OpenAIToneAnalyzer.swift in Sources */,
+				C2C9DD7206A65B1579A5190A /* RecipientMemory.swift in Sources */,
+				6A419FF921198D93A073AB0E /* SharedKeychain.swift in Sources */,
+				A4FDDCB7F7C0264C39FF6732 /* SharedUserDefaults.swift in Sources */,
+				8638A0EAAAB038498BE22829 /* StoreKitManager.swift in Sources */,
+				AF282DE8A0AFCB8E77D1DAD8 /* StyleMemory.swift in Sources */,
+				CAC1F787FB6D455F9E2ED646 /* ToneEngine.swift in Sources */,
+				1A06E18F2984DDB350DFB704 /* TonoAnalytics.swift in Sources */,
+				038D31802AAA9BAC17E903DD /* TonoBackend.swift in Sources */,
+				BB880388F9F6609985D1B589 /* UserMemory.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2D49F73AE9CABD0DBABA334C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A950D38EBA2B8E065632F65A /* ShareRootView.swift in Sources */,
+				44FC072890D0B17F577A883D /* ShareViewController.swift in Sources */,
+				6E859BC8FB332A3E2B18687C /* AnthropicToneAnalyzer.swift in Sources */,
+				1F625673B188289A9DEBCA36 /* ContactsSync.swift in Sources */,
+				F4A0614B2EA0F7930ECBBF73 /* CrashReporter.swift in Sources */,
+				F004E54C4B033273348E9C80 /* DraftHistory.swift in Sources */,
+				E65BC7E31EB304D12B39B900 /* FeatureFlags.swift in Sources */,
+				FE1397E60BD23EA5225588DB /* MetricKitReporter.swift in Sources */,
+				80B58A8D1033B49E59D0C8AD /* MockToneAnalyzer.swift in Sources */,
+				116DC2016276436A294530C8 /* NotificationManager.swift in Sources */,
+				064C6BE46F8BF7A326369F1B /* OpenAIToneAnalyzer.swift in Sources */,
+				20D1B23B844C847F7AB362C3 /* RecipientMemory.swift in Sources */,
+				F80D80989CF1FB77AC24BF28 /* SharedKeychain.swift in Sources */,
+				B27692745B9F58F19E3523F4 /* SharedUserDefaults.swift in Sources */,
+				9C393F5231D04D19A6FBC3E2 /* StoreKitManager.swift in Sources */,
+				C9E4BE5B5759944FF1CF021C /* StyleMemory.swift in Sources */,
+				79AC64BE1A2EA4D714325707 /* ToneEngine.swift in Sources */,
+				5F83779DF44BD910F21ACB5D /* TonoAnalytics.swift in Sources */,
+				07771916969E0C8C3D29726C /* TonoBackend.swift in Sources */,
+				1356CCBB3E9630970F4EDA61 /* UserMemory.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		542F06D016A6163B466BBAE0 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4A7F52C5EC4E98E266267D4E /* ContactsAccessTests.swift in Sources */,
+				850000000000000000000002 /* SpellingCorrection.swift in Sources */,
+				850000000000000000000003 /* SpellingCorrectionTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B14A7AE140AC5BFF7F33A4C8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3C85BFB4E498791114E7670D /* AnthropicToneAnalyzer.swift in Sources */,
+				3781BE8282934F1F04FC4365 /* ContactsSync.swift in Sources */,
+				9C0313E9BB6AA4137CF9EEC9 /* CrashReporter.swift in Sources */,
+				92808AE4BDF0F76D247ABF99 /* DraftHistory.swift in Sources */,
+				9E55776A112AE436BB508713 /* FeatureFlags.swift in Sources */,
+				1C0E2FF825129467C4BE13C6 /* MetricKitReporter.swift in Sources */,
+				2006FA0CC979F68A4F917014 /* MockToneAnalyzer.swift in Sources */,
+				5CC67FB528A79D66EC5DFD8A /* NotificationManager.swift in Sources */,
+				12676D74075F792D0A79560B /* OpenAIToneAnalyzer.swift in Sources */,
+				3CF8925783573B502B4DCB28 /* RecipientMemory.swift in Sources */,
+				71DEA398DF3A4C434E4E57C1 /* SharedKeychain.swift in Sources */,
+				3636B8D05701682C16720B5A /* SharedUserDefaults.swift in Sources */,
+				A46646633DFB0CD88599A352 /* StoreKitManager.swift in Sources */,
+				E02AFD0E8D1E9CC00AD34BBC /* StyleMemory.swift in Sources */,
+				9FDCC2E3A74B2E8B15F196B2 /* ToneEngine.swift in Sources */,
+				C01F2575A616C9221BEB8360 /* TonoAnalytics.swift in Sources */,
+				B4D890F33DE830A63EBF20DF /* TonoBackend.swift in Sources */,
+				68F42FB269CC51E4E90CBC0E /* UserMemory.swift in Sources */,
+				255C57EC2FEFADD136CC95C4 /* MessagesViewController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D2CE6844E9064DDAEFE492B7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				ACD65ABC66C16A8CF9A1228B /* AnthropicToneAnalyzer.swift in Sources */,
+				3445E8532232C012E7274043 /* CoachDraftIntent.swift in Sources */,
+				F6EFD46D618CC03F0EF55311 /* ContactsSync.swift in Sources */,
+				F9F9FEC515BC480346923B7B /* CrashReporter.swift in Sources */,
+				DE7FE19B2535A1D6751A7E8D /* DigestView.swift in Sources */,
+				D2A8474984B2140EEA2F01AE /* DraftHistory.swift in Sources */,
+				EE4DDFD2295E0A5D078895EF /* FeatureFlags.swift in Sources */,
+				2F986D1C30D60DF7044A1827 /* HomeView.swift in Sources */,
+				5A3F5B2DEE787882EB6A04AC /* MemoryView.swift in Sources */,
+				BCE86246C1AA22B4751B06C8 /* MetricKitReporter.swift in Sources */,
+				7F66AA74371662296036B61E /* MockToneAnalyzer.swift in Sources */,
+				8C7430C7B06EAF353BEA3E71 /* NotificationManager.swift in Sources */,
+				A3D6E3007ACDF66C3251C56E /* OnboardingCalibrationView.swift in Sources */,
+				09855EF291E1E11F38AA72AC /* OpenAIToneAnalyzer.swift in Sources */,
+				26A32AFB6BA4EE68D7300F89 /* PlaygroundView.swift in Sources */,
+				51381AED82774B5C91E484A7 /* CoachView.swift in Sources */,
+				511B5CB9D0506AE3B0B7BA9A /* RecipientMemory.swift in Sources */,
+				C89EABB2DBA692A1FF5AC255 /* SettingsView.swift in Sources */,
+				BD9E5A023D82845158A938D9 /* SharedKeychain.swift in Sources */,
+				C9B979F056F3D84FB316577F /* SharedUserDefaults.swift in Sources */,
+				01B5DA16281CE5533AAA9E35 /* StoreKitManager.swift in Sources */,
+				B4D2FE13BAC21B8C41C5185C /* StyleMemory.swift in Sources */,
+				7F047DD75ED87391C5FF4865 /* ToneEngine.swift in Sources */,
+				4C8023DED2667EAE03930F5B /* TonoAnalytics.swift in Sources */,
+				857FC116EAF1F727CFB420AA /* TonoApp.swift in Sources */,
+				43690A23F2E1A83FE74F3466 /* TonoBackend.swift in Sources */,
+				8EF5CEEF637E9023B58E83A3 /* UserMemory.swift in Sources */,
+				629905485734D49549C48A35 /* OnboardingEntryPointsView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		60F1A31EA6DD29F24EB550A6 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 222A4BB5BC4EFDC252F76C97 /* TonoKeyboard */;
+			targetProxy = 33E236150B1B9D53217E34D0 /* PBXContainerItemProxy */;
+		};
+		B89ED4E7E58BAF013BD4DF60 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = TonoMessagesExtension;
+			target = 5E7AA4C8F391BA513B44CF06 /* TonoMessagesExtension */;
+			targetProxy = 8ECA4C5AF7D3FCA10D2AFD56 /* PBXContainerItemProxy */;
+		};
+		E5A1C5B849F4CD1936B33170 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = Tono;
+			target = EBE86B011C11AB11A09CEBA7 /* Tono */;
+			targetProxy = 1F33D11E336D4CB3E5BECA57 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		02C72DAC7E6C8A5FA6AE6CC3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/Tono.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMPILER_INDEX_STORE_ENABLE = NO;
+				DEVELOPMENT_TEAM = 4938S9TTBM;
+				INFOPLIST_FILE = App/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.tonoit.app;
+				PRODUCT_NAME = Tono;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		16D41841B8E1319F33542AC4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		22D080A7A65988DC030E8B9E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = ShareExtension/ShareExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMPILER_INDEX_STORE_ENABLE = NO;
+				DEVELOPMENT_TEAM = 4938S9TTBM;
+				INFOPLIST_FILE = ShareExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.tonoit.app.share;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		2795134D583A05B42B30A529 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = ShareExtension/ShareExtension.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Distribution";
+				CODE_SIGN_STYLE = Manual;
+				COMPILER_INDEX_STORE_ENABLE = NO;
+				DEVELOPMENT_TEAM = 4938S9TTBM;
+				INFOPLIST_FILE = ShareExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.tonoit.app.share;
+				PROVISIONING_PROFILE_SPECIFIER = "ASC AppStore com.tonoit.app.share";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		2C4F2D0CEEB7264840C1C637 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		3DA85A919D93CC55CE51DCAA /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/Tono.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Distribution";
+				CODE_SIGN_STYLE = Manual;
+				COMPILER_INDEX_STORE_ENABLE = NO;
+				DEVELOPMENT_TEAM = 4938S9TTBM;
+				INFOPLIST_FILE = App/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.tonoit.app;
+				PRODUCT_NAME = Tono;
+				PROVISIONING_PROFILE_SPECIFIER = "ASC AppStore com.tonoit.app";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		502E412BC9DC2EA661B39ABD /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGNING_ALLOWED = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tonoit.app.tests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Tono.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Tono";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		7875F3B753DF61F300D72CC8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGNING_ALLOWED = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tonoit.app.tests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Tono.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Tono";
+			};
+			name = Debug;
+		};
+		7E5F63BDC78AE30936EA5725 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = TonoMessagesExtension/TonoMessagesExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMPILER_INDEX_STORE_ENABLE = NO;
+				DEVELOPMENT_TEAM = 4938S9TTBM;
+				INFOPLIST_FILE = TonoMessagesExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.tonoit.app.messages;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		8700F68DB184DCAEC613EF65 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = KeyboardExtension/TonoKeyboard.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Distribution";
+				CODE_SIGN_STYLE = Manual;
+				COMPILER_INDEX_STORE_ENABLE = NO;
+				DEVELOPMENT_TEAM = 4938S9TTBM;
+				INFOPLIST_FILE = KeyboardExtension/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.tonoit.app.keyboard;
+				PROVISIONING_PROFILE_SPECIFIER = "ASC AppStore com.tonoit.app.keyboard";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		B74EDF9191DB8DA1909BEF8F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = TonoMessagesExtension/TonoMessagesExtension.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Distribution";
+				CODE_SIGN_STYLE = Manual;
+				COMPILER_INDEX_STORE_ENABLE = NO;
+				DEVELOPMENT_TEAM = 4938S9TTBM;
+				INFOPLIST_FILE = TonoMessagesExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.tonoit.app.messages;
+				PROVISIONING_PROFILE_SPECIFIER = "ASC AppStore com.tonoit.app.messages";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		FF1060FBDE754069CF93E55D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = KeyboardExtension/TonoKeyboard.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMPILER_INDEX_STORE_ENABLE = NO;
+				DEVELOPMENT_TEAM = 4938S9TTBM;
+				INFOPLIST_FILE = KeyboardExtension/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.tonoit.app.keyboard;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		2F49AF9FA1DFCDF43E2782DB /* Build configuration list for PBXNativeTarget "TonoKeyboard" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FF1060FBDE754069CF93E55D /* Debug */,
+				8700F68DB184DCAEC613EF65 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		715A8CF082BA07B995045773 /* Build configuration list for PBXNativeTarget "Tono" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				02C72DAC7E6C8A5FA6AE6CC3 /* Debug */,
+				3DA85A919D93CC55CE51DCAA /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		86CCEE6B2FC40DE963213BE1 /* Build configuration list for PBXNativeTarget "TonoTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				502E412BC9DC2EA661B39ABD /* Release */,
+				7875F3B753DF61F300D72CC8 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BFD2AB0D0932FE828387F141 /* Build configuration list for PBXProject "Tono" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				16D41841B8E1319F33542AC4 /* Debug */,
+				2C4F2D0CEEB7264840C1C637 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		E33089BE6E3AA12DE429A5F8 /* Build configuration list for PBXNativeTarget "TonoShare" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2795134D583A05B42B30A529 /* Release */,
+				22D080A7A65988DC030E8B9E /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F4F7CD6211697F18BD99439A /* Build configuration list for PBXNativeTarget "TonoMessagesExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B74EDF9191DB8DA1909BEF8F /* Release */,
+				7E5F63BDC78AE30936EA5725 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 1121AB054D8122B413A4D902 /* Project object */;
+}

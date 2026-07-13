@@ -1,0 +1,95 @@
+{
+  "identifier" : "tono-storekit-config",
+  "nonConsumableProducts" : [],
+  "nonRenewingSubscriptions" : [],
+  "products" : [],
+  "settings" : {
+    "_failTransactionsEnabled" : false,
+    "_locale" : "en_US",
+    "_storeKitErrors" : [
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Load Products"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Purchase"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Verification"
+      }
+    ]
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "tono-pro-group",
+      "localizations" : [
+        {
+          "locale" : "en_US",
+          "name" : "Tono Pro"
+        }
+      ],
+      "name" : "Tono Pro",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [],
+          "codeOffers" : [],
+          "displayPrice" : "39.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "tono-pro-yearly",
+          "introductoryOffer" : {
+            "displayPrice" : "0.00",
+            "offerID" : "tono-yearly-trial",
+            "paymentMode" : "FREE_TRIAL",
+            "periodCount" : 1,
+            "subscriptionPeriod" : "P1W"
+          },
+          "localizations" : [
+            {
+              "description" : "Unlimited rewrites, style memory, per-recipient coaching, and weekly insights. Billed annually.",
+              "displayName" : "Tono Pro Annual",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.tono.pro.yearly",
+          "referenceName" : "Pro Annual",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "reviewNote" : "",
+          "subscriptionGroupID" : "tono-pro-group",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [],
+          "codeOffers" : [],
+          "displayPrice" : "5.99",
+          "familyShareable" : false,
+          "groupNumber" : 2,
+          "internalID" : "tono-pro-monthly",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Unlimited rewrites, style memory, per-recipient coaching, and weekly insights.",
+              "displayName" : "Tono Pro Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.tono.pro.monthly",
+          "referenceName" : "Pro Monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "reviewNote" : "",
+          "subscriptionGroupID" : "tono-pro-group",
+          "type" : "RecurringSubscription"
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 2,
+    "minor" : 0
+  }
+}
