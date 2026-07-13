@@ -11,7 +11,7 @@ The GitHub repository previously contained an unrelated legacy monorepo. Its fin
 - branch `legacy/pre-canonical-main`
 - annotated tag `legacy-remote-main-2026-07-08`
 
-The canonical imported-history decisions and original-to-canonical commit mappings remain in `docs/provenance/history-map.json`.
+The canonical imported-history decisions and original-to-canonical commit mappings remain in `docs/provenance/history-map.json`. Before publication, the canonical history was rewritten once to remove every historical `node_modules` path, including a 109.64 MB generated Next.js SWC binary rejected by GitHub. The target side of each provenance map was composed through that rewrite; original source SHAs remain unchanged.
 
 ## Runtime provenance contract
 
