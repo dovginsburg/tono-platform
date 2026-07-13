@@ -6,6 +6,9 @@ from PIL import Image, ImageDraw, ImageFont
 
 WIDTH = 402
 HEIGHT = 256
+RESULTS_HEIGHT = 292
+SECTION_GAP = 12
+CANVAS_HEIGHT = HEIGHT + SECTION_GAP + RESULTS_HEIGHT
 SCALE = 3
 TOP_BAR = 46
 EDGE = 4
@@ -47,6 +50,47 @@ def centered(draw, box, text, fill, text_font):
     draw.text((x, y), text, fill=fill, font=text_font)
 
 
+def draw_coach_results(draw, origin_y, *, background, label, border, coach, pressed, disabled):
+    """Render the expanded Coach state with all four canonical choices.
+
+    The second state intentionally includes normal, pressed/selected, and
+    disabled controls so the evidence covers every branded interaction state.
+    """
+    draw.rectangle(
+        (0, origin_y * SCALE, WIDTH * SCALE, (origin_y + RESULTS_HEIGHT) * SCALE),
+        fill=background,
+    )
+    title_font = font(14)
+    axis_font = font(11)
+    body_font = font(12)
+    state_font = font(9)
+
+    draw.text((12 * SCALE, (origin_y + 7) * SCALE), "Tono · Looks okay", fill=label, font=title_font)
+    draw.text((352 * SCALE, (origin_y + 7) * SCALE), "Back", fill=label, font=title_font)
+
+    choices = [
+        ("Warmer", "Thanks for checking — could you help with this?", coach, "normal"),
+        ("Clearer", "Please send the revised draft by 3 PM.", pressed, "pressed"),
+        ("Funnier", "Tiny plot twist: can we move this to Friday?", coach, "normal"),
+        ("Safer", "Would you be open to reviewing this together?", disabled, "disabled"),
+    ]
+    y = origin_y + 40
+    card_height = 57
+    for axis, rewrite, fill, state in choices:
+        rounded(draw, (EDGE, y, WIDTH - EDGE, y + card_height), KEY_RADIUS, fill, border)
+        draw.text((14 * SCALE, (y + 5) * SCALE), f"● {axis}", fill="#FFFFFF", font=axis_font)
+        state_box = draw.textbbox((0, 0), state, font=state_font)
+        state_width = state_box[2] - state_box[0]
+        draw.text(
+            ((WIDTH - 14) * SCALE - state_width, (y + 6) * SCALE),
+            state,
+            fill="#FFFFFF",
+            font=state_font,
+        )
+        draw.text((14 * SCALE, (y + 26) * SCALE), rewrite, fill="#FFFFFF", font=body_font)
+        y += card_height + 4
+
+
 def render(name: str, dark: bool):
     background = "#1C1C1E" if dark else "#D1D4DA"
     key = "#55565A" if dark else "#FFFFFF"
@@ -54,8 +98,10 @@ def render(name: str, dark: bool):
     label = "#FFFFFF" if dark else "#000000"
     border = "#696A6E" if dark else "#C3C5C9"
     coach = "#8D4CB3" if dark else "#5E1F78"
+    coach_pressed = "#713090" if dark else "#451258"
+    coach_disabled = "#76617D"
 
-    image = Image.new("RGB", (WIDTH * SCALE, HEIGHT * SCALE), background)
+    image = Image.new("RGB", (WIDTH * SCALE, CANVAS_HEIGHT * SCALE), background)
     draw = ImageDraw.Draw(image)
     key_font = font(22)
     control_font = font(15)
@@ -98,6 +144,17 @@ def render(name: str, dark: bool):
     centered(draw, (104, y, 320, y + KEY_HEIGHT), "space", label, control_font)
     rounded(draw, (326, y, WIDTH - EDGE, y + KEY_HEIGHT), KEY_RADIUS, control, border)
     centered(draw, (326, y, WIDTH - EDGE, y + KEY_HEIGHT), "return", label, control_font)
+
+    draw_coach_results(
+        draw,
+        HEIGHT + SECTION_GAP,
+        background=background,
+        label=label,
+        border=border,
+        coach=coach,
+        pressed=coach_pressed,
+        disabled=coach_disabled,
+    )
 
     output = Path(__file__).resolve().parents[3] / "artifacts" / name
     output.parent.mkdir(parents=True, exist_ok=True)
