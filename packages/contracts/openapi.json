@@ -1,0 +1,2610 @@
+{
+  "components": {
+    "schemas": {
+      "AdminFlagOverrideRequest": {
+        "properties": {
+          "device_id": {
+            "title": "Device Id",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "device_id",
+          "enabled"
+        ],
+        "title": "AdminFlagOverrideRequest",
+        "type": "object"
+      },
+      "AdminUpdateFlagRequest": {
+        "properties": {
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "plan_required": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "UNCHANGED",
+            "title": "Plan Required"
+          },
+          "rollout_pct": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rollout Pct"
+          }
+        },
+        "title": "AdminUpdateFlagRequest",
+        "type": "object"
+      },
+      "AnalyzeRequest": {
+        "properties": {
+          "axes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Axes",
+            "type": "array"
+          },
+          "context_hints": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Hints"
+          },
+          "draft": {
+            "title": "Draft",
+            "type": "string"
+          },
+          "mode": {
+            "default": "coach",
+            "enum": [
+              "coach",
+              "read"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "preferred_voice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferred Voice"
+          },
+          "recipient_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recipient Hint"
+          },
+          "thread_context": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Context"
+          }
+        },
+        "required": [
+          "draft"
+        ],
+        "title": "AnalyzeRequest",
+        "type": "object"
+      },
+      "ApiAnalyzeRequest": {
+        "properties": {
+          "axes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Axes"
+          },
+          "context_hints": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Up to 5 short facts from the user's on-device memory, injected into the system prompt.",
+            "title": "Context Hints"
+          },
+          "locale": {
+            "default": "en",
+            "description": "BCP-47 locale for the response language, e.g. 'en', 'es', 'fr', 'de', 'ja', 'pt-BR', 'ar'.",
+            "title": "Locale",
+            "type": "string"
+          },
+          "mode": {
+            "default": "coach",
+            "description": "coach = analyze a draft you're about to send; read = interpret a message you received.",
+            "enum": [
+              "coach",
+              "read"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "preferred_voice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferred Voice"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Force a specific provider (openai | anthropic | mock). If omitted, the server picks based on TONO_PROVIDER env.",
+            "title": "Provider"
+          },
+          "recipient_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recipient Hint"
+          },
+          "text": {
+            "description": "The draft message to analyze.",
+            "title": "Text",
+            "type": "string"
+          },
+          "thread_context": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Context"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "ApiAnalyzeRequest",
+        "type": "object"
+      },
+      "ApiAnalyzeResponse": {
+        "properties": {
+          "daily_limit": {
+            "title": "Daily Limit",
+            "type": "integer"
+          },
+          "flags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Flags",
+            "type": "array"
+          },
+          "perception": {
+            "title": "Perception",
+            "type": "string"
+          },
+          "plan": {
+            "title": "Plan",
+            "type": "string"
+          },
+          "risk_level": {
+            "title": "Risk Level",
+            "type": "string"
+          },
+          "risk_reason": {
+            "default": "",
+            "title": "Risk Reason",
+            "type": "string"
+          },
+          "subtext": {
+            "title": "Subtext",
+            "type": "string"
+          },
+          "suggestions": {
+            "items": {
+              "$ref": "#/components/schemas/RewriteSuggestion"
+            },
+            "title": "Suggestions",
+            "type": "array"
+          },
+          "used_today": {
+            "title": "Used Today",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "risk_level",
+          "perception",
+          "subtext",
+          "suggestions",
+          "flags",
+          "used_today",
+          "daily_limit",
+          "plan"
+        ],
+        "title": "ApiAnalyzeResponse",
+        "type": "object"
+      },
+      "AppleSignInRequest": {
+        "properties": {
+          "identity_token": {
+            "title": "Identity Token",
+            "type": "string"
+          },
+          "link": {
+            "default": false,
+            "title": "Link",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "identity_token"
+        ],
+        "title": "AppleSignInRequest",
+        "type": "object"
+      },
+      "AxisEventRequest": {
+        "properties": {
+          "axis": {
+            "title": "Axis",
+            "type": "string"
+          },
+          "risk_level": {
+            "title": "Risk Level",
+            "type": "string"
+          }
+        },
+        "required": [
+          "axis",
+          "risk_level"
+        ],
+        "title": "AxisEventRequest",
+        "type": "object"
+      },
+      "CheckoutRequest": {
+        "properties": {
+          "cancel_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancel Url"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "interval": {
+            "default": "month",
+            "title": "Interval",
+            "type": "string"
+          },
+          "success_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Success Url"
+          }
+        },
+        "title": "CheckoutRequest",
+        "type": "object"
+      },
+      "CheckoutResponse": {
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "session_id"
+        ],
+        "title": "CheckoutResponse",
+        "type": "object"
+      },
+      "CreateCouponRequest": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "duration_days": {
+            "title": "Duration Days",
+            "type": "integer"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "max_uses": {
+            "default": 0,
+            "title": "Max Uses",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "duration_days"
+        ],
+        "title": "CreateCouponRequest",
+        "type": "object"
+      },
+      "EventRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "edit_after": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edit After"
+          },
+          "event": {
+            "title": "Event",
+            "type": "string"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "msg_len_bucket": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Msg Len Bucket"
+          },
+          "picked_axis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Picked Axis"
+          },
+          "rewrite_used": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rewrite Used"
+          },
+          "risk_level": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Level"
+          },
+          "selected_axis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Axis"
+          },
+          "shown_axes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shown Axes"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "ts": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ts"
+          }
+        },
+        "required": [
+          "event"
+        ],
+        "title": "EventRequest",
+        "type": "object"
+      },
+      "GoogleSignInRequest": {
+        "properties": {
+          "id_token": {
+            "title": "Id Token",
+            "type": "string"
+          },
+          "link": {
+            "default": false,
+            "title": "Link",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id_token"
+        ],
+        "title": "GoogleSignInRequest",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "MeResponse": {
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "daily_limit": {
+            "title": "Daily Limit",
+            "type": "integer"
+          },
+          "device_id": {
+            "title": "Device Id",
+            "type": "string"
+          },
+          "is_pro": {
+            "title": "Is Pro",
+            "type": "boolean"
+          },
+          "plan": {
+            "title": "Plan",
+            "type": "string"
+          },
+          "subscription_renews_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subscription Renews At"
+          },
+          "subscription_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subscription Status"
+          },
+          "used_today": {
+            "title": "Used Today",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "device_id",
+          "plan",
+          "is_pro",
+          "used_today",
+          "daily_limit",
+          "subscription_status",
+          "subscription_renews_at"
+        ],
+        "title": "MeResponse",
+        "type": "object"
+      },
+      "MetricsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "avg_memory_mb": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Memory Mb"
+          },
+          "bg_normal": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bg Normal"
+          },
+          "bg_oom": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bg Oom"
+          },
+          "bg_watchdog": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bg Watchdog"
+          },
+          "crash_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Crash Count"
+          },
+          "disk_write_exception_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disk Write Exception Count"
+          },
+          "end_ts": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Ts"
+          },
+          "fg_normal": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fg Normal"
+          },
+          "fg_oom": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fg Oom"
+          },
+          "hang_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hang Count"
+          },
+          "ts": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ts"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "MetricsRequest",
+        "type": "object"
+      },
+      "PasskeyListItem": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "credential_id": {
+            "title": "Credential Id",
+            "type": "string"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "nickname": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nickname"
+          },
+          "transports": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Transports",
+            "type": "array"
+          }
+        },
+        "required": [
+          "credential_id",
+          "created_at"
+        ],
+        "title": "PasskeyListItem",
+        "type": "object"
+      },
+      "PasskeyLoginVerifyRequest": {
+        "properties": {
+          "credential": {
+            "additionalProperties": true,
+            "title": "Credential",
+            "type": "object"
+          }
+        },
+        "required": [
+          "credential"
+        ],
+        "title": "PasskeyLoginVerifyRequest",
+        "type": "object"
+      },
+      "PasskeyLoginVerifyResponse": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "is_pro": {
+            "title": "Is Pro",
+            "type": "boolean"
+          },
+          "plan": {
+            "title": "Plan",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "plan",
+          "is_pro"
+        ],
+        "title": "PasskeyLoginVerifyResponse",
+        "type": "object"
+      },
+      "PasskeyRegisterVerifyRequest": {
+        "properties": {
+          "credential": {
+            "additionalProperties": true,
+            "title": "Credential",
+            "type": "object"
+          },
+          "nickname": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nickname"
+          }
+        },
+        "required": [
+          "credential"
+        ],
+        "title": "PasskeyRegisterVerifyRequest",
+        "type": "object"
+      },
+      "PasskeyRegisterVerifyResponse": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "credential_id": {
+            "title": "Credential Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "credential_id"
+        ],
+        "title": "PasskeyRegisterVerifyResponse",
+        "type": "object"
+      },
+      "PortalResponse": {
+        "properties": {
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "PortalResponse",
+        "type": "object"
+      },
+      "RedeemCouponRequest": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "RedeemCouponRequest",
+        "type": "object"
+      },
+      "RedeemCouponResponse": {
+        "properties": {
+          "coupon_pro_expires_at": {
+            "title": "Coupon Pro Expires At",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "coupon_pro_expires_at",
+          "message"
+        ],
+        "title": "RedeemCouponResponse",
+        "type": "object"
+      },
+      "RegisterRequest": {
+        "properties": {
+          "app_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Version"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform"
+          }
+        },
+        "title": "RegisterRequest",
+        "type": "object"
+      },
+      "RegisterResponse": {
+        "properties": {
+          "api_token": {
+            "title": "Api Token",
+            "type": "string"
+          },
+          "device_id": {
+            "title": "Device Id",
+            "type": "string"
+          },
+          "is_pro": {
+            "title": "Is Pro",
+            "type": "boolean"
+          },
+          "plan": {
+            "title": "Plan",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_id",
+          "api_token",
+          "plan",
+          "is_pro"
+        ],
+        "title": "RegisterResponse",
+        "type": "object"
+      },
+      "RewriteSuggestion": {
+        "properties": {
+          "axis": {
+            "title": "Axis",
+            "type": "string"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "risk_after": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk After"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "axis",
+          "text"
+        ],
+        "title": "RewriteSuggestion",
+        "type": "object"
+      },
+      "SetFeatureRequest": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "SetFeatureRequest",
+        "type": "object"
+      },
+      "SignInResponse": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "is_pro": {
+            "title": "Is Pro",
+            "type": "boolean"
+          },
+          "plan": {
+            "title": "Plan",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "plan",
+          "is_pro"
+        ],
+        "title": "SignInResponse",
+        "type": "object"
+      },
+      "ToneAnalysis": {
+        "properties": {
+          "flags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Flags",
+            "type": "array"
+          },
+          "perception": {
+            "title": "Perception",
+            "type": "string"
+          },
+          "risk_level": {
+            "title": "Risk Level",
+            "type": "string"
+          },
+          "risk_reason": {
+            "default": "",
+            "title": "Risk Reason",
+            "type": "string"
+          },
+          "subtext": {
+            "title": "Subtext",
+            "type": "string"
+          },
+          "suggestions": {
+            "items": {
+              "$ref": "#/components/schemas/RewriteSuggestion"
+            },
+            "title": "Suggestions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "risk_level",
+          "perception",
+          "subtext",
+          "suggestions",
+          "flags"
+        ],
+        "title": "ToneAnalysis",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Proxy + auth + billing for the Social Tone Coach keyboard. See ../SCOPE.md for the product context.",
+    "title": "Tono backend",
+    "version": "0.3.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/admin/axis-stats": {
+      "get": {
+        "description": "Per-axis win counts broken down by risk level, plus global ranking.\n\n``overall`` \u2014 axis tap totals across all risk levels.\n``by_risk_level`` \u2014 per-risk breakdown so we can see which axes resonate\n  when a message is high-risk vs. low-risk (feeds prompt tuning).\n``global_ranking`` \u2014 the collective-intelligence axis order currently\n  used as the default for new users who have no per-user StyleMemory.",
+        "operationId": "admin_axis_stats_admin_axis_stats_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Axis Stats Admin Axis Stats Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Axis Stats"
+      }
+    },
+    "/admin/coupon/create": {
+      "post": {
+        "description": "Create a new coupon code. Protected by TONO_ADMIN_SECRET header.",
+        "operationId": "admin_create_coupon_admin_coupon_create_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCouponRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Create Coupon Admin Coupon Create Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Create Coupon"
+      }
+    },
+    "/admin/flags": {
+      "get": {
+        "description": "List all feature flags with their current state.",
+        "operationId": "admin_list_flags_admin_flags_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response Admin List Flags Admin Flags Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin List Flags"
+      }
+    },
+    "/admin/flags/{key}": {
+      "patch": {
+        "description": "Update a feature flag globally.",
+        "operationId": "admin_update_flag_admin_flags__key__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminUpdateFlagRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Update Flag Admin Flags  Key  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Update Flag"
+      }
+    },
+    "/admin/flags/{key}/override": {
+      "post": {
+        "description": "Force-enable or force-disable a flag for one device (beta access, support exceptions).",
+        "operationId": "admin_set_flag_override_admin_flags__key__override_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminFlagOverrideRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Set Flag Override Admin Flags  Key  Override Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Set Flag Override"
+      }
+    },
+    "/admin/flags/{key}/override/{device_id}": {
+      "delete": {
+        "description": "Remove an admin override so the device falls back to the global flag.",
+        "operationId": "admin_delete_flag_override_admin_flags__key__override__device_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Delete Flag Override Admin Flags  Key  Override  Device Id  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Delete Flag Override"
+      }
+    },
+    "/admin/improvement-stats": {
+      "get": {
+        "description": "Collective improvement aggregates with k-anonymity floor enforced at query level.\n\n- ``axis_effectiveness``: which axes win by risk level. Only patterns\n  backed by >= min_devices distinct devices are returned; patterns with\n  fewer contributors are discarded to prevent any individual's behavior\n  from being distinguishable in the aggregate.\n- ``rewrite_quality``: edit-after-insert rates by axis. High rate signals\n  close-but-wrong rewrites \u2014 candidate for prompt revision.\n- ``min_devices_floor``: the k-anon floor applied to every query above.\n\nUse these aggregates to tune default axis ordering and prompt quality.\nAll individual event rows are aged out after 90 days; only aggregates\nsurvive long-term.",
+        "operationId": "admin_improvement_stats_admin_improvement_stats_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "title": "Days",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "min_devices",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Min Devices",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Improvement Stats Admin Improvement Stats Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Improvement Stats"
+      }
+    },
+    "/admin/maintenance/age-out-events": {
+      "post": {
+        "description": "Age out raw improvement_events older than retain_days.\n\nRaw events are kept only long enough to compute rolling aggregates.\nCall this nightly (e.g. from a Railway cron or a scheduled job).",
+        "operationId": "admin_age_out_events_admin_maintenance_age_out_events_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "retain_days",
+            "required": false,
+            "schema": {
+              "default": 90,
+              "title": "Retain Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Age Out Events Admin Maintenance Age Out Events Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Age Out Events"
+      }
+    },
+    "/admin/stats": {
+      "get": {
+        "description": "Aggregate product analytics: axis usage, registration count, active pro count.",
+        "operationId": "admin_stats_admin_stats_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Stats Admin Stats Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin Stats"
+      }
+    },
+    "/api/analyze": {
+      "post": {
+        "description": "The keyboard's primary endpoint. Authenticated, rate-limited,\nserver holds the LLM API key.",
+        "operationId": "api_analyze_api_analyze_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApiAnalyzeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiAnalyzeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Api Analyze"
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Health Health Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health"
+      }
+    },
+    "/slack/command": {
+      "post": {
+        "operationId": "slack_command_slack_command_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Slack Command Slack Command Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Slack Command",
+        "tags": [
+          "slack"
+        ]
+      }
+    },
+    "/slack/install": {
+      "get": {
+        "operationId": "slack_install_slack_install_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Slack Install",
+        "tags": [
+          "slack"
+        ]
+      }
+    },
+    "/slack/interaction": {
+      "post": {
+        "description": "Handle Block Kit action payloads (e.g. 'Post this rewrite' buttons).",
+        "operationId": "slack_interaction_slack_interaction_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Slack Interaction Slack Interaction Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Slack Interaction",
+        "tags": [
+          "slack"
+        ]
+      }
+    },
+    "/slack/oauth": {
+      "get": {
+        "operationId": "slack_oauth_slack_oauth_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "code",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Code"
+            }
+          },
+          {
+            "in": "query",
+            "name": "error",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Slack Oauth",
+        "tags": [
+          "slack"
+        ]
+      }
+    },
+    "/v1/analyze": {
+      "post": {
+        "description": "Unauthenticated passthrough kept for backward compatibility with\nthe iOS Playground tab and integration tests. No billing is applied,\nbut a per-IP cap protects the shared provider credentials from abuse.",
+        "operationId": "v1_analyze_v1_analyze_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnalyzeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToneAnalysis"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "V1 Analyze"
+      }
+    },
+    "/v1/auth/apple": {
+      "post": {
+        "operationId": "auth_apple_v1_auth_apple_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppleSignInRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Auth Apple"
+      }
+    },
+    "/v1/auth/google": {
+      "post": {
+        "operationId": "auth_google_v1_auth_google_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoogleSignInRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Auth Google"
+      }
+    },
+    "/v1/auth/passkey": {
+      "get": {
+        "operationId": "passkey_list_v1_auth_passkey_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PasskeyListItem"
+                  },
+                  "title": "Response Passkey List V1 Auth Passkey Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Passkey List",
+        "tags": [
+          "passkeys"
+        ]
+      }
+    },
+    "/v1/auth/passkey/login/options": {
+      "post": {
+        "description": "Public \u2014 no bearer token needed to *start* a passkey login. Uses\ndiscoverable credentials (no `allow_credentials` list), so the\nauthenticator itself prompts the user to pick which passkey to use \u2014\nwe don't need to know who's signing in until they've done it.",
+        "operationId": "passkey_login_options_v1_auth_passkey_login_options_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Passkey Login Options",
+        "tags": [
+          "passkeys"
+        ]
+      }
+    },
+    "/v1/auth/passkey/login/verify": {
+      "post": {
+        "operationId": "passkey_login_verify_v1_auth_passkey_login_verify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeyLoginVerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyLoginVerifyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Passkey Login Verify",
+        "tags": [
+          "passkeys"
+        ]
+      }
+    },
+    "/v1/auth/passkey/register/options": {
+      "post": {
+        "operationId": "passkey_register_options_v1_auth_passkey_register_options_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Passkey Register Options",
+        "tags": [
+          "passkeys"
+        ]
+      }
+    },
+    "/v1/auth/passkey/register/verify": {
+      "post": {
+        "operationId": "passkey_register_verify_v1_auth_passkey_register_verify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeyRegisterVerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyRegisterVerifyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Passkey Register Verify",
+        "tags": [
+          "passkeys"
+        ]
+      }
+    },
+    "/v1/auth/passkey/{credential_id}": {
+      "delete": {
+        "operationId": "passkey_delete_v1_auth_passkey__credential_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "credential_id",
+            "required": true,
+            "schema": {
+              "title": "Credential Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Passkey Delete",
+        "tags": [
+          "passkeys"
+        ]
+      }
+    },
+    "/v1/checkout": {
+      "post": {
+        "operationId": "create_checkout_session_v1_checkout_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckoutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckoutResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Checkout Session",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/v1/coupon/redeem": {
+      "post": {
+        "description": "Redeem a promo/coupon code. Grants Pro access for the code's duration.",
+        "operationId": "redeem_coupon_v1_coupon_redeem_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RedeemCouponRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedeemCouponResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Redeem Coupon"
+      }
+    },
+    "/v1/digest": {
+      "get": {
+        "description": "Weekly tone digest \u2014 rewrites, days active, axis breakdown.",
+        "operationId": "get_digest_v1_digest_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Digest V1 Digest Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Digest"
+      }
+    },
+    "/v1/event/axis": {
+      "post": {
+        "description": "Record which rewrite axis the user tapped. Used for product analytics\n(which axes resonate most) and eventually for personalized axis ordering.",
+        "operationId": "log_axis_event_v1_event_axis_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AxisEventRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Log Axis Event"
+      }
+    },
+    "/v1/events": {
+      "post": {
+        "description": "A3: First-party analytics event ingestion. Fire-and-forget;\nfailures do not surface to the client.\n\nA4 enforced: only event-type strings, axis enums, risk levels, latency,\nand mode strings are accepted. No message content, no recipient names,\nno free-text user input reaches this endpoint.\n\nimprovement_outcome: stored to improvement_events only when the device's\n'improve_tono' flag is enabled (respects opt-out). k-anonymity floor is\nenforced at aggregation query time, not here.",
+        "operationId": "log_analytics_event_v1_events_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Log Analytics Event"
+      }
+    },
+    "/v1/features": {
+      "get": {
+        "description": "Return the resolved feature flags for the authenticated device.",
+        "operationId": "get_features_v1_features_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Get Features V1 Features Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Features"
+      }
+    },
+    "/v1/features/{key}": {
+      "put": {
+        "description": "Let users toggle their own user-controllable flags (e.g. opt out of weekly digest).",
+        "operationId": "set_feature_preference_v1_features__key__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetFeatureRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Set Feature Preference V1 Features  Key  Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Feature Preference"
+      }
+    },
+    "/v1/locales": {
+      "get": {
+        "description": "Locales the LLM providers can respond in. Clients use this to build\na language switcher without hardcoding the list.",
+        "operationId": "list_locales_v1_locales_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Locales V1 Locales Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Locales"
+      }
+    },
+    "/v1/me": {
+      "get": {
+        "operationId": "me_v1_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Me"
+      }
+    },
+    "/v1/metrics": {
+      "post": {
+        "description": "A2: Receive MetricKit daily summaries from the host app.\nLogged to stdout for now; wire to a time-series store when\ndevice fleet grows large enough to need dashboards.",
+        "operationId": "ingest_metrics_v1_metrics_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MetricsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Ingest Metrics"
+      }
+    },
+    "/v1/portal": {
+      "post": {
+        "operationId": "create_portal_session_v1_portal_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Portal Session",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/v1/register": {
+      "post": {
+        "operationId": "register_v1_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register"
+      }
+    },
+    "/v1/stripe/webhook": {
+      "post": {
+        "operationId": "stripe_webhook_v1_stripe_webhook_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Stripe Webhook V1 Stripe Webhook Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Stripe Webhook",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/v1/whoami": {
+      "get": {
+        "description": "Public debug endpoint. Returns the client's apparent IP and a server\ntimestamp so iOS / curl callers can sanity-check routing, proxies, and\nclock skew. No auth required, no PII stored.\n\nPorted forward from the pre-Path-A server (kept for iOS routing\nsanity-checks during the account-layer migration).",
+        "operationId": "v1_whoami_v1_whoami_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response V1 Whoami V1 Whoami Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "V1 Whoami"
+      }
+    }
+  }
+}

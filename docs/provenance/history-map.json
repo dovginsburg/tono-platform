@@ -1,0 +1,52 @@
+{
+  "format": 1,
+  "canonical_root": "tono-platform",
+  "imports": [
+    {
+      "component": "backend",
+      "source": "/Users/Ezra/Projects/apps/tono/backend",
+      "original_head": "2821a222b9b9b2ad9f5b9bdc88cb71f733a10295",
+      "rewritten_original_head": "6c02dda581b4a8272497603cc69f040d6e6b9089",
+      "imported_head": "cb1763989c36ab58e755f99d1fae78807c3e8a03",
+      "root": "apps/backend",
+      "working_snapshot": true
+    },
+    {
+      "component": "web",
+      "source": "/Users/Ezra/Projects/apps/tono-web",
+      "original_head": "78b2bf9c3e9650e96e1a23b8f0c75c5476c36135",
+      "rewritten_original_head": "88cb11b84200fc68e7d149a632a88a98ad99b4ad",
+      "imported_head": "88cb11b84200fc68e7d149a632a88a98ad99b4ad",
+      "root": "apps/web",
+      "working_snapshot": false
+    },
+    {
+      "component": "ios",
+      "source": "/Users/Ezra/Projects/apps/tono/ios",
+      "original_head": "dc7ea04bec4af57cc901b99ddc034574d6353c10",
+      "rewritten_original_head": "f3acaa296c295e87098af4e12b47da89c869b6ab",
+      "imported_head": "f3acaa296c295e87098af4e12b47da89c869b6ab",
+      "root": "apps/ios",
+      "working_snapshot": false,
+      "protected_release": "build-85"
+    },
+    {
+      "component": "android",
+      "source": "/Users/Ezra/Projects/apps/tono/android",
+      "original_head": "754a06fdcecfd67df5e0ca84f1a3f678892eca7c",
+      "rewritten_original_head": "16b1179dd3c58cd2c5669f5604660b2fd46bc26b",
+      "imported_head": "2a7b245c9ebcff30c94baa9a6a651c16b4a3540f",
+      "root": "apps/android",
+      "working_snapshot": true
+    },
+    {
+      "component": "tono-claude-reviewed",
+      "source": "/Users/Ezra/Projects/apps/tono-claude",
+      "original_head": "107b2a9befe037f697a802f2b89d82b6d6402d23",
+      "rewritten_original_head": "63665bc6c5a9ef5189314eb4f74c80473477fd37",
+      "imported_head": "63665bc6c5a9ef5189314eb4f74c80473477fd37",
+      "root": "vendor/reviewed/tono-claude",
+      "working_snapshot": false
+    }
+  ]
+}

@@ -1,0 +1,95 @@
+name: Canonical CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-provenance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify clean canonical source and imported history
+        run: python3 scripts/ci/verify_source.py
+      - name: Verify checkout starts clean
+        run: git diff --exit-code && test -z "$(git status --porcelain)"
+      - name: Full-history secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Generate artifact provenance
+        run: python3 scripts/ci/prepare_provenance.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: canonical-provenance
+          path: build/provenance.json
+
+  backend-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: apps/backend/requirements.txt
+      - run: pip install -r apps/backend/requirements.txt
+      - run: python3 scripts/ci/prepare_provenance.py
+      - run: python -m pytest -q apps/backend/tests
+      - run: python3 scripts/ci/export_openapi.py --check
+      - name: Build backend image with immutable labels
+        run: docker build --build-arg TONO_CANONICAL_SHA="$GITHUB_SHA" --build-arg TONO_SCHEMA_REVISION="$(cat schema/revision.txt)" -t tono-backend:"$GITHUB_SHA" apps/backend
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: python3 scripts/ci/prepare_provenance.py
+      - run: npm ci
+        working-directory: apps/web
+      - run: npm run build
+        working-directory: apps/web
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://example.invalid
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-not-a-secret
+          TONO_BACKEND_URL: http://127.0.0.1:8765
+      - run: grep -F "$GITHUB_SHA" apps/web/public/build-provenance.json
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - run: python3 scripts/ci/prepare_provenance.py
+      - run: ./gradlew testDebugUnitTest assembleDebug --stacktrace
+        working-directory: apps/android
+      - name: Verify APK embeds canonical SHA
+        run: unzip -p apps/android/app/build/outputs/apk/debug/app-debug.apk assets/build-provenance.json | grep -F "$GITHUB_SHA"
+
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/ci/prepare_provenance.py
+      - name: Build simulator artifact without signing
+        working-directory: apps/ios
+        run: xcodebuild build -project Tono.xcodeproj -scheme Tono -destination 'generic/platform=iOS Simulator' -derivedDataPath build/ios CODE_SIGNING_ALLOWED=NO TONO_CANONICAL_SHA="$GITHUB_SHA" TONO_SCHEMA_REVISION="$(cat ../../schema/revision.txt)"
+      - name: Verify app embeds canonical SHA
+        run: plutil -extract TonoCanonicalSHA raw apps/ios/build/ios/Build/Products/Debug-iphonesimulator/Tono.app/Info.plist | grep -F "$GITHUB_SHA"

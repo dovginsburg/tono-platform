@@ -153,17 +153,28 @@ def create_checkout_session(
     # app-sourced subscriptions from web-sourced ones later (web
     # subscriptions have no device row to attach to).
     if user is not None:
-        customer_id = user.stripe_customer_id
+        account_id = user.account_id
+        customer_id = (
+            user.account.stripe_customer_id
+            if user.account is not None
+            else user.stripe_customer_id
+        )
         if not customer_id:
-            customer = stripe.Customer.create(
-                metadata={"tono_device_id": user.device_id},
-            )
+            customer_metadata = {"tono_device_id": user.device_id}
+            if account_id:
+                customer_metadata["tono_account_id"] = account_id
+            customer = stripe.Customer.create(metadata=customer_metadata)
             customer_id = customer["id"]
-            store.attach_stripe_customer(user.device_id, customer_id)
+            if account_id:
+                store.attach_account_stripe_customer(account_id, customer_id)
+            else:
+                store.attach_stripe_customer(user.device_id, customer_id)
         metadata = {
             "tono_device_id": user.device_id,
             "tono_source": "app",
         }
+        if account_id:
+            metadata["tono_account_id"] = account_id
         client_reference_id = user.device_id
     else:
         customer_id = None
@@ -220,12 +231,17 @@ def create_portal_session(
 ) -> PortalResponse:
     if not _is_configured():
         raise HTTPException(503, "Stripe is not configured on this server.")
-    if not user.stripe_customer_id:
+    customer_id = (
+        user.account.stripe_customer_id
+        if user.account is not None
+        else user.stripe_customer_id
+    )
+    if not customer_id:
         raise HTTPException(400, "No Stripe customer on file. Start checkout first.")
 
     stripe.api_key = _secret()
     session = stripe.billing_portal.Session.create(
-        customer=user.stripe_customer_id,
+        customer=customer_id,
         return_url=f"{_public_base_url(request)}/v1/checkout/return",
     )
     return PortalResponse(url=session["url"])
@@ -299,6 +315,7 @@ def _handle_subscription_event(store: Store, etype: str, obj: dict) -> None:
     """
 
     device_id: Optional[str] = None
+    account_id: Optional[str] = _meta(obj, "tono_account_id")
     customer_id: Optional[str] = None
     subscription_id: Optional[str] = None
     status_str: Optional[str] = None
@@ -343,23 +360,32 @@ def _handle_subscription_event(store: Store, etype: str, obj: dict) -> None:
         # sends deletion events for subscriptions we never wrote to (e.g.
         # from a previous deployment, or a different app sharing the
         # account). 500-ing on those makes Stripe disable the endpoint.
-        if not device_id and not customer_id:
+        if not account_id and not device_id and not customer_id:
             logger.info(
                 "Stripe webhook: subscription event has no tono_device_id "
                 "and no customer id; skipping (event type=%s).",
                 etype,
             )
             return
-        store.update_subscription(
-            device_id=device_id,
-            customer_id=customer_id,
-            subscription_id=None,
-            status="canceled",
-            renews_at=None,
-        )
+        if account_id:
+            store.update_account_subscription(
+                account_id=account_id,
+                customer_id=customer_id,
+                subscription_id=None,
+                status="canceled",
+                renews_at=None,
+            )
+        else:
+            store.update_subscription(
+                device_id=device_id,
+                customer_id=customer_id,
+                subscription_id=None,
+                status="canceled",
+                renews_at=None,
+            )
         return
 
-    if not device_id and not customer_id:
+    if not account_id and not device_id and not customer_id:
         logger.info(
             "Stripe webhook: subscription event has no tono_device_id "
             "and no customer id; skipping (event type=%s).",
@@ -367,13 +393,24 @@ def _handle_subscription_event(store: Store, etype: str, obj: dict) -> None:
         )
         return
 
-    store.update_subscription(
-        device_id=device_id,
-        customer_id=customer_id,
-        subscription_id=subscription_id,
-        status=status_str,
-        renews_at=renews_at,
-    )
+    if account_id:
+        if customer_id:
+            store.attach_account_stripe_customer(account_id, customer_id)
+        store.update_account_subscription(
+            account_id=account_id,
+            customer_id=customer_id,
+            subscription_id=subscription_id,
+            status=status_str,
+            renews_at=renews_at,
+        )
+    else:
+        store.update_subscription(
+            device_id=device_id,
+            customer_id=customer_id,
+            subscription_id=subscription_id,
+            status=status_str,
+            renews_at=renews_at,
+        )
 
 
 def _meta(obj: dict, key: str) -> Optional[str]:

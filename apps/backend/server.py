@@ -330,6 +330,10 @@ async def health() -> dict[str, Any]:
         "ts": int(time.time()),
         "id": str(uuid.uuid4())[:8],
         "version": "0.3.0",
+        "canonical_sha": os.environ.get("TONO_CANONICAL_SHA", "unknown"),
+        "schema_revision": os.environ.get(
+            "TONO_SCHEMA_REVISION", "legacy-sqlite-unversioned"
+        ),
         "stripe_configured": bool(os.environ.get("STRIPE_SECRET_KEY")),
         "slack_configured": bool(os.environ.get("SLACK_CLIENT_ID")),
         "free_daily_limit": int(os.environ.get("FREE_DAILY_LIMIT", "10")),
@@ -363,11 +367,17 @@ async def list_locales() -> dict[str, Any]:
 
 
 @app.post("/v1/analyze", response_model=ToneAnalysis)
-async def v1_analyze(req: AnalyzeRequest) -> dict[str, Any]:
+async def v1_analyze(req: AnalyzeRequest, request: Request) -> dict[str, Any]:
     """Unauthenticated passthrough kept for backward compatibility with
-    the iOS Playground tab and integration tests. No rate limit, no
-    billing — the caller pays the LLM cost directly.
+    the iOS Playground tab and integration tests. No billing is applied,
+    but a per-IP cap protects the shared provider credentials from abuse.
     """
+    if not _check_ip_rate(_get_client_ip(request)):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many requests. Please retry in a minute.",
+            headers={"Retry-After": "60"},
+        )
     provider = os.environ.get("TONO_PROVIDER", "mock")
     if provider == "mock":
         return mock_analyze(req)
