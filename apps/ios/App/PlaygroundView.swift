@@ -89,7 +89,7 @@ struct PlaygroundView: View {
                 draft: draft,
                 recipientHint: recipientHint.isEmpty ? nil : recipientHint,
                 preferredVoice: prefs.preferredVoice,
-                axes: prefs.axes.isEmpty ? RewriteAxis.allCases : prefs.axes
+                axes: RewriteAxis.allCases
             )
             do {
                 var perception = ""
@@ -125,7 +125,7 @@ struct PlaygroundView: View {
                     perception: perception,
                     subtext: subtext,
                     reason: reason,
-                    suggestions: suggestions,
+                    suggestions: try suggestions.canonicalCoachChoices(),
                     flags: flags
                 )
                 await MainActor.run {

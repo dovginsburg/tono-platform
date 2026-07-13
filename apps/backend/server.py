@@ -49,6 +49,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import passkeys, payments, slack, social_auth
 from .analyze import (
     AnalyzeRequest,
+    CANONICAL_COACH_AXES,
     CoachContractError,
     RewriteSuggestion,
     ToneAnalysis,
@@ -56,6 +57,7 @@ from .analyze import (
     openai_analyze,
     anthropic_analyze,
     build_user_prompt,
+    enforce_coach_contract,
 )
 from .auth import CurrentUser, StoreDep, current_user
 from .store import AccountConflictError, Store, User, get_store
@@ -561,9 +563,19 @@ async def api_analyze(
         )
 
     provider = (body.provider or os.environ.get("TONO_PROVIDER", "mock")).lower()
-    # Use client-provided ranking (per-user StyleMemory) when present; fall back
-    # to the collective win order so new users inherit crowd wisdom.
-    axes = body.axes or store.global_axis_ranking(days=30)
+    # Coach is a fixed four-choice contract. Personal ranking may influence
+    # analytics, but never payload membership or order.
+    axes = list(CANONICAL_COACH_AXES) if body.mode == "coach" else []
+    internal = AnalyzeRequest(
+        draft=body.text,
+        recipient_hint=body.recipient_hint,
+        preferred_voice=body.preferred_voice,
+        axes=axes,
+        context_hints=body.context_hints,
+        thread_context=body.thread_context,
+        mode=body.mode,
+        locale=body.locale,
+    )
 
     # Cache lookup — hits don't consume the daily allowance.
     cache_key = (
@@ -573,6 +585,12 @@ async def api_analyze(
     )
     if cache_key:
         cached = store.get_cached_response(cache_key)
+        if cached:
+            try:
+                cached = enforce_coach_contract(cached, internal)
+            except CoachContractError as e:
+                logger.warning("Ignoring invalid cached Coach response: %s", e)
+                cached = None
         if cached:
             today = _today_utc()
             # Pooled on the account once signed in — see consume_rewrite.
@@ -601,17 +619,6 @@ async def api_analyze(
             },
             headers={"Retry-After": "86400"},
         )
-
-    internal = AnalyzeRequest(
-        draft=body.text,
-        recipient_hint=body.recipient_hint,
-        preferred_voice=body.preferred_voice,
-        axes=axes,
-        context_hints=body.context_hints,
-        thread_context=body.thread_context,
-        mode=body.mode,
-        locale=body.locale,
-    )
 
     try:
         if provider == "mock":

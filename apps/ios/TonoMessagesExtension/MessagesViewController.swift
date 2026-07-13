@@ -253,22 +253,22 @@ struct MessagesRootView: View {
         isLoading = true
         errorMessage = nil
         Task {
-            await performAnalysis(axes: RewriteAxis.allCases)
+            await performAnalysis()
         }
     }
 
-    private func runAxisRewrite(_ axis: RewriteAxis) {
+    private func runAxisRewrite(_: RewriteAxis) {
         guard !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         isLoading = true
         errorMessage = nil
         Task {
-            await performAnalysis(axes: [axis])
+            await performAnalysis()
         }
     }
 
-    private func performAnalysis(axes: [RewriteAxis]) async {
+    private func performAnalysis() async {
         do {
-            let req = AnalysisRequest(draft: draftText, axes: axes)
+            let req = AnalysisRequest(draft: draftText, axes: RewriteAxis.allCases)
             var perception = ""
             var suggestions: [RewriteSuggestion] = []
             var riskLevel: RiskLevel = .medium
@@ -292,6 +292,7 @@ struct MessagesRootView: View {
                 case .error(let msg): throw ToneEngineError.backend(msg)
                 }
             }
+            suggestions = try suggestions.canonicalCoachChoices()
             await MainActor.run {
                 analysis = ToneAnalysis(riskLevel: riskLevel, perception: perception, subtext: subtext, reason: reason, suggestions: suggestions, flags: flags)
                 isLoading = false

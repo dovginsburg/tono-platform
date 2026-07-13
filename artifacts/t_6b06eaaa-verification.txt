@@ -1,43 +1,65 @@
-Tono build 86 verification — task t_6b06eaaa
+Tono build 86 reconciliation evidence — task t_c786998d
+Generated 2026-07-13 in the isolated Codex worktree.
 
-Original contract/autocorrect fix (commit 10ab72c)
-Backend command: python -m pytest -q
-Result: 110 passed in 4.83s
-Simulator XCTest command: xcodebuild test -project Tono.xcodeproj -scheme Tono -destination 'platform=iOS Simulator,id=A034F0C4-F573-49D2-99AC-F7DEB1500294' CODE_SIGNING_ALLOWED=NO
-Result: TEST SUCCEEDED — 23 tests, 0 failures
-xcresult: /Users/Ezra/Library/Developer/Xcode/DerivedData/Tono-dhyvmakrjwnvftcnhxulkafbcnuy/Logs/Test/Test-Tono-2026.07.13_11-03-56--0400.xcresult
+Evidence classification
+- t_6b06eaaa-native-apple-keyboard-light.png: runtime Apple keyboard reference supplied by the replayed candidate.
+- t_6b06eaaa-build86-simulator.png: runtime host-app screenshot; it does not show the Tono keyboard.
+- t_6b06eaaa-tono-keyboard-spec-light.png and ...-dark.png: generated specification renders, not runtime captures.
+- No runtime Tono-keyboard screenshot is claimed by this reconciliation.
 
-Visual parity follow-up (uncommitted review candidate)
-Build command: xcodebuild build-for-testing -project Tono.xcodeproj -scheme Tono -destination 'platform=iOS Simulator,id=A034F0C4-F573-49D2-99AC-F7DEB1500294' CODE_SIGNING_ALLOWED=NO
-Result: TEST BUILD SUCCEEDED. This compiles the app, keyboard extension, and new KeyboardVisualStyleTests without executing Gary's own tests; Sherlock must run them independently.
+Backend verification
+- python3 -m pytest -q apps/backend/tests/test_coach_contract.py apps/backend/tests/test_api.py
+  Exit 0: 61 passed, including invalid-cache fallback and Coach contract regressions.
+- python3 -m pytest -q apps/backend/tests
+  Exit 1: 115 passed, 2 Slack interaction tests blocked because python-multipart is absent from the available environment. The two failures are outside Coach behavior.
+- PYTHONPYCACHEPREFIX=/tmp/t_c786998d-pycache python3 -m compileall -q apps/backend
+  Exit 0.
 
-Native Apple reference
-Device: iPhone 17 Pro simulator, iOS 26.5, 402×874pt at 3×.
-Synthetic draft: “Hey, I need help with something!”
-Screenshot: artifacts/t_6b06eaaa-native-apple-keyboard-light.png
-Measured from the screenshot: full native keyboard region ≈334pt including the Apple-owned globe/dictation area; suggestion + typing content ≈256pt; keycaps ≈43–44pt high; vertical row gaps ≈8–11pt; letter font ≈22pt; corner radius ≈5pt; shadow offset ≈1pt.
+iOS verification
+- xcrun swiftc -module-cache-path /tmp/t_c786998d-swift-module-cache -typecheck apps/ios/KeyboardExtension/TonoCoachClient.swift
+  Exit 0: the pure Coach decoder and exact rewrite-target logic type-check successfully.
+- A temporary pure-Swift executable linked TonoCoachClient.swift and asserted exact, ignored, and clamped post-adjustment caret positions.
+  Exit 0: only the exact captured target position authorizes mutation.
+- xcrun simctl list devices available
+  Exit 1: CoreSimulatorService connection invalid; no installed simulator runtimes were discoverable.
+- Focused CoachContractTests, SpellingCorrectionTests, and KeyboardVisualStyleTests via xcodebuild test
+  Exit 65 before test execution: no available iOS Simulator runtime; host asset-catalog compilation could not obtain a simulator runtime.
+- Full xcodebuild test using the only concrete destination returned by xcodebuild (local Mac destination)
+  Exit 65 before test execution for the same missing-simulator-runtime asset-catalog failure.
+- xcodebuild build-for-testing -project Tono.xcodeproj -scheme Tono -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/t_c786998d-final-bft CODE_SIGNING_ALLOWED=NO
+  Exit 65: TonoKeyboard Swift sources compiled and linked for arm64 and x86_64; the host asset catalog then failed because no simulator runtime is installed.
+- xcodebuild clean build -project Tono.xcodeproj -scheme Tono -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/t_c786998d-final-clean CODE_SIGNING_ALLOWED=NO
+  Exit 65: same host asset-catalog/runtime blocker after keyboard-extension compilation.
 
-Tono parity specification
-Compact portrait width (<390pt): 252pt owned content.
-Regular portrait width (390–429pt): 256pt owned content.
-Large portrait width (>=430pt): 264pt owned content.
-Typing rows: 44pt minimum touch/key height, 8pt gaps, 4pt edge inset, 22pt key font, 5pt radius, 1pt shadow offset.
-Coach strip: 46pt; visible Coach control: 36pt centered in the strip. Coach no longer shrinks ordinary typing rows.
-Specification renders: artifacts/t_6b06eaaa-tono-keyboard-spec-light.png and artifacts/t_6b06eaaa-tono-keyboard-spec-dark.png.
+Source and binary inclusion
+- TonoKeyboardVisualStyle.swift and TonoCoachClient.swift are members of the TonoKeyboard Sources phase and the test Sources phase.
+- CoachContractTests.swift and KeyboardVisualStyleTests.swift are members of the TonoTests Sources phase.
+- TonoKeyboard.appex is in the host Embed Foundation Extensions phase.
+- A simulator extension product produced during the reconciliation is a universal arm64/x86_64 Mach-O. Its packaged Info.plist has CFBundleIdentifier com.tonoit.app.keyboard and CFBundleVersion 86.
+- strings on its TonoKeyboard.debug.dylib contains CoachRewriteTarget, TonoCoachChoiceControl, all four canonical labels, and the build-86 stale-rewrite rejection marker. This is binary inclusion evidence, not runtime UI evidence.
 
-Coach semantic-violet contrast against white text (WCAG relative luminance)
-Light normal #5E1F78: 10.81:1
-Dark normal #8D4CB3: 5.50:1
-Light pressed #451258: 14.18:1
-Dark pressed #713090: 8.31:1
-Disabled #76617D: 5.56:1
-All states exceed the 4.5:1 AA threshold. Ordinary keys, suggestions, mode controls, space, return, shift, emoji, and delete remain system-neutral.
+Geometry specification
+- Portrait owned-content heights: 252pt below 390pt width, 256pt at 390–429pt, 264pt at 430pt and wider.
+- Coach strip 46pt; Coach control 36pt; typing keys 44pt; row gaps 8pt; edge inset 4pt; key font 22pt; radius 5pt; shadow offset 1pt.
+- Focused source tests assert the width tiers, ordinary-row dimensions, gap/font/radius/shadow metrics, and that Coach does not shrink typing rows.
+
+Mechanically recomputed Coach contrast against white text (WCAG relative luminance)
+- normal light #5E1F78: 10.81:1
+- normal dark #8D4CB3: 5.50:1
+- pressed light #451258: 14.18:1
+- pressed dark #713090: 8.31:1
+- disabled light/dark #76617D: 5.56:1
+All listed states exceed 4.5:1. The reusable control also has selected and disabled state tests; ordinary keys remain system-neutral.
+
+Build-number verification
+- App, keyboard, share, and Messages plists all lint successfully and contain CFBundleVersion 86.
+- ACTION=install bash apps/ios/Scripts/bump-build.sh exits 0 and verifies all four are 86 without mutating them.
 
 Artifact SHA-256
-build86 host-app screenshot: d442041ee260a16556abacd12dcbaa753fad6a3cbb4083a6af864f3ecae67bf5
-native Apple reference: 2798bb3633f4f734d825adf1c6d2a36d327b0d7dffc2ce9b601a144fa027c7a3
-Tono dark specification: a4205517522cd4ff2370512e5d55d20cca3af5b788eec6c5febdf7b195562195
-Tono light specification: d739cd35f37cc5189ca44061d536987f41b28b2f4871440f7395fee1ef9c4579
+- host-app screenshot: d442041ee260a16556abacd12dcbaa753fad6a3cbb4083a6af864f3ecae67bf5
+- native Apple reference: 2798bb3633f4f734d825adf1c6d2a36d327b0d7dffc2ce9b601a144fa027c7a3
+- Tono dark specification: 40dd37fe08a28b8cc057da7e7a6f4bd9f815d9153c7d894eb03136b75f06b1c1
+- Tono light specification: 166ac5b8a77dc1005277757a87647bdcc24cdde68c6cd0ebe861e2d3ea3ad874
 
-Review gate
-The simulator accepted and launched com.tonoit.app.keyboard and logged “keyboard layout installed mode=letters,” but direct defaults-based keyboard switching did not expose the extension view in the screenshot. No runtime Tono-keyboard screenshot is claimed. Sherlock must cycle to Tono through the simulator UI, capture actual light/dark normal/pressed/disabled states, compare geometry against the native reference, and run the full test suite before approval.
+Human gate
+Install an iOS simulator runtime, run the complete XCTest suite, then cycle to the Tono keyboard in both appearances and visually compare actual normal/pressed/selected/disabled states and portrait geometry with the native reference. A real runtime Tono capture remains required for visual acceptance.

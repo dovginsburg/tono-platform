@@ -113,6 +113,48 @@ final class TonoCoachButton: UIButton {
     }
 }
 
+/// Branded rewrite choice with the same mechanically verified color states as
+/// the Coach entry and retry actions.
+final class TonoCoachChoiceControl: UIControl {
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isAccessibilityElement = true
+        updateCoachAppearance()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        updateCoachAppearance()
+    }
+
+    override var isHighlighted: Bool {
+        didSet { updateCoachAppearance() }
+    }
+
+    override var isEnabled: Bool {
+        didSet { updateCoachAppearance() }
+    }
+
+    override var isSelected: Bool {
+        didSet { updateCoachAppearance() }
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        if previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle {
+            updateCoachAppearance()
+        }
+    }
+
+    private func updateCoachAppearance() {
+        backgroundColor = TonoCoachPalette.background(
+            enabled: isEnabled,
+            highlighted: isHighlighted || isSelected
+        )
+        alpha = 1
+    }
+}
+
 extension UIColor {
     convenience init(hexRGB: String) {
         var value: UInt64 = 0

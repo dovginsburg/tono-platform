@@ -411,7 +411,7 @@ struct CoachView: View {
             let response = try await TonoBackend.shared.analyze(
                 text: trimmed,
                 preferredVoice: prefs.preferredVoice,
-                axes: prefs.axes.isEmpty ? nil : prefs.axes,
+                axes: RewriteAxis.allCases,
                 recipientHint: nil,
                 contextHints: nil,
                 threadContext: nil,

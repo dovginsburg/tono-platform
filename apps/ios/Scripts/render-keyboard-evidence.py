@@ -72,10 +72,12 @@ def render(name: str, dark: bool):
         if row_index == 0:
             left, right = EDGE, WIDTH - EDGE
         elif row_index == 1:
-            left, right = 20, WIDTH - 20
+            row1_width = (WIDTH - EDGE * 2 - ROW_GAP * 9) / 10
+            inset = (row1_width + ROW_GAP) / 2
+            left, right = EDGE + inset, WIDTH - EDGE - inset
         else:
             left, right = 58, WIDTH - 58
-        gap = 6
+        gap = ROW_GAP
         key_width = (right - left - gap * (len(chars) - 1)) / len(chars)
         for index, char in enumerate(chars):
             x = left + index * (key_width + gap)

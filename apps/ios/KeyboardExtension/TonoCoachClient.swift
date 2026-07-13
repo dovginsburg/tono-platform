@@ -38,6 +38,68 @@
 
 import Foundation
 
+/// Immutable request-time text range. A rewrite is permitted only while the
+/// same visible document is present; caret-only moves are handled by returning
+/// to the captured range, while any edit fails closed.
+struct CoachRewriteTarget: Equatable {
+    struct MutationPlan: Equatable {
+        let initialCursorOffset: Int
+        let deleteCount: Int
+        let insertion: String
+        let finalCursorOffset: Int
+    }
+
+    let draft: String
+    private let before: String
+    private let after: String
+    private let draftEndOffset: Int
+    private let trailingWhitespaceCount: Int
+
+    static func capture(before: String, after: String) -> Self? {
+        guard let first = before.firstIndex(where: { !$0.isWhitespace }),
+              let last = before.lastIndex(where: { !$0.isWhitespace }) else { return nil }
+        let end = before.index(after: last)
+        let draft = String(before[first..<end])
+        return Self(
+            draft: draft,
+            before: before,
+            after: after,
+            draftEndOffset: before.distance(from: before.startIndex, to: end),
+            trailingWhitespaceCount: before.distance(from: end, to: before.endIndex)
+        )
+    }
+
+    func mutationPlan(liveBefore: String, liveAfter: String, replacement: String) -> MutationPlan? {
+        guard liveBefore + liveAfter == before + after else { return nil }
+        return MutationPlan(
+            initialCursorOffset: draftEndOffset - liveBefore.count,
+            deleteCount: draft.count,
+            insertion: replacement,
+            finalCursorOffset: trailingWhitespaceCount
+        )
+    }
+
+    /// Re-validates the exact caret position after the host has been asked to
+    /// move it. Some text hosts clamp or ignore adjustTextPosition requests,
+    /// so the pre-move mutation plan is not sufficient authorization to edit.
+    func isAtMutationPosition(liveBefore: String, liveAfter: String) -> Bool {
+        let end = before.index(before.startIndex, offsetBy: draftEndOffset)
+        return liveBefore == String(before[..<end])
+            && liveAfter == String(before[end...]) + after
+    }
+
+    /// Returns a safe offset back to a previously observed caret position,
+    /// but only while the captured document remains byte-for-byte unchanged.
+    func cursorOffset(
+        liveBefore: String,
+        liveAfter: String,
+        toBeforeCount targetBeforeCount: Int
+    ) -> Int? {
+        guard liveBefore + liveAfter == before + after else { return nil }
+        return targetBeforeCount - liveBefore.count
+    }
+}
+
 public final class TonoCoachClient {
 
     public struct CoachRewrite: Equatable, Codable {
@@ -76,6 +138,7 @@ public final class TonoCoachClient {
         case http(status: Int, body: String)
         case timeout
         case decoding(String)
+        case staleDraft
 
         public var userFacingMessage: String {
             switch self {
@@ -92,6 +155,8 @@ public final class TonoCoachClient {
                 return "Server returned \(status): \(body.prefix(160))"
             case .decoding(let m):
                 return "Could not read server response: \(m)"
+            case .staleDraft:
+                return "The draft changed while Coach was working. Run Coach again."
             }
         }
     }
@@ -213,9 +278,14 @@ public final class TonoCoachClient {
 
         for rewrite in raw {
             let axis = rewrite.axis.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let text = rewrite.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            var text = rewrite.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard canonicalAxes.contains(axis) else {
                 throw contractError("unsupported rewrite axis: \(axis)")
+            }
+            let label = "\(axis):"
+            if text.lowercased().hasPrefix(label) {
+                text = String(text.dropFirst(label.count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
             }
             guard !text.isEmpty else {
                 throw contractError("blank \(axis) rewrite")

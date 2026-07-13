@@ -98,6 +98,17 @@ public struct RewriteSuggestion: Codable, Identifiable, Equatable {
     }
 }
 
+public extension Array where Element == RewriteSuggestion {
+    func canonicalCoachChoices() throws -> [RewriteSuggestion] {
+        let axes = RewriteAxis.allCases
+        guard count == axes.count,
+              Set(map(\.axis)).count == axes.count,
+              Set(map(\.axis)) == Set(axes)
+        else { throw ToneEngineError.decoding("incomplete Coach choices") }
+        return axes.compactMap { axis in first { $0.axis == axis } }
+    }
+}
+
 public struct ToneAnalysis: Codable, Equatable {
     public let riskLevel: RiskLevel
     public let perception: String          // 1-sentence "how it might land"

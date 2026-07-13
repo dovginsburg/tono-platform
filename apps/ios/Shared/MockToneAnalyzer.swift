@@ -108,7 +108,7 @@ public struct MockToneAnalyzer: ToneAnalyzing {
 
         var suggestions: [RewriteSuggestion] = []
 
-        if req.axes.contains(.warmer) {
+        if RewriteAxis.allCases.contains(.warmer) {
             let warmer = warmRewrite(of: draft)
             suggestions.append(RewriteSuggestion(
                 axis: .warmer,
@@ -116,22 +116,22 @@ public struct MockToneAnalyzer: ToneAnalyzing {
                 rationale: "Adds a one-line validation before the ask."
             ))
         }
-        if req.axes.contains(.clearer) {
+        if RewriteAxis.allCases.contains(.clearer) {
             let clearer = clearRewrite(of: draft)
             suggestions.append(RewriteSuggestion(
                 axis: .clearer,
                 text: clearer,
-                rationale: "Names the ask and a specific deadline."
+                rationale: "Makes the ask more explicit without adding facts."
             ))
         }
-        if req.axes.contains(.funnier) {
+        if RewriteAxis.allCases.contains(.funnier) {
             suggestions.append(RewriteSuggestion(
                 axis: .funnier,
                 text: draft,
                 rationale: "context doesn't call for humor"
             ))
         }
-        if req.axes.contains(.safer) {
+        if RewriteAxis.allCases.contains(.safer) {
             suggestions.append(RewriteSuggestion(
                 axis: .safer,
                 text: safeRewrite(of: draft),
@@ -161,7 +161,7 @@ public struct MockToneAnalyzer: ToneAnalyzing {
     private func clearRewrite(of s: String) -> String {
         if s.lowercased().contains("let me know") {
             return s.replacingOccurrences(
-                of: "let me know", with: "could you reply by Friday EOD?"
+                of: "let me know", with: "please tell me what you think"
             )
         }
         return s

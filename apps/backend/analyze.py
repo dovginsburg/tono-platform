@@ -53,7 +53,7 @@ Operate by these rules:
 11. Preserve the user's semantic intent. Remove clearly accidental leading
     gibberish when a coherent trailing message is present, but never invent a
     new event or scenario (for example a pocket text, wrong recipient, apology,
-    or instruction to ignore the message).
+    instruction to ignore the message, deadline, date, name, or commitment).
 12. Return exactly one rewrite for every requested axis, in this order:
     warmer, clearer, funnier, safer. Never omit an axis.
 
@@ -155,11 +155,10 @@ def intended_draft(draft: str) -> str:
         word for word in re.findall(r"[A-Za-z]+", prefix)
         if len(word) >= 3 and not re.search(r"[aeiouy]", word, flags=re.IGNORECASE)
     ]
-    has_symbol_noise = any(
-        not (char.isalnum() or char.isspace() or char in "'’-_,.")
-        for char in prefix
-    )
-    return candidate if has_symbol_noise or len(malformed_words) >= 2 else stripped
+    # Symbols alone are not evidence of corruption: prefixes such as
+    # "Context:" and "❤️" can carry legitimate meaning. Require multiple
+    # word-like fragments that are mechanically malformed before dropping it.
+    return candidate if len(malformed_words) >= 2 else stripped
 
 
 def _semantic_terms(text: str) -> set[str]:
@@ -182,24 +181,38 @@ def _preserves_semantic_intent(source: str, rewrite: str) -> bool:
     )
     if any(phrase in lowered for phrase in invented_scenarios):
         return False
+    factual_markers = (
+        "sorry", "apologize", "apologies", "eod", "deadline", "today",
+        "tomorrow", "monday", "tuesday", "wednesday", "thursday", "friday",
+        "saturday", "sunday",
+    )
+    source_lowered = source.lower()
+    if any(marker in lowered and marker not in source_lowered for marker in factual_markers):
+        return False
     source_terms = _semantic_terms(source)
     if not source_terms:
         return True
     return bool(source_terms & _semantic_terms(rewrite))
 
 
+def _clean_rewrite_prefix(text: str, axis: str) -> str:
+    """Remove only an exact provider-added axis label, never user prose."""
+    match = re.match(rf"^\s*{re.escape(axis)}\s*:\s*(\S[\s\S]*)$", text, re.IGNORECASE)
+    return match.group(1).strip() if match else text.strip()
+
+
 def enforce_coach_contract(result: dict[str, Any], req: AnalyzeRequest) -> dict[str, Any]:
     """Validate, canonicalize, and fail closed on incomplete or shifted rewrites."""
+    if not isinstance(result, dict):
+        raise CoachContractError("invalid response payload")
     if req.mode == "read":
         return result
     requested = [axis.strip().lower() for axis in req.axes]
     if not requested:
         requested = list(CANONICAL_COACH_AXES)
-    if len(set(requested)) != len(requested) or any(
-        axis not in CANONICAL_COACH_AXES for axis in requested
-    ):
-        raise CoachContractError("invalid requested axes")
-    expected = [axis for axis in CANONICAL_COACH_AXES if axis in requested]
+    if tuple(requested) != CANONICAL_COACH_AXES:
+        raise CoachContractError("Coach requires warmer, clearer, funnier, safer in order")
+    expected = list(CANONICAL_COACH_AXES)
     raw = result.get("suggestions")
     if not isinstance(raw, list):
         raise CoachContractError("missing suggestions")
@@ -209,7 +222,7 @@ def enforce_coach_contract(result: dict[str, Any], req: AnalyzeRequest) -> dict[
         if not isinstance(suggestion, dict):
             raise CoachContractError("invalid suggestion")
         axis = str(suggestion.get("axis", "")).strip().lower()
-        text = str(suggestion.get("text", "")).strip()
+        text = _clean_rewrite_prefix(str(suggestion.get("text", "")), axis)
         if axis not in expected:
             raise CoachContractError(f"unexpected axis: {axis}")
         if axis in by_axis:
@@ -330,7 +343,7 @@ def mock_analyze(req: AnalyzeRequest) -> dict[str, Any]:
             {"axis": "warmer", "text": warmer, "rationale": "Adds a one-line validation before the ask."}
         )
     if "clearer" in req.axes:
-        clearer = draft.replace("let me know", "could you reply by Friday EOD?")
+        clearer = draft.replace("let me know", "please tell me what you think")
         suggestions.append(
             {"axis": "clearer", "text": clearer, "rationale": "Names the ask and a specific deadline."}
         )

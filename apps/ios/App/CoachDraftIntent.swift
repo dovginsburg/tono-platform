@@ -40,7 +40,7 @@ struct CoachDraftIntent: AppIntent {
             draft: draft,
             recipientHint: nil,
             preferredVoice: prefs.preferredVoice,
-            axes: prefs.axes.isEmpty ? RewriteAxis.allCases : prefs.axes,
+            axes: RewriteAxis.allCases,
             contextHints: UserMemory.topFacts()
         )
         let result: ToneAnalysis = try await {
@@ -67,7 +67,7 @@ struct CoachDraftIntent: AppIntent {
                 case .error(let msg): throw ToneEngineError.backend(msg)
                 }
             }
-            return ToneAnalysis(riskLevel: riskLevel, perception: perception, subtext: subtext, reason: reason, suggestions: suggestions, flags: flags)
+            return ToneAnalysis(riskLevel: riskLevel, perception: perception, subtext: subtext, reason: reason, suggestions: try suggestions.canonicalCoachChoices(), flags: flags)
         }()
         let best = StyleMemory.sorted(result.suggestions.map(\.axis)).first
             .flatMap { axis in result.suggestions.first { $0.axis == axis } }

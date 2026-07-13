@@ -53,7 +53,7 @@ struct ShareAnalysisView: View {
                 let req = AnalysisRequest(
                     draft: draft,
                     preferredVoice: prefs.preferredVoice,
-                    axes: prefs.axes.isEmpty ? RewriteAxis.allCases : prefs.axes
+                    axes: RewriteAxis.allCases
                 )
                 let result: ToneAnalysis = try await {
                     var perception = ""
@@ -79,7 +79,7 @@ struct ShareAnalysisView: View {
                         case .error(let msg): throw ToneEngineError.backend(msg)
                         }
                     }
-                    return ToneAnalysis(riskLevel: riskLevel, perception: perception, subtext: subtext, reason: reason, suggestions: suggestions, flags: flags)
+                    return ToneAnalysis(riskLevel: riskLevel, perception: perception, subtext: subtext, reason: reason, suggestions: try suggestions.canonicalCoachChoices(), flags: flags)
                 }()
                 await MainActor.run {
                     analysis = result

@@ -62,6 +62,18 @@ final class KeyboardVisualStyleTests: XCTestCase {
         XCTAssertEqual(button.titleColor(for: .disabled), .white)
     }
 
+    func testCoachChoiceUsesReusableNormalPressedSelectedAndDisabledStates() {
+        let choice = TonoCoachChoiceControl(frame: .zero)
+        XCTAssertTrue(Self.sameColor(choice.backgroundColor, TonoCoachPalette.normal))
+        choice.isHighlighted = true
+        XCTAssertTrue(Self.sameColor(choice.backgroundColor, TonoCoachPalette.pressed))
+        choice.isHighlighted = false
+        choice.isSelected = true
+        XCTAssertTrue(Self.sameColor(choice.backgroundColor, TonoCoachPalette.pressed))
+        choice.isEnabled = false
+        XCTAssertTrue(Self.sameColor(choice.backgroundColor, TonoCoachPalette.disabledBackground))
+    }
+
     private static func contrastRatio(foreground: UIColor, background: UIColor) -> CGFloat {
         let bright = max(luminance(foreground), luminance(background))
         let dark = min(luminance(foreground), luminance(background))

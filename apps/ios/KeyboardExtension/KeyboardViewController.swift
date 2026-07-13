@@ -254,8 +254,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private var bodyContainer: UIView?
     private var preferredHeightConstraint: NSLayoutConstraint?
 
-    private var capturedContextLength: Int = 0
-    private var lastSubmittedDraft: String = ""
+    private var coachRewriteTarget: CoachRewriteTarget?
+    private var coachRequestID: UUID?
 
     private var keysStack: UIStackView?
     private var coachContainer: UIView?
@@ -1871,15 +1871,15 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         updateCandidateStrip(values: [])
         if isEmojiPanelVisible { hideEmojiPanel() }
         let proxy = textDocumentProxy
-        let raw = proxy.documentContextBeforeInput ?? ""
-        let draft = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if draft.isEmpty {
+        guard let target = CoachRewriteTarget.capture(
+            before: proxy.documentContextBeforeInput ?? "",
+            after: proxy.documentContextAfterInput ?? ""
+        ) else {
             presentCoachEmptyState()
             return
         }
-        capturedContextLength = raw.count
-        lastSubmittedDraft = draft
-        runCoach(draft: draft)
+        coachRewriteTarget = target
+        runCoach(draft: target.draft)
     }
 
     private func presentCoachEmptyState() {
@@ -1920,10 +1920,13 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachButton?.isEnabled = false
         presentCoachLoading()
         let client = TonoCoachClient(endpoint: Const.backendURL, timeout: Const.coachTimeout)
+        let requestID = UUID()
+        coachRequestID = requestID
         NSLog("TONO_KB BUILD86 coach: begin POST /v1/analyze (len=\(draft.count))")
         client.coach(draft: draft) { [weak self] result in
             DispatchQueue.main.async {
-                guard let self = self else { return }
+                guard let self = self, self.coachRequestID == requestID else { return }
+                self.coachRequestID = nil
                 self.coachBusy = false
                 self.coachButton?.isEnabled = true
                 switch result {
@@ -1992,6 +1995,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachContainer?.removeFromSuperview()
         coachContainer = nil
         coachStatusLabel = nil
+        coachResultsStack = nil
 
         let panel = UIView()
         panel.translatesAutoresizingMaskIntoConstraints = false
@@ -2068,8 +2072,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     private func makeRewriteChip(suggestion: TonoCoachClient.CoachRewrite, index: Int) -> UIView {
-        let chip = UIControl()
-        chip.backgroundColor = keyboardKeyBackground(.secondary)
+        let chip = TonoCoachChoiceControl()
         chip.layer.cornerRadius = Const.keyCornerRadius
         chip.layer.borderWidth = Const.keyBorderWidth
         chip.layer.borderColor = keyboardKeyBorder().cgColor
@@ -2094,7 +2097,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             for: .systemFont(ofSize: 14, weight: .regular)
         )
         text.adjustsFontForContentSizeCategory = true
-        text.textColor = .label
+        text.textColor = TonoCoachPalette.foreground
         text.numberOfLines = 2
         text.translatesAutoresizingMaskIntoConstraints = false
         chip.addSubview(text)
@@ -2121,17 +2124,11 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     private func coachAxisStyle(for axis: String) -> (label: String, color: UIColor) {
         switch axis {
-        case "warmer": return ("Warmer", coachDynamicColor(light: "B4234D", dark: "FF6B8A"))
-        case "clearer": return ("Clearer", coachDynamicColor(light: "006A8E", dark: "49C7F2"))
-        case "funnier": return ("Funnier", coachDynamicColor(light: "7A5100", dark: "FFC247"))
-        case "safer": return ("Safer", coachDynamicColor(light: "147A36", dark: "4CD471"))
-        default: return (axis.capitalized, .label)
-        }
-    }
-
-    private func coachDynamicColor(light: String, dark: String) -> UIColor {
-        UIColor { traits in
-            UIColor(hexRGB: traits.userInterfaceStyle == .dark ? dark : light)
+        case "warmer": return ("Warmer", TonoCoachPalette.foreground)
+        case "clearer": return ("Clearer", TonoCoachPalette.foreground)
+        case "funnier": return ("Funnier", TonoCoachPalette.foreground)
+        case "safer": return ("Safer", TonoCoachPalette.foreground)
+        default: return (axis.capitalized, TonoCoachPalette.foreground)
         }
     }
 
@@ -2147,13 +2144,45 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     private func applyRewrite(_ rewrite: String) {
         let proxy = textDocumentProxy
-        let liveContext = proxy.documentContextBeforeInput ?? ""
-        let deletions = min(capturedContextLength, liveContext.count)
-        for _ in 0..<deletions {
-            proxy.deleteBackward()
+        let originalBefore = proxy.documentContextBeforeInput ?? ""
+        let originalAfter = proxy.documentContextAfterInput ?? ""
+        guard let target = coachRewriteTarget,
+              let plan = target.mutationPlan(
+            liveBefore: originalBefore,
+            liveAfter: originalAfter,
+            replacement: rewrite
+        ) else {
+            NSLog("TONO_KB BUILD86 rewrite: rejected stale or edited draft")
+            presentCoachError(.staleDraft)
+            return
         }
-        proxy.insertText(rewrite)
-        NSLog("TONO_KB BUILD86 rewrite: inserted len=\(rewrite.count) (deleted \(deletions))")
+        if plan.initialCursorOffset != 0 {
+            proxy.adjustTextPosition(byCharacterOffset: plan.initialCursorOffset)
+        }
+        let adjustedBefore = proxy.documentContextBeforeInput ?? ""
+        let adjustedAfter = proxy.documentContextAfterInput ?? ""
+        guard target.isAtMutationPosition(
+            liveBefore: adjustedBefore,
+            liveAfter: adjustedAfter
+        ) else {
+            if let restoreOffset = target.cursorOffset(
+                liveBefore: adjustedBefore,
+                liveAfter: adjustedAfter,
+                toBeforeCount: originalBefore.count
+            ), restoreOffset != 0 {
+                proxy.adjustTextPosition(byCharacterOffset: restoreOffset)
+            }
+            NSLog("TONO_KB BUILD86 rewrite: rejected clamped or ignored caret move")
+            presentCoachError(.staleDraft)
+            return
+        }
+        for _ in 0..<plan.deleteCount { proxy.deleteBackward() }
+        proxy.insertText(plan.insertion)
+        if plan.finalCursorOffset != 0 {
+            proxy.adjustTextPosition(byCharacterOffset: plan.finalCursorOffset)
+        }
+        coachRewriteTarget = nil
+        NSLog("TONO_KB BUILD86 rewrite: inserted len=\(rewrite.count) (deleted \(plan.deleteCount))")
     }
 
     // MARK: - Coach error
@@ -2165,6 +2194,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachContainer?.removeFromSuperview()
         coachContainer = nil
         coachStatusLabel = nil
+        coachResultsStack = nil
 
         let panel = UIView()
         panel.translatesAutoresizingMaskIntoConstraints = false
@@ -2238,12 +2268,15 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachErrorContainer?.removeFromSuperview()
         coachErrorContainer = nil
         coachErrorLabel = nil
-        let draft = lastSubmittedDraft
-        if draft.isEmpty {
+        guard let target = CoachRewriteTarget.capture(
+            before: textDocumentProxy.documentContextBeforeInput ?? "",
+            after: textDocumentProxy.documentContextAfterInput ?? ""
+        ) else {
             presentCoachEmptyState()
-        } else {
-            runCoach(draft: draft)
+            return
         }
+        coachRewriteTarget = target
+        runCoach(draft: target.draft)
     }
 }
 

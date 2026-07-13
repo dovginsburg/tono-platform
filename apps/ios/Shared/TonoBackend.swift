@@ -366,7 +366,16 @@ public final class TonoBackend: @unchecked Sendable {
             thread_context: threadContext,
             mode: mode.rawValue
         )
-        return try await post(path: "/api/analyze", body: req, authorize: true)
+        let response: TonoAnalysisResponse = try await post(
+            path: "/api/analyze", body: req, authorize: true
+        )
+        if mode == .coach {
+            let axes = response.suggestions.map(\.axis)
+            guard axes == RewriteAxis.allCases.map(\.rawValue) else {
+                throw TonoBackendError.network("incomplete Coach response")
+            }
+        }
+        return response
     }
 
     /// Thin convenience wrapper for the keyboard extension's "Coach" flow.
@@ -414,6 +423,31 @@ public final class TonoBackend: @unchecked Sendable {
             let analysis: CoachResponse?
         }
         let req = Req(text: text)
+        let canonicalAxes = ["warmer", "clearer", "funnier", "safer"]
+        func canonicalize(_ raw: [CoachRewrite]) -> [CoachRewrite]? {
+            var byAxis: [String: CoachRewrite] = [:]
+            for rewrite in raw {
+                let axis = rewrite.axis.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                var text = rewrite.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard canonicalAxes.contains(axis), byAxis[axis] == nil else { return nil }
+                let label = "\(axis):"
+                if text.lowercased().hasPrefix(label) {
+                    text = String(text.dropFirst(label.count))
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                guard !text.isEmpty else { return nil }
+                byAxis[axis] = CoachRewrite(
+                    axis: axis,
+                    text: text,
+                    rationale: rewrite.rationale,
+                    riskAfter: rewrite.riskAfter
+                )
+            }
+            guard raw.count == canonicalAxes.count else { return nil }
+            return canonicalAxes.compactMap { byAxis[$0] }.count == canonicalAxes.count
+                ? canonicalAxes.compactMap { byAxis[$0] }
+                : nil
+        }
         let (data, response) = try await postRaw(path: "/v1/coach", body: req, authorize: true)
         guard let http = response as? HTTPURLResponse else {
             throw TonoBackendError.network("no http response")
@@ -432,19 +466,30 @@ public final class TonoBackend: @unchecked Sendable {
         // or {analysis: {...}}. Tolerate all three; keyboard caller only
         // needs the rewrite array so we hand back a canonical JSON blob.
         if let parsed = try? JSONDecoder().decode(CoachResponse.self, from: data) {
-            return String(data: (try? JSONEncoder().encode(parsed)) ?? data, encoding: .utf8) ?? ""
+            guard let rewrites = canonicalize(parsed.rewrites) else {
+                throw TonoBackendError.network("incomplete Coach response")
+            }
+            let canonical = CoachResponse(
+                rewrites: rewrites,
+                usedToday: parsed.usedToday,
+                dailyLimit: parsed.dailyLimit,
+                plan: parsed.plan
+            )
+            return String(data: try JSONEncoder().encode(canonical), encoding: .utf8) ?? ""
         }
         if let loose = try? JSONDecoder().decode(Resp.self, from: data) {
+            guard let rewrites = canonicalize(loose.rewrites ?? loose.suggestions ?? []) else {
+                throw TonoBackendError.network("incomplete Coach response")
+            }
             let canonical = CoachResponse(
-                rewrites: loose.rewrites ?? loose.suggestions ?? [],
+                rewrites: rewrites,
                 usedToday: loose.analysis?.usedToday,
                 dailyLimit: loose.analysis?.dailyLimit,
                 plan: loose.analysis?.plan
             )
-            return String(data: (try? JSONEncoder().encode(canonical)) ?? data, encoding: .utf8) ?? ""
+            return String(data: try JSONEncoder().encode(canonical), encoding: .utf8) ?? ""
         }
-        // Last-ditch: return whatever the server gave us.
-        return String(data: data, encoding: .utf8) ?? ""
+        throw TonoBackendError.network("invalid Coach response")
     }
 
     /// Streaming version of analyze — returns an AsyncStream of AnalysisEvents.

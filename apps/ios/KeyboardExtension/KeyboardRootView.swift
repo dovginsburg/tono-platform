@@ -223,17 +223,11 @@ public final class KeyboardModel: ObservableObject {
             let hintsEnabled = FeatureFlags.isEnabled(.memoryContextHints)
             let hints = hintsEnabled ? UserMemory.topFacts() : []
             CrashReporter.setCustomKey(hintsEnabled, forKey: "memory_facts_loaded")
-            let enabledAxes = prefs.axes.isEmpty ? RewriteAxis.allCases : prefs.axes
-            // Pro users: send axes in StyleMemory-ranked order so the LLM
-            // generates in the user's preferred order (mock fallback also respects it).
-            let rankedAxes = self.isPro && FeatureFlags.isEnabled(.memoryInference)
-                ? StyleMemory.sorted(enabledAxes, recipientId: selectedRecipient?.id)
-                : enabledAxes
             let req = AnalysisRequest(
                 draft: self.draft,
                 recipientHint: self.selectedRecipient?.voiceHint,
                 preferredVoice: prefs.preferredVoice,
-                axes: rankedAxes,
+                axes: RewriteAxis.allCases,
                 contextHints: hints,
                 threadContext: FeatureFlags.isEnabled(.threadContext) ? self.threadContext : nil
             )
@@ -306,12 +300,13 @@ public final class KeyboardModel: ObservableObject {
                     }
                 }
 
+                let canonicalSuggestions = try suggestions.canonicalCoachChoices()
                 let result = ToneAnalysis(
                     riskLevel: riskLevel,
                     perception: perception,
                     subtext: subtext,
                     reason: reason,
-                    suggestions: suggestions,
+                    suggestions: canonicalSuggestions,
                     flags: flags
                 )
 
@@ -946,37 +941,15 @@ private struct ResultsView: View {
     @ObservedObject var model: KeyboardModel
     let analysis: ToneAnalysis
 
-    // StyleMemory re-ranking is a Pro feature: free users get default axis order.
     private var sortedSuggestions: [RewriteSuggestion] {
-        guard model.isPro, FeatureFlags.isEnabled(.memoryInference) else {
-            return analysis.suggestions
-        }
-        let rid = model.selectedRecipient?.id
-        let orderedAxes = StyleMemory.sorted(analysis.suggestions.map(\.axis), recipientId: rid)
-        var result = orderedAxes.compactMap { axis in
+        RewriteAxis.allCases.compactMap { axis in
             analysis.suggestions.first { $0.axis == axis }
         }
-        // Honor per-recipient safer preference — always surface it first.
-        if model.selectedRecipient?.preferSafer == true,
-           let idx = result.firstIndex(where: { $0.axis == .safer }), idx > 0 {
-            result.insert(result.remove(at: idx), at: 0)
-        }
-        return result
     }
 
     // Non-nil when StyleMemory changed the suggestion order.
     private var styleMemoryHint: String? {
-        guard model.isPro, FeatureFlags.isEnabled(.memoryInference) else { return nil }
-        let original = analysis.suggestions.map(\.axis)
-        let rid      = model.selectedRecipient?.id
-        let sorted   = StyleMemory.sorted(original, recipientId: rid)
-        guard sorted != original || model.selectedRecipient?.preferSafer == true else { return nil }
-        if let recipient = model.selectedRecipient,
-           let rid2 = rid, StyleMemory.meetsThreshold(recipientId: rid2) {
-            let topAxis = sorted.first?.displayName ?? "this style"
-            return "For \(recipient.label) · \(topAxis) first"
-        }
-        return "Ranked for your style"
+        nil
     }
 
     var body: some View {

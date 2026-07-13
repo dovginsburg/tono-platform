@@ -151,7 +151,7 @@ def test_api_analyze_happy_path(client):
     assert "per my last" not in safer["text"].lower()
 
 
-def test_api_analyze_respects_axes(client):
+def test_api_analyze_enforces_canonical_coach_axes(client):
     reg = _register(client)
     r = client.post(
         "/api/analyze",
@@ -160,7 +160,54 @@ def test_api_analyze_respects_axes(client):
     )
     assert r.status_code == 200, r.text
     j = r.json()
-    assert {s["axis"] for s in j["suggestions"]} == {"warmer"}
+    assert [s["axis"] for s in j["suggestions"]] == [
+        "warmer", "clearer", "funnier", "safer"
+    ]
+
+
+def test_api_analyze_treats_invalid_cached_coach_payload_as_miss(client, monkeypatch):
+    from backend import server
+    from backend.store import get_store
+
+    reg = _register(client)
+    text = "Please help with this request."
+    axes = list(server.CANONICAL_COACH_AXES)
+    cache_key = server._analysis_cache_key(text, axes, None, "en")
+    get_store().set_cached_response(cache_key, {
+        "risk_level": "low",
+        "perception": "Looks okay.",
+        "subtext": "A direct request.",
+        "risk_reason": "Lands cleanly.",
+        "suggestions": [{"axis": "warmer", "text": text}],
+        "flags": [],
+    })
+    provider_calls = 0
+
+    async def valid_provider(req):
+        nonlocal provider_calls
+        provider_calls += 1
+        return {
+            "risk_level": "low",
+            "perception": "Looks okay.",
+            "subtext": "A direct request.",
+            "risk_reason": "Lands cleanly.",
+            "suggestions": [
+                {"axis": axis, "text": req.draft} for axis in req.axes
+            ],
+            "flags": [],
+        }
+
+    monkeypatch.setattr(server, "openai_analyze", valid_provider)
+    response = client.post(
+        "/api/analyze",
+        headers=_auth(reg["api_token"]),
+        json={"text": text, "provider": "openai"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert provider_calls == 1
+    assert [item["axis"] for item in response.json()["suggestions"]] == axes
+    assert response.json()["used_today"] == 1
 
 
 def test_api_analyze_requires_text(client):

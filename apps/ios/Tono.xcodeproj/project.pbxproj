@@ -454,7 +454,7 @@
 				D2CE6844E9064DDAEFE492B7 /* Sources */,
 				F81029E3912AE8AF7C3D8EBF /* Resources */,
 				2683EAB09F60A8B296EAAE4A /* Embed Foundation Extensions */,
-				57F72FA11337D8F77D2ABF56 /* Bump Build Number */,
+				57F72FA11337D8F77D2ABF56 /* Verify Build Number */,
 			);
 			buildRules = (
 			);
@@ -534,7 +534,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		57F72FA11337D8F77D2ABF56 /* Bump Build Number */ = {
+		57F72FA11337D8F77D2ABF56 /* Verify Build Number */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
@@ -545,8 +545,10 @@
 			inputPaths = (
 				"$(SRCROOT)/App/Info.plist",
 				"$(SRCROOT)/KeyboardExtension/Info.plist",
+				"$(SRCROOT)/ShareExtension/Info.plist",
+				"$(SRCROOT)/TonoMessagesExtension/Info.plist",
 			);
-			name = "Bump Build Number";
+			name = "Verify Build Number";
 			outputFileListPaths = (
 			);
 			outputPaths = (
