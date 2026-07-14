@@ -91,17 +91,17 @@ export default function TonoFooter() {
             </p>
             <ul className="space-y-2 text-[13px]">
               <li>
-                <a href="/#how" className="text-tono-text-soft hover:text-tono-text transition">
+                <Link href="/#how" className="text-tono-text-soft hover:text-tono-text transition">
                   How it works
-                </a>
+                </Link>
               </li>
               <li>
-                <a href="/#pricing" className="text-tono-text-soft hover:text-tono-text transition">
+                <Link href="/#pricing" className="text-tono-text-soft hover:text-tono-text transition">
                   Pricing
-                </a>
+                </Link>
               </li>
               <li>
-                <Link href="/login" className="text-tono-text-soft hover:text-tono-text transition">
+                <Link href="/login" className="inline-flex items-center min-h-[44px] min-w-[44px] text-tono-text-soft hover:text-tono-text transition">
                   Sign in
                 </Link>
               </li>
@@ -205,24 +205,13 @@ export default function TonoFooter() {
                   GitHub
                 </a>
               </li>
+
               <li>
                 <a
-                  href="https://x.com/tono"
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  href="mailto:hi@tonoit.com?subject=ios%20waitlist"
                   className="text-tono-text-soft hover:text-tono-text transition"
                 >
-                  X (Twitter)
-                </a>
-              </li>
-              <li>
-                <a
-                  href="https://apps.apple.com/app/tono"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-tono-text-soft hover:text-tono-text transition"
-                >
-                  App Store
+                  iOS — coming soon, join the waitlist
                 </a>
               </li>
             </ul>
@@ -233,13 +222,17 @@ export default function TonoFooter() {
                 Real signup backend is out of scope for this audit. ── */}
         <NewsletterStrip />
 
+        <p className="mt-8 text-[12px] text-tono-text-softer leading-relaxed">
+          Subscriptions auto-renew at $3.99/mo or $39.99/yr after the 7-day free trial unless cancelled. Cancel anytime.
+        </p>
+
         {/* Bottom rail */}
         <div className="mt-10 pt-6 border-t border-tono-border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
           <p className="text-[11px] text-tono-muted">
             © {year} tono. all rights reserved.
           </p>
           <p className="text-[11px] text-tono-muted">
-            drafts stay in your browser. nothing leaves unless you copy it.
+            drafts are sent only when you choose rewrite. tono never sends on your behalf.
           </p>
         </div>
       </div>

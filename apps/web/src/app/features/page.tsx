@@ -8,10 +8,11 @@
 // Token reference: tailwind.config.ts. No new colors.
 
 import type { Metadata } from 'next'
+import Link from 'next/link'
 
 export const metadata: Metadata = {
   title: 'features — tono',
-  description: 'the four tones, free vs pro, ios keyboard, and how tono handles your drafts.',
+  description: 'the four tones, trial and pro, ios keyboard, and how tono handles your drafts.',
 }
 
 const FEATURES = [
@@ -22,8 +23,8 @@ const FEATURES = [
   },
   {
     label: 'privacy',
-    title: 'drafts stay in your browser.',
-    body: 'the free tier never sends your text to a server. signed-in pro users get quota + local history, never a server-side copy.',
+    title: 'sent only when you choose rewrite.',
+    body: 'your draft is sent securely to tono only when you choose rewrite. signed-in pro users get quota + local history, and tono never sends a message on your behalf.',
   },
   {
     label: 'ios keyboard',
@@ -41,12 +42,12 @@ export default function FeaturesPage() {
   return (
     <main className="min-h-screen bg-tono-bg text-tono-text font-sans antialiased">
       <div className="max-w-3xl mx-auto px-6 py-16 md:py-24">
-        <a
+        <Link
           href="/"
           className="text-sm text-tono-text-soft hover:text-tono-text transition min-h-[44px] inline-flex items-center"
         >
           ← back
-        </a>
+        </Link>
 
         <span className="block mt-8 text-[11px] uppercase tracking-wider font-semibold text-tono-accent-light">
           features
@@ -55,8 +56,8 @@ export default function FeaturesPage() {
           what tono does, on one page.
         </h1>
         <p className="text-tono-text-soft text-base md:text-lg leading-[1.65] mt-5">
-          four rewrite modes, no server-side copy on the free tier, an ios
-          keyboard, and a local history. that's the whole product.
+          four rewrite modes, a 7-day free trial, an ios keyboard coming soon,
+          and a local history. that's the whole product.
         </p>
 
         <div className="mt-12 space-y-5">
@@ -79,12 +80,12 @@ export default function FeaturesPage() {
         </div>
 
         <div className="mt-12 text-center">
-          <a
+          <Link
             href="/pricing"
             className="inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-[12px] bg-tono-accent hover:bg-tono-accent-hover text-white font-semibold transition min-h-[48px]"
           >
             see pricing →
-          </a>
+          </Link>
         </div>
       </div>
     </main>

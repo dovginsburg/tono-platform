@@ -10,6 +10,7 @@
 // no marketing fluff.
 
 import type { Metadata } from 'next'
+import Link from 'next/link'
 
 export const metadata: Metadata = {
   title: 'about — tono',
@@ -20,12 +21,12 @@ export default function AboutPage() {
   return (
     <main className="min-h-screen bg-tono-bg text-tono-text font-sans antialiased">
       <div className="max-w-3xl mx-auto px-6 py-16 md:py-24">
-        <a
+        <Link
           href="/"
           className="text-sm text-tono-text-soft hover:text-tono-text transition min-h-[44px] inline-flex items-center"
         >
           ← back
-        </a>
+        </Link>
 
         <span className="block mt-8 text-[11px] uppercase tracking-wider font-semibold text-tono-accent-light">
           about
@@ -47,8 +48,8 @@ export default function AboutPage() {
             <p className="text-tono-text-soft">
               a tool you paste a draft into. it returns four rewrites —
               warmer, clearer, funnier, safer — each one labeled, each one
-              yours to edit, copy, or ignore. nothing leaves your browser on
-              the free tier.
+              yours to edit, copy, or ignore. Tono starts with a real 7-day free
+              trial. After the trial, Pro is $3.99/month or $39.99/year unless cancelled.
             </p>
           </div>
 
@@ -58,7 +59,7 @@ export default function AboutPage() {
             </h2>
             <ul className="list-disc pl-6 space-y-2 text-tono-text-soft">
               <li>an autoresponder — tono never sends on your behalf</li>
-              <li>a therapy bot — see our <a href="/app/privacy" className="underline hover:text-tono-text">privacy</a> page</li>
+              <li>a therapy bot — see our <Link href="/privacy" className="underline hover:text-tono-text">privacy</Link> page</li>
               <li>a training data pipeline — nothing you write is used to train anything</li>
             </ul>
           </div>

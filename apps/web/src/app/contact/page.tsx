@@ -10,6 +10,7 @@
 // form, swap the nav entry to point here.
 
 import type { Metadata } from 'next'
+import Link from 'next/link'
 
 export const metadata: Metadata = {
   title: 'contact — tono',
@@ -47,12 +48,12 @@ export default function ContactPage() {
   return (
     <main className="min-h-screen bg-tono-bg text-tono-text font-sans antialiased">
       <div className="max-w-3xl mx-auto px-6 py-16 md:py-24">
-        <a
+        <Link
           href="/"
           className="text-sm text-tono-text-soft hover:text-tono-text transition min-h-[44px] inline-flex items-center"
         >
           ← back
-        </a>
+        </Link>
 
         <span className="block mt-8 text-[11px] uppercase tracking-wider font-semibold text-tono-accent-light">
           contact
@@ -66,7 +67,7 @@ export default function ContactPage() {
           see it first.
         </p>
 
-        <div className="mt-12 grid sm:grid-cols-2 gap-5">
+        <div className="mt-12 grid grid-cols-1 sm:grid-cols-2 gap-5">
           {CHANNELS.map((c) => (
             <article
               key={c.label}
@@ -83,7 +84,7 @@ export default function ContactPage() {
               </p>
               <a
                 href={`mailto:${c.email}?subject=${encodeURIComponent(c.label)}`}
-                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-[10px] bg-tono-accent hover:bg-tono-accent-hover text-white font-semibold transition min-h-[40px] text-[13px]"
+                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-[10px] bg-tono-accent hover:bg-tono-accent-hover text-white font-semibold transition min-h-[44px] text-[13px]"
               >
                 email {c.label}
               </a>

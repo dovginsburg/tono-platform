@@ -7,7 +7,7 @@
 // and a risk assessment.
 //
 // Brand voice (lowercase, dry, no exclamation):
-//   - empty:  "paste any text. four rewrites in two seconds."
+//   - empty:  "paste a draft — pick a tone — copy when it lands."
 //   - loading:"thinking…"
 //   - error:  "couldn't reach tono. check your connection and try again."
 //
@@ -32,7 +32,7 @@ type AnalyzeResponse = {
 }
 
 const EXAMPLE_PLACEHOLDER =
-  'paste any text. four rewrites in two seconds.'
+  'paste a draft — pick a tone — copy when it lands.'
 
 const TONE_ORDER: Axis[] = ['warmer', 'clearer', 'funnier', 'safer']
 
@@ -130,7 +130,7 @@ export default function TonoDemo() {
             </span>
           </div>
           <span className="text-[10px] font-mono lowercase text-tono-muted">
-            free · no signup
+            demo · no signup
           </span>
         </div>
 
@@ -171,7 +171,7 @@ export default function TonoDemo() {
             type="button"
             onClick={submit}
             disabled={!draft.trim() || loading}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-[10px] bg-tono-accent hover:bg-tono-accent-hover disabled:bg-tono-bg-elev disabled:text-tono-muted text-white font-semibold text-[13px] transition min-h-[40px]"
+            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-[10px] bg-tono-accent hover:bg-tono-accent-hover disabled:bg-tono-bg-elev disabled:text-tono-muted text-white font-semibold text-[13px] transition min-h-[44px]"
           >
             {loading ? 'rewriting…' : 'rewrite'}
             {!loading && (
@@ -224,7 +224,7 @@ export default function TonoDemo() {
                           type="button"
                           onClick={() => copy(axis, s.text)}
                           aria-label={`copy ${axis} rewrite`}
-                          className="text-[10px] font-mono lowercase text-tono-text-softer hover:text-tono-text-soft transition px-2 py-1 rounded-md hover:bg-tono-bg-card"
+                          className="text-[10px] font-mono lowercase text-tono-text-softer hover:text-tono-text-soft transition px-3 py-2 rounded-md hover:bg-tono-bg-card min-h-[44px] min-w-[44px]"
                         >
                           {copiedFlag ? 'copied' : 'copy'}
                         </button>
@@ -248,7 +248,7 @@ export default function TonoDemo() {
             ⌘/ctrl + enter to rewrite
           </span>
           <span className="text-[10px] font-mono lowercase text-tono-accent-light">
-            drafts stay in your browser
+            sent only when you rewrite
           </span>
         </div>
       </div>
