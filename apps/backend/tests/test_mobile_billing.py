@@ -260,6 +260,46 @@ def test_google_cancel_notification_removes_access_and_retry_is_idempotent(clien
     assert client.get("/v1/me", headers=_auth(registration)).json()["is_pro"] is False
 
 
+def test_duplicate_google_notification_does_not_requery_or_change_entitlement(client):
+    from backend import mobile_billing
+    from backend.server import app
+
+    registration = _register(client)
+    google = FakeGooglePlay(_google_purchase(owner_device_id=registration["device_id"]))
+    app.dependency_overrides[mobile_billing.get_google_play_client] = lambda: google
+    try:
+        granted = client.post(
+            "/v1/google-play/subscription",
+            json={"purchase_token": "google-token-replayed-event"},
+            headers=_auth(registration),
+        )
+        google.purchase = _google_purchase(state="SUBSCRIPTION_STATE_CANCELED")
+        payload = base64.b64encode(json.dumps({
+            "packageName": "com.tono.myapp",
+            "subscriptionNotification": {
+                "purchaseToken": "google-token-replayed-event"
+            },
+        }).encode()).decode()
+        body = {"message": {"data": payload, "messageId": "google-event-replayed"}}
+        first = client.post("/v1/google-play/notifications", json=body)
+
+        # A Pub/Sub redelivery must be a no-op even if Google's current snapshot
+        # has advanced since the original event was handled.
+        google.purchase = _google_purchase(
+            owner_device_id=registration["device_id"]
+        )
+        retry = client.post("/v1/google-play/notifications", json=body)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert granted.json()["is_pro"] is True
+    assert first.status_code == retry.status_code == 200
+    assert first.json()["duplicate"] is False
+    assert retry.json()["duplicate"] is True
+    assert google.package_names == ["com.tono.myapp", "com.tono.myapp"]
+    assert client.get("/v1/me", headers=_auth(registration)).json()["is_pro"] is False
+
+
 def test_duplicate_apple_purchase_cannot_cross_accounts(client, monkeypatch):
     from backend import mobile_billing
     from backend.server import app

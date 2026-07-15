@@ -425,10 +425,13 @@ def google_play_notification(
         expected_package = os.environ.get("TONO_GOOGLE_PACKAGE_NAME", "com.tono.myapp")
         if decoded.get("packageName") != expected_package or not purchase_token:
             raise ValueError("notification identity missing")
+        if store.has_mobile_billing_event("google", body.message.messageId):
+            return {"received": True, "duplicate": True}
         purchase = google.get_subscription(expected_package, purchase_token)
         values = _google_purchase_values(purchase_token, purchase)
-        store.update_known_mobile_purchase(provider="google", **values)
-        inserted = store.record_mobile_billing_event("google", body.message.messageId)
+        inserted = store.apply_mobile_billing_event(
+            provider="google", event_id=body.message.messageId, **values
+        )
         return {"received": True, "duplicate": not inserted}
     except HTTPException:
         raise

@@ -980,6 +980,81 @@ class Store:
 
         return self._run(_do).result()
 
+    def has_mobile_billing_event(self, provider: str, event_id: str) -> bool:
+        """Return whether a provider event was already applied successfully."""
+        def _do() -> bool:
+            row = self._conn.execute(
+                "SELECT 1 FROM mobile_billing_events WHERE provider=? AND event_id=?",
+                (provider, event_id),
+            ).fetchone()
+            return row is not None
+
+        return self._run(_do).result()
+
+    def apply_mobile_billing_event(
+        self,
+        *,
+        provider: str,
+        event_id: str,
+        purchase_key: str,
+        product_id: str,
+        transaction_id: Optional[str],
+        purchase_status: str,
+        expires_at: Optional[str],
+        provider_event_at: int,
+    ) -> bool:
+        """Atomically deduplicate an event and update its previously claimed purchase."""
+        assert provider in ("apple", "google")
+
+        def _do() -> bool:
+            cur = self._conn.cursor()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                cur.execute(
+                    "INSERT OR IGNORE INTO mobile_billing_events"
+                    "(provider, event_id, received_at) VALUES (?, ?, ?)",
+                    (provider, event_id, _now_iso()),
+                )
+                if cur.rowcount == 0:
+                    cur.execute("COMMIT")
+                    return False
+
+                cur.execute(
+                    "SELECT owner_kind, owner_id FROM mobile_purchases "
+                    "WHERE provider=? AND purchase_key=?",
+                    (provider, purchase_key),
+                )
+                owner = cur.fetchone()
+                if owner:
+                    cur.execute(
+                        """UPDATE mobile_purchases
+                           SET product_id=?, transaction_id=?, status=?, expires_at=?,
+                               provider_event_at=?, updated_at=?
+                           WHERE provider=? AND purchase_key=?
+                             AND (
+                               provider_event_at < ?
+                               OR (
+                                 provider_event_at = ?
+                                 AND (status != 'revoked' OR ? = 'revoked')
+                               )
+                             )""",
+                        (
+                            product_id, transaction_id, purchase_status, expires_at,
+                            provider_event_at, _now_iso(), provider, purchase_key,
+                            provider_event_at, provider_event_at, purchase_status,
+                        ),
+                    )
+                    self._reconcile_mobile_owner(
+                        cur, owner["owner_kind"], owner["owner_id"]
+                    )
+                cur.execute("COMMIT")
+                return True
+            except Exception:
+                cur.execute("ROLLBACK")
+                raise
+
+        return self._run(_do).result()
+
     # ---- passkeys (WebAuthn) ----
 
     def create_bare_account(self) -> Account:
