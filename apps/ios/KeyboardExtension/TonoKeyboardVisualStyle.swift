@@ -132,6 +132,20 @@ final class TonoKeyboardUIKitShiftPath {
         return mutationGeneration
     }
 
+    /// Records the exact context produced by a shipping proxy mutation without
+    /// waiting for UIKit's `documentContextBeforeInput` cache to catch up.
+    @discardableResult
+    func documentDidMutate(
+        contextBeforeInput: String?,
+        deleteCount: Int,
+        insertion: String
+    ) -> Int {
+        guard let contextBeforeInput else { return documentDidMutate() }
+        let retainedCount = max(0, contextBeforeInput.count - deleteCount)
+        let retained = contextBeforeInput.prefix(retainedCount)
+        return documentDidMutate(effectiveContext: String(retained) + insertion)
+    }
+
     @discardableResult
     func textDidChange(
         policy: UITextAutocapitalizationType,

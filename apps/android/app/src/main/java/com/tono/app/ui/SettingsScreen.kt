@@ -25,7 +25,7 @@ import com.tono.shared.storage.UserMemory
 import kotlinx.coroutines.launch
 
 // Mirrors ios/App/SettingsView.swift
-// Voice, memory, feature toggles, plan status — no Stripe on Android (Play Billing).
+// Tone, memory, feature toggles, plan status — no Stripe on Android (Play Billing).
 
 @Composable
 fun SettingsScreen(
@@ -61,10 +61,7 @@ fun SettingsScreen(
         SettingsSection(title = "Account") {
             SettingsRow("Status", if (me != null) "Connected" else "Not connected")
             me?.let { u ->
-                SettingsRow("Plan", if (u.isPro) "Pro" else "Free")
-                if (!u.isPro) {
-                    SettingsRow("Today", "${u.usedToday} / ${u.dailyLimit} rewrites")
-                }
+                SettingsRow("Access", if (u.isPro) "Verified" else "Trial or subscription required")
             }
             meError?.let {
                 Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp,
@@ -78,15 +75,15 @@ fun SettingsScreen(
             )
         }
 
-        // Voice section
-        SettingsSection(title = "Voice") {
+        // Tone section
+        SettingsSection(title = "Tone") {
             OutlinedTextField(
                 value         = voiceField,
                 onValueChange = {
                     voiceField = it
                     SharedStore.putString(SharedKeys.PREFERRED_VOICE, it.takeIf { s -> s.isNotBlank() })
                 },
-                label       = { Text("Preferred voice") },
+                label       = { Text("Preferred tone") },
                 placeholder = { Text("e.g. direct, warm, terse", color = Color.Gray) },
                 modifier    = Modifier
                     .fillMaxWidth()
@@ -205,7 +202,7 @@ fun SettingsScreen(
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text(if (isPro) "Pro ✓" else "Free", fontWeight = FontWeight.SemiBold)
+                Text(if (isPro) "Access verified ✓" else "Trial required", fontWeight = FontWeight.SemiBold)
                 Text(
                     if (isPro) "Verified" else "Google Play",
                     color = Color.Gray,
@@ -221,7 +218,7 @@ fun SettingsScreen(
                 }
             } else {
                 Text(
-                    "Free: 10 coaching sessions/day. Play displays the current local price before purchase.",
+                    "Choose a plan below. Google Play must show an eligible 7-day trial; then it auto-renews at the localized price unless cancelled.",
                     color = Color.Gray,
                     fontSize = 12.sp,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -238,7 +235,7 @@ fun SettingsScreen(
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 4.dp),
                     ) {
-                        Text("${product.label} · ${product.formattedPrice}")
+                        Text("${product.label}: 7 days free, then ${product.formattedPrice}/${product.renewalPeriod}")
                     }
                 }
             }

@@ -10,6 +10,7 @@ The backend, not either mobile client, grants Pro. Both stores must be configure
 - `TONO_APPLE_ROOT_CERTIFICATES`: `:`-separated DER certificate paths downloaded from Apple PKI.
 - `TONO_APPLE_PRODUCT_IDS`: optional comma-separated allowlist; defaults to the current monthly/yearly Pro IDs.
 - `TONO_APPLE_ONLINE_CHECKS`: defaults to `true` for certificate revocation/expiry checks.
+- `TONO_APPLE_LEGACY_CLAIM_BEFORE_MS`: optional App Store purchase-date cutoff for restoring pre-build-88 transactions that have no `appAccountToken`. Leave unset after the migration window; tokenized purchases never use this exception.
 
 Configure App Store Server Notifications V2 to POST to `/v1/app-store/notifications` on the matching environment lane.
 
@@ -18,12 +19,13 @@ Configure App Store Server Notifications V2 to POST to `/v1/app-store/notificati
 - `GOOGLE_APPLICATION_CREDENTIALS`: service-account JSON with Android Publisher access, or use Application Default Credentials.
 - `TONO_GOOGLE_PACKAGE_NAME`: authoritative package name (defaults to `com.tono.myapp`).
 - `TONO_GOOGLE_PRODUCT_IDS`: optional comma-separated allowlist; defaults to the current monthly/yearly Pro IDs.
+- `TONO_GOOGLE_LEGACY_CLAIM_BEFORE_MS`: optional Google Play purchase-start cutoff for restoring purchases created before the Android client supplied `obfuscatedExternalAccountId`. Leave unset after the migration window; purchases with an account identifier must always match it.
 
 Configure Google Play real-time developer notifications through Pub/Sub push to `/v1/google-play/notifications`. The notification token is never trusted by itself; the handler resolves it through `purchases.subscriptionsv2.get` before changing entitlement.
 
 ## Threat boundary
 
-This protects against forged client product/tier claims, wrong app/environment payloads, token reuse across accounts, and stale/retried provider events. It trusts the backend process, its SQLite database, configured store credentials, and the official provider APIs/libraries; it does not attempt to survive a hostile backend runtime or database administrator.
+This protects against forged client product/tier claims, wrong app/environment payloads, token reuse across accounts, and stale/retried provider events. It trusts the backend process, its SQLite database, configured store credentials, and the official provider APIs/libraries; it does not attempt to survive a hostile backend runtime or database administrator. The two explicit legacy migration switches relax attacker-first ownership binding for otherwise unowned pre-token purchases, so run them only on a time-bounded migration lane; the purchase uniqueness constraint still prevents later cross-account attachment.
 
 ## TestFlight purchase acceptance matrix
 

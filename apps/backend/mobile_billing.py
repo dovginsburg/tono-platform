@@ -228,6 +228,21 @@ def _normalize_uuid(value: Any) -> Optional[str]:
         return None
 
 
+def _legacy_apple_claim_allowed(transaction: Any) -> bool:
+    """Allow pre-token purchases only inside an explicit migration window."""
+    raw_cutoff = os.environ.get("TONO_APPLE_LEGACY_CLAIM_BEFORE_MS")
+    purchase_date = getattr(transaction, "purchaseDate", None)
+    try:
+        cutoff = int(raw_cutoff) if raw_cutoff is not None else 0
+    except ValueError:
+        return False
+    return (
+        getattr(transaction, "appAccountToken", None) is None
+        and isinstance(purchase_date, int)
+        and 0 < purchase_date <= cutoff
+    )
+
+
 def _validate_apple_ownership(store: Store, user: User, transaction: Any) -> None:
     token = _normalize_uuid(getattr(transaction, "appAccountToken", None))
     allowed = {
@@ -235,6 +250,8 @@ def _validate_apple_ownership(store: Store, user: User, transaction: Any) -> Non
         for identifier in store.mobile_billing_owner_identifiers(user)
         if (normalized := _normalize_uuid(identifier)) is not None
     }
+    if token is None and _legacy_apple_claim_allowed(transaction):
+        return
     if token is None or token not in allowed:
         raise HTTPException(403, "Apple purchase belongs to another Tono account")
 
@@ -243,9 +260,26 @@ def _google_obfuscated_account_id(identifier: str) -> str:
     return hashlib.sha256(f"tono:{identifier}".encode("utf-8")).hexdigest()
 
 
+def _legacy_google_claim_allowed(purchase: dict[str, Any]) -> bool:
+    """Allow only pre-binding purchases inside an explicit dated migration window."""
+    raw_cutoff = os.environ.get("TONO_GOOGLE_LEGACY_CLAIM_BEFORE_MS")
+    start_time = purchase.get("startTime")
+    if not isinstance(start_time, str):
+        return False
+    try:
+        cutoff = int(raw_cutoff) if raw_cutoff is not None else 0
+        started_at = dt.datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+        started_at_ms = int(started_at.timestamp() * 1000)
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return 0 < started_at_ms <= cutoff
+
+
 def _validate_google_ownership(store: Store, user: User, purchase: dict[str, Any]) -> None:
     external = purchase.get("externalAccountIdentifiers") or {}
     actual = external.get("obfuscatedExternalAccountId")
+    if actual is None and _legacy_google_claim_allowed(purchase):
+        return
     if not isinstance(actual, str) or not any(
         hmac.compare_digest(actual, _google_obfuscated_account_id(identifier))
         for identifier in store.mobile_billing_owner_identifiers(user)

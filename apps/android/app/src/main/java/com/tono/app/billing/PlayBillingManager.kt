@@ -15,6 +15,8 @@ import com.android.billingclient.api.QueryPurchasesParams
 import com.android.billingclient.api.Purchase
 import com.android.billingclient.api.PurchasesUpdatedListener
 import com.tono.shared.network.TonoBackend
+import com.tono.shared.storage.KeychainKeys
+import com.tono.shared.storage.SecureStore
 import com.tono.shared.storage.SharedKeys
 import com.tono.shared.storage.SharedStore
 import kotlinx.coroutines.CoroutineScope
@@ -32,6 +34,7 @@ data class PlayProduct(
     val id: String,
     val label: String,
     val formattedPrice: String,
+    val renewalPeriod: String,
 )
 
 data class BillingUiState(
@@ -89,12 +92,24 @@ object PlayBillingManager : PurchasesUpdatedListener {
 
     fun purchase(activity: Activity, productId: String) {
         val details = productDetails[productId]
-        val offer = details?.subscriptionOfferDetails?.firstOrNull()
+        val offer = details?.subscriptionOfferDetails?.firstOrNull { candidate ->
+            candidate.pricingPhases.pricingPhaseList.firstOrNull()?.let { phase ->
+                TrialOfferContract.isRealSevenDayTrial(phase.priceAmountMicros, phase.billingPeriod)
+            } == true
+        }
         if (details == null || offer == null) {
             _state.value = _state.value.copy(
                 error = "This subscription is not available from Google Play right now.",
             )
             refresh()
+            return
+        }
+
+        val deviceId = SecureStore.get(KeychainKeys.DEVICE_ID)
+        if (deviceId.isNullOrBlank()) {
+            _state.value = _state.value.copy(
+                error = "Tono must finish account setup before purchasing. Reopen the app and try again.",
+            )
             return
         }
 
@@ -106,6 +121,7 @@ object PlayBillingManager : PurchasesUpdatedListener {
             activity,
             BillingFlowParams.newBuilder()
                 .setProductDetailsParamsList(listOf(productParams))
+                .setObfuscatedAccountId(BillingOwnership.obfuscatedAccountId(deviceId))
                 .build(),
         )
         if (result.responseCode != BillingClient.BillingResponseCode.OK) {
@@ -224,8 +240,10 @@ object PlayBillingManager : PurchasesUpdatedListener {
                         )
                     },
                     onFailure = { error ->
+                        SharedStore.putBoolean(SharedKeys.PRO_UNLOCKED, false)
                         _state.value = _state.value.copy(
                             isLoading = false,
+                            isPro = false,
                             message = if (hasPending) "Purchase pending approval in Google Play." else null,
                             error = "Could not confirm entitlement: ${error.message ?: "backend unavailable"}",
                         )
@@ -253,9 +271,10 @@ object PlayBillingManager : PurchasesUpdatedListener {
                     }
                 }
                 if (verified.isFailure) {
+                    SharedStore.putBoolean(SharedKeys.PRO_UNLOCKED, false)
                     _state.value = _state.value.copy(
                         isLoading = false,
-                        isPro = SharedStore.getBoolean(SharedKeys.PRO_UNLOCKED),
+                        isPro = false,
                         message = null,
                         error = "Purchase received, but secure verification failed. Tap Restore purchases to retry.",
                     )
@@ -263,6 +282,7 @@ object PlayBillingManager : PurchasesUpdatedListener {
                 }
                 val me = verified.getOrThrow()
                 if (!me.isPro) {
+                    SharedStore.putBoolean(SharedKeys.PRO_UNLOCKED, false)
                     _state.value = _state.value.copy(
                         isLoading = false,
                         isPro = false,
@@ -272,6 +292,7 @@ object PlayBillingManager : PurchasesUpdatedListener {
                     return@launch
                 }
                 if (!purchase.isAcknowledged) acknowledge(purchase)
+                SharedStore.putBoolean(SharedKeys.PRO_UNLOCKED, true)
                 _state.value = _state.value.copy(
                     isLoading = false,
                     isPro = EntitlementDecision.isPro(true, me.isPro),
@@ -294,16 +315,17 @@ object PlayBillingManager : PurchasesUpdatedListener {
     }
 
     private fun toDisplayProduct(details: ProductDetails): PlayProduct? {
-        val regularPhase = details.subscriptionOfferDetails
-            ?.firstOrNull()
-            ?.pricingPhases
-            ?.pricingPhaseList
-            ?.lastOrNull()
-            ?: return null
+        val offer = details.subscriptionOfferDetails?.firstOrNull { candidate ->
+            candidate.pricingPhases.pricingPhaseList.firstOrNull()?.let { phase ->
+                TrialOfferContract.isRealSevenDayTrial(phase.priceAmountMicros, phase.billingPeriod)
+            } == true
+        } ?: return null
+        val regularPhase = offer.pricingPhases.pricingPhaseList.lastOrNull() ?: return null
         return PlayProduct(
             id = details.productId,
             label = if (details.productId == BillingProducts.MONTHLY) "Monthly" else "Yearly",
             formattedPrice = regularPhase.formattedPrice,
+            renewalPeriod = if (details.productId == BillingProducts.MONTHLY) "month" else "year",
         )
     }
 

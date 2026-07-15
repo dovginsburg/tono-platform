@@ -42,6 +42,38 @@ final class KeyboardVisualStyleTests: XCTestCase {
         XCTAssertEqual(path.state, .lowercase)
     }
 
+    func testShippingBoundaryMutationUsesSynthesizedContextWhenProxyLags() {
+        let path = TonoKeyboardUIKitShiftPath()
+        let generation = path.documentDidMutate(
+            contextBeforeInput: "Hello",
+            deleteCount: 0,
+            insertion: ". "
+        )
+
+        XCTAssertTrue(path.applyDeferredAutoCapitalization(
+            generation: generation,
+            policy: .sentences,
+            contextBeforeInput: "Hello"
+        ))
+        XCTAssertEqual(path.state, .oneShotUppercase)
+    }
+
+    func testShippingBoundaryMutationUsesSynthesizedContextWhenProxyIsEmpty() {
+        let path = TonoKeyboardUIKitShiftPath()
+        let generation = path.documentDidMutate(
+            contextBeforeInput: "Hello.",
+            deleteCount: 0,
+            insertion: "\n"
+        )
+
+        XCTAssertTrue(path.applyDeferredAutoCapitalization(
+            generation: generation,
+            policy: .sentences,
+            contextBeforeInput: ""
+        ))
+        XCTAssertEqual(path.state, .oneShotUppercase)
+    }
+
     func testShippingUIKitShiftPathPreservesEveryHostPolicy() {
         let none = TonoKeyboardUIKitShiftPath()
         none.documentDidMutate(effectiveContext: "Hello. ")

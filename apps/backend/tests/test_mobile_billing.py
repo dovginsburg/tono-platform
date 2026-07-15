@@ -464,6 +464,37 @@ def test_attacker_cannot_first_claim_apple_purchase_bound_to_victim(client, monk
     assert legitimate.json()["is_pro"] is True
 
 
+def test_tokenless_legacy_apple_purchase_requires_explicit_cutoff(client, monkeypatch):
+    from backend import mobile_billing
+    from backend.server import app
+
+    monkeypatch.setenv("TONO_APPLE_ENVIRONMENT", "Production")
+    registration = _register(client)
+
+    async def fake_verify(_: str):
+        return _apple_transaction(appAccountToken=None, purchaseDate=1_000)
+
+    app.dependency_overrides[mobile_billing.get_apple_transaction_verifier] = lambda: fake_verify
+    try:
+        rejected = client.post(
+            "/v1/app-store/subscription",
+            json={"signed_transaction_info": "legacy-jws"},
+            headers=_auth(registration),
+        )
+        monkeypatch.setenv("TONO_APPLE_LEGACY_CLAIM_BEFORE_MS", "2000")
+        migrated = client.post(
+            "/v1/app-store/subscription",
+            json={"signed_transaction_info": "legacy-jws"},
+            headers=_auth(registration),
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert rejected.status_code == 403
+    assert migrated.status_code == 200
+    assert migrated.json()["is_pro"] is True
+
+
 def test_attacker_cannot_first_claim_google_purchase_bound_to_victim(client):
     from backend import mobile_billing
     from backend.server import app
@@ -491,6 +522,53 @@ def test_attacker_cannot_first_claim_google_purchase_bound_to_victim(client):
     assert client.get("/v1/me", headers=_auth(attacker)).json()["is_pro"] is False
     assert legitimate.status_code == 200
     assert legitimate.json()["is_pro"] is True
+
+
+def test_google_legacy_claim_requires_explicit_purchase_date_cutoff(client, monkeypatch):
+    from backend import mobile_billing
+    from backend.server import app
+
+    registration = _register(client)
+    google = FakeGooglePlay(_google_purchase())
+    app.dependency_overrides[mobile_billing.get_google_play_client] = lambda: google
+    body = {"purchase_token": "legacy-google-token"}
+    try:
+        rejected = client.post(
+            "/v1/google-play/subscription", json=body, headers=_auth(registration)
+        )
+        monkeypatch.setenv("TONO_GOOGLE_LEGACY_CLAIM_BEFORE_MS", "2000")
+        migrated = client.post(
+            "/v1/google-play/subscription", json=body, headers=_auth(registration)
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert rejected.status_code == 403
+    assert migrated.status_code == 200
+    assert migrated.json()["is_pro"] is True
+
+
+def test_google_legacy_cutoff_never_bypasses_mismatched_binding(client, monkeypatch):
+    from backend import mobile_billing
+    from backend.server import app
+
+    registration = _register(client)
+    purchase = _google_purchase(
+        owner_device_id="00000000-0000-0000-0000-000000000999"
+    )
+    google = FakeGooglePlay(purchase)
+    app.dependency_overrides[mobile_billing.get_google_play_client] = lambda: google
+    monkeypatch.setenv("TONO_GOOGLE_LEGACY_CLAIM_BEFORE_MS", "2000")
+    try:
+        response = client.post(
+            "/v1/google-play/subscription",
+            json={"purchase_token": "mismatched-tokenized-google-token"},
+            headers=_auth(registration),
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 403
 
 
 def test_delayed_older_apple_notification_cannot_regrant_after_refund(client, monkeypatch):
@@ -565,6 +643,7 @@ def _apple_transaction(**overrides):
         "expiresDate": 4102444800000,
         "revocationDate": None,
         "signedDate": 1_000,
+        "purchaseDate": 1_000,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -591,6 +670,7 @@ def _google_purchase(
     owner_device_id=None,
 ):
     purchase = {
+        "startTime": "1970-01-01T00:00:01Z",
         "subscriptionState": state,
         "acknowledgementState": acknowledgement,
         "latestOrderId": "google-order-1",

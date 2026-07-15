@@ -205,7 +205,7 @@ private fun AddRecipientSheet(
             OutlinedTextField(
                 value         = voiceHint,
                 onValueChange = { voiceHint = it },
-                label         = { Text("Voice hint (optional)") },
+                label         = { Text("Tone hint (optional)") },
                 placeholder   = { Text("e.g. prefers formal tone; no humor", color = Color.Gray) },
                 modifier      = Modifier.fillMaxWidth(),
                 minLines      = 2,

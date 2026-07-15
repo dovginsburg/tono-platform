@@ -179,6 +179,12 @@ public final class StoreKitManager: ObservableObject {
         entitlement.persist()
     }
 
+    /// Applies an independently accepted `/v1/me` observation to the same
+    /// state used by purchase, restore, Account, Plan, and the keyboard mirror.
+    public func acceptBackendState(_ me: TonoMe) {
+        applyBackendState(me, inTrial: me.isPro && isInFreeTrial)
+    }
+
     public func isEligibleForFreeTrial(_ product: Product) -> Bool {
         eligibleFreeTrialProductIDs.contains(product.id)
     }

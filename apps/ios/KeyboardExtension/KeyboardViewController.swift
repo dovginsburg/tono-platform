@@ -1395,12 +1395,21 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     private func applySpellingMutation(_ plan: SpellingMutationPlan) {
+        let contextBeforeMutation = textDocumentProxy.documentContextBeforeInput
         if plan.cursorAdvance > 0 {
             textDocumentProxy.adjustTextPosition(byCharacterOffset: plan.cursorAdvance)
         }
         for _ in 0..<plan.deleteCount { textDocumentProxy.deleteBackward() }
         textDocumentProxy.insertText(plan.insertion)
-        shiftPath.documentDidMutate()
+        if plan.cursorAdvance == 0 {
+            shiftPath.documentDidMutate(
+                contextBeforeInput: contextBeforeMutation,
+                deleteCount: plan.deleteCount,
+                insertion: plan.insertion
+            )
+        } else {
+            shiftPath.documentDidMutate()
+        }
     }
 
     private func isSpellingBoundary(_ text: String) -> Bool {
@@ -1430,8 +1439,13 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             return false
         }
         for _ in record.correctedSuffix { textDocumentProxy.deleteBackward() }
-        textDocumentProxy.insertText(keepBoundary ? record.restoredText : record.original)
-        shiftPath.documentDidMutate()
+        let restored = keepBoundary ? record.restoredText : record.original
+        textDocumentProxy.insertText(restored)
+        shiftPath.documentDidMutate(
+            contextBeforeInput: context,
+            deleteCount: record.correctedSuffix.count,
+            insertion: restored
+        )
         autocorrectionRecord = nil
         spellingDecision = nil
         spellingToken = nil
@@ -1448,9 +1462,14 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             host: spellingHostPolicy,
             hasPendingAutocorrectionUndo: autocorrectionRecord != nil
         ) {
+            let contextBeforeMutation = textDocumentProxy.documentContextBeforeInput
             textDocumentProxy.deleteBackward()
             textDocumentProxy.insertText(". ")
-            shiftPath.documentDidMutate()
+            shiftPath.documentDidMutate(
+                contextBeforeInput: contextBeforeMutation,
+                deleteCount: 1,
+                insertion: ". "
+            )
             spellingService.cancel()
             spellingDecision = nil
             spellingToken = nil

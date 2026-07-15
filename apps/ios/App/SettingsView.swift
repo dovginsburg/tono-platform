@@ -490,6 +490,7 @@ struct SettingsView: View {
         do {
             let me = try await TonoBackend.shared.me()
             await MainActor.run {
+                store.acceptBackendState(me)
                 usage = TonoUsage(usedToday: me.usedToday, dailyLimit: me.dailyLimit,
                                   plan: me.plan, isPro: me.isPro)
                 usageError = nil

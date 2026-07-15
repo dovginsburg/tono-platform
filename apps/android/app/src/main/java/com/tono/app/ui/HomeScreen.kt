@@ -93,19 +93,19 @@ fun HomeScreen(onOpenKeyboardSettings: () -> Unit) {
             }
         }
 
-        // Footer — free / pro tiers
+        // Trial-only subscription footer
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Free · 10 rewrites/day", color = Color.White.copy(alpha = 0.7f),
+            Text("7 days free after Google Play authorization", color = Color.White.copy(alpha = 0.7f),
                 fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text("All four rewrite axes on the Tono keyboard.",
+            Text("Then the selected plan auto-renews unless cancelled.",
                 color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp)
             Spacer(Modifier.height(4.dp))
             val monthly = billing.products.firstOrNull { it.id == BillingProducts.MONTHLY }
             val yearly = billing.products.firstOrNull { it.id == BillingProducts.YEARLY }
             val proPrice = if (monthly != null && yearly != null)
-                "Pro · ${monthly.formattedPrice}/mo or ${yearly.formattedPrice}/yr"
+                "${monthly.formattedPrice}/month or ${yearly.formattedPrice}/year"
             else
-                "Pro · pricing shown in Google Play"
+                "Localized prices shown in Google Play"
             Text(proPrice, color = Color.White.copy(alpha = 0.7f),
                 fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             Text("Unlimited rewrites, style memory, per-recipient coaching, weekly digest.",
