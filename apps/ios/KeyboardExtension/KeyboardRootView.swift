@@ -317,7 +317,11 @@ public final class KeyboardModel: ObservableObject {
                     self.isPro = usage.isPro
                     SharedStore.defaults.set(usage.usedToday, forKey: SharedKeys.widgetUsedToday)
                     SharedStore.defaults.set(usage.dailyLimit, forKey: SharedKeys.widgetDailyLimit)
-                    SharedStore.defaults.set(usage.isPro, forKey: SharedKeys.proUnlocked)
+                    let mirrored = TonoAuthoritativeEntitlement.load()
+                    TonoAuthoritativeEntitlement(
+                        serverIsPro: usage.isPro,
+                        appleTrial: mirrored.isInFreeTrial
+                    ).persist()
                 }
                 SharedStore.defaults.set(result.perception, forKey: SharedKeys.lastPerception)
                 SharedStore.defaults.set(result.riskLevel.rawValue, forKey: SharedKeys.lastRiskLevel)

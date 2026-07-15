@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from types import SimpleNamespace
 
@@ -63,7 +64,9 @@ def test_apple_sandbox_transaction_is_accepted_in_explicit_testflight_lane(clien
     registration = _register(client)
 
     async def fake_verify(_: str):
-        return _apple_transaction(environment="Sandbox")
+        return _apple_transaction(
+            environment="Sandbox", appAccountToken=registration["device_id"]
+        )
 
     app.dependency_overrides[mobile_billing.get_apple_transaction_verifier] = lambda: fake_verify
     try:
@@ -111,7 +114,9 @@ def test_apple_ignores_forged_client_product(client, monkeypatch):
     registration = _register(client)
 
     async def fake_verify(_: str):
-        return _apple_transaction(productId=APPLE_MONTHLY)
+        return _apple_transaction(
+            productId=APPLE_MONTHLY, appAccountToken=registration["device_id"]
+        )
 
     app.dependency_overrides[mobile_billing.get_apple_transaction_verifier] = lambda: fake_verify
     try:
@@ -136,6 +141,11 @@ def test_google_cheaper_product_substitution_cannot_grant_pro(client, monkeypatc
     google = FakeGooglePlay({
         "subscriptionState": "SUBSCRIPTION_STATE_ACTIVE",
         "acknowledgementState": "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED",
+        "externalAccountIdentifiers": {
+            "obfuscatedExternalAccountId": _google_obfuscated_account_id(
+                registration["device_id"]
+            )
+        },
         "lineItems": [{
             "productId": "com.tonoit.basic.monthly",
             "expiryTime": "2099-01-01T00:00:00Z",
@@ -166,7 +176,10 @@ def test_google_uses_authoritative_product_and_acknowledges_purchase(client, mon
 
     monkeypatch.setenv("TONO_GOOGLE_PACKAGE_NAME", "com.tono.myapp")
     registration = _register(client)
-    google = FakeGooglePlay(_google_purchase(acknowledgement="ACKNOWLEDGEMENT_STATE_PENDING"))
+    google = FakeGooglePlay(_google_purchase(
+        acknowledgement="ACKNOWLEDGEMENT_STATE_PENDING",
+        owner_device_id=registration["device_id"],
+    ))
     app.dependency_overrides[mobile_billing.get_google_play_client] = lambda: google
     try:
         response = client.post(
@@ -198,7 +211,7 @@ def test_duplicate_google_token_cannot_cross_accounts(client):
     store = get_store()
     store.link_device_to_account(first["device_id"], store.create_bare_account().id)
     store.link_device_to_account(second["device_id"], store.create_bare_account().id)
-    google = FakeGooglePlay(_google_purchase())
+    google = FakeGooglePlay(_google_purchase(owner_device_id=first["device_id"]))
     app.dependency_overrides[mobile_billing.get_google_play_client] = lambda: google
     body = {"purchase_token": "same-google-token", "product_id": APPLE_YEARLY}
     try:
@@ -212,7 +225,7 @@ def test_duplicate_google_token_cannot_cross_accounts(client):
         app.dependency_overrides.clear()
 
     assert first_response.status_code == 200
-    assert second_response.status_code == 409
+    assert second_response.status_code == 403
     assert client.get("/v1/me", headers=_auth(second)).json()["is_pro"] is False
 
 
@@ -221,7 +234,7 @@ def test_google_cancel_notification_removes_access_and_retry_is_idempotent(clien
     from backend.server import app
 
     registration = _register(client)
-    google = FakeGooglePlay(_google_purchase())
+    google = FakeGooglePlay(_google_purchase(owner_device_id=registration["device_id"]))
     app.dependency_overrides[mobile_billing.get_google_play_client] = lambda: google
     try:
         granted = client.post(
@@ -260,7 +273,7 @@ def test_duplicate_apple_purchase_cannot_cross_accounts(client, monkeypatch):
     store.link_device_to_account(second["device_id"], store.create_bare_account().id)
 
     async def fake_verify(_: str):
-        return _apple_transaction()
+        return _apple_transaction(appAccountToken=first["device_id"])
 
     app.dependency_overrides[mobile_billing.get_apple_transaction_verifier] = lambda: fake_verify
     try:
@@ -276,7 +289,7 @@ def test_duplicate_apple_purchase_cannot_cross_accounts(client, monkeypatch):
         app.dependency_overrides.clear()
 
     assert first_response.status_code == 200
-    assert second_response.status_code == 409
+    assert second_response.status_code == 403
     assert client.get("/v1/me", headers=_auth(second)).json()["is_pro"] is False
 
 
@@ -286,7 +299,7 @@ def test_anonymous_mobile_purchase_moves_with_device_when_account_is_linked(clie
     from backend.store import get_store
 
     registration = _register(client)
-    google = FakeGooglePlay(_google_purchase())
+    google = FakeGooglePlay(_google_purchase(owner_device_id=registration["device_id"]))
     app.dependency_overrides[mobile_billing.get_google_play_client] = lambda: google
     try:
         granted = client.post(
@@ -311,7 +324,14 @@ def test_apple_refund_removes_access(client, monkeypatch):
 
     monkeypatch.setenv("TONO_APPLE_ENVIRONMENT", "Production")
     registration = _register(client)
-    transactions = iter([_apple_transaction(), _apple_transaction(revocationDate=1700000000000)])
+    transactions = iter([
+        _apple_transaction(appAccountToken=registration["device_id"]),
+        _apple_transaction(
+            appAccountToken=registration["device_id"],
+            revocationDate=1700000000000,
+            signedDate=2_000,
+        ),
+    ])
 
     async def fake_verify(_: str):
         return next(transactions)
@@ -343,7 +363,7 @@ def test_apple_notification_retry_is_idempotent(client, monkeypatch):
     registration = _register(client)
 
     async def fake_transaction(_: str):
-        return _apple_transaction()
+        return _apple_transaction(appAccountToken=registration["device_id"])
 
     async def fake_notification(_: str):
         return SimpleNamespace(
@@ -372,6 +392,129 @@ def test_apple_notification_retry_is_idempotent(client, monkeypatch):
     assert count == 1
 
 
+def test_attacker_cannot_first_claim_apple_purchase_bound_to_victim(client, monkeypatch):
+    from backend import mobile_billing
+    from backend.server import app
+
+    monkeypatch.setenv("TONO_APPLE_ENVIRONMENT", "Production")
+    attacker = _register(client, "1")
+    victim = _register(client, "2")
+
+    async def fake_verify(_: str):
+        return _apple_transaction(appAccountToken=victim["device_id"])
+
+    app.dependency_overrides[mobile_billing.get_apple_transaction_verifier] = lambda: fake_verify
+    try:
+        stolen = client.post(
+            "/v1/app-store/subscription",
+            json={"signed_transaction_info": "copied-victim-jws"},
+            headers=_auth(attacker),
+        )
+        legitimate = client.post(
+            "/v1/app-store/subscription",
+            json={"signed_transaction_info": "victim-jws"},
+            headers=_auth(victim),
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert stolen.status_code == 403
+    assert client.get("/v1/me", headers=_auth(attacker)).json()["is_pro"] is False
+    assert legitimate.status_code == 200
+    assert legitimate.json()["is_pro"] is True
+
+
+def test_attacker_cannot_first_claim_google_purchase_bound_to_victim(client):
+    from backend import mobile_billing
+    from backend.server import app
+
+    attacker = _register(client, "1")
+    victim = _register(client, "2")
+    purchase = _google_purchase()
+    purchase["externalAccountIdentifiers"] = {
+        "obfuscatedExternalAccountId": _google_obfuscated_account_id(victim["device_id"])
+    }
+    google = FakeGooglePlay(purchase)
+    app.dependency_overrides[mobile_billing.get_google_play_client] = lambda: google
+    body = {"purchase_token": "copied-victim-google-token"}
+    try:
+        stolen = client.post(
+            "/v1/google-play/subscription", json=body, headers=_auth(attacker)
+        )
+        legitimate = client.post(
+            "/v1/google-play/subscription", json=body, headers=_auth(victim)
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert stolen.status_code == 403
+    assert client.get("/v1/me", headers=_auth(attacker)).json()["is_pro"] is False
+    assert legitimate.status_code == 200
+    assert legitimate.json()["is_pro"] is True
+
+
+def test_delayed_older_apple_notification_cannot_regrant_after_refund(client, monkeypatch):
+    from backend import mobile_billing
+    from backend.server import app
+    from backend.store import get_store
+
+    monkeypatch.setenv("TONO_APPLE_ENVIRONMENT", "Production")
+    registration = _register(client)
+    transactions = iter([
+        _apple_transaction(
+            appAccountToken=registration["device_id"], signedDate=1_000
+        ),
+        _apple_transaction(
+            appAccountToken=registration["device_id"],
+            signedDate=3_000,
+            revocationDate=2_900,
+        ),
+        _apple_transaction(
+            appAccountToken=registration["device_id"], signedDate=2_000
+        ),
+    ])
+    notification_ids = iter(["newer-refund", "delayed-older-active"])
+
+    async def fake_transaction(_: str):
+        return next(transactions)
+
+    async def fake_notification(_: str):
+        return SimpleNamespace(
+            notificationUUID=next(notification_ids),
+            data=SimpleNamespace(signedTransactionInfo="transaction-jws"),
+        )
+
+    app.dependency_overrides[mobile_billing.get_apple_transaction_verifier] = lambda: fake_transaction
+    app.dependency_overrides[mobile_billing.get_apple_notification_verifier] = lambda: fake_notification
+    try:
+        granted = client.post(
+            "/v1/app-store/subscription",
+            json={"signed_transaction_info": "grant-jws"},
+            headers=_auth(registration),
+        )
+        refunded = client.post(
+            "/v1/app-store/notifications", json={"signedPayload": "newer-refund"}
+        )
+        delayed = client.post(
+            "/v1/app-store/notifications", json={"signedPayload": "older-active"}
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    row = get_store()._conn.execute(
+        "SELECT status, provider_event_at FROM mobile_purchases "
+        "WHERE provider='apple' AND purchase_key='apple-original-1'"
+    ).fetchone()
+    assert granted.json()["is_pro"] is True
+    assert refunded.status_code == delayed.status_code == 200
+    assert client.get("/v1/me", headers=_auth(registration)).json()["is_pro"] is False
+    assert tuple(row) == ("revoked", 3_000)
+
+
+def _google_obfuscated_account_id(device_id: str) -> str:
+    return hashlib.sha256(f"tono:{device_id}".encode("utf-8")).hexdigest()
+
+
 def _apple_transaction(**overrides):
     values = {
         "bundleId": "com.tonoit.app",
@@ -381,6 +524,7 @@ def _apple_transaction(**overrides):
         "productId": APPLE_MONTHLY,
         "expiresDate": 4102444800000,
         "revocationDate": None,
+        "signedDate": 1_000,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -404,8 +548,9 @@ def _google_purchase(
     *,
     state="SUBSCRIPTION_STATE_ACTIVE",
     acknowledgement="ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED",
+    owner_device_id=None,
 ):
-    return {
+    purchase = {
         "subscriptionState": state,
         "acknowledgementState": acknowledgement,
         "latestOrderId": "google-order-1",
@@ -413,3 +558,8 @@ def _google_purchase(
             {"productId": APPLE_MONTHLY, "expiryTime": "2099-01-01T00:00:00Z"}
         ],
     }
+    if owner_device_id:
+        purchase["externalAccountIdentifiers"] = {
+            "obfuscatedExternalAccountId": _google_obfuscated_account_id(owner_device_id)
+        }
+    return purchase

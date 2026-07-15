@@ -264,9 +264,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     // Build 79 — layout, shift, emoji state.
     private var layoutMode: KeyboardLayoutMode = .letters
-    private var shiftState: ShiftState = .lowercase
-    private var shiftWasAutomatic = false
-    private var suppressNextPostInsertionAutoCapitalization = false
+    private let shiftPath = TonoKeyboardUIKitShiftPath()
+    private var shiftState: ShiftState { shiftPath.state }
     private weak var shiftButton: UIButton?
     private weak var returnButton: UIButton?
     private var hostConfiguration: HostConfiguration?
@@ -1117,6 +1116,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     @objc private func charTapped(_ sender: UIButton) {
         guard let title = sender.title(for: .normal) else { return }
+        let contextBeforeInsertion = textDocumentProxy.documentContextBeforeInput ?? ""
         let insertedAlphabeticCharacter = title.unicodeScalars.count == 1
             && title.unicodeScalars.allSatisfy(CharacterSet.letters.contains)
         if isSpellingBoundary(title) {
@@ -1126,18 +1126,20 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             textDocumentProxy.insertText(title)
         }
         playInputClick()
-        if layoutMode == .letters, shiftState == .oneShotUppercase {
-            shiftState = TonoKeyboardShiftMachine.stateAfterCharacter(
-                shiftState,
-                policy: hostAutocapitalizationType
-            )
-            shiftWasAutomatic = hostAutocapitalizationType == .allCharacters
+        if shiftPath.characterTapped(
+            isAlphabetic: insertedAlphabeticCharacter,
+            policy: hostAutocapitalizationType,
+            contextAfterInsertion: contextBeforeInsertion + title,
+            isLettersLayout: layoutMode == .letters
+        ) {
             relayoutLettersForShift()
         }
-        suppressNextPostInsertionAutoCapitalization = insertedAlphabeticCharacter
+        let mutationGeneration = shiftPath.mutationGeneration
         DispatchQueue.main.async { [weak self] in
             if !insertedAlphabeticCharacter {
-                self?.applyAutoCapitalizationIfNeeded()
+                self?.applyAutoCapitalizationIfNeeded(
+                    expectedGeneration: mutationGeneration
+                )
             }
             self?.refreshSpellingSuggestions()
         }
@@ -1152,22 +1154,13 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     @objc private func shiftSingleTapped() {
-        shiftWasAutomatic = false
-        switch shiftState {
-        case .capsLock:
-            shiftState = .lowercase
-        case .lowercase:
-            shiftState = .oneShotUppercase
-        case .oneShotUppercase:
-            shiftState = .lowercase
-        }
+        shiftPath.shiftSingleTapped()
         relayoutLettersForShift()
         playInputClick()
     }
 
     @objc private func shiftDoubleTapped() {
-        shiftWasAutomatic = false
-        shiftState = shiftState == .capsLock ? .lowercase : .capsLock
+        shiftPath.shiftDoubleTapped()
         relayoutLettersForShift()
         playInputClick()
     }
@@ -1192,27 +1185,25 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         handleInputModeList(from: sender, with: event)
     }
 
-    private func applyAutoCapitalizationIfNeeded() {
-        guard shiftState != .capsLock else { return }
+    private func applyAutoCapitalizationIfNeeded(expectedGeneration: Int? = nil) {
         guard layoutMode == .letters else { return }
-        if shiftState == .oneShotUppercase, !shiftWasAutomatic { return }
-        if suppressNextPostInsertionAutoCapitalization,
-           hostAutocapitalizationType != .allCharacters {
-            suppressNextPostInsertionAutoCapitalization = false
-            return
-        }
-        suppressNextPostInsertionAutoCapitalization = false
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
-        let shouldCapitalize = TonoKeyboardShiftMachine.recommendsCapitalization(
-            policy: hostAutocapitalizationType,
-            context: before
-        )
-        let next: ShiftState = shouldCapitalize ? .oneShotUppercase : .lowercase
-        if shiftState != next {
-            shiftState = next
+        let changed: Bool
+        if let expectedGeneration {
+            changed = shiftPath.applyDeferredAutoCapitalization(
+                generation: expectedGeneration,
+                policy: hostAutocapitalizationType,
+                contextBeforeInput: before
+            )
+        } else {
+            changed = shiftPath.textDidChange(
+                policy: hostAutocapitalizationType,
+                contextBeforeInput: before
+            )
+        }
+        if changed {
             relayoutLettersForShift()
         }
-        shiftWasAutomatic = shouldCapitalize
     }
 
 
@@ -1409,6 +1400,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         }
         for _ in 0..<plan.deleteCount { textDocumentProxy.deleteBackward() }
         textDocumentProxy.insertText(plan.insertion)
+        shiftPath.documentDidMutate()
     }
 
     private func isSpellingBoundary(_ text: String) -> Bool {
@@ -1439,6 +1431,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         }
         for _ in record.correctedSuffix { textDocumentProxy.deleteBackward() }
         textDocumentProxy.insertText(keepBoundary ? record.restoredText : record.original)
+        shiftPath.documentDidMutate()
         autocorrectionRecord = nil
         spellingDecision = nil
         spellingToken = nil
@@ -1457,6 +1450,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         ) {
             textDocumentProxy.deleteBackward()
             textDocumentProxy.insertText(". ")
+            shiftPath.documentDidMutate()
             spellingService.cancel()
             spellingDecision = nil
             spellingToken = nil
@@ -1465,8 +1459,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             commitBoundary(" ")
         }
         playInputClick()
+        let mutationGeneration = shiftPath.mutationGeneration
         DispatchQueue.main.async { [weak self] in
-            self?.applyAutoCapitalizationIfNeeded()
+            self?.applyAutoCapitalizationIfNeeded(expectedGeneration: mutationGeneration)
             self?.refreshSpellingSuggestions()
         }
     }
@@ -1478,10 +1473,12 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         } else {
             autocorrectionRecord = nil
             textDocumentProxy.insertText(character)
+            shiftPath.documentDidMutate()
         }
         playInputClick()
+        let mutationGeneration = shiftPath.mutationGeneration
         DispatchQueue.main.async { [weak self] in
-            self?.applyAutoCapitalizationIfNeeded()
+            self?.applyAutoCapitalizationIfNeeded(expectedGeneration: mutationGeneration)
             self?.refreshSpellingSuggestions()
         }
     }
@@ -1491,6 +1488,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         if !restoreOriginalAfterBackspaceIfPossible() {
             autocorrectionRecord = nil
             textDocumentProxy.deleteBackward()
+            shiftPath.documentDidMutate()
         }
         playInputClick()
         deleteRepeatCount = 0
@@ -1500,8 +1498,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     @objc private func backspaceTouchEnded() {
         cancelDeleteRepeat()
+        let mutationGeneration = shiftPath.mutationGeneration
         DispatchQueue.main.async { [weak self] in
-            self?.applyAutoCapitalizationIfNeeded()
+            self?.applyAutoCapitalizationIfNeeded(expectedGeneration: mutationGeneration)
             self?.refreshSpellingSuggestions()
         }
     }
@@ -1510,6 +1509,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         let item = DispatchWorkItem { [weak self] in
             guard let self = self, generation == self.deleteRepeatGeneration else { return }
             self.textDocumentProxy.deleteBackward()
+            self.shiftPath.documentDidMutate()
             self.playInputClick()
             self.deleteRepeatCount += 1
             let accelerated = Const.deleteRepeatInterval - Double(self.deleteRepeatCount) * 0.004
@@ -1530,8 +1530,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     @objc private func returnTapped() {
         commitBoundary("\n")
         playInputClick()
+        let mutationGeneration = shiftPath.mutationGeneration
         DispatchQueue.main.async { [weak self] in
-            self?.applyAutoCapitalizationIfNeeded()
+            self?.applyAutoCapitalizationIfNeeded(expectedGeneration: mutationGeneration)
             self?.refreshSpellingSuggestions()
         }
     }
@@ -1826,6 +1827,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private func insertEmoji(_ emoji: String) {
         guard !emoji.isEmpty else { return }
         textDocumentProxy.insertText(emoji)
+        shiftPath.documentDidMutate()
         playInputClick()
         var list = EmojiCategory.glyphsForRecents()
         list.removeAll { $0 == emoji }

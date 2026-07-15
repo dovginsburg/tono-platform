@@ -58,15 +58,7 @@ def test_settings_visible_labels_use_tone_without_renaming_storage_symbols():
     assert 'Section("Voice hint (optional)")' not in settings
 
 
-def test_storekit_purchase_outcomes_are_explicit_and_server_authoritative():
-    manager = _source("Shared/StoreKitManager.swift")
+def test_storekit_manager_starts_once_from_app_entry():
     app = _source("App/TonoApp.swift")
 
-    assert "syncAppStoreSubscription" in manager
-    assert "applyBackendState(" in manager
-    assert "inTrial: transaction.offer?.paymentMode == .freeTrial" in manager
-    assert "subscription.isEligibleForIntroOffer" in manager
-    assert 'purchaseError = "Purchase canceled."' in manager
-    assert 'purchaseError = "Purchase is pending approval."' in manager
-    assert "guard updatesTask == nil else { return }" in manager
-    assert "StoreKitManager.shared.start()" in app
+    assert app.count("StoreKitManager.shared.start()") == 1

@@ -5,8 +5,10 @@ from __future__ import annotations
 import base64
 import datetime as dt
 import hashlib
+import hmac
 import json
 import os
+import uuid
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Optional
 from urllib.parse import quote
@@ -184,7 +186,7 @@ def _owner(user: User) -> tuple[str, str]:
     return ("account", user.account_id) if user.account_id else ("device", user.device_id)
 
 
-def _apple_purchase_values(transaction: Any) -> dict[str, Optional[str]]:
+def _apple_purchase_values(transaction: Any) -> dict[str, Any]:
     product_id = getattr(transaction, "productId", None)
     if not product_id or product_id not in _allowed_products("apple"):
         raise HTTPException(400, "Apple product is not a Tono product")
@@ -193,6 +195,9 @@ def _apple_purchase_values(transaction: Any) -> dict[str, Optional[str]]:
     expires_at = _milliseconds_to_iso(getattr(transaction, "expiresDate", None))
     if not purchase_key or not transaction_id or not expires_at:
         raise HTTPException(400, "Apple transaction is incomplete")
+    provider_event_at = getattr(transaction, "signedDate", None)
+    if not isinstance(provider_event_at, int) or provider_event_at <= 0:
+        raise HTTPException(400, "Apple transaction signed date is missing")
     active = (
         getattr(transaction, "revocationDate", None) is None
         and expires_at > dt.datetime.now(dt.timezone.utc).isoformat()
@@ -203,6 +208,7 @@ def _apple_purchase_values(transaction: Any) -> dict[str, Optional[str]]:
         "product_id": product_id,
         "expires_at": expires_at,
         "purchase_status": "active" if active else "revoked",
+        "provider_event_at": provider_event_at,
     }
 
 
@@ -215,8 +221,40 @@ def _validate_apple_identity(transaction: Any) -> None:
         raise HTTPException(400, "Apple transaction app mismatch")
 
 
+def _normalize_uuid(value: Any) -> Optional[str]:
+    try:
+        return str(uuid.UUID(str(value)))
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _validate_apple_ownership(store: Store, user: User, transaction: Any) -> None:
+    token = _normalize_uuid(getattr(transaction, "appAccountToken", None))
+    allowed = {
+        normalized
+        for identifier in store.mobile_billing_owner_identifiers(user)
+        if (normalized := _normalize_uuid(identifier)) is not None
+    }
+    if token is None or token not in allowed:
+        raise HTTPException(403, "Apple purchase belongs to another Tono account")
+
+
+def _google_obfuscated_account_id(identifier: str) -> str:
+    return hashlib.sha256(f"tono:{identifier}".encode("utf-8")).hexdigest()
+
+
+def _validate_google_ownership(store: Store, user: User, purchase: dict[str, Any]) -> None:
+    external = purchase.get("externalAccountIdentifiers") or {}
+    actual = external.get("obfuscatedExternalAccountId")
+    if not isinstance(actual, str) or not any(
+        hmac.compare_digest(actual, _google_obfuscated_account_id(identifier))
+        for identifier in store.mobile_billing_owner_identifiers(user)
+    ):
+        raise HTTPException(403, "Google Play purchase belongs to another Tono account")
+
+
 def _record_for_user(
-    store: Store, user: User, provider: str, values: dict[str, Optional[str]]
+    store: Store, user: User, provider: str, values: dict[str, Any]
 ) -> None:
     owner_kind, owner_id = _owner(user)
     try:
@@ -272,6 +310,7 @@ async def sync_app_store_subscription(
     except Exception as exc:
         raise HTTPException(400, "invalid Apple signed transaction") from exc
     _validate_apple_identity(transaction)
+    _validate_apple_ownership(store, user, transaction)
     values = _apple_purchase_values(transaction)
     _record_for_user(store, user, "apple", values)
     return _billing_response(store, user, values["product_id"] or "")
@@ -303,7 +342,7 @@ async def app_store_notification(
         raise HTTPException(400, "invalid Apple signed notification") from exc
 
 
-def _google_purchase_values(purchase_token: str, purchase: dict[str, Any]) -> dict[str, Optional[str]]:
+def _google_purchase_values(purchase_token: str, purchase: dict[str, Any]) -> dict[str, Any]:
     items = purchase.get("lineItems") or []
     allowed = _allowed_products("google")
     authoritative = [item for item in items if item.get("productId") in allowed]
@@ -314,6 +353,12 @@ def _google_purchase_values(purchase_token: str, purchase: dict[str, Any]) -> di
     if not expires_at:
         raise HTTPException(400, "Google Play subscription expiry is missing")
     normalized_expiry = expires_at.replace("Z", "+00:00")
+    try:
+        provider_event_at = int(
+            dt.datetime.fromisoformat(normalized_expiry).timestamp() * 1000
+        )
+    except ValueError as exc:
+        raise HTTPException(400, "Google Play subscription expiry is invalid") from exc
     active_states = {
         "SUBSCRIPTION_STATE_ACTIVE",
         "SUBSCRIPTION_STATE_IN_GRACE_PERIOD",
@@ -328,6 +373,7 @@ def _google_purchase_values(purchase_token: str, purchase: dict[str, Any]) -> di
         "product_id": item["productId"],
         "expires_at": normalized_expiry,
         "purchase_status": "active" if active else "revoked",
+        "provider_event_at": provider_event_at,
     }
 
 
@@ -341,6 +387,7 @@ def sync_google_play_subscription(
     package_name = os.environ.get("TONO_GOOGLE_PACKAGE_NAME", "com.tono.myapp")
     try:
         purchase = google.get_subscription(package_name, body.purchase_token)
+        _validate_google_ownership(store, user, purchase)
         values = _google_purchase_values(body.purchase_token, purchase)
         if (
             values["purchase_status"] == "active"

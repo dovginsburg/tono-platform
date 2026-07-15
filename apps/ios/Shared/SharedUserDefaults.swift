@@ -109,6 +109,37 @@ public enum SharedStore {
     }
 }
 
+/// The last backend-accepted entitlement mirrored across Tono processes.
+/// StoreKit can prove that a transaction belongs to Apple, but only the
+/// backend decides whether that transaction currently grants Tono access.
+public struct TonoAuthoritativeEntitlement: Equatable {
+    public let isPro: Bool
+    public let isInFreeTrial: Bool
+
+    public init(serverIsPro: Bool, appleTrial: Bool) {
+        self.isPro = serverIsPro
+        self.isInFreeTrial = serverIsPro && appleTrial
+    }
+
+    public var statusLabel: String {
+        isInFreeTrial ? "Trial" : (isPro ? "Pro" : "Subscribe")
+    }
+
+    public func persist(to defaults: UserDefaults = SharedStore.defaults) {
+        defaults.set(isPro, forKey: SharedKeys.proUnlocked)
+        defaults.set(isInFreeTrial, forKey: SharedKeys.inFreeTrial)
+    }
+
+    public static func load(
+        from defaults: UserDefaults = SharedStore.defaults
+    ) -> TonoAuthoritativeEntitlement {
+        TonoAuthoritativeEntitlement(
+            serverIsPro: defaults.bool(forKey: SharedKeys.proUnlocked),
+            appleTrial: defaults.bool(forKey: SharedKeys.inFreeTrial)
+        )
+    }
+}
+
 public struct TonePreferences {
     public var provider: LLMProvider
     public var apiKey: String?
@@ -146,7 +177,8 @@ public struct TonePreferences {
         d.removeObject(forKey: SharedKeys.apiKey)
         d.set(preferredVoice, forKey: SharedKeys.preferredVoice)
         d.set(axes.map(\.rawValue), forKey: SharedKeys.axes)
-        d.set(proUnlocked, forKey: SharedKeys.proUnlocked)
+        // Entitlement flags are written only by
+        // TonoAuthoritativeEntitlement.persist after backend acceptance.
     }
 }
 

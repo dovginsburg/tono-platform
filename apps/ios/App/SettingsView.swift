@@ -129,11 +129,11 @@ struct SettingsView: View {
                         .foregroundColor(.secondary)
                 }
             }
-            if let u = usage {
+            if usage != nil {
                 HStack {
                     Text("Plan")
                     Spacer()
-                    Text(u.isPro ? "Pro" : "Subscribe").foregroundColor(.secondary)
+                    Text(store.statusLabel).foregroundColor(.secondary)
                 }
             } else if let err = usageError {
                 Text(err).font(.caption).foregroundColor(.red)
@@ -396,8 +396,8 @@ struct SettingsView: View {
     }
 
     private var planSection: some View {
-        let isPro = store.isPro || prefs.proUnlocked || (usage?.isPro ?? false)
-        let status = store.isInFreeTrial ? "Trial" : (isPro ? "Pro" : "Subscribe")
+        let isPro = store.isPro
+        let status = store.statusLabel
         return Section("Plan") {
             HStack {
                 Text(isPro && !store.isInFreeTrial ? "\(status) ✓" : status)
@@ -515,6 +515,7 @@ struct SettingsView: View {
             _ = try await TonoBackend.shared.redeemCoupon(code: code)
             promoSuccess = "Pro access activated!"
             promoCode = ""
+            await store.refreshEntitlements()
             await refreshUsage()
         } catch let e as TonoBackendError {
             promoError = e.localizedDescription

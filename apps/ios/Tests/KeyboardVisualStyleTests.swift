@@ -1,7 +1,101 @@
 import XCTest
 import UIKit
+@testable import Tono
 
 final class KeyboardVisualStyleTests: XCTestCase {
+    func testShippingUIKitShiftPathTypesRapidShiftABeforeHostSync() {
+        let path = TonoKeyboardUIKitShiftPath()
+
+        path.shiftSingleTapped()
+        path.characterTapped(
+            isAlphabetic: true,
+            policy: .sentences,
+            contextAfterInsertion: "A"
+        )
+        XCTAssertEqual(path.state, .lowercase)
+
+        path.textDidChange(policy: .sentences, contextBeforeInput: "")
+        XCTAssertEqual(path.state, .lowercase)
+
+        path.characterTapped(
+            isAlphabetic: true,
+            policy: .sentences,
+            contextAfterInsertion: "Ab"
+        )
+        path.textDidChange(policy: .sentences, contextBeforeInput: "A")
+        XCTAssertEqual(path.state, .lowercase)
+
+        path.textDidChange(policy: .sentences, contextBeforeInput: "Ab")
+        XCTAssertEqual(path.state, .lowercase)
+    }
+
+    func testShippingUIKitShiftPathDropsSupersededDeferredWork() {
+        let path = TonoKeyboardUIKitShiftPath()
+        let generation = path.documentDidMutate(effectiveContext: "Hello. ")
+
+        path.documentDidMutate(effectiveContext: "Hello. w")
+        XCTAssertFalse(path.applyDeferredAutoCapitalization(
+            generation: generation,
+            policy: .sentences,
+            contextBeforeInput: "Hello. "
+        ))
+        XCTAssertEqual(path.state, .lowercase)
+    }
+
+    func testShippingUIKitShiftPathPreservesEveryHostPolicy() {
+        let none = TonoKeyboardUIKitShiftPath()
+        none.documentDidMutate(effectiveContext: "Hello. ")
+        none.textDidChange(policy: .none, contextBeforeInput: "")
+        XCTAssertEqual(none.state, .lowercase)
+
+        let words = TonoKeyboardUIKitShiftPath()
+        words.documentDidMutate(effectiveContext: "hello ")
+        words.textDidChange(policy: .words, contextBeforeInput: "")
+        XCTAssertEqual(words.state, .oneShotUppercase)
+
+        let sentences = TonoKeyboardUIKitShiftPath()
+        sentences.documentDidMutate(effectiveContext: "Hello. ")
+        sentences.textDidChange(policy: .sentences, contextBeforeInput: "")
+        XCTAssertEqual(sentences.state, .oneShotUppercase)
+
+        let allCharacters = TonoKeyboardUIKitShiftPath()
+        allCharacters.documentDidMutate(effectiveContext: "a")
+        allCharacters.textDidChange(policy: .allCharacters, contextBeforeInput: "")
+        XCTAssertEqual(allCharacters.state, .oneShotUppercase)
+        allCharacters.characterTapped(
+            isAlphabetic: true,
+            policy: .allCharacters,
+            contextAfterInsertion: "AB"
+        )
+        XCTAssertEqual(allCharacters.state, .oneShotUppercase)
+    }
+
+    func testAuthoritativeEntitlementLifecycleOverridesStaleLocalTrueAndPersistsTrial() {
+        let suite = "TonoEntitlementTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: SharedKeys.proUnlocked)
+        defaults.set(true, forKey: SharedKeys.inFreeTrial)
+
+        let revoked = TonoAuthoritativeEntitlement(serverIsPro: false, appleTrial: true)
+        revoked.persist(to: defaults)
+        XCTAssertEqual(revoked.statusLabel, "Subscribe")
+        XCTAssertEqual(TonoAuthoritativeEntitlement.load(from: defaults), revoked)
+
+        let trial = TonoAuthoritativeEntitlement(serverIsPro: true, appleTrial: true)
+        trial.persist(to: defaults)
+        XCTAssertEqual(trial.statusLabel, "Trial")
+        XCTAssertEqual(TonoAuthoritativeEntitlement.load(from: defaults), trial)
+
+        let active = TonoAuthoritativeEntitlement(serverIsPro: true, appleTrial: false)
+        active.persist(to: defaults)
+        XCTAssertEqual(active.statusLabel, "Pro")
+        XCTAssertEqual(TonoAuthoritativeEntitlement.load(from: defaults), active)
+
+        revoked.persist(to: defaults)
+        XCTAssertEqual(TonoAuthoritativeEntitlement.load(from: defaults), revoked)
+    }
+
     func testSingleShiftIsConsumedByTheNextLetter() {
         var machine = TonoKeyboardShiftMachine()
 

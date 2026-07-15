@@ -83,6 +83,112 @@ struct TonoKeyboardShiftMachine {
     }
 }
 
+/// Owns the mutable Shift state used by the shipping UIKit callbacks. Keeping
+/// callback ordering here makes delayed `textDidChange` delivery deterministic
+/// and lets tests exercise the same path as `KeyboardViewController`.
+final class TonoKeyboardUIKitShiftPath {
+    private(set) var state: TonoKeyboardShiftState = .lowercase
+    private(set) var mutationGeneration = 0
+    private var oneShotWasAutomatic = false
+    private var effectiveContextAwaitingHostSync: String?
+
+    func shiftSingleTapped() {
+        oneShotWasAutomatic = false
+        switch state {
+        case .capsLock: state = .lowercase
+        case .lowercase: state = .oneShotUppercase
+        case .oneShotUppercase: state = .lowercase
+        }
+    }
+
+    func shiftDoubleTapped() {
+        oneShotWasAutomatic = false
+        state = state == .capsLock ? .lowercase : .capsLock
+    }
+
+    @discardableResult
+    func characterTapped(
+        isAlphabetic: Bool,
+        policy: UITextAutocapitalizationType,
+        contextAfterInsertion: String,
+        isLettersLayout: Bool = true
+    ) -> Bool {
+        let previous = state
+        documentDidMutate(effectiveContext: contextAfterInsertion)
+        if isLettersLayout, isAlphabetic, state == .oneShotUppercase {
+            state = TonoKeyboardShiftMachine.stateAfterCharacter(state, policy: policy)
+            oneShotWasAutomatic = policy == .allCharacters
+        }
+        return state != previous
+    }
+
+    /// Invalidates deferred work whenever Tono changes the document. Supplying
+    /// an effective context lets the next host callback remain deterministic
+    /// even when UIKit still exposes the pre-mutation proxy context.
+    @discardableResult
+    func documentDidMutate(effectiveContext: String? = nil) -> Int {
+        mutationGeneration &+= 1
+        effectiveContextAwaitingHostSync = effectiveContext
+        return mutationGeneration
+    }
+
+    @discardableResult
+    func textDidChange(
+        policy: UITextAutocapitalizationType,
+        contextBeforeInput: String
+    ) -> Bool {
+        return applyAutomaticCapitalization(
+            policy: policy,
+            contextBeforeInput: contextBeforeInput
+        )
+    }
+
+    @discardableResult
+    func applyDeferredAutoCapitalization(
+        generation: Int,
+        policy: UITextAutocapitalizationType,
+        contextBeforeInput: String
+    ) -> Bool {
+        guard generation == mutationGeneration else { return false }
+        return applyAutomaticCapitalization(
+            policy: policy,
+            contextBeforeInput: contextBeforeInput
+        )
+    }
+
+    private func applyAutomaticCapitalization(
+        policy: UITextAutocapitalizationType,
+        contextBeforeInput: String
+    ) -> Bool {
+        let previous = state
+        guard state != .capsLock else { return false }
+        if state == .oneShotUppercase, !oneShotWasAutomatic { return false }
+        let context = effectiveContext(forHostContext: contextBeforeInput)
+        let shouldCapitalize = TonoKeyboardShiftMachine.recommendsCapitalization(
+            policy: policy,
+            context: context
+        )
+        state = shouldCapitalize ? .oneShotUppercase : .lowercase
+        oneShotWasAutomatic = shouldCapitalize
+        return state != previous
+    }
+
+    private func effectiveContext(forHostContext hostContext: String) -> String {
+        guard let expected = effectiveContextAwaitingHostSync else {
+            return hostContext
+        }
+        if hostContext == expected {
+            effectiveContextAwaitingHostSync = nil
+            return hostContext
+        }
+        if hostContext.isEmpty || expected.hasPrefix(hostContext) {
+            return expected
+        }
+        effectiveContextAwaitingHostSync = nil
+        return hostContext
+    }
+}
+
 /// Resolves the appearance boundary between a host text field and the keyboard
 /// extension. Messages reports `.default` in both appearances, while the
 /// extension process can retain a light trait even when the device is dark.

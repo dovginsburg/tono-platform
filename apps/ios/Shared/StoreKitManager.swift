@@ -29,17 +29,28 @@ public final class StoreKitManager: ObservableObject {
     }
 
     @Published public var products:     [Product] = []
-    @Published public var isPro:        Bool      = false
+    @Published public private(set) var isPro: Bool
     @Published public var isLoading:    Bool      = false
     @Published public var purchaseError: String?
     /// True when the user is in an active introductory free trial period
     /// (Apple's "real" 7-day trial configured in App Store Connect).
-    @Published public var isInFreeTrial: Bool     = false
+    @Published public private(set) var isInFreeTrial: Bool
     @Published public private(set) var eligibleFreeTrialProductIDs: Set<String> = []
 
     private var updatesTask: Task<Void, Never>?
 
-    private init() {}
+    private init() {
+        let entitlement = TonoAuthoritativeEntitlement.load()
+        isPro = entitlement.isPro
+        isInFreeTrial = entitlement.isInFreeTrial
+    }
+
+    public var statusLabel: String {
+        TonoAuthoritativeEntitlement(
+            serverIsPro: isPro,
+            appleTrial: isInFreeTrial
+        ).statusLabel
+    }
 
     // Call once from the app entry point.
     public func start() {
@@ -54,7 +65,10 @@ public final class StoreKitManager: ObservableObject {
         isLoading = true
         purchaseError = nil
         do {
-            let result = try await product.purchase()
+            let ownershipOption = Product.PurchaseOption.appAccountToken(
+                try purchaseAccountToken()
+            )
+            let result = try await product.purchase(options: [ownershipOption])
             switch result {
             case .success(let verification):
                 let transaction = try checkVerified(verification)
@@ -153,15 +167,16 @@ public final class StoreKitManager: ObservableObject {
     }
 
     private func applyBackendState(_ me: TonoMe, inTrial: Bool) {
-        isPro = me.isPro
-        isInFreeTrial = me.isPro && inTrial
+        let entitlement = TonoAuthoritativeEntitlement(
+            serverIsPro: me.isPro,
+            appleTrial: inTrial
+        )
+        isPro = entitlement.isPro
+        isInFreeTrial = entitlement.isInFreeTrial
         // Mirror into shared prefs so the keyboard extension can read it
         // without importing StoreKit (extensions can't use @MainActor across
         // process boundary; the flag is the safe IPC channel).
-        var prefs = TonePreferences()
-        prefs.proUnlocked = me.isPro
-        prefs.inFreeTrial = me.isPro && inTrial
-        prefs.save()
+        entitlement.persist()
     }
 
     public func isEligibleForFreeTrial(_ product: Product) -> Bool {
@@ -193,10 +208,24 @@ public final class StoreKitManager: ObservableObject {
         }
     }
 
+    private func purchaseAccountToken() throws -> UUID {
+        guard let deviceID = SharedKeychain.get(KeychainKeys.deviceID),
+              let token = UUID(uuidString: deviceID) else {
+            throw StoreError.missingAccountToken
+        }
+        return token
+    }
+
     public enum StoreError: LocalizedError {
         case failedVerification
+        case missingAccountToken
         public var errorDescription: String? {
-            "Purchase verification failed. Contact support if this persists."
+            switch self {
+            case .failedVerification:
+                return "Purchase verification failed. Contact support if this persists."
+            case .missingAccountToken:
+                return "Tono must finish account setup before purchasing. Please reopen the app and try again."
+            }
         }
     }
 }

@@ -130,6 +130,7 @@ CREATE TABLE IF NOT EXISTS mobile_purchases (
     transaction_id TEXT,
     status         TEXT NOT NULL,
     expires_at     TEXT,
+    provider_event_at INTEGER NOT NULL DEFAULT 0,
     updated_at     TEXT NOT NULL,
     PRIMARY KEY (provider, purchase_key),
     UNIQUE (provider, transaction_id)
@@ -404,6 +405,7 @@ class Store:
             "ALTER TABLE users ADD COLUMN mobile_subscription_renews_at TEXT",
             "ALTER TABLE accounts ADD COLUMN mobile_subscription_status TEXT",
             "ALTER TABLE accounts ADD COLUMN mobile_subscription_renews_at TEXT",
+            "ALTER TABLE mobile_purchases ADD COLUMN provider_event_at INTEGER NOT NULL DEFAULT 0",
         ):
             with contextlib.suppress(sqlite3.OperationalError):
                 self._conn.execute(stmt)
@@ -809,6 +811,21 @@ class Store:
 
     # ---- App Store / Google Play purchases ----
 
+    def mobile_billing_owner_identifiers(self, user: User) -> set[str]:
+        """Return provider ownership ids accepted for this authenticated user."""
+        def _do() -> set[str]:
+            identifiers = {user.device_id}
+            if not user.account_id:
+                return identifiers
+            identifiers.add(user.account_id)
+            rows = self._conn.execute(
+                "SELECT device_id FROM users WHERE account_id=?", (user.account_id,)
+            ).fetchall()
+            identifiers.update(row["device_id"] for row in rows)
+            return identifiers
+
+        return self._run(_do).result()
+
     def record_mobile_purchase(
         self,
         *,
@@ -820,6 +837,7 @@ class Store:
         transaction_id: Optional[str],
         purchase_status: str,
         expires_at: Optional[str],
+        provider_event_at: int,
     ) -> None:
         """Upsert a verified purchase without allowing its owner to drift."""
         assert provider in ("apple", "google")
@@ -845,17 +863,27 @@ class Store:
                 cur.execute(
                     """INSERT INTO mobile_purchases
                        (provider, purchase_key, owner_kind, owner_id, product_id,
-                        transaction_id, status, expires_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        transaction_id, status, expires_at, provider_event_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(provider, purchase_key) DO UPDATE SET
                          product_id=excluded.product_id,
                          transaction_id=excluded.transaction_id,
                          status=excluded.status,
                          expires_at=excluded.expires_at,
-                         updated_at=excluded.updated_at""",
+                         provider_event_at=excluded.provider_event_at,
+                         updated_at=excluded.updated_at
+                       WHERE excluded.provider_event_at > mobile_purchases.provider_event_at
+                          OR (
+                            excluded.provider_event_at = mobile_purchases.provider_event_at
+                            AND (
+                              mobile_purchases.status != 'revoked'
+                              OR excluded.status = 'revoked'
+                            )
+                          )""",
                     (
                         provider, purchase_key, owner_kind, owner_id, product_id,
-                        transaction_id, purchase_status, expires_at, _now_iso(),
+                        transaction_id, purchase_status, expires_at,
+                        provider_event_at, _now_iso(),
                     ),
                 )
                 self._reconcile_mobile_owner(cur, owner_kind, owner_id)
@@ -875,6 +903,7 @@ class Store:
         transaction_id: Optional[str],
         purchase_status: str,
         expires_at: Optional[str],
+        provider_event_at: int,
     ) -> bool:
         """Apply a notification only after a client has claimed the purchase."""
         def _do() -> bool:
@@ -891,11 +920,20 @@ class Store:
             try:
                 cur.execute(
                     """UPDATE mobile_purchases
-                       SET product_id=?, transaction_id=?, status=?, expires_at=?, updated_at=?
-                       WHERE provider=? AND purchase_key=?""",
+                       SET product_id=?, transaction_id=?, status=?, expires_at=?,
+                           provider_event_at=?, updated_at=?
+                       WHERE provider=? AND purchase_key=?
+                         AND (
+                           provider_event_at < ?
+                           OR (
+                             provider_event_at = ?
+                             AND (status != 'revoked' OR ? = 'revoked')
+                           )
+                         )""",
                     (
                         product_id, transaction_id, purchase_status, expires_at,
-                        _now_iso(), provider, purchase_key,
+                        provider_event_at, _now_iso(), provider, purchase_key,
+                        provider_event_at, provider_event_at, purchase_status,
                     ),
                 )
                 self._reconcile_mobile_owner(cur, owner["owner_kind"], owner["owner_id"])
