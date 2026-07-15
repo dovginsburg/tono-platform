@@ -56,7 +56,10 @@ public final class StoreKitManager: ObservableObject {
             switch result {
             case .success(let verification):
                 let transaction = try checkVerified(verification)
-                await updateProState()
+                let me = try await TonoBackend.shared.syncAppStoreSubscription(
+                    signedTransactionInfo: verification.jwsRepresentation
+                )
+                applyBackendState(me, inTrial: transaction.offerType == .introductory)
                 await transaction.finish()
             case .userCancelled:
                 break
@@ -96,8 +99,8 @@ public final class StoreKitManager: ObservableObject {
     }
 
     private func updateProState() async {
-        var active = false
         var inTrial = false
+        var backendState: TonoMe?
         for await result in Transaction.currentEntitlements {
             // Verified by StoreKit; unverified transactions are silently
             // skipped (StoreError.failedVerification would be thrown for
@@ -105,7 +108,11 @@ public final class StoreKitManager: ObservableObject {
             guard case .verified(let tx) = result else { continue }
             guard ProductID.all.contains(tx.productID) else { continue }
             guard tx.revocationDate == nil else { continue }
-            active = true
+            if let me = try? await TonoBackend.shared.syncAppStoreSubscription(
+                signedTransactionInfo: result.jwsRepresentation
+            ) {
+                backendState = me
+            }
             // Detect Apple's real 7-day free trial: tx.offerType == .introductory
             // and offer is a free-trial-period offer. This is the ONLY way to
             // know the user is in a trial — there's no separate "isOnTrial" flag.
@@ -120,22 +127,37 @@ public final class StoreKitManager: ObservableObject {
                 }
             }
         }
-        isPro = active
-        isInFreeTrial = inTrial
+        if backendState == nil {
+            backendState = try? await TonoBackend.shared.me()
+        }
+        guard let backendState else { return }
+        applyBackendState(backendState, inTrial: inTrial)
+    }
+
+    private func applyBackendState(_ me: TonoMe, inTrial: Bool) {
+        isPro = me.isPro
+        isInFreeTrial = me.isPro && inTrial
         // Mirror into shared prefs so the keyboard extension can read it
         // without importing StoreKit (extensions can't use @MainActor across
         // process boundary; the flag is the safe IPC channel).
         var prefs = TonePreferences()
-        prefs.proUnlocked = active
-        prefs.inFreeTrial = inTrial
+        prefs.proUnlocked = me.isPro
+        prefs.inFreeTrial = me.isPro && inTrial
         prefs.save()
     }
 
     private func listenForTransactionUpdates() async {
         for await result in Transaction.updates {
             if case .verified(let tx) = result {
-                await updateProState()
-                await tx.finish()
+                do {
+                    _ = try await TonoBackend.shared.syncAppStoreSubscription(
+                        signedTransactionInfo: result.jwsRepresentation
+                    )
+                    await updateProState()
+                    await tx.finish()
+                } catch {
+                    purchaseError = "Purchase received, but server verification failed. Try Restore purchases."
+                }
             }
         }
     }

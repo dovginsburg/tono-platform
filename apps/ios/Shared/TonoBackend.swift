@@ -280,6 +280,19 @@ public final class TonoBackend: @unchecked Sendable {
         try await get(path: "/v1/me")
     }
 
+    /// Sends StoreKit's Apple-signed JWS to the backend. The backend verifies
+    /// it with Apple's official server library and remains the Pro authority.
+    public func syncAppStoreSubscription(signedTransactionInfo: String) async throws -> TonoMe {
+        struct Req: Encodable {
+            let signed_transaction_info: String
+        }
+        return try await post(
+            path: "/v1/app-store/subscription",
+            body: Req(signed_transaction_info: signedTransactionInfo),
+            authorize: true
+        )
+    }
+
     // ── Email identity (added 2026-07-03) ──────────────────────────────────
     // Send a 6-digit OTP to `email`. A successful request uses the same safe
     // response regardless of account state. Operational failures remain

@@ -121,6 +121,29 @@ CREATE TABLE IF NOT EXISTS stripe_events (
     payload       TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS mobile_purchases (
+    provider       TEXT NOT NULL,
+    purchase_key   TEXT NOT NULL,
+    owner_kind     TEXT NOT NULL CHECK (owner_kind IN ('device', 'account')),
+    owner_id       TEXT NOT NULL,
+    product_id     TEXT NOT NULL,
+    transaction_id TEXT,
+    status         TEXT NOT NULL,
+    expires_at     TEXT,
+    updated_at     TEXT NOT NULL,
+    PRIMARY KEY (provider, purchase_key),
+    UNIQUE (provider, transaction_id)
+);
+CREATE INDEX IF NOT EXISTS idx_mobile_purchases_owner
+    ON mobile_purchases(owner_kind, owner_id, status, expires_at);
+
+CREATE TABLE IF NOT EXISTS mobile_billing_events (
+    provider    TEXT NOT NULL,
+    event_id    TEXT NOT NULL,
+    received_at TEXT NOT NULL,
+    PRIMARY KEY (provider, event_id)
+);
+
 CREATE TABLE IF NOT EXISTS response_cache (
     cache_key     TEXT PRIMARY KEY,
     response_json TEXT NOT NULL,
@@ -221,6 +244,10 @@ class DeviceRegistrationProofError(Exception):
     """An existing public device id was presented without its secret proof."""
 
 
+class MobilePurchaseConflictError(Exception):
+    """A provider purchase is already owned by another device/account."""
+
+
 def _plan_grants_pro(plan: str, subscription_status: Optional[str], coupon_pro_expires_at: Optional[str]) -> bool:
     if plan == "pro" and subscription_status in ("active", "trialing"):
         return True
@@ -232,6 +259,10 @@ def _plan_grants_pro(plan: str, subscription_status: Optional[str], coupon_pro_e
         except ValueError:
             pass
     return False
+
+
+def _mobile_grants_pro(status: Optional[str], expires_at: Optional[str]) -> bool:
+    return bool(status == "active" and expires_at and expires_at > _now_iso())
 
 
 @dataclass
@@ -255,10 +286,17 @@ class Account:
     updated_at: str
     daily_count: int = 0
     daily_day: Optional[str] = None
+    mobile_subscription_status: Optional[str] = None
+    mobile_subscription_renews_at: Optional[str] = None
 
     @property
     def is_pro(self) -> bool:
-        return _plan_grants_pro(self.plan, self.subscription_status, self.coupon_pro_expires_at)
+        return (
+            _plan_grants_pro(self.plan, self.subscription_status, self.coupon_pro_expires_at)
+            or _mobile_grants_pro(
+                self.mobile_subscription_status, self.mobile_subscription_renews_at
+            )
+        )
 
 
 @dataclass
@@ -293,6 +331,8 @@ class User:
     coupon_pro_expires_at: Optional[str] = None
     account_id: Optional[str] = None
     account: Optional[Account] = None
+    mobile_subscription_status: Optional[str] = None
+    mobile_subscription_renews_at: Optional[str] = None
 
     @property
     def is_pro(self) -> bool:
@@ -301,12 +341,18 @@ class User:
         # particular device never itself had a Stripe subscription.
         if self.account is not None:
             return self.account.is_pro
-        return _plan_grants_pro(self.plan, self.subscription_status, self.coupon_pro_expires_at)
+        return (
+            _plan_grants_pro(self.plan, self.subscription_status, self.coupon_pro_expires_at)
+            or _mobile_grants_pro(
+                self.mobile_subscription_status, self.mobile_subscription_renews_at
+            )
+        )
 
     @property
     def plan_resolved(self) -> str:
         """`plan`, but resolved through the linked account when present."""
-        return self.account.plan if self.account is not None else self.plan
+        source_plan = self.account.plan if self.account is not None else self.plan
+        return "pro" if self.is_pro else source_plan
 
 
 @dataclass
@@ -354,6 +400,10 @@ class Store:
             "ALTER TABLE users ADD COLUMN device_credential_hash TEXT",
             "ALTER TABLE users ADD COLUMN previous_api_token TEXT",
             "ALTER TABLE users ADD COLUMN previous_api_token_expires_at TEXT",
+            "ALTER TABLE users ADD COLUMN mobile_subscription_status TEXT",
+            "ALTER TABLE users ADD COLUMN mobile_subscription_renews_at TEXT",
+            "ALTER TABLE accounts ADD COLUMN mobile_subscription_status TEXT",
+            "ALTER TABLE accounts ADD COLUMN mobile_subscription_renews_at TEXT",
         ):
             with contextlib.suppress(sqlite3.OperationalError):
                 self._conn.execute(stmt)
@@ -695,10 +745,27 @@ class Store:
         device shares the account's Pro status from then on."""
 
         def _do() -> None:
-            self._conn.execute(
-                "UPDATE users SET account_id = ?, updated_at = ? WHERE device_id = ?",
-                (account_id, _now_iso(), device_id),
-            )
+            cur = self._conn.cursor()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                cur.execute(
+                    "UPDATE users SET account_id = ?, updated_at = ? WHERE device_id = ?",
+                    (account_id, _now_iso(), device_id),
+                )
+                # Purchases made before sign-in follow the device into its first
+                # account. Once account-owned they can never drift to another.
+                cur.execute(
+                    """UPDATE mobile_purchases
+                       SET owner_kind='account', owner_id=?, updated_at=?
+                       WHERE owner_kind='device' AND owner_id=?""",
+                    (account_id, _now_iso(), device_id),
+                )
+                self._reconcile_mobile_owner(cur, "device", device_id)
+                self._reconcile_mobile_owner(cur, "account", account_id)
+                cur.execute("COMMIT")
+            except Exception:
+                cur.execute("ROLLBACK")
+                raise
 
         self._run(_do).result()
 
@@ -739,6 +806,141 @@ class Store:
             )
 
         self._run(_do).result()
+
+    # ---- App Store / Google Play purchases ----
+
+    def record_mobile_purchase(
+        self,
+        *,
+        provider: str,
+        purchase_key: str,
+        owner_kind: str,
+        owner_id: str,
+        product_id: str,
+        transaction_id: Optional[str],
+        purchase_status: str,
+        expires_at: Optional[str],
+    ) -> None:
+        """Upsert a verified purchase without allowing its owner to drift."""
+        assert provider in ("apple", "google")
+        assert owner_kind in ("device", "account")
+
+        def _do() -> None:
+            cur = self._conn.cursor()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                cur.execute(
+                    "SELECT owner_kind, owner_id FROM mobile_purchases "
+                    "WHERE provider=? AND purchase_key=?",
+                    (provider, purchase_key),
+                )
+                existing = cur.fetchone()
+                if existing and (
+                    existing["owner_kind"] != owner_kind
+                    or existing["owner_id"] != owner_id
+                ):
+                    raise MobilePurchaseConflictError(
+                        "purchase is already attached to another account"
+                    )
+                cur.execute(
+                    """INSERT INTO mobile_purchases
+                       (provider, purchase_key, owner_kind, owner_id, product_id,
+                        transaction_id, status, expires_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(provider, purchase_key) DO UPDATE SET
+                         product_id=excluded.product_id,
+                         transaction_id=excluded.transaction_id,
+                         status=excluded.status,
+                         expires_at=excluded.expires_at,
+                         updated_at=excluded.updated_at""",
+                    (
+                        provider, purchase_key, owner_kind, owner_id, product_id,
+                        transaction_id, purchase_status, expires_at, _now_iso(),
+                    ),
+                )
+                self._reconcile_mobile_owner(cur, owner_kind, owner_id)
+                cur.execute("COMMIT")
+            except Exception:
+                cur.execute("ROLLBACK")
+                raise
+
+        self._run(_do).result()
+
+    def update_known_mobile_purchase(
+        self,
+        *,
+        provider: str,
+        purchase_key: str,
+        product_id: str,
+        transaction_id: Optional[str],
+        purchase_status: str,
+        expires_at: Optional[str],
+    ) -> bool:
+        """Apply a notification only after a client has claimed the purchase."""
+        def _do() -> bool:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT owner_kind, owner_id FROM mobile_purchases "
+                "WHERE provider=? AND purchase_key=?",
+                (provider, purchase_key),
+            )
+            owner = cur.fetchone()
+            if not owner:
+                return False
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                cur.execute(
+                    """UPDATE mobile_purchases
+                       SET product_id=?, transaction_id=?, status=?, expires_at=?, updated_at=?
+                       WHERE provider=? AND purchase_key=?""",
+                    (
+                        product_id, transaction_id, purchase_status, expires_at,
+                        _now_iso(), provider, purchase_key,
+                    ),
+                )
+                self._reconcile_mobile_owner(cur, owner["owner_kind"], owner["owner_id"])
+                cur.execute("COMMIT")
+                return True
+            except Exception:
+                cur.execute("ROLLBACK")
+                raise
+
+        return self._run(_do).result()
+
+    def _reconcile_mobile_owner(
+        self, cur: sqlite3.Cursor, owner_kind: str, owner_id: str
+    ) -> None:
+        cur.execute(
+            """SELECT MAX(expires_at) AS expires_at
+               FROM mobile_purchases
+               WHERE owner_kind=? AND owner_id=? AND status='active'
+                 AND expires_at > ?""",
+            (owner_kind, owner_id, _now_iso()),
+        )
+        active = cur.fetchone()
+        expires_at = active["expires_at"] if active else None
+        status_value = "active" if expires_at else None
+        table, key = (
+            ("accounts", "id") if owner_kind == "account" else ("users", "device_id")
+        )
+        cur.execute(
+            f"""UPDATE {table}
+                   SET mobile_subscription_status=?,
+                       mobile_subscription_renews_at=?, updated_at=?
+                 WHERE {key}=?""",
+            (status_value, expires_at, _now_iso(), owner_id),
+        )
+
+    def record_mobile_billing_event(self, provider: str, event_id: str) -> bool:
+        def _do() -> bool:
+            cur = self._conn.execute(
+                "INSERT OR IGNORE INTO mobile_billing_events(provider, event_id, received_at) "
+                "VALUES (?, ?, ?)",
+                (provider, event_id, _now_iso()),
+            )
+            return cur.rowcount == 1
+
+        return self._run(_do).result()
 
     # ---- passkeys (WebAuthn) ----
 
@@ -846,7 +1048,8 @@ class Store:
         def _do() -> tuple[bool, int, int]:
             cur = self._conn.cursor()
             cur.execute(
-                "SELECT plan, subscription_status, coupon_pro_expires_at, daily_count, daily_day, account_id "
+                "SELECT plan, subscription_status, coupon_pro_expires_at, daily_count, daily_day, account_id, "
+                "mobile_subscription_status, mobile_subscription_renews_at "
                 "FROM users WHERE device_id = ?",
                 (device_id,),
             )
@@ -856,7 +1059,8 @@ class Store:
 
             if row["account_id"]:
                 cur.execute(
-                    "SELECT plan, subscription_status, coupon_pro_expires_at, daily_count, daily_day "
+                    "SELECT plan, subscription_status, coupon_pro_expires_at, daily_count, daily_day, "
+                    "mobile_subscription_status, mobile_subscription_renews_at "
                     "FROM accounts WHERE id = ?",
                     (row["account_id"],),
                 )
@@ -867,6 +1071,11 @@ class Store:
                 table, key_col, key_val = "users", "device_id", device_id
 
             if quota_row["plan"] == "pro" and quota_row["subscription_status"] in ("active", "trialing"):
+                return (True, quota_row["daily_count"], -1)
+            if _mobile_grants_pro(
+                quota_row["mobile_subscription_status"],
+                quota_row["mobile_subscription_renews_at"],
+            ):
                 return (True, quota_row["daily_count"], -1)
             if quota_row["coupon_pro_expires_at"] and quota_row["coupon_pro_expires_at"] > _now_iso():
                 return (True, quota_row["daily_count"], -1)
@@ -1433,6 +1642,8 @@ def _row_to_user(row: sqlite3.Row | dict) -> User:
         updated_at=d.get("updated_at") or "",
         coupon_pro_expires_at=d.get("coupon_pro_expires_at"),
         account_id=d.get("account_id"),
+        mobile_subscription_status=d.get("mobile_subscription_status"),
+        mobile_subscription_renews_at=d.get("mobile_subscription_renews_at"),
     )
 
 
@@ -1453,6 +1664,8 @@ def _row_to_account(row: sqlite3.Row | dict) -> Account:
         updated_at=d.get("updated_at") or "",
         daily_count=d.get("daily_count") or 0,
         daily_day=d.get("daily_day"),
+        mobile_subscription_status=d.get("mobile_subscription_status"),
+        mobile_subscription_renews_at=d.get("mobile_subscription_renews_at"),
     )
 
 

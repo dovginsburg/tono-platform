@@ -46,7 +46,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import passkeys, payments, rate_limit, slack, social_auth
+from . import mobile_billing, passkeys, payments, rate_limit, slack, social_auth
 from .analyze import (
     AnalyzeRequest,
     CANONICAL_COACH_AXES,
@@ -1146,6 +1146,7 @@ def admin_create_coupon(
 # ---------------------------------------------------------------------------
 
 app.include_router(payments.router)
+app.include_router(mobile_billing.router)
 app.include_router(slack.router)
 app.include_router(passkeys.router)
 
