@@ -19,7 +19,7 @@ HOW IT WORKS
 WHAT YOU STAY IN CONTROL OF
 • Your draft text is sent to Tono's server for analysis and immediately discarded. We never store message content.
 • You choose which rewrite — if any — to insert.
-• "Help improve Tono" is opt-out. Off by default is one toggle away in Settings.
+• "Help improve Tono" is on by default. You can opt out with one toggle in Settings.
 • Style memory and per-recipient profiles live on your device.
 
 BUILT FOR
@@ -29,8 +29,7 @@ BUILT FOR
 • Anyone who has stared at a draft, deleted it, retyped it three times, and still hit send nervous.
 
 PRICING
-Free: 10 Coach runs per day, all four tone axes, offline heuristics.
-Pro: Unlimited Coach runs, style memory, per-recipient coaching, weekly writing digest. Cancel anytime.
+Pro: Unlimited Coach runs, style memory, per-recipient coaching, and a weekly writing digest for $3.99/month or $39.99/year. Both plans include a 7-day free trial. Cancel anytime.
 
 WHAT WE DON'T DO
 • No ads. No data brokers. No model training on your messages.

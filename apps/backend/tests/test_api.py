@@ -333,10 +333,7 @@ def test_api_analyze_rate_limit(client):
         json={"text": "this should be blocked"},
     )
     assert r.status_code == 429
-    detail = r.json()["error"]["message"]
-    # Detail is a dict for 429s; TestClient's HTTPException handler
-    # serializes whatever detail we passed.
-    assert "daily" in str(detail).lower()
+    assert r.json()["error"]["message"] == "active trial or subscription required"
 
 
 def test_api_analyze_pro_unlimited(client, monkeypatch):

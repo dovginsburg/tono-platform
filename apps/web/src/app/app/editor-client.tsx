@@ -103,11 +103,7 @@ export function RewriteEditor({
       });
       const data: AnalyzeResponse = await res.json();
       if (res.status === 429) {
-        setError(
-          data.message
-            ? `${data.message}. ${data.used_today ?? '?'} of ${data.daily_limit ?? '?'} today.`
-            : 'daily limit reached'
-        );
+        setError(data.message || 'request unavailable');
         if (typeof data.used_today === 'number' && typeof data.daily_limit === 'number') {
           setLimit({ used: data.used_today, max: data.daily_limit });
         }
@@ -217,10 +213,10 @@ export function RewriteEditor({
             <Link href="/app/app/history" style={ghostBtn} title="history">
               history
             </Link>
-            <span style={quotaStyle} title={limit ? `${limit.used} of ${limit.max} free today` : ''}>
+            <span style={quotaStyle} title={limit ? `${limit.used} of ${limit.max} requests used` : ''}>
               <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)' }} />
               <span>
-                <strong>{limit ? limit.used : '–'}</strong> / {limit ? (limit.max === Infinity ? '∞' : limit.max) : '–'} today
+                <strong>{limit ? limit.used : '–'}</strong> / {limit ? (limit.max === Infinity ? '∞' : limit.max) : '–'} requests
               </span>
             </span>
             <span style={avatarStyle} title={email}>
@@ -408,7 +404,7 @@ export function RewriteEditor({
           <span>draft auto-saved</span>
           {!hasApiToken && (
             <span style={{ color: 'var(--warning, #F59E0B)' }}>
-              (anonymous — sign in for daily quota)
+              (anonymous — sign in to sync access)
             </span>
           )}
         </div>

@@ -131,8 +131,8 @@ public final class KeyboardModel: ObservableObject {
     /// Long-press on the return key: load the draft and pop the Coach prompt.
     /// We deliberately run through `requestCoach()` rather than `runCoach()`
     /// directly so the user always gets a confirmation step — a long-press on
-    /// the return key is an exploratory gesture and should not silently burn
-    /// a /v1/coach call against their daily quota.
+    /// the return key is an exploratory gesture and should not silently send
+    /// a /v1/coach call before explicit confirmation.
     func requestCoach() {
         loadDraft()
         guard !draft.isEmpty else {
@@ -904,8 +904,6 @@ private struct ErrorView: View {
     @ObservedObject var model: KeyboardModel
     let message: String
 
-    private var isDailyLimit: Bool { message.lowercased().contains("daily free limit") }
-
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: "exclamationmark.triangle")
@@ -916,18 +914,6 @@ private struct ErrorView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
                 .foregroundColor(.white)
-            if isDailyLimit {
-                VStack(spacing: 6) {
-                    Text("\(model.usedToday) of \(model.dailyLimit) rewrites used today")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundColor(.white.opacity(0.7))
-                    Text("Tono can remember how you talk to each person and get better every time. Unlock the full coach.")
-                        .font(.system(size: 12, design: .rounded))
-                        .foregroundColor(.white.opacity(0.55))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 4)
-                }
-            }
             Button("Back") { model.back() }
                 .foregroundColor(.black)
                 .padding(.horizontal, 16)
@@ -1628,7 +1614,7 @@ private struct CoachPromptView: View {
                 .accessibilityLabel("Run Coach on this draft")
             }
 
-            Text("Uses one of your \(model.dailyLimit) daily rewrites. Cancel if you weren't sure.")
+            Text("Coach analyzes this draft only after you confirm. Cancel if you weren't sure.")
                 .font(.system(size: 11, design: .rounded))
                 .foregroundColor(.white.opacity(0.4))
                 .multilineTextAlignment(.center)

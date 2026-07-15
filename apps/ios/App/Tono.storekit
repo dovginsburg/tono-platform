@@ -56,7 +56,7 @@
               "locale" : "en_US"
             }
           ],
-          "productID" : "com.tono.pro.yearly",
+          "productID" : "com.tonoit.pro.yearly",
           "referenceName" : "Pro Annual",
           "recurringSubscriptionPeriod" : "P1Y",
           "reviewNote" : "",
@@ -66,11 +66,17 @@
         {
           "adHocOffers" : [],
           "codeOffers" : [],
-          "displayPrice" : "5.99",
+          "displayPrice" : "3.99",
           "familyShareable" : false,
           "groupNumber" : 2,
           "internalID" : "tono-pro-monthly",
-          "introductoryOffer" : null,
+          "introductoryOffer" : {
+            "displayPrice" : "0.00",
+            "offerID" : "tono-monthly-trial",
+            "paymentMode" : "FREE_TRIAL",
+            "periodCount" : 1,
+            "subscriptionPeriod" : "P1W"
+          },
           "localizations" : [
             {
               "description" : "Unlimited rewrites, style memory, per-recipient coaching, and weekly insights.",
@@ -78,7 +84,7 @@
               "locale" : "en_US"
             }
           ],
-          "productID" : "com.tono.pro.monthly",
+          "productID" : "com.tonoit.pro.monthly",
           "referenceName" : "Pro Monthly",
           "recurringSubscriptionPeriod" : "P1M",
           "reviewNote" : "",

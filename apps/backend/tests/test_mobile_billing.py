@@ -24,6 +24,13 @@ def _auth(registration: dict[str, str]) -> dict[str, str]:
     return {"Authorization": f"Bearer {registration['api_token']}"}
 
 
+def test_mobile_subscription_routes_are_registered_in_openapi(client):
+    paths = client.get("/openapi.json").json()["paths"]
+
+    assert "/v1/app-store/subscription" in paths
+    assert "/v1/google-play/subscription" in paths
+
+
 def test_apple_sandbox_transaction_is_rejected_in_production_lane(client, monkeypatch):
     from backend import mobile_billing
     from backend.server import app

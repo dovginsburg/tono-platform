@@ -5,11 +5,10 @@
 // CURRENT CODE values (used at runtime by ProductID enum below):
 //   com.tonoit.pro.monthly  — auto-renewing subscription
 //   com.tonoit.pro.yearly   — auto-renewing subscription
-// NOTE: App/Tono.storekit still references `com.tono.pro.*` (no `it`),
-// and the header docs in this file historically used `com.tonocoach.pro.*`.
-// Product IDs in App Store Connect are immutable once created — verify
-// what's registered in ASC before changing the .storekit or this enum,
-// or StoreKit will throw "product not available" at loadProducts time.
+// App/Tono.storekit and the ProductID enum use the same `com.tonoit.pro.*`
+// identifiers. Product IDs in App Store Connect are immutable once created;
+// verify what's registered in ASC before changing either source, or StoreKit
+// will throw "product not available" at loadProducts time.
 //
 // To test in the Simulator: File → New → StoreKit Configuration File in
 // Xcode, add both product IDs, then select it under

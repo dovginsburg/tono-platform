@@ -281,7 +281,7 @@ _PRIVACY_HTML = """<!DOCTYPE html>
 <ul>
   <li><strong>Anonymous device ID</strong> — a random UUID generated on first launch. No name, email, or phone number.</li>
   <li><strong>Draft text (transient)</strong> — your message is sent to our server for analysis and immediately discarded. We never store message content.</li>
-  <li><strong>Usage counters</strong> — how many rewrites you've run today, your plan tier. No content, no recipients.</li>
+  <li><strong>Service activity</strong> — content-free activity counts and your access status. No content, no recipients.</li>
   <li><strong>Subscription status</strong> — plan (free/pro) and renewal date, via StoreKit 2 (iOS) or Stripe (web).</li>
 </ul>
 
@@ -294,7 +294,7 @@ _PRIVACY_HTML = """<!DOCTYPE html>
 </ul>
 
 <h2>How your data is used</h2>
-<p>Device IDs are used solely to enforce the daily free-tier limit and track subscription status. Aggregate usage counts (how many rewrites per day) may be used to improve the product. No data is sold to or shared with third parties for advertising.</p>
+<p>Device IDs are used solely to maintain service access and subscription status. Aggregate, content-free activity counts may be used to improve the product. No data is sold to or shared with third parties for advertising.</p>
 
 <h2>How Tono learns and improves</h2>
 <p>With your permission ("Help improve Tono" toggle in Settings, on by default), Tono records content-free outcome signals: which rewrite style you chose, whether you used the suggestion, and a rough message-length bucket (short / medium / long — never the actual length or any words). <strong>Your messages, your rewrites, and who you're messaging are never collected.</strong> These anonymous outcome signals accumulate across users and help us improve axis ordering and rewrite quality for everyone. You can opt out at any time in Settings → Preferences → Help improve Tono; opting out immediately stops any signal from leaving your device and does not affect your personal style memory.</p>
@@ -609,7 +609,7 @@ async def api_analyze(
         locale=body.locale,
     )
 
-    # Cache lookup — hits don't consume the daily allowance.
+    # Cache lookup — hits don't consume another rewrite.
     cache_key = (
         _analysis_cache_key(body.text, axes, body.preferred_voice, body.locale)
         if provider != "mock"
@@ -644,7 +644,7 @@ async def api_analyze(
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail={
-                "message": "daily free limit reached",
+                "message": "active trial or subscription required",
                 "used_today": used,
                 "daily_limit": limit,
                 "plan": user.plan,

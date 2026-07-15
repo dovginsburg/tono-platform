@@ -119,7 +119,7 @@ struct HomeView: View {
                     .foregroundColor(.white.opacity(0.5))
             }
             Group {
-                Text("Pro · $5.99/mo or $39.99/yr")
+                Text("Pro · $3.99/month or $39.99/year")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .foregroundColor(.white.opacity(0.7))
                     .padding(.top, 4)

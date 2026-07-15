@@ -467,8 +467,7 @@ struct CoachView: View {
         case .http(let code, let msg):
             let trimmed = msg.count > 200 ? String(msg.prefix(200)) + "…" : msg
             if code == 429 {
-                let today = usage.map { "\($0.usedToday)/\($0.dailyLimit)" } ?? "today's"
-                return "Daily limit reached (\(today)). Subscribe in Settings for unlimited rewrites."
+                return "Active trial or subscription required. Open Settings to continue."
             }
             return trimmed.isEmpty ? "Server error \(code)" : "Server error \(code): \(trimmed)"
         case .notRegistered:

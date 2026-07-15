@@ -36,10 +36,9 @@ public enum TonoBackendError: Error, LocalizedError {
         case .notRegistered:
             return "Account not set up yet. Open the Tono app once to sign in."
         case .http(let code, let msg):
-            // 429 carries a usage payload; we surface its message but the
-            // caller already has used_today/daily_limit on the response
-            // model so the UI can render "N/10 today" without parsing.
-            if code == 429 { return "Daily limit reached. Open Tono to subscribe." }
+            // 429 carries a usage payload for internal state, but public copy
+            // stays aligned with trial/subscription access rather than quotas.
+            if code == 429 { return "Active trial or subscription required. Open Tono to continue." }
             if code == 401 { return "Sign-in expired. Open the Tono app to refresh." }
             if code == 503 { return "Service temporarily unavailable." }
             return msg.isEmpty ? "Server error (\(code))." : msg
@@ -484,7 +483,7 @@ public final class TonoBackend: @unchecked Sendable {
         if !(200...299).contains(http.statusCode) {
             let body = String(data: data, encoding: .utf8) ?? ""
             if http.statusCode == 429 {
-                throw TonoBackendError.http(http.statusCode, "Daily limit reached.")
+                throw TonoBackendError.http(http.statusCode, "Active trial or subscription required.")
             }
             if http.statusCode == 401 {
                 throw TonoBackendError.notRegistered

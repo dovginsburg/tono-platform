@@ -3,7 +3,7 @@
 Single source of truth for:
   - devices (one row per install; identity = `device_id` issued by the iOS app)
   - bearer tokens (long random; opaque; rotated on demand)
-  - daily rewrite counter (resets at UTC midnight)
+  - usage counter keyed by UTC calendar day
   - Stripe customer + subscription linkage
   - plan tier ("free" | "pro")
   - response cache (SHA-256 keyed, 5-min TTL)
@@ -72,10 +72,9 @@ CREATE TABLE IF NOT EXISTS accounts (
     subscription_status     TEXT,
     subscription_renews_at  TEXT,
     coupon_pro_expires_at   TEXT,
-    -- Free-tier daily allowance, pooled across every device linked to this
-    -- account — see consume_rewrite. Same shape as users.daily_count/
-    -- daily_day, deliberately: a device with no account_id still counts
-    -- against ITS OWN columns of the same name on `users`.
+    -- Account-level usage fields, pooled across every linked device; see
+    -- consume_rewrite. The shape deliberately matches users.daily_count/
+    -- daily_day: a device without an account_id uses its own `users` fields.
     daily_count             INTEGER NOT NULL DEFAULT 0,
     daily_day               TEXT,
     created_at              TEXT NOT NULL,
@@ -1147,15 +1146,13 @@ class Store:
     # ---- rate limit ----
 
     def consume_rewrite(self, device_id: str) -> tuple[bool, int, int]:
-        """Check + increment the daily free-tier counter.
+        """Check and increment usage for the device's effective billing owner.
 
-        Anonymous devices count against their own `users.daily_count` row,
-        exactly as before accounts existed. A device linked to an account
-        counts against `accounts.daily_count` instead — pooled across every
-        device linked to that account, so a free user's 10/day is one
-        shared allowance across their phone, laptop, etc., not 10 per
-        device. `table`/`key_col` below are fixed internal literals (never
-        user input), picking which row anchors the quota.
+        Anonymous devices use their own `users.daily_count` row. A device
+        linked to an account uses `accounts.daily_count` instead, pooling
+        usage across every device linked to that account. `table`/`key_col`
+        below are fixed internal literals (never user input) that select the
+        row anchoring the usage check.
         """
 
         def _do() -> tuple[bool, int, int]:

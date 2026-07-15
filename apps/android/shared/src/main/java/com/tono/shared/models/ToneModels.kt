@@ -95,7 +95,7 @@ sealed class ToneEngineError(message: String) : Exception(message) {
     class Backend(msg: String)  : ToneEngineError("Backend: $msg")
     object Offline      : ToneEngineError("No connection. Tap Back and try again when you have signal.")
     class RateLimit(val usedToday: Int, val dailyLimit: Int)
-        : ToneEngineError("Daily free limit reached. Open Tono to upgrade.")
+        : ToneEngineError("Active trial or subscription required. Open Tono to continue.")
 }
 
 // Wire JSON models (kotlinx.serialization)

@@ -12,15 +12,15 @@ When you tap Coach, the draft you're working on is sent to our server for analys
 Subscription status
 We store your plan (Free / Pro) and renewal date so the app can show you what you have access to. Payments are handled by Google Play Billing; we receive a tokenized subscription identifier, not your card details.
 
-Aggregate, content-free usage signals (only if you opt in)
-If you turn on "Help improve Tono" in Settings (on by default for new users, off by default for existing users until they re-confirm), we record only:
+Aggregate, content-free usage signals (on by default, with opt-out)
+"Help improve Tono" is on by default. While it remains on, we record only:
   - Which rewrite axis you tapped (warmer / clearer / funnier / safer)
   - Whether you inserted the suggestion or returned to your draft
   - A coarse message-length bucket (short / medium / long — never the actual length or any words)
 We never record your draft, your rewrites, the recipient, the app you were typing in, or anything about who you were writing to. You can turn this off at any time in Settings; turning it off immediately stops any signal from leaving your device.
 
 Device identifier
-A device-scoped random ID is generated when you install Tono. It is used solely to enforce the free-tier daily Coach limit and to associate your subscription with your device. It is not linked to your name, email, phone number, advertising ID, or any other personal identifier. You can reset it by reinstalling the app.
+A device-scoped random ID is generated when you install Tono. It is used to associate your subscription with your device. It is not linked to your name, email, phone number, advertising ID, or any other personal identifier. You can reset it by reinstalling the app.
 
 WHAT WE NEVER COLLECT
 
@@ -33,9 +33,8 @@ WHAT WE NEVER COLLECT
 HOW WE USE WHAT WE COLLECT
 
   - To generate the four rewrite axes and the risk badge
-  - To enforce the free-tier daily Coach limit
   - To manage your subscription and billing status
-  - To improve rewrite quality across users, only via the aggregate, content-free signals described above (opt-in only)
+  - To improve rewrite quality across users, only via the aggregate, content-free signals described above (on by default, with opt-out)
 
 WHO WE SHARE WITH
 
