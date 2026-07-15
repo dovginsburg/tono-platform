@@ -459,6 +459,41 @@ def test_retired_quota_claim_detector_closes_fresh_grammar_and_discourse_gaps():
     assert not false_positives, false_positives
 
 
+def test_retired_quota_claim_detector_binds_recurring_event_and_state_allocations():
+    hostile_copy = (
+        "For each unpaid account, dawn unlocks a package containing ten rewrites.",
+        "Each complimentary account starts the day able to request ten edits.",
+        "Ten revisions become usable by nonpaying users anew every sunrise.",
+        "Free members' capacity to perform ten rewrites is restored daily.",
+        "At daily rollover, unpaid accounts once more may make ten revisions.",
+        "Gratis users are limited to ten text improvements, with the allowance renewed each morning.",
+        "Every sunrise activates ten edits for anyone without a paid plan.",
+        "Complimentary users begin each calendar date with ten available rewrites.",
+        "After midnight, each free member can make ten more revisions.",
+        "Every new morning restores permission for gratis users to polish ten drafts.",
+    )
+    benign_copy = (
+        "Free users can buy a pack of ten edits; purchases are available daily.",
+        "Ten rewrites donated by free users are published every morning.",
+        "Complimentary users may view ten revision examples daily.",
+        "Unpaid members get ten editing tips each day.",
+        "Ten rewrites are available to free users for the one-day launch event.",
+        "Free users won ten edits in yesterday's contest; contest results refresh daily.",
+        "Ten edits belong to free users' saved history; backups run nightly.",
+        "No-cost accounts compare ten rewrites while the dashboard refreshes each morning.",
+        "Gratis members receive ten edit invoices every day from paid contractors.",
+        "Each morning, free users read a report about ten coaching requests made by Pro users.",
+        "The free-user handbook has ten revision chapters and is republished daily.",
+        "Unpaid users tag ten rewrites; the tag index rebuilds at midnight.",
+    )
+
+    missing = [copy for copy in hostile_copy if not _retired_quota_claims(copy)]
+    false_positives = [copy for copy in benign_copy if _retired_quota_claims(copy)]
+
+    assert not missing, missing
+    assert not false_positives, false_positives
+
+
 def test_retired_quota_claim_detector_rejects_benign_contexts():
     benign_copy = (
         "Pro users get ten rewrites daily during the pilot.",

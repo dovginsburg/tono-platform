@@ -17,7 +17,7 @@ def retired_quota_claims(source: str) -> list[str]:
     free_pattern = (
         r"\b(?:complimentary|free(?!\s+form\b)|gratis|nonpaying|unpaid|"
         r"zero\s+price|on\s+the\s+house|no\s+(?:charge|cost)|"
-        r"pay(?:s|ing)?\s+nothing|without\s+paying)\b"
+        r"pay(?:s|ing)?\s+nothing|without\s+(?:paying|(?:a\s+)?paid\s+plan))\b"
     )
     recipient_pattern = r"\b(?:accounts?|members?|people|users?)\b"
     quantity_pattern = r"\b(?:10|ten|decuple)\b"
@@ -29,7 +29,7 @@ def retired_quota_claims(source: str) -> list[str]:
         r"(?!\s+(?:articles?|badges?|certificates?|examples?|guides?|receipts?|reports?|"
         r"samples?|tutorials?|vouchers?)\b)"
         r"(?!\s+(?!(?:access|after|allocated|allocation|allotted|allotment|allowance|"
-        r"among|and|are|assigned|at|available|before|belonging|belongs?|but|composes?|comprises?|"
+        r"among|and|are|assigned|at|available|becomes?|before|belonging|belongs?|but|composes?|comprises?|"
         r"comes?|constitutes?|contains?|credited|daily|day|each|earmarked|entitlement|every|forms?|for|"
         r"from|go(?:es)?|grant|granted|in|is|nightly|of|on|or|per|provided|remain|"
         r"allotment|available|balance|benefit|control|decuple|held|it|its|make|our|owned|owners?|payable|"
@@ -42,6 +42,8 @@ def retired_quota_claims(source: str) -> list[str]:
         r"24\s*(?:h|hours?)|twenty\s+four\s+hour(?:\s+cycle)?|day\s+by\s+day|"
         r"(?:a|each|every|per)\s+(?:(?:new\s+)?(?:calendar|utc)\s+)?(?:day|night|morning)|"
         r"once\s+per\s+day|the\s+following\s+morning|"
+        r"(?:a|each|every|per)\s+(?:(?:new\s+)?(?:calendar|utc)\s+)?date|"
+        r"starts?\s+the\s+day|"
         r"(?:at|from|upon|when)\s+(?:the\s+)?(?:beginning|commencement)\s+of\s+each\s+day|"
         r"when\s+(?:a|each|the)\s+(?:new\s+)?day\s+(?:begins|opens)|"
         r"upon\s+each\s+day(?:'s)?\s+commencement|"
@@ -518,6 +520,24 @@ def retired_quota_claims(source: str) -> list[str]:
             + tight_quantity_service_pair,
             segment,
         )
+        event_state_allocation = bool(
+            re.search(free_entity_pattern, segment)
+            and re.search(cadence_pattern, segment)
+            and re.search(
+                r"\b(?:"
+                r"(?:unlock|activate)s?(?:\s+(?:an?\s+)?(?:package|bundle))?|"
+                r"starts?\s+the\s+day\s+able\s+to|"
+                r"becomes?\s+usable(?:\s+by)?|"
+                r"capacity\s+to\b.{0,45}\b(?:are|is)\s+restored|"
+                r"once\s+more\s+(?:can|may)|"
+                r"(?:are|is)\s+limited\s+to|"
+                r"begins?\s+each\s+(?:calendar\s+)?date\s+with|"
+                r"can\s+make\b.{0,24}\bmore|"
+                r"restores?\s+permission(?:\s+for)?"
+                r")\b",
+                segment,
+            )
+        )
         directly_free_relation = (
             not re.search(r"\b(?:paid|premium|pro|subscribers?)\b", segment)
             and (
@@ -596,6 +616,7 @@ def retired_quota_claims(source: str) -> list[str]:
             or pair_nominal_is_beneficiary_property
             or cadence_restores_owned_nominal
             or cadence_restores_beneficiary_nominal_with_pair
+            or event_state_allocation
             or directly_free_relation
         )
 
