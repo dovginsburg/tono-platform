@@ -149,7 +149,7 @@ public final class TonoCoachClient {
             case .timeout:
                 return "Request timed out. Check your connection and tap Retry."
             case .http(let status, let body):
-                if status == 429 { return "Daily free limit reached. Open Tono to upgrade." }
+                if status == 429 { return "Daily limit reached. Open Tono to subscribe." }
                 if status == 503 { return "Service temporarily unavailable. Tap Retry." }
                 if body.isEmpty { return "Server returned status \(status)." }
                 return "Server returned \(status): \(body.prefix(160))"

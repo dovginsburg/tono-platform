@@ -25,6 +25,23 @@ Configure Google Play real-time developer notifications through Pub/Sub push to 
 
 This protects against forged client product/tier claims, wrong app/environment payloads, token reuse across accounts, and stale/retried provider events. It trusts the backend process, its SQLite database, configured store credentials, and the official provider APIs/libraries; it does not attempt to survive a hostile backend runtime or database administrator.
 
+## TestFlight purchase acceptance matrix
+
+Run this matrix against an explicit Sandbox backend lane before promoting a new iOS candidate. Do not point the candidate at the Production validation lane: TestFlight StoreKit transactions are Sandbox transactions.
+
+| Scenario | Expected app result | Expected backend result |
+| --- | --- | --- |
+| Eligible annual purchase | Paywall closes; Settings shows `Trial`; keyboard entitlement unlocks | `/v1/me` is authoritative with `is_pro=true` and an active mobile subscription |
+| Paid monthly purchase or ineligible annual purchase | Paywall closes; Settings shows `Pro` and never claims a trial | `/v1/me` is authoritative with `is_pro=true` |
+| User cancels the purchase sheet | Paywall stays open and shows `Purchase canceled.` | No entitlement change |
+| Ask-to-Buy or other pending purchase | Paywall stays open and shows the pending message | No entitlement until a verified transaction update is reconciled |
+| Unverified transaction | Paywall stays open and shows verification failure | No entitlement change |
+| Relaunch after successful purchase | `Trial` or `Pro` is restored; keyboard entitlement remains unlocked | Current StoreKit entitlement is revalidated and `/v1/me` remains active |
+| Restore after reinstall or stale local state | Restore repairs `Trial`/`Pro`; server-validation failures remain visible | Signed current entitlement reattaches only to its existing owner |
+| Refund/revoke/cancel update | Access disappears after refresh/relaunch | Notification reconciliation makes `/v1/me.is_pro=false` |
+
+Sherlock physical acceptance must also type `Shift, a, b` → `Ab`, double-Shift then `a, b` → `AB`, and unlock Caps Lock then `c` → `c` in Messages and one ordinary text field, checking both output and Shift icon state.
+
 ## Rollback
 
-Revert the billing patch and redeploy the prior backend. The additive `mobile_purchases`, `mobile_billing_events`, and nullable `mobile_subscription_*` columns may remain safely in SQLite; older code ignores them, so no destructive down migration is required.
+Revert the billing candidate and redeploy the prior backend/app candidate. The additive `mobile_purchases`, `mobile_billing_events`, and nullable `mobile_subscription_*` columns may remain safely in SQLite; older code ignores them, so no destructive down migration is required.

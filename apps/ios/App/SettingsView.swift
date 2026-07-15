@@ -1,5 +1,5 @@
 // SettingsView.swift
-// Voice + axis toggles, plan management, backend connection status.
+// Tone + axis toggles, plan management, backend connection status.
 // The paywall uses StoreKit 2 — no Stripe redirect on iOS.
 
 import SwiftUI
@@ -62,6 +62,7 @@ struct SettingsView: View {
                     platform: "ios",
                     appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0"
                 )
+                await store.refreshEntitlements()
                 await refreshUsage()
             }
             .sheet(isPresented: $showPaywall) {
@@ -132,14 +133,7 @@ struct SettingsView: View {
                 HStack {
                     Text("Plan")
                     Spacer()
-                    Text(u.isPro ? "Pro" : "Free").foregroundColor(.secondary)
-                }
-                if !u.isPro {
-                    HStack {
-                        Text("Today")
-                        Spacer()
-                        Text("\(u.usedToday)/\(u.dailyLimit)").foregroundColor(.secondary)
-                    }
+                    Text(u.isPro ? "Pro" : "Subscribe").foregroundColor(.secondary)
                 }
             } else if let err = usageError {
                 Text(err).font(.caption).foregroundColor(.red)
@@ -297,8 +291,8 @@ struct SettingsView: View {
     }
 
     private var voiceSection: some View {
-        Section("Voice") {
-            TextField("Preferred voice (e.g. direct, warm, terse)", text: $voiceField)
+        Section("Tone") {
+            TextField("Preferred tone (e.g. direct, warm, concise)", text: $voiceField)
                 .onChange(of: voiceField) { new in
                     prefs.preferredVoice = new.isEmpty ? nil : new
                     prefs.save()
@@ -379,7 +373,7 @@ struct SettingsView: View {
                 Label("Contacts Access & Import", systemImage: "person.crop.circle.badge.checkmark")
             }
             .accessibilityHint("Review Contacts permission, manage limited access, or import recipients.")
-            Text("Recipient profiles stay in Tono’s local App Group. Only a chosen recipient’s voice hint is sent with a coaching request.")
+            Text("Recipient profiles stay in Tono’s local App Group. Only a chosen recipient’s tone hint is sent with a coaching request.")
                 .font(.caption).foregroundColor(.secondary)
         }
         .sheet(isPresented: $showAddRecipient) {
@@ -403,14 +397,15 @@ struct SettingsView: View {
 
     private var planSection: some View {
         let isPro = store.isPro || prefs.proUnlocked || (usage?.isPro ?? false)
+        let status = store.isInFreeTrial ? "Trial" : (isPro ? "Pro" : "Subscribe")
         return Section("Plan") {
             HStack {
-                Text(isPro ? "Pro ✓" : "Free")
+                Text(isPro && !store.isInFreeTrial ? "\(status) ✓" : status)
                 Spacer()
                 if !isPro {
-                    // Apple-compliant label: matches the action and names
-                    // the auto-renewing nature of the trial.
-                    Button("Try Pro free for 7 days") { showPaywall = true }
+                    Button(store.eligibleFreeTrialProductIDs.isEmpty ? "Subscribe" : "Start free trial") {
+                        showPaywall = true
+                    }
                         .buttonStyle(.borderedProminent)
                 }
             }
@@ -443,7 +438,7 @@ struct SettingsView: View {
                     }
                 }
             }
-            Text("Free: 3 coaching sessions/day, all four rewrite axes, no card required. Pro (7-day free trial, then auto-renews at $5.99/mo or $39.99/yr unless cancelled): unlimited + thread context + style memory + per-recipient coaching + weekly digest. Cancel anytime in Settings.")
+            Text("Unlimited rewrites, thread context, style memory, per-recipient coaching, and a weekly digest. Manage or cancel anytime in Apple ID subscriptions.")
                 .font(.caption).foregroundColor(.secondary)
         }
     }
@@ -608,7 +603,7 @@ Payment will be charged to your Apple ID account at the confirmation of purchase
                 .foregroundColor(.white.opacity(0.6))
                 .multilineTextAlignment(.center)
             VStack(spacing: 6) {
-                FeatureLine("Unlimited rewrites (Free is 3/day)")
+                FeatureLine("Unlimited rewrites")
                 FeatureLine("Thread context — paste the prior message")
                 FeatureLine("Per-recipient style memory")
                 FeatureLine("Weekly tone report — spot your patterns")
@@ -629,7 +624,11 @@ Payment will be charged to your Apple ID account at the confirmation of purchase
                     .padding(.horizontal, 24)
             }
             ForEach(store.products, id: \.id) { product in
-                ProductRow(product: product, isLoading: store.isLoading) {
+                ProductRow(
+                    product: product,
+                    isLoading: store.isLoading,
+                    isEligibleForFreeTrial: store.isEligibleForFreeTrial(product)
+                ) {
                     Task { await store.purchase(product) }
                 }
             }
@@ -685,7 +684,7 @@ private struct AddRecipientView: View {
                 Section("Name or relationship") {
                     TextField("e.g. Mom, Boss, Alex", text: $label)
                 }
-                Section("Voice hint (optional)") {
+                Section("Tone hint (optional)") {
                     TextField("e.g. prefers formal tone; no humor", text: $voiceHint)
                     Toggle("Always include safer rewrite", isOn: $preferSafer)
                 }
@@ -718,6 +717,7 @@ private struct AddRecipientView: View {
 private struct ProductRow: View {
     let product:   Product
     let isLoading: Bool
+    let isEligibleForFreeTrial: Bool
     let onPurchase: () -> Void
 
     private var isYearly: Bool { product.id.contains("yearly") }
@@ -739,35 +739,15 @@ private struct ProductRow: View {
                                 .foregroundColor(.green)
                         }
                     }
-                    // Show Apple's real intro offer if it exists (set up in
-                    // App Store Connect → Subscriptions → introductory offer).
-                    // Example: "$0.00 / 7 days, then auto-renews at $5.99/mo".
-                    // Falls back to a clear fixed text if no offer is configured
-                    // yet (e.g., during local development without ASC).
                     introOfferLine
                 }
                 Spacer()
                 if isLoading {
                     ProgressView().tint(.white)
                 } else {
-                    // Big price on the right. When intro offer is present,
-                    // show the trial "$0.00" up top and the regular price below.
-                    // introOffer is only available on iOS 17.2+; older OS
-                    // versions just see the regular price.
-                    VStack(alignment: .trailing, spacing: 0) {
-                        if let intro = product.subscription?.introductoryOffer {
-                            Text(intro.displayPrice)
-                                .font(.system(size: 16, weight: .bold, design: .rounded))
-                                .foregroundColor(.white)
-                            Text("then \(product.displayPrice)")
-                                .font(.system(size: 10, design: .rounded))
-                                .foregroundColor(.white.opacity(0.7))
-                        } else {
-                            Text(product.displayPrice)
-                                .font(.system(size: 16, weight: .bold, design: .rounded))
-                                .foregroundColor(.white)
-                        }
-                    }
+                    Text(product.displayPrice)
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
                 }
             }
             .padding(16)
@@ -784,11 +764,12 @@ private struct ProductRow: View {
     @ViewBuilder
     private var introOfferLine: some View {
         if let intro = product.subscription?.introductoryOffer,
-           intro.paymentMode == .freeTrial {
+           intro.paymentMode == .freeTrial,
+           isEligibleForFreeTrial {
             // Render the intro period dynamically from the offer (Apple manages
             // the actual duration). The text below is the standard Apple boilerplate
             // per App Store guideline 3.1.2.
-            Text("Free for \(intro.period.value) \(intro.period.unit.description), then auto-renews at \(product.displayPrice) unless cancelled")
+            Text("\(intro.period.value)-\(intro.period.unit.description) free trial, then auto-renews at \(product.displayPrice) unless canceled")
                 .font(.system(size: 11, design: .rounded))
                 .foregroundColor(.white.opacity(0.7))
                 .fixedSize(horizontal: false, vertical: true)

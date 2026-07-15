@@ -162,11 +162,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     /// Letter-key shift state. Symbols/numbers ignore shift entirely.
-    enum ShiftState {
-        case lowercase
-        case oneShotUppercase
-        case capsLock
-    }
+    typealias ShiftState = TonoKeyboardShiftState
 
     private struct HostConfiguration: Equatable {
         let keyboardType: Int
@@ -270,6 +266,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private var layoutMode: KeyboardLayoutMode = .letters
     private var shiftState: ShiftState = .lowercase
     private var shiftWasAutomatic = false
+    private var suppressNextPostInsertionAutoCapitalization = false
     private weak var shiftButton: UIButton?
     private weak var returnButton: UIButton?
     private var hostConfiguration: HostConfiguration?
@@ -1120,6 +1117,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     @objc private func charTapped(_ sender: UIButton) {
         guard let title = sender.title(for: .normal) else { return }
+        let insertedAlphabeticCharacter = title.unicodeScalars.count == 1
+            && title.unicodeScalars.allSatisfy(CharacterSet.letters.contains)
         if isSpellingBoundary(title) {
             commitBoundary(title)
         } else {
@@ -1128,12 +1127,18 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         }
         playInputClick()
         if layoutMode == .letters, shiftState == .oneShotUppercase {
-            shiftState = .lowercase
-            shiftWasAutomatic = false
-            updateShiftButtonAppearance()
+            shiftState = TonoKeyboardShiftMachine.stateAfterCharacter(
+                shiftState,
+                policy: hostAutocapitalizationType
+            )
+            shiftWasAutomatic = hostAutocapitalizationType == .allCharacters
+            relayoutLettersForShift()
         }
+        suppressNextPostInsertionAutoCapitalization = insertedAlphabeticCharacter
         DispatchQueue.main.async { [weak self] in
-            self?.applyAutoCapitalizationIfNeeded()
+            if !insertedAlphabeticCharacter {
+                self?.applyAutoCapitalizationIfNeeded()
+            }
             self?.refreshSpellingSuggestions()
         }
     }
@@ -1191,8 +1196,14 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         guard shiftState != .capsLock else { return }
         guard layoutMode == .letters else { return }
         if shiftState == .oneShotUppercase, !shiftWasAutomatic { return }
+        if suppressNextPostInsertionAutoCapitalization,
+           hostAutocapitalizationType != .allCharacters {
+            suppressNextPostInsertionAutoCapitalization = false
+            return
+        }
+        suppressNextPostInsertionAutoCapitalization = false
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
-        let shouldCapitalize = automaticCapitalizationRecommended(
+        let shouldCapitalize = TonoKeyboardShiftMachine.recommendsCapitalization(
             policy: hostAutocapitalizationType,
             context: before
         )
@@ -1204,32 +1215,6 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         shiftWasAutomatic = shouldCapitalize
     }
 
-    private func automaticCapitalizationRecommended(
-        policy: UITextAutocapitalizationType,
-        context: String
-    ) -> Bool {
-        switch policy {
-        case .none:
-            return false
-        case .allCharacters:
-            return true
-        case .words:
-            return context.isEmpty || context.last?.isWhitespace == true
-        case .sentences:
-            if context.isEmpty || context.hasSuffix("\n") { return true }
-            let trimmed = context.replacingOccurrences(
-                of: #"\s+$"#,
-                with: "",
-                options: .regularExpression
-            )
-            guard trimmed.count < context.count else { return false }
-            if trimmed.isEmpty { return true }
-            guard let last = trimmed.last else { return false }
-            return ".!?".contains(last)
-        @unknown default:
-            return false
-        }
-    }
 
     private func relayoutLettersForShift() {
         guard let stack = keysStack else { return }

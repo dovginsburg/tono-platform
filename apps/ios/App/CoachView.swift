@@ -323,7 +323,7 @@ struct CoachView: View {
                 HStack {
                     Image(systemName: u.isPro ? "checkmark.seal.fill" : "circle.dotted")
                         .foregroundColor(u.isPro ? .green : .white.opacity(0.5))
-                    Text(u.isPro ? "Pro · unlimited" : "Free · \(u.usedToday)/\(u.dailyLimit) today")
+                    Text(u.isPro ? "Pro · unlimited" : "Subscribe for unlimited rewrites")
                         .font(.system(size: 11, design: .rounded))
                         .foregroundColor(.white.opacity(0.45))
                     Spacer()
@@ -468,7 +468,7 @@ struct CoachView: View {
             let trimmed = msg.count > 200 ? String(msg.prefix(200)) + "…" : msg
             if code == 429 {
                 let today = usage.map { "\($0.usedToday)/\($0.dailyLimit)" } ?? "today's"
-                return "Daily free limit reached (\(today)). Upgrade in Settings for unlimited."
+                return "Daily limit reached (\(today)). Subscribe in Settings for unlimited rewrites."
             }
             return trimmed.isEmpty ? "Server error \(code)" : "Server error \(code): \(trimmed)"
         case .notRegistered:

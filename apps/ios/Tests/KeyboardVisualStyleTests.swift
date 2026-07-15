@@ -2,6 +2,50 @@ import XCTest
 import UIKit
 
 final class KeyboardVisualStyleTests: XCTestCase {
+    func testSingleShiftIsConsumedByTheNextLetter() {
+        var machine = TonoKeyboardShiftMachine()
+
+        machine.singleTapShift()
+        XCTAssertEqual(machine.insert("a", policy: .sentences, contextAfterInsertion: "A"), "A")
+        XCTAssertEqual(machine.insert("b", policy: .sentences, contextAfterInsertion: "Ab"), "b")
+        XCTAssertEqual(machine.state, .lowercase)
+    }
+
+    func testDoubleShiftPersistsAsCapsLock() {
+        var machine = TonoKeyboardShiftMachine()
+
+        machine.doubleTapShift()
+        XCTAssertEqual(machine.insert("a", policy: .sentences, contextAfterInsertion: "A"), "A")
+        XCTAssertEqual(machine.insert("b", policy: .sentences, contextAfterInsertion: "AB"), "B")
+        XCTAssertEqual(machine.state, .capsLock)
+    }
+
+    func testSingleTapUnlocksCapsLock() {
+        var machine = TonoKeyboardShiftMachine(state: .capsLock)
+
+        machine.singleTapShift()
+        XCTAssertEqual(machine.insert("c", policy: .sentences, contextAfterInsertion: "c"), "c")
+        XCTAssertEqual(machine.state, .lowercase)
+    }
+
+    func testSentenceBoundaryAutoShiftIsConsumedOnce() {
+        var machine = TonoKeyboardShiftMachine()
+
+        machine.applyAutomaticCapitalization(policy: .sentences, context: "Hello. ")
+        XCTAssertEqual(machine.state, .oneShotUppercase)
+        XCTAssertEqual(machine.insert("w", policy: .sentences, contextAfterInsertion: "Hello. W"), "W")
+        XCTAssertEqual(machine.insert("o", policy: .sentences, contextAfterInsertion: "Hello. Wo"), "o")
+    }
+
+    func testAllCharactersHostPolicyRemainsUppercase() {
+        var machine = TonoKeyboardShiftMachine()
+
+        machine.applyAutomaticCapitalization(policy: .allCharacters, context: "")
+        XCTAssertEqual(machine.insert("a", policy: .allCharacters, contextAfterInsertion: "A"), "A")
+        XCTAssertEqual(machine.insert("b", policy: .allCharacters, contextAfterInsertion: "AB"), "B")
+        XCTAssertEqual(machine.state, .oneShotUppercase)
+    }
+
     func testPortraitMetricsKeepAppleSizedTypingRowsAcrossPhoneWidths() {
         let compact = TonoKeyboardMetrics.portrait(availableWidth: 375)
         let regular = TonoKeyboardMetrics.portrait(availableWidth: 402)

@@ -1,5 +1,88 @@
 import UIKit
 
+enum TonoKeyboardShiftState: Equatable {
+    case lowercase
+    case oneShotUppercase
+    case capsLock
+}
+
+/// Pure shift reducer shared by the shipping UIKit keyboard and its tests.
+struct TonoKeyboardShiftMachine {
+    private(set) var state: TonoKeyboardShiftState
+    private var oneShotWasAutomatic = false
+
+    init(state: TonoKeyboardShiftState = .lowercase) {
+        self.state = state
+    }
+
+    mutating func singleTapShift() {
+        oneShotWasAutomatic = false
+        switch state {
+        case .lowercase: state = .oneShotUppercase
+        case .oneShotUppercase, .capsLock: state = .lowercase
+        }
+    }
+
+    mutating func doubleTapShift() {
+        oneShotWasAutomatic = false
+        state = state == .capsLock ? .lowercase : .capsLock
+    }
+
+    mutating func applyAutomaticCapitalization(
+        policy: UITextAutocapitalizationType,
+        context: String
+    ) {
+        guard state != .capsLock else { return }
+        guard state != .oneShotUppercase || oneShotWasAutomatic else { return }
+        let capitalize = Self.recommendsCapitalization(policy: policy, context: context)
+        state = capitalize ? .oneShotUppercase : .lowercase
+        oneShotWasAutomatic = capitalize
+    }
+
+    mutating func insert(
+        _ letter: String,
+        policy: UITextAutocapitalizationType,
+        contextAfterInsertion: String
+    ) -> String {
+        let inserted = state == .lowercase ? letter.lowercased() : letter.uppercased()
+        if state != .capsLock {
+            state = policy == .allCharacters ? .oneShotUppercase : .lowercase
+            oneShotWasAutomatic = policy == .allCharacters
+        }
+        return inserted
+    }
+
+    static func stateAfterCharacter(
+        _ state: TonoKeyboardShiftState,
+        policy: UITextAutocapitalizationType
+    ) -> TonoKeyboardShiftState {
+        guard state != .capsLock else { return .capsLock }
+        return policy == .allCharacters ? .oneShotUppercase : .lowercase
+    }
+
+    static func recommendsCapitalization(
+        policy: UITextAutocapitalizationType,
+        context: String
+    ) -> Bool {
+        switch policy {
+        case .none: return false
+        case .allCharacters: return true
+        case .words: return context.isEmpty || context.last?.isWhitespace == true
+        case .sentences:
+            if context.isEmpty || context.hasSuffix("\n") { return true }
+            let trimmed = context.replacingOccurrences(
+                of: #"\s+$"#,
+                with: "",
+                options: .regularExpression
+            )
+            guard trimmed.count < context.count else { return false }
+            if trimmed.isEmpty { return true }
+            return trimmed.last.map { ".!?".contains($0) } ?? false
+        @unknown default: return false
+        }
+    }
+}
+
 /// Resolves the appearance boundary between a host text field and the keyboard
 /// extension. Messages reports `.default` in both appearances, while the
 /// extension process can retain a light trait even when the device is dark.

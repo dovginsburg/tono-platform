@@ -35,6 +35,7 @@ public final class StoreKitManager: ObservableObject {
     /// True when the user is in an active introductory free trial period
     /// (Apple's "real" 7-day trial configured in App Store Connect).
     @Published public var isInFreeTrial: Bool     = false
+    @Published public private(set) var eligibleFreeTrialProductIDs: Set<String> = []
 
     private var updatesTask: Task<Void, Never>?
 
@@ -42,6 +43,7 @@ public final class StoreKitManager: ObservableObject {
 
     // Call once from the app entry point.
     public func start() {
+        guard updatesTask == nil else { return }
         updatesTask = Task { await listenForTransactionUpdates() }
         Task { await loadProductsAndEntitlements() }
     }
@@ -59,14 +61,17 @@ public final class StoreKitManager: ObservableObject {
                 let me = try await TonoBackend.shared.syncAppStoreSubscription(
                     signedTransactionInfo: verification.jwsRepresentation
                 )
-                applyBackendState(me, inTrial: transaction.offerType == .introductory)
+                applyBackendState(
+                    me,
+                    inTrial: transaction.offer?.paymentMode == .freeTrial
+                )
                 await transaction.finish()
             case .userCancelled:
-                break
+                purchaseError = "Purchase canceled."
             case .pending:
                 purchaseError = "Purchase is pending approval."
             @unknown default:
-                break
+                purchaseError = "Purchase did not complete. Please try again."
             }
         } catch {
             purchaseError = error.localizedDescription
@@ -86,12 +91,24 @@ public final class StoreKitManager: ObservableObject {
         isLoading = false
     }
 
+    public func refreshEntitlements() async {
+        await updateProState()
+    }
+
     // MARK: - Private helpers
 
     private func loadProductsAndEntitlements() async {
         do {
             products = try await Product.products(for: ProductID.all)
             products.sort { $0.price > $1.price }  // yearly first
+            var eligible: Set<String> = []
+            for product in products {
+                guard let subscription = product.subscription,
+                      subscription.introductoryOffer?.paymentMode == .freeTrial,
+                      await subscription.isEligibleForIntroOffer else { continue }
+                eligible.insert(product.id)
+            }
+            eligibleFreeTrialProductIDs = eligible
         } catch {
             // Products unavailable in Simulator without a StoreKit config file.
         }
@@ -101,6 +118,8 @@ public final class StoreKitManager: ObservableObject {
     private func updateProState() async {
         var inTrial = false
         var backendState: TonoMe?
+        var sawVerifiedEntitlement = false
+        var serverSyncFailed = false
         for await result in Transaction.currentEntitlements {
             // Verified by StoreKit; unverified transactions are silently
             // skipped (StoreError.failedVerification would be thrown for
@@ -108,23 +127,19 @@ public final class StoreKitManager: ObservableObject {
             guard case .verified(let tx) = result else { continue }
             guard ProductID.all.contains(tx.productID) else { continue }
             guard tx.revocationDate == nil else { continue }
-            if let me = try? await TonoBackend.shared.syncAppStoreSubscription(
-                signedTransactionInfo: result.jwsRepresentation
-            ) {
+            sawVerifiedEntitlement = true
+            do {
+                let me = try await TonoBackend.shared.syncAppStoreSubscription(
+                    signedTransactionInfo: result.jwsRepresentation
+                )
                 backendState = me
+            } catch {
+                serverSyncFailed = true
             }
-            // Detect Apple's real 7-day free trial: tx.offerType == .introductory
-            // and offer is a free-trial-period offer. This is the ONLY way to
-            // know the user is in a trial — there's no separate "isOnTrial" flag.
-            // tx.offer is only available on iOS 17.2+. We fall back to
-            // offerType alone on older OS versions (still correctly identifies
-            // an intro offer, just doesn't distinguish free-trial from pay-up-front).
-            if tx.offerType == .introductory {
-                // Transaction.Offer.PaymentMode values:
-                //   .freeTrial, .payAsYouGo, .payUpFront, .oneTime (iOS 26+)
-                if let offer = tx.offer, offer.paymentMode == .freeTrial {
-                    inTrial = true
-                }
+            // Only Apple's explicit free-trial payment mode counts as a trial;
+            // paid introductory offers must remain ordinary Pro subscriptions.
+            if tx.offer?.paymentMode == .freeTrial {
+                inTrial = true
             }
         }
         if backendState == nil {
@@ -132,6 +147,9 @@ public final class StoreKitManager: ObservableObject {
         }
         guard let backendState else { return }
         applyBackendState(backendState, inTrial: inTrial)
+        if sawVerifiedEntitlement, serverSyncFailed, !backendState.isPro {
+            purchaseError = "Apple confirmed the purchase, but server verification failed. Try Restore purchases."
+        }
     }
 
     private func applyBackendState(_ me: TonoMe, inTrial: Bool) {
@@ -144,6 +162,10 @@ public final class StoreKitManager: ObservableObject {
         prefs.proUnlocked = me.isPro
         prefs.inFreeTrial = me.isPro && inTrial
         prefs.save()
+    }
+
+    public func isEligibleForFreeTrial(_ product: Product) -> Bool {
+        eligibleFreeTrialProductIDs.contains(product.id)
     }
 
     private func listenForTransactionUpdates() async {
