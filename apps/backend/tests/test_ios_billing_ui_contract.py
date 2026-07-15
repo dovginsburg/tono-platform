@@ -494,6 +494,43 @@ def test_retired_quota_claim_detector_binds_recurring_event_and_state_allocation
     assert not false_positives, false_positives
 
 
+def test_retired_quota_claim_detector_binds_recurring_capacity_semantics():
+    hostile_copy = (
+        "Dawn makes ten rewrites possible for each unpaid user.",
+        "Unpaid accounts wake up to ten rewrites every morning.",
+        "Every new day sees ten edits placed at the disposal of free members.",
+        "When the date changes, a no-cost member's ability to revise ten messages returns.",
+        "Nonpaying users may rewrite up to ten messages between midnights.",
+        "A complimentary account can submit ten coaching requests before the next sunrise.",
+        "The clock striking midnight re-enables ten edits for gratis users.",
+        "Ten rewrite slots open for free members with every new day.",
+        "Each morning leaves unpaid people with room for ten revisions.",
+        "Every dawn confers upon nonpaying accounts the ability to polish ten drafts.",
+        "For free users, ten editing opportunities materialize anew each day.",
+        "The day's first moment resets free accounts to ten remaining rewrites.",
+    )
+    benign_copy = (
+        "The guide says dawn makes ten rewrite examples possible for each unpaid user.",
+        "Unpaid accounts wake up to ten rewrite tips every morning.",
+        "Every new day sees ten edit reports placed at the disposal of free members.",
+        "When the date changes, a no-cost member's ability to revise ten survey responses returns.",
+        "Nonpaying users may rewrite up to ten tutorial examples between midnights.",
+        "A complimentary account can submit ten coaching request receipts before the next sunrise.",
+        "The clock striking midnight re-enables ten edit guides for gratis users.",
+        "Ten rewrite certificate slots open for free members with every new day.",
+        "Each morning leaves unpaid people with room for ten revision tutorials.",
+        "Every dawn confers upon nonpaying accounts the ability to polish ten survey drafts.",
+        "For free users, ten editing certificate opportunities materialize anew each day.",
+        "The day's first moment resets free accounts to ten remaining rewrite examples.",
+    )
+
+    missing = [copy for copy in hostile_copy if not _retired_quota_claims(copy)]
+    false_positives = [copy for copy in benign_copy if _retired_quota_claims(copy)]
+
+    assert not missing, missing
+    assert not false_positives, false_positives
+
+
 def test_retired_quota_claim_detector_rejects_benign_contexts():
     benign_copy = (
         "Pro users get ten rewrites daily during the pilot.",

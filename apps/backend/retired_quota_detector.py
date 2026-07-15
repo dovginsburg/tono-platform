@@ -23,31 +23,34 @@ def retired_quota_claims(source: str) -> list[str]:
     quantity_pattern = r"\b(?:10|ten|decuple)\b"
     service_pattern = (
         r"\b(?:coach(?:\s+(?:messages?|requests?|turns?))?|"
-        r"coaching\s+(?:messages?|requests?|turns?)|edits?|"
+        r"coaching\s+(?:messages?|requests?|turns?)|edits?|editing|"
         r"polish(?:es|ing)?|rephras(?:e|es|ing)|revis(?:e|es|ing|ions?)|"
         r"rewrites?|text\s+improvements?|tune\s+ups?)\b"
-        r"(?!\s+(?:articles?|badges?|certificates?|examples?|guides?|receipts?|reports?|"
-        r"samples?|tutorials?|vouchers?)\b)"
+        r"(?!\s+(?:(?:10|remaining|ten|to|up)\s+){0,4}"
+        r"(?:articles?|badges?|certificates?|examples?|guides?|receipts?|reports?|"
+        r"samples?|surveys?|tutorials?|vouchers?)\b)"
         r"(?!\s+(?!(?:access|after|allocated|allocation|allotted|allotment|allowance|"
         r"among|and|are|assigned|at|available|becomes?|before|belonging|belongs?|but|composes?|comprises?|"
         r"comes?|constitutes?|contains?|credited|daily|day|each|earmarked|entitlement|every|forms?|for|"
         r"from|go(?:es)?|grant|granted|in|is|nightly|of|on|or|per|provided|remain|"
         r"allotment|available|balance|benefit|control|decuple|held|it|its|make|our|owned|owners?|payable|"
-        r"possession|property|ration|regain|replenished|requests?|reset|reserved|rests?|restored|set|sits?|that|the|"
-        r"their|them|they|this|those|ten|to|we|which|who|whose|you|your|"
+        r"opportunities?|placed|possible|possession|property|ration|regain|replenished|requests?|"
+        r"reset|reserved|rests?|restored|set|sits?|slots?|that|the|"
+        r"their|them|they|this|those|ten|to|up|we|which|who|whose|you|your|"
         r"accrue(?:s)?)\b)[a-z]+\b)"
     )
     cadence_pattern = (
-        r"(?:\b(?:daily|today|tomorrow|midnight|morning|dawn|sunrise|nightly|"
+        r"(?:\b(?:daily|today|tomorrow|midnights?|morning|dawn|sunrise|nightly|"
         r"24\s*(?:h|hours?)|twenty\s+four\s+hour(?:\s+cycle)?|day\s+by\s+day|"
         r"(?:a|each|every|per)\s+(?:(?:new\s+)?(?:calendar|utc)\s+)?(?:day|night|morning)|"
         r"once\s+per\s+day|the\s+following\s+morning|"
         r"(?:a|each|every|per)\s+(?:(?:new\s+)?(?:calendar|utc)\s+)?date|"
-        r"starts?\s+the\s+day|"
+        r"starts?\s+the\s+day|(?:the\s+)?date\s+changes?|"
+        r"(?:the\s+)?day(?:'s)?\s+(?:first|opening)\s+moment|"
         r"(?:at|from|upon|when)\s+(?:the\s+)?(?:beginning|commencement)\s+of\s+each\s+day|"
         r"when\s+(?:a|each|the)\s+(?:new\s+)?day\s+(?:begins|opens)|"
         r"upon\s+each\s+day(?:'s)?\s+commencement|"
-        r"(?:a|the)\s+new\s+day\s+(?:begins|opens|supplies))\b|\b00:00\b)"
+        r"(?:a|each|every|the)\s+new\s+day(?:\s+(?:begins|opens|supplies))?)\b|\b00:00\b)"
     )
     allocation_noun_pattern = (
         r"\b(?:allocations?|allowance|allotment|balance|credits?|plans?|quota|tiers?)\b"
@@ -538,6 +541,44 @@ def retired_quota_claims(source: str) -> list[str]:
                 segment,
             )
         )
+        scope_artifact_modifier = re.search(
+            r"(?:"
+            + service_pattern
+            + r"|"
+            + quantity_pattern
+            + r").{0,24}\b(?:articles?|badges?|certificates?|examples?|guides?|"
+            r"receipts?|reports?|samples?|surveys?|tutorials?|vouchers?)\b",
+            segment,
+        )
+        capacity_relation_pattern = (
+            r"\b(?:"
+            r"(?:make|makes|made|render|renders|rendered)\b.{0,55}\b(?:available|possible)|"
+            r"wake(?:s|n|ned)?\s+up\s+(?:with|to)|"
+            r"(?:place|places|placed|put|puts)\b.{0,45}\b(?:at\s+the\s+)?disposal|"
+            r"(?:ability|capacity|permission|room)\b.{0,55}\b"
+            r"(?:comes?\s+back|reappears?|returns?|restores?|resets?|renews?)|"
+            r"(?:can|may)\b.{0,55}\b(?:before|between|until)\b|"
+            r"re\s*enable(?:d|s)?|"
+            r"(?:enable|enables|enabled|open|opens|opened|materialize|materializes|"
+            r"materialized|activate|activates|activated|unlock|unlocks|unlocked)\b|"
+            r"(?:leave|leaves|left|provide|provides|provided)\b.{0,45}\b"
+            r"(?:capacity|opportunit(?:y|ies)|room)|"
+            r"(?:confer|confers|conferred|give|gives|gave|grant|grants|granted)\b"
+            r".{0,55}\b(?:ability|capacity|opportunit(?:y|ies)|permission|room)|"
+            r"(?:slots?|opportunit(?:y|ies))\b.{0,35}\b"
+            r"(?:becomes?\s+available|materialize|materializes|open|opens)|"
+            r"reset(?:s|ting)?\b.{0,45}\b(?:remaining|to\s+(?:the\s+)?"
+            + quantity_pattern
+            + r")"
+            r")"
+        )
+        recurring_capacity_allocation = bool(
+            re.search(free_entity_pattern, segment)
+            and re.search(cadence_pattern, segment)
+            and re.search(tight_quantity_service_pair, segment)
+            and re.search(capacity_relation_pattern, segment)
+            and not scope_artifact_modifier
+        )
         directly_free_relation = (
             not re.search(r"\b(?:paid|premium|pro|subscribers?)\b", segment)
             and (
@@ -617,6 +658,7 @@ def retired_quota_claims(source: str) -> list[str]:
             or cadence_restores_owned_nominal
             or cadence_restores_beneficiary_nominal_with_pair
             or event_state_allocation
+            or recurring_capacity_allocation
             or directly_free_relation
         )
 
