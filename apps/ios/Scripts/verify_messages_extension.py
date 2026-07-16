@@ -57,6 +57,8 @@ def check_source(errors: list[str]) -> None:
     project = PROJECT.read_text()
     required_project_markers = (
         "TonoMessagesExtension.appex in Embed Foundation Extensions",
+        "TonoShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 1AEE8A1C65E51602F4AD7330 /* TonoShare.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, )",
+        "remoteGlobalIDString = E55677B30636D321CFE4401C;\n\t\t\tremoteInfo = TonoShare;",
         "ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, )",
         "target = 5E7AA4C8F391BA513B44CF06 /* TonoMessagesExtension */",
         'ASSETCATALOG_COMPILER_APPICON_NAME = "iMessage App Icon"',
@@ -71,9 +73,25 @@ def check_source(errors: list[str]) -> None:
     embed_start = project.find("2683EAB09F60A8B296EAAE4A /* Embed Foundation Extensions */")
     embed_end = project.find("/* End PBXCopyFilesBuildPhase section */", embed_start)
     embed = project[embed_start:embed_end]
-    for product in ("TonoKeyboard.appex", "TonoMessagesExtension.appex"):
+    for product in ("TonoKeyboard.appex", "TonoShare.appex", "TonoMessagesExtension.appex"):
         if product not in embed:
             errors.append(f"embed phase missing {product}")
+    share_embed = "TonoShare.appex in Embed Foundation Extensions"
+    if share_embed in embed and "E6440EC45FF7489495E84BC6" not in embed:
+        errors.append("embed phase does not reference the TonoShare build file")
+
+    host_start = project.find("EBE86B011C11AB11A09CEBA7 /* Tono */ = {")
+    host_end = project.find("/* End PBXNativeTarget section */", host_start)
+    host = project[host_start:host_end]
+    if "E620E36CE284444D862FF350 /* PBXTargetDependency */" not in host:
+        errors.append("Tono host target is missing the TonoShare dependency")
+    share_dependency = project.find("E620E36CE284444D862FF350 /* PBXTargetDependency */ = {")
+    share_dependency_end = project.find("};", share_dependency)
+    dependency = project[share_dependency:share_dependency_end]
+    if "target = E55677B30636D321CFE4401C /* TonoShare */" not in dependency:
+        errors.append("TonoShare target dependency is invalid")
+    if "targetProxy = 9C48D8BAF5FA4A5490685907 /* PBXContainerItemProxy */" not in dependency:
+        errors.append("TonoShare target dependency proxy is invalid")
 
     versions: set[tuple[type, object, type, object]] = set()
     for relative in BUNDLES:
@@ -142,7 +160,7 @@ def check_source(errors: list[str]) -> None:
 
 def check_built_bundle(app: Path, label: str, errors: list[str]) -> None:
     plugins = app / "PlugIns"
-    expected = ("TonoKeyboard.appex", "TonoMessagesExtension.appex")
+    expected = ("TonoKeyboard.appex", "TonoShare.appex", "TonoMessagesExtension.appex")
     for name in expected:
         if not (plugins / name).is_dir():
             errors.append(f"{label} missing PlugIns/{name}")
@@ -175,7 +193,7 @@ def check_ipa(path: Path, errors: list[str]) -> None:
             errors.append(f"IPA must contain exactly one host app, found {len(app_roots)}")
             return
         root = PurePosixPath(*app_roots[0])
-        expected = ("TonoKeyboard.appex", "TonoMessagesExtension.appex")
+        expected = ("TonoKeyboard.appex", "TonoShare.appex", "TonoMessagesExtension.appex")
         versions = set()
         for relative in ("Info.plist", *(f"PlugIns/{name}/Info.plist" for name in expected)):
             member = str(root / relative)
