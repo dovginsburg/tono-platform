@@ -8,10 +8,10 @@ Usage:
 
 The script:
   1. Registers a new device (or re-uses TONO_API_TOKEN if set).
-  2. Posts an analyze request and records the `used_today` count.
+  2. Records the current device and plan.
   3. Waits for the user to trigger a redeploy (or just re-run after a deploy).
-  4. Fetches /v1/me and confirms the user record still exists (device_id,
-     plan, daily_count) — proving /data is mounted and WAL is flushing.
+  4. Fetches /v1/me and confirms the user record still exists — proving
+     /data is mounted and WAL is flushing.
 """
 
 import os
@@ -66,17 +66,7 @@ def main():
 
     # --- Step 2: fetch current state ---
     me_before = request("GET", "/v1/me", token=api_token)
-    print(f"\nBefore: device_id={me_before['device_id'][:8]}… plan={me_before['plan']} "
-          f"used_today={me_before['used_today']}")
-
-    # --- Step 3: analyze to bump daily count ---
-    print("Sending analyze request…")
-    result = request("POST", "/api/analyze", {
-        "text": "Let me know when you can — persistence test.",
-        "provider": "mock",
-    }, token=api_token)
-    used_after = result.get("used_today", "?")
-    print(f"  used_today after request: {used_after}")
+    print(f"\nBefore: device_id={me_before['device_id'][:8]}… plan={me_before['plan']}")
 
     # --- Step 4: prompt for redeploy ---
     print("\n" + "="*60)
@@ -89,8 +79,7 @@ def main():
 
     # --- Step 5: re-fetch to verify persistence ---
     me_after = request("GET", "/v1/me", token=api_token)
-    print(f"\nAfter: device_id={me_after['device_id'][:8]}… plan={me_after['plan']} "
-          f"used_today={me_after['used_today']}")
+    print(f"\nAfter: device_id={me_after['device_id'][:8]}… plan={me_after['plan']}")
 
     # --- Step 6: verdict ---
     print()

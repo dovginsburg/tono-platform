@@ -210,4 +210,5 @@ def test_webhook_checkout_completed_updates_account_and_all_its_devices(client, 
         assert device_row.plan == "free"
         me = client.get("/v1/me", headers=_auth(device["api_token"])).json()
         assert me["is_pro"] is True
-        assert me["daily_limit"] == -1
+        assert "daily_limit" not in me
+        assert "used_today" not in me

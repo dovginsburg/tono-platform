@@ -34,3 +34,15 @@ def test_active_android_ui_uses_trial_and_tone_copy_without_zero_price():
     assert 'Text("Voice hint (optional)")' not in active_ui
     assert "TrialOfferContract.isRealSevenDayTrial" in manager
     assert "regularPhase.formattedPrice" in manager
+
+
+def test_android_backend_contract_has_no_retired_quota_fields():
+    backend = (
+        ANDROID_APP.parent
+        / "shared/src/main/java/com/tono/shared/network/TonoBackend.kt"
+    ).read_text(encoding="utf-8")
+
+    assert "used_today" not in backend
+    assert "daily_limit" not in backend
+    assert "usedToday" not in backend
+    assert "dailyLimit" not in backend

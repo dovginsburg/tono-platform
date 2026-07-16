@@ -133,6 +133,21 @@ def test_shipping_source_discovery_covers_active_platform_trees():
     } <= paths
 
 
+def test_ios_and_web_backend_contracts_have_no_retired_quota_fields():
+    contracts = {
+        "ios": _source("Shared/TonoBackend.swift"),
+        "web-analyze": (WEB / "src/app/api/analyze/route.ts").read_text(encoding="utf-8"),
+        "web-me": (WEB / "src/app/api/me/route.ts").read_text(encoding="utf-8"),
+    }
+
+    for name, source in contracts.items():
+        assert "used_today" not in source, name
+        assert "daily_limit" not in source, name
+        assert "usedToday" not in source, name
+        assert "dailyLimit" not in source, name
+        assert "86400" not in source, name
+
+
 def test_production_binary_metadata_matches_independently_reviewed_copy():
     repo = BACKEND.parents[1]
     actual = {

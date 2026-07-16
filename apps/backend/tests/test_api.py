@@ -43,6 +43,18 @@ def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _grant_active_subscription(registration: dict) -> None:
+    from backend.store import get_store
+
+    get_store().update_subscription(
+        device_id=registration["device_id"],
+        customer_id=None,
+        subscription_id=f"sub_{registration['device_id']}",
+        status="active",
+        renews_at=None,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Sanity
 # ---------------------------------------------------------------------------
@@ -54,8 +66,7 @@ def test_health(client):
     j = r.json()
     assert j["status"] == "ok"
     assert "version" in j
-    # Free limit comes from FREE_DAILY_LIMIT (set to 3 in conftest).
-    assert j["free_daily_limit"] == 3
+    assert "free_daily_limit" not in j
     # Stripe off in test env.
     assert j["stripe_configured"] is False
 
@@ -114,8 +125,8 @@ def test_register_then_me(client):
     assert r.status_code == 200, r.text
     me = r.json()
     assert me["device_id"] == reg["device_id"]
-    assert me["used_today"] == 0
-    assert me["daily_limit"] == 3  # FREE_DAILY_LIMIT in conftest
+    assert "used_today" not in me
+    assert "daily_limit" not in me
 
 
 def test_register_idempotent_with_device_credential(client):
@@ -221,6 +232,7 @@ def test_me_rejects_bad_token(client):
 
 def test_api_analyze_happy_path(client):
     reg = _register(client)
+    _grant_active_subscription(reg)
     r = client.post(
         "/api/analyze",
         headers=_auth(reg["api_token"]),
@@ -230,9 +242,9 @@ def test_api_analyze_happy_path(client):
     j = r.json()
     assert j["risk_level"] == "high"
     assert "passive-aggressive" in j["flags"]
-    assert j["used_today"] == 1
-    assert j["daily_limit"] == 3
-    assert j["plan"] == "free"
+    assert j["plan"] == "pro"
+    assert "used_today" not in j
+    assert "daily_limit" not in j
     # The "safer" rewrite should drop the passive-aggressive phrase.
     safer = next(s for s in j["suggestions"] if s["axis"] == "safer")
     assert "per my last" not in safer["text"].lower()
@@ -240,6 +252,7 @@ def test_api_analyze_happy_path(client):
 
 def test_api_analyze_enforces_canonical_coach_axes(client):
     reg = _register(client)
+    _grant_active_subscription(reg)
     r = client.post(
         "/api/analyze",
         headers=_auth(reg["api_token"]),
@@ -257,6 +270,7 @@ def test_api_analyze_treats_invalid_cached_coach_payload_as_miss(client, monkeyp
     from backend.store import get_store
 
     reg = _register(client)
+    _grant_active_subscription(reg)
     text = "Please help with this request."
     axes = list(server.CANONICAL_COACH_AXES)
     cache_key = server._analysis_cache_key(text, axes, None, "en")
@@ -294,7 +308,8 @@ def test_api_analyze_treats_invalid_cached_coach_payload_as_miss(client, monkeyp
     assert response.status_code == 200, response.text
     assert provider_calls == 1
     assert [item["axis"] for item in response.json()["suggestions"]] == axes
-    assert response.json()["used_today"] == 1
+    assert "used_today" not in response.json()
+    assert "daily_limit" not in response.json()
 
 
 def test_api_analyze_requires_text(client):
@@ -312,28 +327,19 @@ def test_api_analyze_requires_auth(client):
     assert r.status_code == 401
 
 
-def test_api_analyze_rate_limit(client):
-    """FREE_DAILY_LIMIT=3 in conftest. 3 should succeed, 4th returns 429."""
-
+def test_api_analyze_requires_entitlement_on_first_rewrite(client):
     reg = _register(client)
     headers = _auth(reg["api_token"])
-
-    for i in range(3):
-        r = client.post(
-            "/api/analyze",
-            headers=headers,
-            json={"text": f"message {i}"},
-        )
-        assert r.status_code == 200, f"call {i}: {r.text}"
-        assert r.json()["used_today"] == i + 1
-
     r = client.post(
         "/api/analyze",
         headers=headers,
-        json={"text": "this should be blocked"},
+        json={"text": "the first unpaid rewrite must be blocked"},
     )
     assert r.status_code == 429
     assert r.json()["error"]["message"] == "active trial or subscription required"
+    assert "Retry-After" not in r.headers
+    assert "used_today" not in r.text
+    assert "daily_limit" not in r.text
 
 
 def test_api_analyze_pro_unlimited(client, monkeypatch):
@@ -364,7 +370,8 @@ def test_api_analyze_pro_unlimited(client, monkeypatch):
         assert r.status_code == 200, f"call {i}: {r.text}"
         j = r.json()
         assert j["plan"] == "pro"
-        assert j["daily_limit"] == -1  # unlimited
+        assert "used_today" not in j
+        assert "daily_limit" not in j
 
 
 # ---------------------------------------------------------------------------
@@ -466,7 +473,8 @@ def test_coupon_happy_path(client, monkeypatch):
     # /v1/me should now show is_pro=True
     me = client.get("/v1/me", headers=_auth(reg["api_token"])).json()
     assert me["is_pro"] is True
-    assert me["daily_limit"] == -1
+    assert "used_today" not in me
+    assert "daily_limit" not in me
 
 
 def test_coupon_redeemed_twice_rejected(client, monkeypatch):
@@ -517,18 +525,29 @@ def test_coupon_duplicate_code_rejected(client, monkeypatch):
     assert r.status_code == 409
 
 
-def test_coupon_unlocks_unlimited_rewrites(client, monkeypatch):
-    """A coupon-pro user should bypass the daily rate limit."""
+def test_coupon_unlocks_rewrites(client, monkeypatch):
+    """An active coupon grants rewrite access without quota counters."""
     monkeypatch.setenv("TONO_ADMIN_SECRET", _ADMIN_SECRET)
     _create_coupon(client, code="UNLIM")
     reg = _register(client)
     client.post("/v1/coupon/redeem", headers=_auth(reg["api_token"]), json={"code": "UNLIM"})
 
     headers = _auth(reg["api_token"])
-    for i in range(5):  # well beyond FREE_DAILY_LIMIT=3 in tests
+    for i in range(5):
         r = client.post("/api/analyze", headers=headers, json={"text": f"msg {i}"})
         assert r.status_code == 200, f"call {i}: {r.text}"
-        assert r.json()["daily_limit"] == -1
+        assert "used_today" not in r.json()
+        assert "daily_limit" not in r.json()
+
+
+def test_openapi_has_no_retired_quota_fields(client):
+    document = client.get("/openapi.json").json()
+    schemas = document["components"]["schemas"]
+
+    assert "used_today" not in schemas["MeResponse"]["properties"]
+    assert "daily_limit" not in schemas["MeResponse"]["properties"]
+    assert "used_today" not in schemas["ApiAnalyzeResponse"]["properties"]
+    assert "daily_limit" not in schemas["ApiAnalyzeResponse"]["properties"]
 
 
 # ---------------------------------------------------------------------------

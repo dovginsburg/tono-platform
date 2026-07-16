@@ -378,8 +378,6 @@ struct CoachView: View {
             if let me = try? await TonoBackend.shared.me() {
                 await MainActor.run {
                     usage = TonoUsage(
-                        usedToday: me.usedToday,
-                        dailyLimit: me.dailyLimit,
                         plan: me.plan,
                         isPro: me.isPro
                     )
@@ -434,8 +432,6 @@ struct CoachView: View {
                 if let me = try? await TonoBackend.shared.me() {
                     await MainActor.run {
                         usage = TonoUsage(
-                            usedToday: me.usedToday,
-                            dailyLimit: me.dailyLimit,
                             plan: me.plan,
                             isPro: me.isPro
                         )

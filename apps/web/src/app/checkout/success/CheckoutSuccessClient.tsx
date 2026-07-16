@@ -18,8 +18,6 @@ type MeResponse = {
   device_id?: string | null
   plan?: string
   is_pro?: boolean
-  used_today?: number
-  daily_limit?: number
   subscription_status?: string | null
   subscription_renews_at?: string | null
 }

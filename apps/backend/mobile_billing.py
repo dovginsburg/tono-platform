@@ -306,15 +306,10 @@ def _billing_response(store: Store, user: User, product_id: str) -> dict[str, An
     refreshed = store.get_by_device(user.device_id)
     if refreshed is None:
         raise HTTPException(404, "device no longer exists")
-    quota_source = refreshed.account if refreshed.account else refreshed
-    today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
-    used_today = quota_source.daily_count if quota_source.daily_day == today else 0
     return {
         "device_id": user.device_id,
         "plan": refreshed.plan_resolved,
         "is_pro": refreshed.is_pro,
-        "used_today": used_today,
-        "daily_limit": -1 if refreshed.is_pro else int(os.environ.get("FREE_DAILY_LIMIT", "10")),
         "account_id": refreshed.account_id,
         "subscription_status": (
             refreshed.account.mobile_subscription_status

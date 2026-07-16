@@ -241,10 +241,6 @@
       },
       "ApiAnalyzeResponse": {
         "properties": {
-          "daily_limit": {
-            "title": "Daily Limit",
-            "type": "integer"
-          },
           "flags": {
             "items": {
               "type": "string"
@@ -279,10 +275,6 @@
             },
             "title": "Suggestions",
             "type": "array"
-          },
-          "used_today": {
-            "title": "Used Today",
-            "type": "integer"
           }
         },
         "required": [
@@ -291,11 +283,22 @@
           "subtext",
           "suggestions",
           "flags",
-          "used_today",
-          "daily_limit",
           "plan"
         ],
         "title": "ApiAnalyzeResponse",
+        "type": "object"
+      },
+      "AppleNotificationRequest": {
+        "properties": {
+          "signedPayload": {
+            "title": "Signedpayload",
+            "type": "string"
+          }
+        },
+        "required": [
+          "signedPayload"
+        ],
+        "title": "AppleNotificationRequest",
         "type": "object"
       },
       "AppleSignInRequest": {
@@ -314,6 +317,30 @@
           "identity_token"
         ],
         "title": "AppleSignInRequest",
+        "type": "object"
+      },
+      "AppleSubscriptionRequest": {
+        "properties": {
+          "product_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product Id"
+          },
+          "signed_transaction_info": {
+            "title": "Signed Transaction Info",
+            "type": "string"
+          }
+        },
+        "required": [
+          "signed_transaction_info"
+        ],
+        "title": "AppleSubscriptionRequest",
         "type": "object"
       },
       "AxisEventRequest": {
@@ -568,6 +595,36 @@
         "title": "EventRequest",
         "type": "object"
       },
+      "GoogleNotificationRequest": {
+        "properties": {
+          "message": {
+            "$ref": "#/components/schemas/GooglePubSubMessage"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "GoogleNotificationRequest",
+        "type": "object"
+      },
+      "GooglePubSubMessage": {
+        "properties": {
+          "data": {
+            "title": "Data",
+            "type": "string"
+          },
+          "messageId": {
+            "title": "Messageid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "messageId"
+        ],
+        "title": "GooglePubSubMessage",
+        "type": "object"
+      },
       "GoogleSignInRequest": {
         "properties": {
           "id_token": {
@@ -584,6 +641,41 @@
           "id_token"
         ],
         "title": "GoogleSignInRequest",
+        "type": "object"
+      },
+      "GoogleSubscriptionRequest": {
+        "properties": {
+          "package_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Package Name"
+          },
+          "product_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product Id"
+          },
+          "purchase_token": {
+            "title": "Purchase Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "purchase_token"
+        ],
+        "title": "GoogleSubscriptionRequest",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -611,10 +703,6 @@
               }
             ],
             "title": "Account Id"
-          },
-          "daily_limit": {
-            "title": "Daily Limit",
-            "type": "integer"
           },
           "device_id": {
             "title": "Device Id",
@@ -649,18 +737,12 @@
               }
             ],
             "title": "Subscription Status"
-          },
-          "used_today": {
-            "title": "Used Today",
-            "type": "integer"
           }
         },
         "required": [
           "device_id",
           "plan",
           "is_pro",
-          "used_today",
-          "daily_limit",
           "subscription_status",
           "subscription_renews_at"
         ],
@@ -990,6 +1072,7 @@
           "app_version": {
             "anyOf": [
               {
+                "maxLength": 64,
                 "type": "string"
               },
               {
@@ -998,9 +1081,23 @@
             ],
             "title": "App Version"
           },
+          "device_credential": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 43,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Credential"
+          },
           "device_id": {
             "anyOf": [
               {
+                "format": "uuid",
                 "type": "string"
               },
               {
@@ -1012,6 +1109,14 @@
           "platform": {
             "anyOf": [
               {
+                "enum": [
+                  "ios",
+                  "android",
+                  "macos",
+                  "windows",
+                  "web",
+                  "slack"
+                ],
                 "type": "string"
               },
               {
@@ -1029,6 +1134,17 @@
           "api_token": {
             "title": "Api Token",
             "type": "string"
+          },
+          "device_credential": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Credential"
           },
           "device_id": {
             "title": "Device Id",
@@ -1850,6 +1966,97 @@
         "summary": "V1 Analyze"
       }
     },
+    "/v1/app-store/notifications": {
+      "post": {
+        "operationId": "app_store_notification_v1_app_store_notifications_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppleNotificationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response App Store Notification V1 App Store Notifications Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "App Store Notification",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/v1/app-store/subscription": {
+      "post": {
+        "operationId": "sync_app_store_subscription_v1_app_store_subscription_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppleSubscriptionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Sync App Store Subscription V1 App Store Subscription Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Sync App Store Subscription",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
     "/v1/auth/apple": {
       "post": {
         "operationId": "auth_apple_v1_auth_apple_post",
@@ -2415,6 +2622,98 @@
           }
         ],
         "summary": "Set Feature Preference"
+      }
+    },
+    "/v1/google-play/notifications": {
+      "post": {
+        "description": "Resolve an RTDN token against Google before changing any entitlement.",
+        "operationId": "google_play_notification_v1_google_play_notifications_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoogleNotificationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Google Play Notification V1 Google Play Notifications Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Google Play Notification",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/v1/google-play/subscription": {
+      "post": {
+        "operationId": "sync_google_play_subscription_v1_google_play_subscription_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoogleSubscriptionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Sync Google Play Subscription V1 Google Play Subscription Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Sync Google Play Subscription",
+        "tags": [
+          "billing"
+        ]
       }
     },
     "/v1/locales": {

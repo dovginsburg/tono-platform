@@ -28,18 +28,9 @@ type AnalyzeResponse = {
   subtext?: string;
   suggestions?: Rewrite[];
   flags?: string[];
-  // 429 shape
   message?: string;
-  used_today?: number;
-  daily_limit?: number;
+  error?: { message?: string };
   plan?: string;
-};
-
-type Quota = {
-  used_today: number;
-  daily_limit: number;
-  plan: string;
-  is_pro?: boolean;
 };
 
 const AXES: Axis[] = ['warmer', 'clearer', 'funnier', 'safer'];
@@ -64,29 +55,9 @@ export function RewriteEditor({
   const [perception, setPerception] = useState<{ risk_level?: string; subtext?: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [limit, setLimit] = useState<{ used: number; max: number } | null>(null);
   const [selected, setSelected] = useState<Axis | null>(null);
   const [copied, setCopied] = useState<Axis | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  const loadQuota = useCallback(async () => {
-    try {
-      const res = await fetch('/api/me', { cache: 'no-store' });
-      if (res.ok) {
-        const data: Quota = await res.json();
-        setLimit({
-          used: data.used_today,
-          max: data.daily_limit === -1 ? Infinity : data.daily_limit,
-        });
-      }
-    } catch {
-      // Quota is decorative; don't surface errors.
-    }
-  }, []);
-
-  useEffect(() => {
-    loadQuota();
-  }, [loadQuota]);
 
   const rewrite = useCallback(async () => {
     if (!draft.trim() || loading) return;
@@ -103,10 +74,7 @@ export function RewriteEditor({
       });
       const data: AnalyzeResponse = await res.json();
       if (res.status === 429) {
-        setError(data.message || 'request unavailable');
-        if (typeof data.used_today === 'number' && typeof data.daily_limit === 'number') {
-          setLimit({ used: data.used_today, max: data.daily_limit });
-        }
+        setError(data.error?.message || data.message || 'active trial or subscription required');
         return;
       }
       if (!res.ok) {
@@ -130,15 +98,12 @@ export function RewriteEditor({
         suggestions,
         perception: data.perception || '',
       });
-
-      // Refresh quota after a successful rewrite
-      loadQuota();
     } catch (e) {
       setError("couldn't reach tono. check your connection and try again.");
     } finally {
       setLoading(false);
     }
-  }, [draft, loading, loadQuota]);
+  }, [draft, loading]);
 
   // ⌘+Enter / Ctrl+Enter to rewrite
   useEffect(() => {
@@ -213,12 +178,6 @@ export function RewriteEditor({
             <Link href="/app/app/history" style={ghostBtn} title="history">
               history
             </Link>
-            <span style={quotaStyle} title={limit ? `${limit.used} of ${limit.max} requests used` : ''}>
-              <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)' }} />
-              <span>
-                <strong>{limit ? limit.used : '–'}</strong> / {limit ? (limit.max === Infinity ? '∞' : limit.max) : '–'} requests
-              </span>
-            </span>
             <span style={avatarStyle} title={email}>
               {(email[0] || '?').toUpperCase()}
             </span>
@@ -622,17 +581,6 @@ const navMetaStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 12,
-};
-const quotaStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  padding: '6px 12px',
-  background: 'var(--bg-card)',
-  border: '1px solid var(--border)',
-  borderRadius: 999,
-  fontSize: 13,
-  color: 'var(--text-soft)',
 };
 const avatarStyle: React.CSSProperties = {
   width: 32,

@@ -94,7 +94,7 @@ sealed class ToneEngineError(message: String) : Exception(message) {
     class Decoding(msg: String) : ToneEngineError("Could not read response: $msg")
     class Backend(msg: String)  : ToneEngineError("Backend: $msg")
     object Offline      : ToneEngineError("No connection. Tap Back and try again when you have signal.")
-    class RateLimit(val usedToday: Int, val dailyLimit: Int)
+    object RateLimit
         : ToneEngineError("Active trial or subscription required. Open Tono to continue.")
 }
 

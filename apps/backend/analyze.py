@@ -517,7 +517,7 @@ async def stream_anthropic_analyze(req: AnalyzeRequest):
     Event types:
       data: {"type":"perception","text":"..."}
       data: {"type":"suggestion","axis":"warmer","text":"...","rationale":"..."}
-      data: {"type":"complete","risk_level":"low","flags":[],"used_today":N,"daily_limit":N,"plan":"free"}
+      data: {"type":"complete","risk_level":"low","flags":[],"plan":"free"}
       data: {"type":"error","message":"..."}
       data: [DONE]
     """

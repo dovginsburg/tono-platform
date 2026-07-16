@@ -10,9 +10,9 @@ Two API surfaces share one FastAPI app:
 
   AUTHENTICATED (device bearer token, used by the keyboard + host app):
     POST /v1/register             -> mint/refresh a bearer token
-    GET  /v1/me                   -> device plan + daily usage
+    GET  /v1/me                   -> device plan + subscription status
     POST /api/analyze             -> rewrite draft, server holds the
-                                    LLM API key, daily + IP rate limits applied
+                                    LLM API key, entitlement + IP limits applied
     POST /v1/event/axis           -> log which rewrite axis the user tapped
     POST /v1/checkout             -> Stripe Checkout Session for Pro (web/B2B)
     POST /v1/portal               -> Stripe Billing Portal
@@ -152,8 +152,6 @@ class ApiAnalyzeRequest(BaseModel):
 
 
 class ApiAnalyzeResponse(ToneAnalysis):
-    used_today: int
-    daily_limit: int  # -1 means unlimited (Pro)
     plan: str
 
 
@@ -339,7 +337,6 @@ async def health() -> dict[str, Any]:
         ),
         "stripe_configured": bool(os.environ.get("STRIPE_SECRET_KEY")),
         "slack_configured": bool(os.environ.get("SLACK_CLIENT_ID")),
-        "free_daily_limit": int(os.environ.get("FREE_DAILY_LIMIT", "10")),
     }
 
 
@@ -460,8 +457,6 @@ class MeResponse(BaseModel):
     device_id: str
     plan: str
     is_pro: bool
-    used_today: int
-    daily_limit: int  # -1 = unlimited
     subscription_status: Optional[str]
     subscription_renews_at: Optional[str]
     account_id: Optional[str] = None
@@ -469,23 +464,12 @@ class MeResponse(BaseModel):
 
 @app.get("/v1/me", response_model=MeResponse)
 def me(user: CurrentUser, store: StoreDep) -> MeResponse:
-    today = _today_utc()
-    # Once a device is linked to an account, the account is the source of
-    # truth for plan/subscription/daily usage — see User.is_pro /
-    # User.plan_resolved, and Store.consume_rewrite for why the counter
-    # itself lives on the account row once signed in (pooled across every
-    # device linked to it, not reset per device).
-    quota_source = user.account if user.account else user
-    used = quota_source.daily_count if quota_source.daily_day == today else 0
-    limit = -1 if user.is_pro else int(os.environ.get("FREE_DAILY_LIMIT", "10"))
     subscription_status = user.account.subscription_status if user.account else user.subscription_status
     subscription_renews_at = user.account.subscription_renews_at if user.account else user.subscription_renews_at
     return MeResponse(
         device_id=user.device_id,
         plan=user.plan_resolved,
         is_pro=user.is_pro,
-        used_today=used,
-        daily_limit=limit,
         subscription_status=subscription_status,
         subscription_renews_at=subscription_renews_at,
         account_id=user.account_id,
@@ -609,7 +593,19 @@ async def api_analyze(
         locale=body.locale,
     )
 
-    # Cache lookup — hits don't consume another rewrite.
+    # Subscription access is checked before cache lookup so a non-entitled
+    # account cannot bypass billing by requesting a previously cached draft.
+    if not store.consume_rewrite(user.device_id):
+        store.log_usage(user.device_id, "/api/analyze", 429, drafts_chars=len(body.text))
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={
+                "message": "active trial or subscription required",
+                "plan": user.plan_resolved,
+            },
+        )
+
+    # Cache lookup happens only after entitlement is established.
     cache_key = (
         _analysis_cache_key(body.text, axes, body.preferred_voice, body.locale)
         if provider != "mock"
@@ -624,33 +620,11 @@ async def api_analyze(
                 logger.warning("Ignoring invalid cached Coach response: %s", e)
                 cached = None
         if cached:
-            today = _today_utc()
-            # Pooled on the account once signed in — see consume_rewrite.
-            quota_source = user.account if user.account else user
-            snap_used = quota_source.daily_count if quota_source.daily_day == today else 0
-            snap_limit = -1 if user.is_pro else int(os.environ.get("FREE_DAILY_LIMIT", "10"))
             store.log_usage(
                 user.device_id, "/api/analyze", 200, provider="cache",
                 drafts_chars=len(body.text),
             )
-            return ApiAnalyzeResponse(
-                **cached, used_today=snap_used, daily_limit=snap_limit, plan=user.plan_resolved
-            )
-
-    # Rate limit BEFORE we call the LLM so a bad actor can't burn $.
-    allowed, used, limit = store.consume_rewrite(user.device_id)
-    if not allowed:
-        store.log_usage(user.device_id, "/api/analyze", 429, drafts_chars=len(body.text))
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail={
-                "message": "active trial or subscription required",
-                "used_today": used,
-                "daily_limit": limit,
-                "plan": user.plan,
-            },
-            headers={"Retry-After": "86400"},
-        )
+            return ApiAnalyzeResponse(**cached, plan=user.plan_resolved)
 
     try:
         if provider == "mock":
@@ -688,7 +662,7 @@ async def api_analyze(
         user.device_id, "/api/analyze", 200, provider=provider,
         drafts_chars=len(body.text),
     )
-    return ApiAnalyzeResponse(**result, used_today=used, daily_limit=limit, plan=user.plan_resolved)
+    return ApiAnalyzeResponse(**result, plan=user.plan_resolved)
 
 
 @app.post("/v1/event/axis", status_code=204)

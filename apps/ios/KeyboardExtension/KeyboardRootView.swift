@@ -61,8 +61,6 @@ enum ShiftState { case none, shiftOnce, capsLock }
 public final class KeyboardModel: ObservableObject {
     @Published var mode: KeyboardMode = .keyboard
     @Published var draft: String = ""
-    @Published var usedToday: Int = 0
-    @Published var dailyLimit: Int = 10
     @Published var isPro: Bool = false
     @Published var hasFullAccess: Bool = true
     @Published var isOfflineResult: Bool = false
@@ -259,11 +257,7 @@ public final class KeyboardModel: ObservableObject {
                     platform: "ios",
                     appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0"
                 )
-                self.usedToday = me.usedToday
-                self.dailyLimit = me.dailyLimit
                 self.isPro = me.isPro
-                SharedStore.defaults.set(me.usedToday, forKey: SharedKeys.widgetUsedToday)
-                SharedStore.defaults.set(max(me.dailyLimit, 0), forKey: SharedKeys.widgetDailyLimit)
             } catch {
                 self.isRefinementLoading = false
                 CrashReporter.setCustomKey(false, forKey: "network_in_flight")
@@ -312,11 +306,7 @@ public final class KeyboardModel: ObservableObject {
 
                 CrashReporter.setCustomKey(false, forKey: "network_in_flight")
                 if let usage = try? await TonoBackend.shared.me() {
-                    self.usedToday = usage.usedToday
-                    self.dailyLimit = usage.dailyLimit
                     self.isPro = usage.isPro
-                    SharedStore.defaults.set(usage.usedToday, forKey: SharedKeys.widgetUsedToday)
-                    SharedStore.defaults.set(usage.dailyLimit, forKey: SharedKeys.widgetDailyLimit)
                     let mirrored = TonoAuthoritativeEntitlement.load()
                     TonoAuthoritativeEntitlement(
                         serverIsPro: usage.isPro,
@@ -355,8 +345,6 @@ public final class KeyboardModel: ObservableObject {
                 self.isRefinementLoading = false
                 CrashReporter.setCustomKey(false, forKey: "network_in_flight")
                 if let usage = try? await TonoBackend.shared.me() {
-                    self.usedToday = usage.usedToday
-                    self.dailyLimit = usage.dailyLimit
                     self.isPro = usage.isPro
                 }
                 self.mode = .error(err.localizedDescription)
@@ -393,8 +381,6 @@ public final class KeyboardModel: ObservableObject {
                     platform: "ios",
                     appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0"
                 )
-                self.usedToday = me.usedToday
-                self.dailyLimit = me.dailyLimit
                 self.isPro = me.isPro
             } catch {
                 CrashReporter.setCustomKey(false, forKey: "network_in_flight")

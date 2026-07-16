@@ -109,10 +109,9 @@ unless cancelled" (and the $39.99/yr variant). The paywall also shows
 the standard App Store boilerplate required by guideline 3.1.2 (payment
 timing, renewal window, free-trial forfeiture) below the buy buttons.
 
-Sign in with the sandbox Apple ID, then either stay on Free or
-start the Pro trial to test the full experience. The FREE_DAILY_LIMIT
-env var on the backend can be used to raise or lower the free cap for
-testing the limit-exceeded path (defaults to 3).
+Sign in with the sandbox Apple ID, then start the Pro trial to test the
+full rewrite experience. Accounts without an active trial or subscription
+are prompted to subscribe before their first rewrite.
 
 ---
 

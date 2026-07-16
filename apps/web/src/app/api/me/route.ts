@@ -1,5 +1,4 @@
-// Returns plan + daily usage for the current user (via tono_api_token cookie).
-// Falls back to {plan: 'free', used_today: 0, daily_limit: -1} if anonymous.
+// Returns plan + entitlement status for the current user.
 
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
@@ -14,8 +13,6 @@ export async function GET() {
       device_id: null,
       plan: 'free',
       is_pro: false,
-      used_today: 0,
-      daily_limit: -1,
     });
   }
 

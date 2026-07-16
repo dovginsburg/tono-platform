@@ -11,9 +11,6 @@ public enum SharedKeys {
     public static let apiKey = "tc.apiKey"
     public static let preferredVoice = "tc.preferredVoice"
     public static let axes = "tc.axes"
-    public static let freeTierUsed = "tc.freeTierUsed"
-    public static let freeTierDay = "tc.freeTierDay"
-    public static let freeTierLimit = "tc.freeTierLimit"
     public static let proUnlocked = "tc.proUnlocked"
     public static let lastRewriteVoice = "tc.lastRewriteVoice"
     // Apple-managed 7-day free trial state (set by StoreKit 2 from
@@ -45,10 +42,6 @@ public enum SharedKeys {
 
     // JSON-encoded [Recipient] — user-defined recipient context hints.
     public static let recipients = "tc.recipients"
-
-    // Widget-facing usage snapshot (written after each /v1/me response).
-    public static let widgetUsedToday = "tc.widgetUsedToday"
-    public static let widgetDailyLimit = "tc.widgetDailyLimit"
 
     // Axis tap weights for StyleMemory. Keys are "tc.axisWeights" (global)
     // and "tc.axisWeights.<UUID>" (per-recipient).
@@ -179,41 +172,5 @@ public struct TonePreferences {
         d.set(axes.map(\.rawValue), forKey: SharedKeys.axes)
         // Entitlement flags are written only by
         // TonoAuthoritativeEntitlement.persist after backend acceptance.
-    }
-}
-
-public struct FreeTierGate {
-    public let dailyLimit: Int
-
-    public init(dailyLimit: Int = 10) {
-        self.dailyLimit = dailyLimit
-    }
-
-    public var usedToday: Int {
-        SharedStore.defaults.integer(forKey: SharedKeys.freeTierUsed)
-    }
-
-    public var dayStamp: String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = .current
-        return f.string(from: Date())
-    }
-
-    /// Returns true if the user can perform another rewrite today.
-    public func canAnalyze() -> Bool {
-        if TonePreferences().proUnlocked { return true }
-        let stored = SharedStore.defaults.string(forKey: SharedKeys.freeTierDay)
-        if stored != dayStamp {
-            SharedStore.defaults.set(0, forKey: SharedKeys.freeTierUsed)
-            SharedStore.defaults.set(dayStamp, forKey: SharedKeys.freeTierDay)
-            return true
-        }
-        return usedToday < dailyLimit
-    }
-
-    public func recordUse() {
-        if TonePreferences().proUnlocked { return }
-        SharedStore.defaults.set(usedToday + 1, forKey: SharedKeys.freeTierUsed)
     }
 }

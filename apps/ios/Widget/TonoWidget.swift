@@ -1,5 +1,5 @@
 // TonoWidget.swift
-// WidgetKit small / medium / lock-screen widget showing daily rewrite usage
+// WidgetKit small / medium / lock-screen widget showing subscription access
 // and the most recent analysis result.
 //
 // Xcode setup:
@@ -20,14 +20,9 @@ import SwiftUI
 
 struct UsageEntry: TimelineEntry {
     let date: Date
-    let used: Int
-    let limit: Int          // -1 = unlimited (Pro)
     let isPro: Bool
     let lastPerception: String?
     let lastRiskLevel: String?  // "low" | "medium" | "high"
-
-    var displayLimit: Int { isPro ? 0 : max(limit, 0) }
-    var remaining: Int { isPro ? Int.max : max(0, displayLimit - used) }
 }
 
 // ---------------------------------------------------------------------------
@@ -36,7 +31,7 @@ struct UsageEntry: TimelineEntry {
 
 struct UsageProvider: TimelineProvider {
     func placeholder(in context: Context) -> UsageEntry {
-        UsageEntry(date: Date(), used: 4, limit: 10, isPro: false,
+        UsageEntry(date: Date(), isPro: false,
                    lastPerception: "Lands cleanly. ✅", lastRiskLevel: "low")
     }
 
@@ -46,24 +41,17 @@ struct UsageProvider: TimelineProvider {
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<UsageEntry>) -> Void) {
         let entry = currentEntry()
-        // Refresh at midnight so the daily counter resets, or in 1 hour to pick
-        // up new analyses even if the host app didn't trigger an explicit reload.
+        // Refresh hourly to pick up entitlement or analysis changes even if the
+        // host app did not trigger an explicit reload.
         let nextHour = Calendar.current.date(byAdding: .hour, value: 1, to: Date()) ?? Date()
-        let midnight = Calendar.current.startOfDay(for: Date().addingTimeInterval(86_400))
-        let next = min(nextHour, midnight)
-        completion(Timeline(entries: [entry], policy: .after(next)))
+        completion(Timeline(entries: [entry], policy: .after(nextHour)))
     }
 
     private func currentEntry() -> UsageEntry {
         let d = UserDefaults(suiteName: "group.com.tonoit.shared") ?? .standard
-        let used  = d.integer(forKey: "tc.widgetUsedToday")
-        let limit = d.object(forKey: "tc.widgetDailyLimit") as? Int ?? 10
-        let isPro = limit == -1 || d.bool(forKey: "tc.proUnlocked")
         return UsageEntry(
             date: Date(),
-            used: used,
-            limit: limit,
-            isPro: isPro,
+            isPro: d.bool(forKey: "tc.proUnlocked"),
             lastPerception: d.string(forKey: "tc.lastPerception"),
             lastRiskLevel: d.string(forKey: "tc.lastRiskLevel")
         )
@@ -103,24 +91,19 @@ private struct SmallView: View {
             Spacer()
 
             if entry.isPro {
-                Text("∞")
+                Image(systemName: "checkmark.seal.fill")
                     .font(.system(size: 38, weight: .bold, design: .rounded))
-                    .foregroundColor(.white)
-                Text("Pro · unlimited")
+                    .foregroundColor(.green)
+                Text("Pro · active")
                     .font(.system(size: 11, design: .rounded))
                     .foregroundColor(.white.opacity(0.5))
             } else {
-                Text("\(entry.used)/\(entry.displayLimit)")
+                Image(systemName: "lock.fill")
                     .font(.system(size: 32, weight: .bold, design: .rounded))
-                    .foregroundColor(.white)
-                Text("rewrites today")
+                    .foregroundColor(.purple)
+                Text("subscription required")
                     .font(.system(size: 11, design: .rounded))
                     .foregroundColor(.white.opacity(0.5))
-                if entry.displayLimit > 0 {
-                    ProgressView(value: Double(entry.used), total: Double(entry.displayLimit))
-                        .tint(.purple)
-                        .scaleEffect(y: 1.4)
-                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
@@ -138,7 +121,7 @@ private struct MediumView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            // Left: usage counter
+            // Left: subscription status
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 4) {
                     Image(systemName: "sparkles")
@@ -150,25 +133,19 @@ private struct MediumView: View {
                 }
                 Spacer()
                 if entry.isPro {
-                    Text("∞")
+                    Image(systemName: "checkmark.seal.fill")
                         .font(.system(size: 34, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
-                    Text("unlimited")
+                        .foregroundColor(.green)
+                    Text("Pro active")
                         .font(.system(size: 10, design: .rounded))
                         .foregroundColor(.white.opacity(0.5))
                 } else {
-                    Text("\(entry.used)")
+                    Image(systemName: "lock.fill")
                         .font(.system(size: 34, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
-                    Text("of \(entry.displayLimit)")
+                        .foregroundColor(.purple)
+                    Text("subscription required")
                         .font(.system(size: 10, design: .rounded))
                         .foregroundColor(.white.opacity(0.5))
-                    if entry.displayLimit > 0 {
-                        ProgressView(value: Double(entry.used), total: Double(entry.displayLimit))
-                            .tint(.purple)
-                            .scaleEffect(y: 1.4)
-                            .frame(width: 60)
-                    }
                 }
             }
             .frame(maxHeight: .infinity, alignment: .leading)
@@ -223,10 +200,10 @@ private struct AccessoryView: View {
             Image(systemName: "sparkles")
                 .font(.system(size: 12, weight: .semibold))
             if entry.isPro {
-                Text("Tono · Pro ∞")
+                Text("Tono · Pro active")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
             } else {
-                Text("Tono · \(entry.used)/\(entry.displayLimit) rewrites")
+                Text("Tono · subscription required")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
             }
             Spacer()
@@ -271,7 +248,7 @@ struct TonoWidget: Widget {
                 .containerBackground(.black, for: .widget)
         }
         .configurationDisplayName("Tono Rewrites")
-        .description("Daily rewrite usage and your last tone result.")
+        .description("Subscription access and your last tone result.")
         .supportedFamilies([.systemSmall, .systemMedium, .accessoryRectangular])
     }
 }
@@ -280,32 +257,32 @@ struct TonoWidget: Widget {
 // Previews
 // ---------------------------------------------------------------------------
 
-#Preview("Small — free", as: .systemSmall) {
+#Preview("Small — subscription required", as: .systemSmall) {
     TonoWidget()
 } timeline: {
-    UsageEntry(date: .now, used: 4, limit: 10, isPro: false,
+    UsageEntry(date: .now, isPro: false,
                lastPerception: "Might land as guilt-trip. 📩", lastRiskLevel: "high")
-    UsageEntry(date: .now, used: 10, limit: 10, isPro: false,
+    UsageEntry(date: .now, isPro: false,
                lastPerception: nil, lastRiskLevel: nil)
 }
 
-#Preview("Medium — free", as: .systemMedium) {
+#Preview("Medium — subscription required", as: .systemMedium) {
     TonoWidget()
 } timeline: {
-    UsageEntry(date: .now, used: 3, limit: 10, isPro: false,
+    UsageEntry(date: .now, isPro: false,
                lastPerception: "Lands cleanly. ✅", lastRiskLevel: "low")
 }
 
 #Preview("Medium — Pro", as: .systemMedium) {
     TonoWidget()
 } timeline: {
-    UsageEntry(date: .now, used: 22, limit: -1, isPro: true,
+    UsageEntry(date: .now, isPro: true,
                lastPerception: "The ask is hard to act on. 🤔", lastRiskLevel: "medium")
 }
 
 #Preview("Lock screen", as: .accessoryRectangular) {
     TonoWidget()
 } timeline: {
-    UsageEntry(date: .now, used: 4, limit: 10, isPro: false,
+    UsageEntry(date: .now, isPro: false,
                lastPerception: nil, lastRiskLevel: nil)
 }

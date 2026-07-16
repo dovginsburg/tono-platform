@@ -103,7 +103,8 @@ def test_second_device_inherits_pro_from_shared_account(client):
     # Device A should now read as Pro.
     me_a = client.get("/v1/me", headers=_auth_headers(device_a["api_token"])).json()
     assert me_a["is_pro"] is True
-    assert me_a["daily_limit"] == -1
+    assert "used_today" not in me_a
+    assert "daily_limit" not in me_a
 
     # A brand-new device, signing in with the SAME Apple identity, inherits Pro.
     device_b = _register(client)
@@ -115,7 +116,8 @@ def test_second_device_inherits_pro_from_shared_account(client):
 
     me_b = client.get("/v1/me", headers=_auth_headers(device_b["api_token"])).json()
     assert me_b["is_pro"] is True
-    assert me_b["daily_limit"] == -1
+    assert "used_today" not in me_b
+    assert "daily_limit" not in me_b
 
 
 def test_google_signin_creates_account(client):
@@ -268,14 +270,11 @@ def test_reauth_with_same_identity_on_linked_device_is_not_a_conflict(client):
 
 
 # ---------------------------------------------------------------------------
-# Pooled daily free-tier allowance across an account's linked devices.
-# conftest sets FREE_DAILY_LIMIT=3 for the whole suite.
+# Subscription-required access across account and anonymous-device paths.
 # ---------------------------------------------------------------------------
 
 
-def test_free_daily_limit_pools_across_linked_devices(client):
-    """Two devices signed into the SAME account share one daily allowance —
-    not 3/day each, 3/day total. This is the actual point of pooling."""
+def test_linked_non_entitled_devices_are_blocked_on_first_rewrite(client):
     from backend.server import app
 
     device_a = _register(client)
@@ -298,24 +297,16 @@ def test_free_daily_limit_pools_across_linked_devices(client):
             headers=_auth_headers(device["api_token"]),
         )
 
-    # 2 on device A, 1 on device B — that's the full pooled limit of 3.
-    assert analyze(device_a, "first message").status_code == 200
-    assert analyze(device_a, "second message").status_code == 200
-    r3 = analyze(device_b, "third message")
-    assert r3.status_code == 200
-    assert r3.json()["used_today"] == 3
-    assert r3.json()["daily_limit"] == 3
-
-    # A 4th call from EITHER device is rate-limited — it's one shared pool.
-    r4 = analyze(device_b, "fourth message")
-    assert r4.status_code == 429
-    r5 = analyze(device_a, "fifth message")
-    assert r5.status_code == 429
+    for device in (device_a, device_b):
+        response = analyze(device, "first message")
+        assert response.status_code == 429
+        assert response.json()["error"]["message"] == "active trial or subscription required"
+        assert "Retry-After" not in response.headers
+        assert "used_today" not in response.text
+        assert "daily_limit" not in response.text
 
 
-def test_free_daily_limit_still_per_device_when_anonymous(client):
-    """Unchanged pre-accounts behavior: two anonymous devices each get
-    their own independent 3/day, since there's no account to pool through."""
+def test_anonymous_non_entitled_devices_are_blocked_on_first_rewrite(client):
 
     def analyze(device, text):
         return client.post(
@@ -327,9 +318,5 @@ def test_free_daily_limit_still_per_device_when_anonymous(client):
     device_a = _register(client)
     device_b = _register(client)
 
-    for _ in range(3):
-        assert analyze(device_a, "msg").status_code == 200
-    assert analyze(device_a, "one too many").status_code == 429
-
-    # Device B's own allowance is untouched by device A's usage.
-    assert analyze(device_b, "msg").status_code == 200
+    assert analyze(device_a, "first message").status_code == 429
+    assert analyze(device_b, "first message").status_code == 429

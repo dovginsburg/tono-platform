@@ -1143,80 +1143,18 @@ class Store:
 
         return self._run(_do).result()
 
-    # ---- rate limit ----
+    # ---- rewrite access ----
 
-    def consume_rewrite(self, device_id: str) -> tuple[bool, int, int]:
-        """Check and increment usage for the device's effective billing owner.
+    def consume_rewrite(self, device_id: str) -> bool:
+        """Return whether the device has canonical rewrite entitlement.
 
-        Anonymous devices use their own `users.daily_count` row. A device
-        linked to an account uses `accounts.daily_count` instead, pooling
-        usage across every device linked to that account. `table`/`key_col`
-        below are fixed internal literals (never user input) that select the
-        row anchoring the usage check.
+        The historical name is retained for callers, but this method no
+        longer consumes or updates a daily allowance. ``User.is_pro`` is the
+        single entitlement resolver for Stripe, StoreKit/Play, coupons, and
+        linked-account inheritance.
         """
-
-        def _do() -> tuple[bool, int, int]:
-            cur = self._conn.cursor()
-            cur.execute(
-                "SELECT plan, subscription_status, coupon_pro_expires_at, daily_count, daily_day, account_id, "
-                "mobile_subscription_status, mobile_subscription_renews_at "
-                "FROM users WHERE device_id = ?",
-                (device_id,),
-            )
-            row = cur.fetchone()
-            if not row:
-                return (False, 0, 0)
-
-            if row["account_id"]:
-                cur.execute(
-                    "SELECT plan, subscription_status, coupon_pro_expires_at, daily_count, daily_day, "
-                    "mobile_subscription_status, mobile_subscription_renews_at "
-                    "FROM accounts WHERE id = ?",
-                    (row["account_id"],),
-                )
-                quota_row = cur.fetchone()
-                table, key_col, key_val = "accounts", "id", row["account_id"]
-            else:
-                quota_row = row
-                table, key_col, key_val = "users", "device_id", device_id
-
-            if quota_row["plan"] == "pro" and quota_row["subscription_status"] in ("active", "trialing"):
-                return (True, quota_row["daily_count"], -1)
-            if _mobile_grants_pro(
-                quota_row["mobile_subscription_status"],
-                quota_row["mobile_subscription_renews_at"],
-            ):
-                return (True, quota_row["daily_count"], -1)
-            if quota_row["coupon_pro_expires_at"] and quota_row["coupon_pro_expires_at"] > _now_iso():
-                return (True, quota_row["daily_count"], -1)
-
-            today = _today_utc()
-            used = quota_row["daily_count"] if quota_row["daily_day"] == today else 0
-            limit = int(os.environ.get("FREE_DAILY_LIMIT", "10"))
-            if used >= limit:
-                return (False, used, limit)
-
-            cur.execute("BEGIN IMMEDIATE")
-            try:
-                if quota_row["daily_day"] != today:
-                    cur.execute(
-                        f"UPDATE {table} SET daily_count=1, daily_day=?, updated_at=? WHERE {key_col}=?",
-                        (today, _now_iso(), key_val),
-                    )
-                    used = 1
-                else:
-                    cur.execute(
-                        f"UPDATE {table} SET daily_count=daily_count+1, updated_at=? WHERE {key_col}=?",
-                        (_now_iso(), key_val),
-                    )
-                    used += 1
-                cur.execute("COMMIT")
-            except Exception:
-                cur.execute("ROLLBACK")
-                raise
-            return (True, used, limit)
-
-        return self._run(_do).result()
+        user = self.get_by_device(device_id)
+        return bool(user and user.is_pro)
 
     # ---- response cache ----
 

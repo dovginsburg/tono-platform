@@ -34,8 +34,6 @@ import kotlin.coroutines.resumeWithException
     @SerialName("device_id")            val deviceId: String,
     val plan: String,
     @SerialName("is_pro")               val isPro: Boolean,
-    @SerialName("used_today")           val usedToday: Int,
-    @SerialName("daily_limit")          val dailyLimit: Int,
     @SerialName("subscription_status")  val subscriptionStatus: String? = null,
     @SerialName("subscription_renews_at") val subscriptionRenewsAt: String? = null,
 )
@@ -54,8 +52,6 @@ import kotlin.coroutines.resumeWithException
     @SerialName("risk_reason") val reason: String? = null,
     val suggestions: List<TonoSuggestionWire>,
     val flags: List<String>,
-    @SerialName("used_today")  val usedToday: Int,
-    @SerialName("daily_limit") val dailyLimit: Int,
     val plan: String,
 )
 
@@ -261,10 +257,7 @@ object TonoBackend {
                         val bodyStr = resp.body?.string() ?: ""
                         when {
                             resp.code == 429 -> {
-                                val used = runCatching {
-                                    json.decodeFromString<ErrorBody>(bodyStr).error.usedToday ?: 0
-                                }.getOrDefault(0)
-                                cont.resumeWithException(ToneEngineError.RateLimit(used, 5))
+                                cont.resumeWithException(ToneEngineError.RateLimit)
                             }
                             resp.code == 401 -> cont.resumeWithException(
                                 ToneEngineError.Backend("Sign-in expired. Open Tono to refresh.")
@@ -291,8 +284,6 @@ object TonoBackend {
     @Serializable private data class ErrorBody(val error: ErrorInner)
     @Serializable private data class ErrorInner(
         val message: String = "",
-        @SerialName("used_today")  val usedToday: Int? = null,
-        @SerialName("daily_limit") val dailyLimit: Int? = null,
     )
 
     private fun toToneAnalysis(r: TonoAnalysisResponse): ToneAnalysis {

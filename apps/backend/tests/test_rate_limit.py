@@ -36,7 +36,6 @@ def rate_limit_setup(monkeypatch, tmp_path):
     """Configure env BEFORE importing backend.server, then import fresh."""
     monkeypatch.setenv("TONO_DB_PATH", str(tmp_path / "tono_rate.db"))
     monkeypatch.setenv("TONO_PROVIDER", "mock")
-    monkeypatch.setenv("FREE_DAILY_LIMIT", "1000")
     monkeypatch.setenv("TONO_ADMIN_SECRET", "test-secret")
     # Source's limiter: IP_RATE_LIMIT_PER_MIN defaults to 20. Set to 3 for tests.
     monkeypatch.setenv("IP_RATE_LIMIT_PER_MIN", "3")

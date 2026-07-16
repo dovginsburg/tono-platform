@@ -53,18 +53,4 @@ final class ToneEngineTests: XCTestCase {
     func testDecodingRejectsBadJSON() {
         XCTAssertThrowsError(try ToneEngine.decode("not json"))
     }
-
-    func testFreeTierGateResetsDaily() {
-        // This is a smoke test only — it writes to shared defaults. In
-        // production tests, point SharedStore at a test-suite.
-        let gate = FreeTierGate(dailyLimit: 2)
-        // Reset
-        SharedStore.defaults.removeObject(forKey: SharedKeys.freeTierUsed)
-        SharedStore.defaults.removeObject(forKey: SharedKeys.freeTierDay)
-        XCTAssertTrue(gate.canAnalyze())
-        gate.recordUse()
-        XCTAssertTrue(gate.canAnalyze())
-        gate.recordUse()
-        XCTAssertFalse(gate.canAnalyze())
-    }
 }
