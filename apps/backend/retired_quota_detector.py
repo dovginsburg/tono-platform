@@ -39,18 +39,28 @@ def retired_quota_claims(source: str) -> list[str]:
         r"their|them|they|this|those|ten|to|up|we|which|who|whose|you|your|"
         r"accrue(?:s)?)\b)[a-z]+\b)"
     )
+    semantic_service_pattern = (
+        r"\b(?:coach(?:\s+(?:messages?|requests?|turns?))?|"
+        r"coaching\s+(?:messages?|requests?|turns?)|edits?|editing|"
+        r"polish(?:es|ing)?|rephras(?:e|es|ing)|revis(?:e|es|ing|ions?)|"
+        r"rewrites?|text\s+improvements?|tune\s+ups?)\b"
+        r"(?!\s+(?:(?:10|remaining|ten|to|up)\s+){0,4}"
+        r"(?:articles?|badges?|certificates?|examples?|guides?|receipts?|reports?|"
+        r"samples?|surveys?|tips|tutorials?|vouchers?)\b)"
+    )
     cadence_pattern = (
-        r"(?:\b(?:daily|today|tomorrow|midnights?|morning|dawn|sunrise|nightly|"
+        r"(?:\b(?:daily|today|tomorrow|midnights?|morning|dawn|daybreaks?|sunrise|nightly|rollovers?|"
         r"24\s*(?:h|hours?)|twenty\s+four\s+hour(?:\s+cycle)?|day\s+by\s+day|"
         r"(?:a|each|every|per)\s+(?:(?:new\s+)?(?:calendar|utc)\s+)?(?:day|night|morning)|"
         r"once\s+per\s+day|the\s+following\s+morning|"
-        r"(?:a|each|every|per)\s+(?:(?:new\s+)?(?:calendar|utc)\s+)?date|"
+        r"(?:a|each|every|per)\s+(?:(?:new\s+)?(?:calendar|utc)\s+|new\s+)?date|"
         r"starts?\s+the\s+day|(?:the\s+)?date\s+changes?|"
         r"(?:the\s+)?day(?:'s)?\s+(?:first|opening)\s+moment|"
         r"(?:at|from|upon|when)\s+(?:the\s+)?(?:beginning|commencement)\s+of\s+each\s+day|"
-        r"when\s+(?:a|each|the)\s+(?:new\s+)?day\s+(?:begins|opens)|"
+        r"(?:once|when)\s+(?:a|each|the)\s+(?:fresh\s+|new\s+)?day\s+(?:begins|opens|starts|turns\s+over)|"
+        r"when\s+(?:the\s+)?morning\s+arrives|"
         r"upon\s+each\s+day(?:'s)?\s+commencement|"
-        r"(?:a|each|every|the)\s+new\s+day(?:\s+(?:begins|opens|supplies))?)\b|\b00:00\b)"
+        r"(?:a|each|every|the)\s+(?:fresh\s+|new\s+)day(?:\s+(?:begins|opens|starts|supplies))?)\b|\b00:00\b)"
     )
     allocation_noun_pattern = (
         r"\b(?:allocations?|allowance|allotment|balance|credits?|plans?|quota|tiers?)\b"
@@ -66,11 +76,22 @@ def retired_quota_claims(source: str) -> list[str]:
         + free_pattern
         + r")"
     )
+    explicit_free_recipient_pattern = (
+        r"(?:"
+        + free_pattern
+        + r"(?:\s+(?:plan|tier)|,?\s+"
+        + recipient_pattern
+        + r")|"
+        + recipient_pattern
+        + r"(?:\s+who)?\s+.{0,24}"
+        + free_pattern
+        + r")"
+    )
 
     def has_quantity_and_service(text: str) -> bool:
         return bool(
             re.search(quantity_pattern, text)
-            and re.search(service_pattern, text)
+            and re.search(semantic_service_pattern, text)
         )
 
     def has_bound_allocation(segment: str) -> bool:
@@ -110,6 +131,17 @@ def retired_quota_claims(source: str) -> list[str]:
             + service_pattern
             + r"|"
             + service_pattern
+            + r".{0,40}"
+            + quantity_pattern
+            + r")"
+        )
+        semantic_quantity_service_pair = (
+            r"(?:"
+            + quantity_pattern
+            + r".{0,40}"
+            + semantic_service_pattern
+            + r"|"
+            + semantic_service_pattern
             + r".{0,40}"
             + quantity_pattern
             + r")"
@@ -550,34 +582,36 @@ def retired_quota_claims(source: str) -> list[str]:
             r"receipts?|reports?|samples?|surveys?|tutorials?|vouchers?)\b",
             segment,
         )
-        capacity_relation_pattern = (
-            r"\b(?:"
-            r"(?:make|makes|made|render|renders|rendered)\b.{0,55}\b(?:available|possible)|"
-            r"wake(?:s|n|ned)?\s+up\s+(?:with|to)|"
-            r"(?:place|places|placed|put|puts)\b.{0,45}\b(?:at\s+the\s+)?disposal|"
-            r"(?:ability|capacity|permission|room)\b.{0,55}\b"
-            r"(?:comes?\s+back|reappears?|returns?|restores?|resets?|renews?)|"
-            r"(?:can|may)\b.{0,55}\b(?:before|between|until)\b|"
-            r"re\s*enable(?:d|s)?|"
-            r"(?:enable|enables|enabled|open|opens|opened|materialize|materializes|"
-            r"materialized|activate|activates|activated|unlock|unlocks|unlocked)\b|"
-            r"(?:leave|leaves|left|provide|provides|provided)\b.{0,45}\b"
-            r"(?:capacity|opportunit(?:y|ies)|room)|"
-            r"(?:confer|confers|conferred|give|gives|gave|grant|grants|granted)\b"
-            r".{0,55}\b(?:ability|capacity|opportunit(?:y|ies)|permission|room)|"
-            r"(?:slots?|opportunit(?:y|ies))\b.{0,35}\b"
-            r"(?:becomes?\s+available|materialize|materializes|open|opens)|"
-            r"reset(?:s|ting)?\b.{0,45}\b(?:remaining|to\s+(?:the\s+)?"
-            + quantity_pattern
-            + r")"
-            r")"
+        semantic_artifact_context = re.search(
+            r"\b(?:articles?|badges?|certificates?|consultations?|documentation|examples?|guides?|"
+            r"handbooks?|histories|invoices?|manuals?|newsletters?|receipts?|reports?|"
+            r"samples?|seminars?|surveys?|templates?|tips|tutorials?|vouchers?|warranties)\b",
+            segment,
         )
-        recurring_capacity_allocation = bool(
-            re.search(free_entity_pattern, segment)
+        non_beneficiary_role = re.search(
+            r"(?:"
+            r"^(?:the\s+)?[a-z]+(?:\s+[a-z]+){0,2}\s+(?:of|to|for)\s+(?:the\s+)?"
+            + explicit_free_recipient_pattern
+            + r"|"
+            + semantic_quantity_service_pair
+            + r".{0,24}\b(?:by|from)\s+(?:each\s+|every\s+)?"
+            + explicit_free_recipient_pattern
+            + r"|"
+            + explicit_free_recipient_pattern
+            + r".{0,24}\b(?:compare|compares|count|counts|discuss|discusses|download|downloads|"
+            r"inspect|inspects|publish|publishes|read|reads|review|reviews|tag|tags|view|views)\b"
+            r")",
+            segment,
+        )
+        # Bind the policy's semantic roles instead of requiring an allowlisted
+        # allocation verb: recipient + cadence + quantity + coaching service.
+        recurring_semantic_benefit = bool(
+            re.search(explicit_free_recipient_pattern, segment)
             and re.search(cadence_pattern, segment)
-            and re.search(tight_quantity_service_pair, segment)
-            and re.search(capacity_relation_pattern, segment)
+            and re.search(semantic_quantity_service_pair, segment)
             and not scope_artifact_modifier
+            and not semantic_artifact_context
+            and not non_beneficiary_role
         )
         directly_free_relation = (
             not re.search(r"\b(?:paid|premium|pro|subscribers?)\b", segment)
@@ -658,7 +692,7 @@ def retired_quota_claims(source: str) -> list[str]:
             or cadence_restores_owned_nominal
             or cadence_restores_beneficiary_nominal_with_pair
             or event_state_allocation
-            or recurring_capacity_allocation
+            or recurring_semantic_benefit
             or directly_free_relation
         )
 

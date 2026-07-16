@@ -531,6 +531,37 @@ def test_retired_quota_claim_detector_binds_recurring_capacity_semantics():
     assert not false_positives, false_positives
 
 
+def test_retired_quota_claim_detector_generalizes_recurring_recipient_semantics():
+    pairs = (
+        ("Each dawn endows every unpaid user with ten rewrites.", "Each dawn endows every unpaid user with ten rewrite examples."),
+        ("At midnight, ten edits fall to every free member.", "At midnight, ten edit reports fall to every free member."),
+        ("A new date affords no-cost accounts ten coaching turns.", "A new date affords no-cost accounts ten coaching survey results."),
+        ("At sunrise, gratis users acquire the right to revise ten messages.", "At sunrise, gratis users acquire the right to review ten revision tutorials."),
+        ("Every morning puts ten rewrites within reach of unpaid accounts.", "Every morning puts ten rewrite guides within reach of unpaid accounts."),
+        ("Once the day turns over, complimentary members are good for ten edits.", "Once the day turns over, complimentary members are good for ten edit certificates."),
+        ("Ten fresh revisions await each nonpaying user every morning.", "Ten fresh revision examples await each nonpaying user every morning."),
+        ("On each new day, the free tier is provisioned for ten coaching requests.", "On each new day, the free tier is provisioned with ten coaching request reports."),
+        ("Nightly, gratis accounts recover headroom for ten rewrites.", "Nightly, gratis accounts recover storage for ten rewrite receipts."),
+        ("Each sunrise replenishes free users' power to make ten edits.", "Each sunrise replenishes free users' handbook with ten editing tips."),
+        ("The rollover furnishes every unpaid member with ten revisions each morning.", "The rollover furnishes every unpaid member with ten revision samples each morning."),
+        ("Every daybreak bestows ten rewrite chances on no-cost users.", "Every daybreak bestows ten rewrite certificates on no-cost users."),
+        ("When morning arrives, complimentary accounts qualify for ten text improvements.", "When morning arrives, complimentary accounts qualify for ten text-improvement tutorials."),
+        ("Gratis members inherit ten editing uses whenever a new day starts.", "Gratis members inherit ten editing guides whenever a new day starts."),
+        ("The daily reset restores free accounts' authority to perform ten rewrites.", "The daily reset restores free accounts' authority to publish ten rewrite reports."),
+        ("Each morning budgets ten coaching turns for nonpaying people.", "Each morning budgets ten coaching-turn surveys for nonpaying people."),
+        ("At dawn, unpaid accounts receive scope for ten more revisions.", "At dawn, unpaid accounts receive documentation covering ten revision examples."),
+        ("Every midnight renews a free member's eligibility to polish ten drafts.", "Every midnight renews a free member's eligibility to read ten polish tutorials."),
+        ("A fresh day equips complimentary users to make ten edits.", "A fresh day equips complimentary users to inspect ten edit receipts."),
+        ("By sunrise, no-cost accounts again possess the means for ten rewrites.", "By sunrise, no-cost accounts again possess ten rewrite guides."),
+    )
+
+    missing = [hostile for hostile, _ in pairs if not _retired_quota_claims(hostile)]
+    false_positives = [benign for _, benign in pairs if _retired_quota_claims(benign)]
+
+    assert not missing, missing
+    assert not false_positives, false_positives
+
+
 def test_retired_quota_claim_detector_rejects_benign_contexts():
     benign_copy = (
         "Pro users get ten rewrites daily during the pilot.",
