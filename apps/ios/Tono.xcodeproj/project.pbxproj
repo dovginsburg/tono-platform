@@ -18,6 +18,15 @@
 		1A06E18F2984DDB350DFB704 /* TonoAnalytics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92219FEC38B911DE3D75FC8F /* TonoAnalytics.swift */; };
 		1C0E2FF825129467C4BE13C6 /* MetricKitReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 640260545EC970E83D72B3B0 /* MetricKitReporter.swift */; };
 		1CAA969882E6F9D9CC268124 /* TonoKeyboard.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C8209946856E4958F336751B /* TonoKeyboard.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		890000000000000000000001 /* TonoMessagesExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 2850931F0F01200197FC84B7 /* TonoMessagesExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		890000000000000000000002 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 890000000000000000000003 /* Assets.xcassets */; };
+		8A0000000000000000000011 /* LiveToneClassifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A0000000000000000000001 /* LiveToneClassifier.swift */; };
+		8A0000000000000000000012 /* LiveToneSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A0000000000000000000002 /* LiveToneSession.swift */; };
+		8A0000000000000000000013 /* LiveTonePrivacy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A0000000000000000000003 /* LiveTonePrivacy.swift */; };
+		8A0000000000000000000014 /* LiveToneEligibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A0000000000000000000004 /* LiveToneEligibility.swift */; };
+		8A0000000000000000000015 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 8A0000000000000000000005 /* PrivacyInfo.xcprivacy */; };
+		8A0000000000000000000016 /* LiveToneCoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A0000000000000000000006 /* LiveToneCoreTests.swift */; };
+		8A0000000000000000000017 /* LiveTonePrivacyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A0000000000000000000007 /* LiveTonePrivacyTests.swift */; };
 		1F625673B188289A9DEBCA36 /* ContactsSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E33B6F18B213E414885CCCA /* ContactsSync.swift */; };
 		2006FA0CC979F68A4F917014 /* MockToneAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C69903847843E133412E1E5 /* MockToneAnalyzer.swift */; };
 		20D1B23B844C847F7AB362C3 /* RecipientMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58D322318012F6E3758FBE16 /* RecipientMemory.swift */; };
@@ -145,6 +154,7 @@
 			dstSubfolderSpec = 13;
 			files = (
 				1CAA969882E6F9D9CC268124 /* TonoKeyboard.appex in Embed Foundation Extensions */,
+				890000000000000000000001 /* TonoMessagesExtension.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -159,6 +169,14 @@
 		1B3DE7D6D3E9558EBAB94A9A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		217A3D33DCC3DE654CA907C5 /* PlaygroundView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaygroundView.swift; sourceTree = "<group>"; };
 		2850931F0F01200197FC84B7 /* TonoMessagesExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TonoMessagesExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		890000000000000000000003 /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		8A0000000000000000000001 /* LiveToneClassifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveToneClassifier.swift; sourceTree = "<group>"; };
+		8A0000000000000000000002 /* LiveToneSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveToneSession.swift; sourceTree = "<group>"; };
+		8A0000000000000000000003 /* LiveTonePrivacy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTonePrivacy.swift; sourceTree = "<group>"; };
+		8A0000000000000000000004 /* LiveToneEligibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveToneEligibility.swift; sourceTree = "<group>"; };
+		8A0000000000000000000005 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		8A0000000000000000000006 /* LiveToneCoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveToneCoreTests.swift; sourceTree = "<group>"; };
+		8A0000000000000000000007 /* LiveTonePrivacyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTonePrivacyTests.swift; sourceTree = "<group>"; };
 		3BEE71892FA8D9333320C272 /* Tono.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = Tono.storekit; sourceTree = "<group>"; };
 		3C69903847843E133412E1E5 /* MockToneAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockToneAnalyzer.swift; sourceTree = "<group>"; };
 		3C73FA31B4F44D8110957849 /* MemoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryView.swift; sourceTree = "<group>"; };
@@ -265,6 +283,8 @@
 				045FE2F8B15471B8BFD56595 /* ContactsAccessTests.swift */,
 				860000000000000000000003 /* CoachContractTests.swift */,
 				870000000000000000000005 /* KeyboardVisualStyleTests.swift */,
+				8A0000000000000000000006 /* LiveToneCoreTests.swift */,
+				8A0000000000000000000007 /* LiveTonePrivacyTests.swift */,
 				850000000000000000000005 /* SpellingCorrectionTests.swift */,
 			);
 			name = Tests;
@@ -291,6 +311,10 @@
 				4673C08A34AA91DC050C1D33 /* CrashReporter.swift */,
 				F6B4784B7C394FD81347488C /* DraftHistory.swift */,
 				D8F4E5BEB850F3FDD9485F10 /* FeatureFlags.swift */,
+				8A0000000000000000000004 /* LiveToneEligibility.swift */,
+				8A0000000000000000000001 /* LiveToneClassifier.swift */,
+				8A0000000000000000000003 /* LiveTonePrivacy.swift */,
+				8A0000000000000000000002 /* LiveToneSession.swift */,
 				640260545EC970E83D72B3B0 /* MetricKitReporter.swift */,
 				3C69903847843E133412E1E5 /* MockToneAnalyzer.swift */,
 				A20246E7AA254A3BFC26B2ED /* NotificationManager.swift */,
@@ -330,6 +354,7 @@
 				6EDBB4F550AF48643771E5BF /* DigestView.swift */,
 				7FCE9DA4E023C12BADC4BC12 /* HomeView.swift */,
 				A834BA4FC850457268EEDDD3 /* Info.plist */,
+				8A0000000000000000000005 /* PrivacyInfo.xcprivacy */,
 				3C73FA31B4F44D8110957849 /* MemoryView.swift */,
 				600B6DD9AC9FC36C6BB8ED14 /* OnboardingCalibrationView.swift */,
 				217A3D33DCC3DE654CA907C5 /* PlaygroundView.swift */,
@@ -350,6 +375,7 @@
 				4C15A6D1DB3DF8DFB596C677 /* MessagesViewController.swift */,
 				5B75EE54EB84F5BC90F85AA5 /* Info.plist */,
 				8C71600DCEEEFF51AE070EA1 /* TonoMessagesExtension.entitlements */,
+				890000000000000000000003 /* Assets.xcassets */,
 			);
 			name = TonoMessagesExtension;
 			path = TonoMessagesExtension;
@@ -518,6 +544,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				890000000000000000000002 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -528,6 +555,7 @@
 				879EE9AE45F41F898053C977 /* Tono.storekit in Resources */,
 				2A1053919D15380BA5597C24 /* Assets.xcassets in Resources */,
 				CD6D8AD098B0C429CA71714F /* TonoRewrite.shortcut in Resources */,
+				8A0000000000000000000015 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -625,6 +653,8 @@
 				850000000000000000000002 /* SpellingCorrection.swift in Sources */,
 				850000000000000000000003 /* SpellingCorrectionTests.swift in Sources */,
 				860000000000000000000001 /* CoachContractTests.swift in Sources */,
+				8A0000000000000000000016 /* LiveToneCoreTests.swift in Sources */,
+				8A0000000000000000000017 /* LiveTonePrivacyTests.swift in Sources */,
 				860000000000000000000002 /* TonoCoachClient.swift in Sources */,
 				870000000000000000000002 /* TonoKeyboardVisualStyle.swift in Sources */,
 				870000000000000000000003 /* KeyboardVisualStyleTests.swift in Sources */,
@@ -668,6 +698,10 @@
 				DE7FE19B2535A1D6751A7E8D /* DigestView.swift in Sources */,
 				D2A8474984B2140EEA2F01AE /* DraftHistory.swift in Sources */,
 				EE4DDFD2295E0A5D078895EF /* FeatureFlags.swift in Sources */,
+				8A0000000000000000000011 /* LiveToneClassifier.swift in Sources */,
+				8A0000000000000000000012 /* LiveToneSession.swift in Sources */,
+				8A0000000000000000000013 /* LiveTonePrivacy.swift in Sources */,
+				8A0000000000000000000014 /* LiveToneEligibility.swift in Sources */,
 				2F986D1C30D60DF7044A1827 /* HomeView.swift in Sources */,
 				5A3F5B2DEE787882EB6A04AC /* MemoryView.swift in Sources */,
 				BCE86246C1AA22B4751B06C8 /* MetricKitReporter.swift in Sources */,
@@ -966,7 +1000,7 @@
 		7E5F63BDC78AE30936EA5725 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "iMessage App Icon";
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = TonoMessagesExtension/TonoMessagesExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
@@ -1013,7 +1047,7 @@
 		B74EDF9191DB8DA1909BEF8F /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "iMessage App Icon";
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = TonoMessagesExtension/TonoMessagesExtension.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Distribution";

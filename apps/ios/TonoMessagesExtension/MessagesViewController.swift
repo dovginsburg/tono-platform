@@ -1,5 +1,21 @@
 // TonoMessagesExtension/MessagesViewController.swift
 // iMessage extension entry point — enables Tono analysis directly in Messages.
+//
+// Contract (build 90):
+//   compact  → a single "Coach a message" affordance in the Messages drawer
+//   expanded → draft field + Coach button
+//   draft    → user types/pastes the message they are about to send
+//   Coach    → deliberate, authenticated backend round-trip (Bearer token from
+//              the shared Keychain; fails closed with a visible, safe message
+//              if the account has not been set up yet)
+//   select   → user taps one of the four rewrites
+//   insert   → the rewrite is inserted as PLAIN TEXT into the Messages input
+//              field via MSConversation.insertText(_:), where the user reviews
+//              and sends it themselves. We never fabricate an MSMessage bubble,
+//              never auto-send, and never touch the pasteboard.
+//
+// Every failure path (not-registered, network, decode, insert) surfaces a
+// short, non-technical line in the UI instead of failing silently.
 
 import UIKit
 import Messages
@@ -7,25 +23,14 @@ import SwiftUI
 
 class MessagesViewController: MSMessagesAppViewController {
     private var hostingController: UIHostingController<MessagesRootView>?
-    private var currentText: String = ""
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        setupUI()
+        installHostingController()
     }
 
-    private func setupUI() {
-        let rootView = MessagesRootView(
-            text: currentText,
-            presentationStyle: presentationStyle,
-            onRequestExpand: { [weak self] in
-                self?.requestPresentationStyle(.expanded)
-            },
-            onInsertMessage: { [weak self] rewrittenText in
-                self?.insertRewrite(rewrittenText)
-            }
-        )
-        let host = UIHostingController(rootView: rootView)
+    private func installHostingController() {
+        let host = UIHostingController(rootView: makeRootView())
         hostingController = host
         addChild(host)
         view.addSubview(host.view)
@@ -39,20 +44,24 @@ class MessagesViewController: MSMessagesAppViewController {
         host.didMove(toParent: self)
     }
 
+    private func makeRootView() -> MessagesRootView {
+        MessagesRootView(
+            presentationStyle: presentationStyle,
+            // Read the auth state fresh each time the UI is (re)built so a
+            // sign-in that happened in the host app is reflected immediately.
+            isRegistered: TonoBackend.shared.isRegistered(),
+            onRequestExpand: { [weak self] in
+                self?.requestPresentationStyle(.expanded)
+            },
+            onInsertMessage: { [weak self] rewrittenText, completion in
+                self?.insertRewrite(rewrittenText, completion: completion)
+            }
+        )
+    }
+
     override func willBecomeActive(with conversation: MSConversation) {
         super.willBecomeActive(with: conversation)
-        if let message = conversation.selectedMessage, let url = message.url {
-            currentText = url.absoluteString
-        }
         updateHostingController()
-    }
-
-    override func didResignActive(with conversation: MSConversation) {
-        super.didResignActive(with: conversation)
-    }
-
-    override func didReceive(_ message: MSMessage, conversation: MSConversation) {
-        super.didReceive(message, conversation: conversation)
     }
 
     override func didTransition(to presentationStyle: MSMessagesAppPresentationStyle) {
@@ -61,28 +70,27 @@ class MessagesViewController: MSMessagesAppViewController {
     }
 
     private func updateHostingController() {
-        hostingController?.rootView = MessagesRootView(
-            text: currentText,
-            presentationStyle: presentationStyle,
-            onRequestExpand: { [weak self] in
-                self?.requestPresentationStyle(.expanded)
-            },
-            onInsertMessage: { [weak self] rewrittenText in
-                self?.insertRewrite(rewrittenText)
-            }
-        )
+        hostingController?.rootView = makeRootView()
     }
 
-    private func insertRewrite(_ text: String) {
-        guard let conversation = activeConversation else { return }
-        let session = MSSession()
-        let message = MSMessage(session: session)
-        let layout = MSMessageTemplateLayout()
-        layout.caption = text
-        message.layout = layout
-        conversation.insert(message) { error in
-            if let error {
-                print("[Messages] insert error: \(error.localizedDescription)")
+    /// Insert the chosen rewrite as plain text into the Messages compose field.
+    /// The user keeps full control: they see the text land in the input bar and
+    /// tap send themselves. On failure we report a short message back to the UI.
+    private func insertRewrite(_ text: String, completion: @escaping (String?) -> Void) {
+        guard let conversation = activeConversation else {
+            completion("Couldn’t reach the message field. Try reopening Tono.")
+            return
+        }
+        conversation.insertText(text) { [weak self] error in
+            DispatchQueue.main.async {
+                if let error {
+                    completion("Couldn’t insert the rewrite: \(error.localizedDescription)")
+                } else {
+                    // Collapse back to compact so the user is looking at their
+                    // freshly-inserted draft in the input bar.
+                    self?.requestPresentationStyle(.compact)
+                    completion(nil)
+                }
             }
         }
     }
@@ -91,15 +99,18 @@ class MessagesViewController: MSMessagesAppViewController {
 // MARK: - SwiftUI Root View
 
 struct MessagesRootView: View {
-    let text: String
     let presentationStyle: MSMessagesAppPresentationStyle
+    let isRegistered: Bool
     let onRequestExpand: () -> Void
-    let onInsertMessage: (String) -> Void
+    /// (rewrite, completion) — completion delivers nil on success or a short,
+    /// user-facing error string on failure.
+    let onInsertMessage: (String, @escaping (String?) -> Void) -> Void
 
     @State private var draftText: String = ""
     @State private var analysis: ToneAnalysis?
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @State private var didInsert = false
 
     var body: some View {
         if presentationStyle == .compact {
@@ -117,7 +128,7 @@ struct MessagesRootView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Tono Coach")
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
-                Text("Analyze & rewrite your message")
+                Text(didInsert ? "Rewrite added — review & send" : "Analyze & rewrite your message")
                     .font(.system(size: 12, design: .rounded))
                     .foregroundColor(.secondary)
             }
@@ -130,6 +141,7 @@ struct MessagesRootView: View {
                     .background(Color.purple)
                     .clipShape(Circle())
             }
+            .accessibilityLabel("Coach a message")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -139,6 +151,10 @@ struct MessagesRootView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    if !isRegistered {
+                        notRegisteredBanner
+                    }
+
                     TextField("Type or paste your message...", text: $draftText, axis: .vertical)
                         .textFieldStyle(.plain)
                         .padding()
@@ -146,33 +162,19 @@ struct MessagesRootView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .lineLimit(3...8)
 
-                    HStack(spacing: 8) {
-                        Button(action: runAnalysis) {
-                            HStack(spacing: 6) {
-                                Image(systemName: "sparkles")
-                                Text("Coach")
-                            }
-                            .font(.system(size: 14, weight: .semibold, design: .rounded))
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 10)
-                            .background(Color.purple)
-                            .foregroundColor(.white)
-                            .clipShape(Capsule())
+                    Button(action: runAnalysis) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "sparkles")
+                            Text("Coach")
                         }
-                        .disabled(draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isLoading)
-
-                        ForEach(RewriteAxis.allCases) { axis in
-                            Button(action: { runAxisRewrite(axis) }) {
-                                Text(axis.displayName)
-                                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 8)
-                                    .background(Color(.systemGray5))
-                                    .clipShape(Capsule())
-                            }
-                            .disabled(draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isLoading)
-                        }
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(Color.purple)
+                        .foregroundColor(.white)
+                        .clipShape(Capsule())
                     }
+                    .disabled(!canCoach)
 
                     if isLoading {
                         ProgressView("Analyzing...")
@@ -181,10 +183,13 @@ struct MessagesRootView: View {
                     }
 
                     if let err = errorMessage {
-                        Text(err)
+                        Label(err, systemImage: "exclamationmark.triangle.fill")
                             .font(.caption)
                             .foregroundColor(.red)
                             .padding()
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.red.opacity(0.1))
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
                     }
 
                     if let a = analysis {
@@ -196,11 +201,26 @@ struct MessagesRootView: View {
             .navigationTitle("Tono")
             .navigationBarTitleDisplayMode(.inline)
         }
-        .onAppear {
-            if !text.isEmpty && draftText.isEmpty {
-                draftText = text
-            }
+    }
+
+    private var notRegisteredBanner: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label("Set up Tono first", systemImage: "person.crop.circle.badge.exclamationmark")
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+            Text("Open the Tono app once to create your account, then come back to coach messages here.")
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var canCoach: Bool {
+        isRegistered
+            && !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !isLoading
     }
 
     @ViewBuilder
@@ -219,8 +239,12 @@ struct MessagesRootView: View {
             Text(a.perception)
                 .font(.system(size: 15, weight: .medium, design: .rounded))
 
+            Text("Tap a rewrite to drop it into your message.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
             ForEach(a.suggestions) { s in
-                Button(action: { onInsertMessage(s.text) }) {
+                Button(action: { insert(s.text) }) {
                     VStack(alignment: .leading, spacing: 4) {
                         Label(s.axis.displayName, systemImage: s.axis.glyph)
                             .font(.system(size: 11, weight: .semibold, design: .rounded))
@@ -249,20 +273,26 @@ struct MessagesRootView: View {
     }
 
     private func runAnalysis() {
-        guard !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let trimmed = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isRegistered else {
+            errorMessage = "Open the Tono app once to create your account, then try again."
+            return
+        }
+        guard !trimmed.isEmpty else { return }
         isLoading = true
         errorMessage = nil
-        Task {
-            await performAnalysis()
-        }
+        analysis = nil
+        Task { await performAnalysis() }
     }
 
-    private func runAxisRewrite(_: RewriteAxis) {
-        guard !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        isLoading = true
+    private func insert(_ text: String) {
         errorMessage = nil
-        Task {
-            await performAnalysis()
+        onInsertMessage(text) { failure in
+            if let failure {
+                errorMessage = failure
+            } else {
+                didInsert = true
+            }
         }
     }
 

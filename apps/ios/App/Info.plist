@@ -2,10 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>TonoCanonicalSHA</key>
-	<string>$(TONO_CANONICAL_SHA)</string>
-	<key>TonoSchemaRevision</key>
-	<string>$(TONO_SCHEMA_REVISION)</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleExecutable</key>
@@ -23,7 +19,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.1</string>
 	<key>CFBundleVersion</key>
-	<string>86</string>
+	<string>90</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSApplicationQueriesSchemes</key>
@@ -34,6 +30,10 @@
 	<true/>
 	<key>NSContactsUsageDescription</key>
 	<string>Tono uses contacts you choose to create local recipient profiles for personalized coaching.</string>
+	<key>TonoCanonicalSHA</key>
+	<string>$(TONO_CANONICAL_SHA)</string>
+	<key>TonoSchemaRevision</key>
+	<string>$(TONO_SCHEMA_REVISION)</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

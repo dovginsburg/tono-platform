@@ -1,0 +1,1012 @@
+{
+  "schemaVersion": 1,
+  "classifierVersion": 1,
+  "description": "Live Tone build-90 labeled corpus. `risky` is human ground truth. The classifier is precision-first: false positives (hint on risky=false) must be <= 1/20 of the corpus; false negatives are tolerated.",
+  "counts": {
+    "total": 200,
+    "risky": 56,
+    "benign": 144
+  },
+  "messages": [
+    {
+      "id": 1,
+      "text": "As per my last email, the deadline was Friday.",
+      "risky": true
+    },
+    {
+      "id": 2,
+      "text": "Per my last message, I already sent the file.",
+      "risky": true
+    },
+    {
+      "id": 3,
+      "text": "As previously discussed, this is not included in the scope.",
+      "risky": true
+    },
+    {
+      "id": 4,
+      "text": "As I already said, I'm not able to make it.",
+      "risky": true
+    },
+    {
+      "id": 5,
+      "text": "As I already told you, the meeting moved to 3.",
+      "risky": true
+    },
+    {
+      "id": 6,
+      "text": "Like I already said, we're not doing that.",
+      "risky": true
+    },
+    {
+      "id": 7,
+      "text": "For the last time, please stop calling me at work.",
+      "risky": true
+    },
+    {
+      "id": 8,
+      "text": "For the third time, the answer is no.",
+      "risky": true
+    },
+    {
+      "id": 9,
+      "text": "How many times do I have to explain this to you?",
+      "risky": true
+    },
+    {
+      "id": 10,
+      "text": "As stated previously, refunds are final.",
+      "risky": true
+    },
+    {
+      "id": 11,
+      "text": "As I said before, I need this by end of day.",
+      "risky": true
+    },
+    {
+      "id": 12,
+      "text": "Per my previous email, the invoice is attached again.",
+      "risky": true
+    },
+    {
+      "id": 13,
+      "text": "As previously stated, the office is closed Monday.",
+      "risky": true
+    },
+    {
+      "id": 14,
+      "text": "As I already mentioned, that room is booked.",
+      "risky": true
+    },
+    {
+      "id": 15,
+      "text": "That's not my problem, honestly.",
+      "risky": true
+    },
+    {
+      "id": 16,
+      "text": "Not my job to chase you for it.",
+      "risky": true
+    },
+    {
+      "id": 17,
+      "text": "That's on you, I gave you the details.",
+      "risky": true
+    },
+    {
+      "id": 18,
+      "text": "Sounds like a you problem to me.",
+      "risky": true
+    },
+    {
+      "id": 19,
+      "text": "Figure it out yourself, I'm busy.",
+      "risky": true
+    },
+    {
+      "id": 20,
+      "text": "You broke it, do it yourself then.",
+      "risky": true
+    },
+    {
+      "id": 21,
+      "text": "That's not my responsibility anymore.",
+      "risky": true
+    },
+    {
+      "id": 22,
+      "text": "You need to calm down, it's just a text.",
+      "risky": true
+    },
+    {
+      "id": 23,
+      "text": "Would you calm down for one second?",
+      "risky": true
+    },
+    {
+      "id": 24,
+      "text": "You need to relax, seriously.",
+      "risky": true
+    },
+    {
+      "id": 25,
+      "text": "With all due respect, you have no idea what you're talking about.",
+      "risky": true
+    },
+    {
+      "id": 26,
+      "text": "No offense but you always do this.",
+      "risky": true
+    },
+    {
+      "id": 27,
+      "text": "Bless your heart, you really tried.",
+      "risky": true
+    },
+    {
+      "id": 28,
+      "text": "Are you even listening to me right now?",
+      "risky": true
+    },
+    {
+      "id": 29,
+      "text": "Do I have to spell it out for you?",
+      "risky": true
+    },
+    {
+      "id": 30,
+      "text": "It's not rocket science, just click send.",
+      "risky": true
+    },
+    {
+      "id": 31,
+      "text": "Thanks for nothing, really appreciate it.",
+      "risky": true
+    },
+    {
+      "id": 32,
+      "text": "Cool story bro, anyway.",
+      "risky": true
+    },
+    {
+      "id": 33,
+      "text": "Whatever you say, boss.",
+      "risky": true
+    },
+    {
+      "id": 34,
+      "text": "If you say so, I guess.",
+      "risky": true
+    },
+    {
+      "id": 35,
+      "text": "Wow, thanks for the heads up. Not.",
+      "risky": true
+    },
+    {
+      "id": 36,
+      "text": "K thanks bye.",
+      "risky": true
+    },
+    {
+      "id": 37,
+      "text": "look, AS PER MY LAST message, we already covered this.",
+      "risky": true
+    },
+    {
+      "id": 38,
+      "text": "honestly it’s not rocket science.",
+      "risky": true
+    },
+    {
+      "id": 39,
+      "text": "for the last time — stop.",
+      "risky": true
+    },
+    {
+      "id": 40,
+      "text": "as I already said, the number is 4938.",
+      "risky": true
+    },
+    {
+      "id": 41,
+      "text": "Not my problem if you missed the bus.",
+      "risky": true
+    },
+    {
+      "id": 42,
+      "text": "That's on you for not reading the memo.",
+      "risky": true
+    },
+    {
+      "id": 43,
+      "text": "No offense but this whole plan is a mess.",
+      "risky": true
+    },
+    {
+      "id": 44,
+      "text": "Ok, whatever you say then.",
+      "risky": true
+    },
+    {
+      "id": 45,
+      "text": "Fine. Do whatever you want.",
+      "risky": true
+    },
+    {
+      "id": 46,
+      "text": "K.",
+      "risky": true
+    },
+    {
+      "id": 47,
+      "text": "Sure, I guess that's fine.",
+      "risky": true
+    },
+    {
+      "id": 48,
+      "text": "Wow. Okay then.",
+      "risky": true
+    },
+    {
+      "id": 49,
+      "text": "Noted.",
+      "risky": true
+    },
+    {
+      "id": 50,
+      "text": "I mean, if that's what you want.",
+      "risky": true
+    },
+    {
+      "id": 51,
+      "text": "Don't worry about it, clearly I'll handle everything.",
+      "risky": true
+    },
+    {
+      "id": 52,
+      "text": "Must be nice to have all that free time.",
+      "risky": true
+    },
+    {
+      "id": 53,
+      "text": "Great. Another change of plans.",
+      "risky": true
+    },
+    {
+      "id": 54,
+      "text": "Sure. Fine. Whatever.",
+      "risky": true
+    },
+    {
+      "id": 55,
+      "text": "Cool.",
+      "risky": true
+    },
+    {
+      "id": 56,
+      "text": "I already handled it, as usual.",
+      "risky": true
+    },
+    {
+      "id": 57,
+      "text": "Hey, are we still on for dinner tonight?",
+      "risky": false
+    },
+    {
+      "id": 58,
+      "text": "Sounds good, see you at 7!",
+      "risky": false
+    },
+    {
+      "id": 59,
+      "text": "Thanks for the ride today, really appreciate it.",
+      "risky": false
+    },
+    {
+      "id": 60,
+      "text": "Can you send me the address when you get a chance?",
+      "risky": false
+    },
+    {
+      "id": 61,
+      "text": "I'll be about ten minutes late, sorry!",
+      "risky": false
+    },
+    {
+      "id": 62,
+      "text": "Happy birthday! Hope you have an amazing day.",
+      "risky": false
+    },
+    {
+      "id": 63,
+      "text": "Let me know what time works best for you.",
+      "risky": false
+    },
+    {
+      "id": 64,
+      "text": "No worries, take your time.",
+      "risky": false
+    },
+    {
+      "id": 65,
+      "text": "That sounds like a great plan.",
+      "risky": false
+    },
+    {
+      "id": 66,
+      "text": "Congrats on the new job, so happy for you!",
+      "risky": false
+    },
+    {
+      "id": 67,
+      "text": "Do you want me to pick up anything from the store?",
+      "risky": false
+    },
+    {
+      "id": 68,
+      "text": "I finally calmed down after that run, felt great.",
+      "risky": false
+    },
+    {
+      "id": 69,
+      "text": "Let's chill this weekend if you're free.",
+      "risky": false
+    },
+    {
+      "id": 70,
+      "text": "I need to relax tonight, long week.",
+      "risky": false
+    },
+    {
+      "id": 71,
+      "text": "That's on the list for tomorrow.",
+      "risky": false
+    },
+    {
+      "id": 72,
+      "text": "It's not that far, only about ten minutes.",
+      "risky": false
+    },
+    {
+      "id": 73,
+      "text": "My job is fully remote now, which is nice.",
+      "risky": false
+    },
+    {
+      "id": 74,
+      "text": "The problem got fixed this morning.",
+      "risky": false
+    },
+    {
+      "id": 75,
+      "text": "Whatever works for you is fine with me.",
+      "risky": false
+    },
+    {
+      "id": 76,
+      "text": "Just say so if you need a hand.",
+      "risky": false
+    },
+    {
+      "id": 77,
+      "text": "Good morning! Coffee?",
+      "risky": false
+    },
+    {
+      "id": 78,
+      "text": "Running to the gym, back in an hour.",
+      "risky": false
+    },
+    {
+      "id": 79,
+      "text": "Can we reschedule to Thursday?",
+      "risky": false
+    },
+    {
+      "id": 80,
+      "text": "I loved the photos from your trip.",
+      "risky": false
+    },
+    {
+      "id": 81,
+      "text": "Thank you so much for dinner last night.",
+      "risky": false
+    },
+    {
+      "id": 82,
+      "text": "Are you free for a quick call later?",
+      "risky": false
+    },
+    {
+      "id": 83,
+      "text": "The package arrived, thanks for shipping it fast.",
+      "risky": false
+    },
+    {
+      "id": 84,
+      "text": "I'll double-check and get back to you.",
+      "risky": false
+    },
+    {
+      "id": 85,
+      "text": "Let's grab lunch sometime next week.",
+      "risky": false
+    },
+    {
+      "id": 86,
+      "text": "Great meeting you today!",
+      "risky": false
+    },
+    {
+      "id": 87,
+      "text": "Safe travels, text me when you land.",
+      "risky": false
+    },
+    {
+      "id": 88,
+      "text": "I appreciate you covering my shift.",
+      "risky": false
+    },
+    {
+      "id": 89,
+      "text": "Movie night on Friday?",
+      "risky": false
+    },
+    {
+      "id": 90,
+      "text": "I'm proud of you for finishing the marathon.",
+      "risky": false
+    },
+    {
+      "id": 91,
+      "text": "Can you water the plants while I'm away?",
+      "risky": false
+    },
+    {
+      "id": 92,
+      "text": "Sure, I can help you move on Saturday.",
+      "risky": false
+    },
+    {
+      "id": 93,
+      "text": "The recipe turned out amazing, thanks!",
+      "risky": false
+    },
+    {
+      "id": 94,
+      "text": "Let me know if you need anything from me.",
+      "risky": false
+    },
+    {
+      "id": 95,
+      "text": "Wishing you a speedy recovery!",
+      "risky": false
+    },
+    {
+      "id": 96,
+      "text": "I'll bring the drinks, you bring the snacks.",
+      "risky": false
+    },
+    {
+      "id": 97,
+      "text": "Good luck on your exam tomorrow!",
+      "risky": false
+    },
+    {
+      "id": 98,
+      "text": "That color looks great on you.",
+      "risky": false
+    },
+    {
+      "id": 99,
+      "text": "See you at the game this weekend.",
+      "risky": false
+    },
+    {
+      "id": 100,
+      "text": "I'm so glad you called.",
+      "risky": false
+    },
+    {
+      "id": 101,
+      "text": "Let's catch up soon, it's been too long.",
+      "risky": false
+    },
+    {
+      "id": 102,
+      "text": "Can you forward me that email?",
+      "risky": false
+    },
+    {
+      "id": 103,
+      "text": "Thanks for being so patient with me.",
+      "risky": false
+    },
+    {
+      "id": 104,
+      "text": "I'll take care of the reservation.",
+      "risky": false
+    },
+    {
+      "id": 105,
+      "text": "Happy to answer any questions you have.",
+      "risky": false
+    },
+    {
+      "id": 106,
+      "text": "The kids had a blast at the park.",
+      "risky": false
+    },
+    {
+      "id": 107,
+      "text": "I think your idea is really smart.",
+      "risky": false
+    },
+    {
+      "id": 108,
+      "text": "Let's split the bill evenly.",
+      "risky": false
+    },
+    {
+      "id": 109,
+      "text": "I'll meet you at the entrance.",
+      "risky": false
+    },
+    {
+      "id": 110,
+      "text": "Hope your presentation goes well!",
+      "risky": false
+    },
+    {
+      "id": 111,
+      "text": "You did an incredible job on this.",
+      "risky": false
+    },
+    {
+      "id": 112,
+      "text": "Can we push the meeting to 4pm?",
+      "risky": false
+    },
+    {
+      "id": 113,
+      "text": "I found your keys, they're on the counter.",
+      "risky": false
+    },
+    {
+      "id": 114,
+      "text": "Thanks for the thoughtful gift.",
+      "risky": false
+    },
+    {
+      "id": 115,
+      "text": "I'm on my way now.",
+      "risky": false
+    },
+    {
+      "id": 116,
+      "text": "Let's plan something fun for your birthday.",
+      "risky": false
+    },
+    {
+      "id": 117,
+      "text": "Do you need a ride to the airport?",
+      "risky": false
+    },
+    {
+      "id": 118,
+      "text": "That was a delicious meal, thank you.",
+      "risky": false
+    },
+    {
+      "id": 119,
+      "text": "I'll send the notes over tonight.",
+      "risky": false
+    },
+    {
+      "id": 120,
+      "text": "Congratulations on the engagement!",
+      "risky": false
+    },
+    {
+      "id": 121,
+      "text": "Can you save me a seat?",
+      "risky": false
+    },
+    {
+      "id": 122,
+      "text": "I really enjoyed our conversation.",
+      "risky": false
+    },
+    {
+      "id": 123,
+      "text": "Let me know how the interview goes.",
+      "risky": false
+    },
+    {
+      "id": 124,
+      "text": "I'll water your garden while you're gone.",
+      "risky": false
+    },
+    {
+      "id": 125,
+      "text": "Thanks for always having my back.",
+      "risky": false
+    },
+    {
+      "id": 126,
+      "text": "The concert was unforgettable.",
+      "risky": false
+    },
+    {
+      "id": 127,
+      "text": "Want to join us for hiking Sunday?",
+      "risky": false
+    },
+    {
+      "id": 128,
+      "text": "I'll grab the tickets right now.",
+      "risky": false
+    },
+    {
+      "id": 129,
+      "text": "Your support means a lot to me.",
+      "risky": false
+    },
+    {
+      "id": 130,
+      "text": "Let's finalize the details tomorrow.",
+      "risky": false
+    },
+    {
+      "id": 131,
+      "text": "I'm cheering you on from here!",
+      "risky": false
+    },
+    {
+      "id": 132,
+      "text": "Can you recommend a good book?",
+      "risky": false
+    },
+    {
+      "id": 133,
+      "text": "Thanks for the quick reply.",
+      "risky": false
+    },
+    {
+      "id": 134,
+      "text": "I'll be there in five.",
+      "risky": false
+    },
+    {
+      "id": 135,
+      "text": "Hope you feel better soon.",
+      "risky": false
+    },
+    {
+      "id": 136,
+      "text": "That's a fantastic photo of the sunset.",
+      "risky": false
+    },
+    {
+      "id": 137,
+      "text": "Let's do coffee this week.",
+      "risky": false
+    },
+    {
+      "id": 138,
+      "text": "I appreciate your honesty.",
+      "risky": false
+    },
+    {
+      "id": 139,
+      "text": "Can you check if the door is locked?",
+      "risky": false
+    },
+    {
+      "id": 140,
+      "text": "I'm excited for the trip!",
+      "risky": false
+    },
+    {
+      "id": 141,
+      "text": "Thanks for walking the dog.",
+      "risky": false
+    },
+    {
+      "id": 142,
+      "text": "Let me know your flight details.",
+      "risky": false
+    },
+    {
+      "id": 143,
+      "text": "You're going to do great.",
+      "risky": false
+    },
+    {
+      "id": 144,
+      "text": "I'll handle the groceries this week.",
+      "risky": false
+    },
+    {
+      "id": 145,
+      "text": "Happy anniversary to you both!",
+      "risky": false
+    },
+    {
+      "id": 146,
+      "text": "Can we talk later tonight?",
+      "risky": false
+    },
+    {
+      "id": 147,
+      "text": "I saved you some leftovers.",
+      "risky": false
+    },
+    {
+      "id": 148,
+      "text": "Thanks for listening earlier.",
+      "risky": false
+    },
+    {
+      "id": 149,
+      "text": "Let's celebrate this weekend.",
+      "risky": false
+    },
+    {
+      "id": 150,
+      "text": "I'll call you after work.",
+      "risky": false
+    },
+    {
+      "id": 151,
+      "text": "Your garden looks beautiful.",
+      "risky": false
+    },
+    {
+      "id": 152,
+      "text": "Can you send the meeting link?",
+      "risky": false
+    },
+    {
+      "id": 153,
+      "text": "I'm grateful for your help.",
+      "risky": false
+    },
+    {
+      "id": 154,
+      "text": "See you bright and early.",
+      "risky": false
+    },
+    {
+      "id": 155,
+      "text": "That plan works perfectly for me.",
+      "risky": false
+    },
+    {
+      "id": 156,
+      "text": "I'll pick up the cake on the way.",
+      "risky": false
+    },
+    {
+      "id": 157,
+      "text": "Hope the move went smoothly.",
+      "risky": false
+    },
+    {
+      "id": 158,
+      "text": "Let's make a reservation for six.",
+      "risky": false
+    },
+    {
+      "id": 159,
+      "text": "Thanks for the recommendation.",
+      "risky": false
+    },
+    {
+      "id": 160,
+      "text": "I'm looking forward to seeing you.",
+      "risky": false
+    },
+    {
+      "id": 161,
+      "text": "Can you bring an umbrella just in case?",
+      "risky": false
+    },
+    {
+      "id": 162,
+      "text": "I'll email you the itinerary.",
+      "risky": false
+    },
+    {
+      "id": 163,
+      "text": "Your feedback was really helpful.",
+      "risky": false
+    },
+    {
+      "id": 164,
+      "text": "Let's reconnect after the holidays.",
+      "risky": false
+    },
+    {
+      "id": 165,
+      "text": "I appreciate the update.",
+      "risky": false
+    },
+    {
+      "id": 166,
+      "text": "Can you confirm the time?",
+      "risky": false
+    },
+    {
+      "id": 167,
+      "text": "I'm heading out now, see you soon.",
+      "risky": false
+    },
+    {
+      "id": 168,
+      "text": "Thanks for the warm welcome.",
+      "risky": false
+    },
+    {
+      "id": 169,
+      "text": "Let me know if the plan changes.",
+      "risky": false
+    },
+    {
+      "id": 170,
+      "text": "That was so thoughtful of you.",
+      "risky": false
+    },
+    {
+      "id": 171,
+      "text": "I'll return the book next week.",
+      "risky": false
+    },
+    {
+      "id": 172,
+      "text": "Hope you have a relaxing weekend.",
+      "risky": false
+    },
+    {
+      "id": 173,
+      "text": "Can you text me the code?",
+      "risky": false
+    },
+    {
+      "id": 174,
+      "text": "I'm happy to reschedule if needed.",
+      "risky": false
+    },
+    {
+      "id": 175,
+      "text": "Great job on the presentation today.",
+      "risky": false
+    },
+    {
+      "id": 176,
+      "text": "Let's grab dinner to celebrate.",
+      "risky": false
+    },
+    {
+      "id": 177,
+      "text": "Thanks for the ride to the station.",
+      "risky": false
+    },
+    {
+      "id": 178,
+      "text": "I'll bring my laptop for the demo.",
+      "risky": false
+    },
+    {
+      "id": 179,
+      "text": "Your help saved me hours.",
+      "risky": false
+    },
+    {
+      "id": 180,
+      "text": "Can we meet at the cafe?",
+      "risky": false
+    },
+    {
+      "id": 181,
+      "text": "I'm excited to hear how it went.",
+      "risky": false
+    },
+    {
+      "id": 182,
+      "text": "Let me know when you're free.",
+      "risky": false
+    },
+    {
+      "id": 183,
+      "text": "Thanks for covering for me.",
+      "risky": false
+    },
+    {
+      "id": 184,
+      "text": "I'll set up the meeting room.",
+      "risky": false
+    },
+    {
+      "id": 185,
+      "text": "Hope your day is going well.",
+      "risky": false
+    },
+    {
+      "id": 186,
+      "text": "Can you grab milk on the way home?",
+      "risky": false
+    },
+    {
+      "id": 187,
+      "text": "I really value your friendship.",
+      "risky": false
+    },
+    {
+      "id": 188,
+      "text": "Let's plan a picnic next weekend.",
+      "risky": false
+    },
+    {
+      "id": 189,
+      "text": "Thanks for the kind words.",
+      "risky": false
+    },
+    {
+      "id": 190,
+      "text": "I'll check the schedule and confirm.",
+      "risky": false
+    },
+    {
+      "id": 191,
+      "text": "See you at the reunion!",
+      "risky": false
+    },
+    {
+      "id": 192,
+      "text": "That idea could really work.",
+      "risky": false
+    },
+    {
+      "id": 193,
+      "text": "I'm glad we sorted that out.",
+      "risky": false
+    },
+    {
+      "id": 194,
+      "text": "Can you send the draft when ready?",
+      "risky": false
+    },
+    {
+      "id": 195,
+      "text": "I appreciate you thinking of me.",
+      "risky": false
+    },
+    {
+      "id": 196,
+      "text": "Let's touch base on Monday.",
+      "risky": false
+    },
+    {
+      "id": 197,
+      "text": "Thanks for the delicious cookies.",
+      "risky": false
+    },
+    {
+      "id": 198,
+      "text": "I'll meet you halfway, literally.",
+      "risky": false
+    },
+    {
+      "id": 199,
+      "text": "Hope the checkup goes well.",
+      "risky": false
+    },
+    {
+      "id": 200,
+      "text": "Can't wait to see the new place!",
+      "risky": false
+    }
+  ]
+}

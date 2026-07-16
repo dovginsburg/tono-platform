@@ -100,6 +100,13 @@ public enum SharedKeys {
     // JSON-encoded [String] of Unicode glyphs; read lazily by the
     // keyboard extension when the emoji panel mounts (never on startup).
     public static let emojiRecents = "tc.emojiRecents"
+
+    // Live Tone (build-90 experiment) control keys — opt-in, user kill switch,
+    // remote-disable directive, and the user-declared host allowlist — are
+    // defined separately in LiveTonePrivacy.swift (`LiveTonePrivacyKeys`) so
+    // that self-contained control surface and its standalone verifier need no
+    // UIKit/networking imports. They share this `tc.` namespace and the
+    // `group.com.tonoit.shared` App Group suite.
 }
 
 public enum SharedStore {
