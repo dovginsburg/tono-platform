@@ -690,13 +690,21 @@ def test_admin_stats_requires_secret(client):
 
 def test_admin_stats_returns_counts(client, monkeypatch):
     monkeypatch.setenv("TONO_ADMIN_SECRET", _ADMIN_SECRET)
-    _register(client)
+    reg = _register(client)
+    _grant_active_subscription(reg)
+    analyze = client.post(
+        "/api/analyze",
+        headers=_auth(reg["api_token"]),
+        json={"text": "Please send the report today."},
+    )
+    assert analyze.status_code == 200, analyze.text
+
     r = client.get("/admin/stats", headers=_ADMIN_HEADERS)
     assert r.status_code == 200, r.text
     j = r.json()
     assert j["total_devices"] >= 1
     assert "axis_stats_30d" in j
-    assert "rewrites_today" in j
+    assert j["rewrites_today"] == 1
 
 
 # ---------------------------------------------------------------------------

@@ -896,13 +896,21 @@ def admin_stats(request: Request, store: StoreDep) -> dict[str, Any]:
         cur.execute("SELECT COUNT(*) as cnt FROM coupon_redemptions")
         total_redemptions = cur.fetchone()["cnt"]
 
-        today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+        now = dt.datetime.now(dt.timezone.utc)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        tomorrow_start = today_start + dt.timedelta(days=1)
         cur.execute(
-            "SELECT SUM(daily_count) as s FROM users WHERE daily_day = ?", (today,)
+            """SELECT COUNT(*) as cnt FROM usage_log
+               WHERE endpoint = '/api/analyze' AND status_code = 200
+                 AND ts >= ? AND ts < ?""",
+            (
+                today_start.isoformat(timespec="seconds"),
+                tomorrow_start.isoformat(timespec="seconds"),
+            ),
         )
-        rewrites_today = cur.fetchone()["s"] or 0
+        rewrites_today = cur.fetchone()["cnt"]
 
-        cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)).strftime("%Y-%m-%d")
+        cutoff = (now - dt.timedelta(days=30)).strftime("%Y-%m-%d")
         cur.execute(
             "SELECT axis, COUNT(*) as cnt FROM axis_events WHERE ts >= ? GROUP BY axis ORDER BY cnt DESC",
             (cutoff,),
