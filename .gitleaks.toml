@@ -1,0 +1,17 @@
+[extend]
+useDefault = true
+
+# These four JWTs are byte-for-byte copies of Apple's public MIT-licensed test
+# fixtures from app-store-server-library-python v3.1.2 (tag 4eaa2241218f5c82c0a7f3e23e2fb3a7c2078092):
+# https://github.com/apple/app-store-server-library-python/tree/v3.1.2/tests/resources/mock_signed_data
+# They were introduced together in afa7757c and later removed from the tree.
+# Keep the exception constrained to the JWT rule, that immutable commit, and the
+# four exact historical paths so every other rule, commit, and path still scans.
+[[allowlists]]
+description = "Public Apple App Store Server Library v3.1.2 JWT test fixtures"
+targetRules = ["jwt"]
+condition = "AND"
+commits = ["afa7757c0320163e9cf635304464941bf41487fe"]
+paths = [
+  '''^apps/backend/tests/fixtures/apple/(transactionInfo|missingX5CHeaderClaim|testNotification|wrongBundleId)$''',
+]
