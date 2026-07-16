@@ -34,6 +34,7 @@ struct TonoKeyboardMetrics: Equatable {
     let preferredContentHeight: CGFloat
     let coachResultsContentHeight: CGFloat
     let topBarHeight: CGFloat
+    let coachControlWidth: CGFloat
     let coachControlHeight: CGFloat
     let keyMinHeight: CGFloat
     let rowSpacing: CGFloat
@@ -58,9 +59,10 @@ struct TonoKeyboardMetrics: Equatable {
             preferredContentHeight: preferredHeight,
             coachResultsContentHeight: preferredHeight + 36,
             topBarHeight: 46,
-            coachControlHeight: 36,
+            coachControlWidth: 96,
+            coachControlHeight: 44,
             keyMinHeight: 44,
-            rowSpacing: 8,
+            rowSpacing: 6,
             edgePadding: 4,
             keyCornerRadius: 5,
             keyFontSize: 22,
@@ -68,6 +70,11 @@ struct TonoKeyboardMetrics: Equatable {
             keyShadowRadius: 0.75,
             keyShadowOffset: CGSize(width: 0, height: 1)
         )
+    }
+
+    func letterKeyWidth(availableWidth: CGFloat) -> CGFloat {
+        let usable = max(availableWidth - edgePadding * 2, 320)
+        return (usable - rowSpacing * 9) / 10
     }
 }
 
@@ -86,6 +93,18 @@ enum TonoCoachPalette {
     static let disabledBackground = disabled
     static let foreground = UIColor.white
 
+    /// Approved build-84 semantic axis colors. These values are intentionally
+    /// centralized so result labels cannot collapse back to a single color.
+    static func axisAccent(for axis: String) -> UIColor {
+        switch axis.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "warmer": return dynamic(light: UIColor(hexRGB: "B4234D"), dark: UIColor(hexRGB: "FF6B8A"))
+        case "clearer": return dynamic(light: UIColor(hexRGB: "006A8E"), dark: UIColor(hexRGB: "49C7F2"))
+        case "funnier": return dynamic(light: UIColor(hexRGB: "7A5100"), dark: UIColor(hexRGB: "FFC247"))
+        case "safer": return dynamic(light: UIColor(hexRGB: "147A36"), dark: UIColor(hexRGB: "4CD471"))
+        default: return foreground
+        }
+    }
+
     static func background(enabled: Bool, highlighted: Bool) -> UIColor {
         guard enabled else { return disabledBackground }
         return highlighted ? pressed : normal
@@ -98,22 +117,146 @@ enum TonoCoachPalette {
     }
 }
 
-/// Stateful semantic Coach control. It centralizes normal, pressed and disabled
-/// presentation so Coach actions cannot drift back to generic system blue.
-final class TonoCoachButton: UIButton {
+enum TonoKeyHitGeometry {
+    static func expansionInsets(spacing: CGFloat) -> UIEdgeInsets {
+        let halfGap = max(0, spacing) / 2
+        return UIEdgeInsets(top: -halfGap, left: -halfGap, bottom: -halfGap, right: -halfGap)
+    }
+
+    static func expandedFrame(_ frame: CGRect, spacing: CGFloat) -> CGRect {
+        frame.inset(by: expansionInsets(spacing: spacing))
+    }
+}
+
+enum TonoShiftState: Equatable {
+    case lowercase
+    case oneShotUppercase
+    case capsLock
+}
+
+struct TonoShiftStateMachine: Equatable {
+    static let doubleTapInterval: TimeInterval = 0.35
+
+    private(set) var state: TonoShiftState = .lowercase
+    private(set) var isAutomaticOneShot = false
+    private var lastManualTapAt: TimeInterval?
+
+    mutating func manualTap(at timestamp: TimeInterval) {
+        if state == .capsLock {
+            state = .lowercase
+            isAutomaticOneShot = false
+            lastManualTapAt = nil
+            return
+        }
+        let isIntentionalDoubleTap = state == .oneShotUppercase
+            && !isAutomaticOneShot
+            && lastManualTapAt.map {
+                timestamp >= $0 && timestamp - $0 <= Self.doubleTapInterval
+            } == true
+        if isIntentionalDoubleTap {
+            state = .capsLock
+            isAutomaticOneShot = false
+            lastManualTapAt = nil
+            return
+        }
+        state = state == .lowercase ? .oneShotUppercase : .lowercase
+        isAutomaticOneShot = false
+        lastManualTapAt = state == .oneShotUppercase ? timestamp : nil
+    }
+
+    mutating func applyAutoCapitalization(_ recommended: Bool) {
+        guard state != .capsLock else { return }
+        if state == .oneShotUppercase, !isAutomaticOneShot { return }
+        state = recommended ? .oneShotUppercase : .lowercase
+        isAutomaticOneShot = recommended
+        lastManualTapAt = nil
+    }
+
+    mutating func consumeEligibleLetter() {
+        guard state == .oneShotUppercase else { return }
+        state = .lowercase
+        isAutomaticOneShot = false
+        lastManualTapAt = nil
+    }
+
+    mutating func invalidatePendingDoubleTap() {
+        lastManualTapAt = nil
+    }
+
+    mutating func resetForExtensionLifecycle() {
+        self = Self()
+    }
+}
+
+/// Shared keycap press treatment and gap-filling hit region. Expanding each
+/// key by exactly half the inter-key spacing makes adjacent hit regions meet
+/// without overlap, eliminating dead strips while preserving target ownership.
+final class TonoKeyboardButton: UIButton {
+    var accessibilityActivationHandler: (() -> Bool)?
+    var normalBackgroundColor: UIColor? {
+        didSet { if !isHighlighted { backgroundColor = normalBackgroundColor } }
+    }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
+        let metrics = TonoKeyboardMetrics.portrait(availableWidth: UIScreen.main.bounds.width)
+        layer.shadowColor = UIColor.black.cgColor
+        layer.shadowOpacity = metrics.keyShadowOpacity
+        layer.shadowRadius = metrics.keyShadowRadius
+        layer.shadowOffset = metrics.keyShadowOffset
         adjustsImageWhenHighlighted = false
-        setTitleColor(TonoCoachPalette.foreground, for: .normal)
-        setTitleColor(TonoCoachPalette.foreground, for: .highlighted)
-        setTitleColor(TonoCoachPalette.foreground, for: .disabled)
-        updateCoachAppearance()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
-        updateCoachAppearance()
     }
+
+    override func accessibilityActivate() -> Bool {
+        accessibilityActivationHandler?() ?? super.accessibilityActivate()
+    }
+
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        let spacing = TonoKeyboardMetrics.portrait(
+            availableWidth: max(bounds.width, UIScreen.main.bounds.width)
+        ).rowSpacing
+        return bounds.inset(by: TonoKeyHitGeometry.expansionInsets(spacing: spacing)).contains(point)
+    }
+
+    override var isHighlighted: Bool {
+        didSet {
+            backgroundColor = isHighlighted
+                ? normalBackgroundColor?.withAlphaComponent(0.68)
+                : normalBackgroundColor
+            let metrics = TonoKeyboardMetrics.portrait(availableWidth: UIScreen.main.bounds.width)
+            layer.shadowOpacity = isHighlighted ? 0.04 : metrics.keyShadowOpacity
+            transform = isHighlighted
+                ? CGAffineTransform(translationX: 0, y: 1)
+                : .identity
+        }
+    }
+}
+
+/// Stateful semantic Coach control. It centralizes normal, pressed and disabled
+/// presentation so Coach actions cannot drift back to generic system blue.
+final class TonoCoachButton: UIButton {
+    private static let fixedSize = CGSize(
+        width: TonoKeyboardMetrics.portrait(availableWidth: 402).coachControlWidth,
+        height: TonoKeyboardMetrics.portrait(availableWidth: 402).coachControlHeight
+    )
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        configureCoachControl()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configureCoachControl()
+    }
+
+    override var intrinsicContentSize: CGSize { Self.fixedSize }
+
+    override func sizeThatFits(_ size: CGSize) -> CGSize { Self.fixedSize }
 
     override var isHighlighted: Bool {
         didSet { updateCoachAppearance() }
@@ -136,6 +279,20 @@ final class TonoCoachButton: UIButton {
             highlighted: isHighlighted
         )
         alpha = 1
+    }
+
+    private func configureCoachControl() {
+        adjustsImageWhenHighlighted = false
+        titleLabel?.adjustsFontSizeToFitWidth = true
+        titleLabel?.minimumScaleFactor = 0.7
+        titleLabel?.lineBreakMode = .byTruncatingTail
+        titleLabel?.numberOfLines = 1
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+        setContentCompressionResistancePriority(.required, for: .vertical)
+        setTitleColor(TonoCoachPalette.foreground, for: .normal)
+        setTitleColor(TonoCoachPalette.foreground, for: .highlighted)
+        setTitleColor(TonoCoachPalette.foreground, for: .disabled)
+        updateCoachAppearance()
     }
 }
 

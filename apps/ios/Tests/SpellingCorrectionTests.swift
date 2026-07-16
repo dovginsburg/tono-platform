@@ -41,6 +41,78 @@ final class SpellingCorrectionTests: XCTestCase {
         XCTAssertEqual(decision?.automaticReplacement, "the")
     }
 
+    func testDeterministicTypoCorpusRanksSafeEditsWithoutSemanticOvercorrection() {
+        let checker = MockChecker([
+            "teh": SpellingLookup(
+                isMisspelled: true,
+                corrections: ["tea", "ten", "the"],
+                completions: []
+            ),
+            "jello": SpellingLookup(
+                isMisspelled: true,
+                corrections: ["cello", "hello"],
+                completions: []
+            ),
+            "dont": SpellingLookup(
+                isMisspelled: true,
+                corrections: ["don", "don't"],
+                completions: []
+            ),
+            "form": SpellingLookup(
+                isMisspelled: false,
+                corrections: ["from"],
+                completions: []
+            ),
+            "peace": SpellingLookup(
+                isMisspelled: false,
+                corrections: ["piece"],
+                completions: []
+            ),
+        ])
+
+        let transposition = SpellingPolicy.evaluate(request: request("teh"), checker: checker)
+        XCTAssertEqual(transposition?.candidates, ["teh", "the", "ten"])
+        XCTAssertEqual(transposition?.automaticReplacement, "the")
+
+        let nearKey = SpellingPolicy.evaluate(request: request("jello"), checker: checker)
+        XCTAssertEqual(nearKey?.candidates, ["jello", "hello", "cello"])
+        XCTAssertEqual(nearKey?.automaticReplacement, "hello")
+
+        let apostrophe = SpellingPolicy.evaluate(request: request("dont"), checker: checker)
+        XCTAssertEqual(apostrophe?.candidates, ["dont", "don't", "don"])
+        XCTAssertEqual(apostrophe?.automaticReplacement, "don't")
+
+        XCTAssertNil(
+            SpellingPolicy.evaluate(request: request("form"), checker: checker)?.automaticReplacement,
+            "valid words must not be semantically rewritten"
+        )
+        XCTAssertNil(
+            SpellingPolicy.evaluate(request: request("peace"), checker: checker)?.automaticReplacement,
+            "valid words must not be semantically rewritten"
+        )
+    }
+
+    func testAmbiguousNearKeyCandidatesRemainManualChoices() {
+        let checker = MockChecker([
+            "jello": SpellingLookup(
+                isMisspelled: true,
+                corrections: ["hello", "kello"],
+                completions: []
+            )
+        ])
+
+        let decision = SpellingPolicy.evaluate(request: request("jello"), checker: checker)
+        XCTAssertEqual(decision?.candidates, ["jello", "hello", "kello"])
+        XCTAssertNil(decision?.automaticReplacement)
+    }
+
+    func testTypoClassificationCoversTranspositionNearKeyApostropheAndCase() {
+        XCTAssertEqual(SpellingPolicy.typoKind(from: "teh", to: "the"), .adjacentTransposition)
+        XCTAssertEqual(SpellingPolicy.typoKind(from: "jello", to: "hello"), .nearKeySubstitution)
+        XCTAssertEqual(SpellingPolicy.typoKind(from: "dont", to: "don't"), .apostrophe)
+        XCTAssertEqual(SpellingPolicy.preserveCase(of: "Teh", in: "the"), "The")
+    }
+
     func testRecieveUsesInjectedChecker() {
         let checker = MockChecker([
             "recieve": SpellingLookup(isMisspelled: true, corrections: ["receive"], completions: [])

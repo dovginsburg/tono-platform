@@ -38,6 +38,60 @@
 
 import Foundation
 
+struct CoachLatencySnapshot: Equatable {
+    let tapToAcknowledgementMilliseconds: Double
+    let tapToDispatchMilliseconds: Double
+    let dispatchToFirstByteMilliseconds: Double
+    let responseToRenderMilliseconds: Double
+    let totalMilliseconds: Double
+
+    var logLine: String {
+        String(
+            format: "TONO_KB coach_latency tap_to_ack_ms=%.0f tap_to_dispatch_ms=%.0f dispatch_to_first_byte_ms=%.0f response_to_render_ms=%.0f total_ms=%.0f",
+            tapToAcknowledgementMilliseconds,
+            tapToDispatchMilliseconds,
+            dispatchToFirstByteMilliseconds,
+            responseToRenderMilliseconds,
+            totalMilliseconds
+        )
+    }
+}
+
+struct CoachLatencyTrace: Equatable {
+    let tapAt: TimeInterval
+    private(set) var acknowledgedAt: TimeInterval?
+    private(set) var dispatchedAt: TimeInterval?
+    private(set) var firstByteAt: TimeInterval?
+    private(set) var responseAt: TimeInterval?
+    private(set) var renderedAt: TimeInterval?
+
+    mutating func markAcknowledged(at timestamp: TimeInterval) { acknowledgedAt = timestamp }
+    mutating func markDispatched(at timestamp: TimeInterval) { dispatchedAt = timestamp }
+    mutating func markFirstByte(at timestamp: TimeInterval) { firstByteAt = timestamp }
+    mutating func markResponse(at timestamp: TimeInterval) { responseAt = timestamp }
+    mutating func markRendered(at timestamp: TimeInterval) { renderedAt = timestamp }
+
+    var snapshot: CoachLatencySnapshot? {
+        guard let acknowledgedAt,
+              let dispatchedAt,
+              let firstByteAt,
+              let responseAt,
+              let renderedAt,
+              tapAt <= acknowledgedAt,
+              acknowledgedAt <= dispatchedAt,
+              dispatchedAt <= firstByteAt,
+              firstByteAt <= responseAt,
+              responseAt <= renderedAt else { return nil }
+        return CoachLatencySnapshot(
+            tapToAcknowledgementMilliseconds: (acknowledgedAt - tapAt) * 1_000,
+            tapToDispatchMilliseconds: (dispatchedAt - tapAt) * 1_000,
+            dispatchToFirstByteMilliseconds: (firstByteAt - dispatchedAt) * 1_000,
+            responseToRenderMilliseconds: (renderedAt - responseAt) * 1_000,
+            totalMilliseconds: (renderedAt - tapAt) * 1_000
+        )
+    }
+}
+
 /// Immutable request-time text range. A rewrite is permitted only while the
 /// same visible document is present; caret-only moves are handled by returning
 /// to the captured range, while any edit fails closed.
@@ -77,6 +131,10 @@ struct CoachRewriteTarget: Equatable {
             insertion: replacement,
             finalCursorOffset: trailingWhitespaceCount
         )
+    }
+
+    func matches(liveBefore: String, liveAfter: String) -> Bool {
+        liveBefore + liveAfter == before + after
     }
 
     /// Re-validates the exact caret position after the host has been asked to
@@ -174,11 +232,14 @@ public final class TonoCoachClient {
 
     // MARK: - Public entry point
 
-    /// Fire a Coach request. The completion is invoked on the main queue.
+    /// Fire a Coach request. First-byte and completion callbacks are delivered
+    /// on the main queue so the keyboard can mutate one latency trace safely.
+    @discardableResult
     public func coach(
         draft: String,
+        onFirstByte: @escaping (TimeInterval) -> Void = { _ in },
         completion: @escaping (Result<CoachResponse, CoachError>) -> Void
-    ) {
+    ) -> URLSessionDataTask? {
         var req = URLRequest(url: endpoint)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -193,40 +254,100 @@ public final class TonoCoachClient {
             req.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
         } catch {
             DispatchQueue.main.async { completion(.failure(.decoding("encode body: \(error.localizedDescription)"))) }
-            return
+            return nil
         }
 
-        let task = URLSession.shared.dataTask(with: req) { data, response, error in
-            if let urlErr = error as? URLError {
-                if urlErr.code == .timedOut {
-                    DispatchQueue.main.async { completion(.failure(.timeout)) }
-                    return
-                }
-                DispatchQueue.main.async { completion(.failure(.transport(urlErr.localizedDescription))) }
-                return
-            }
-            if let error = error {
-                DispatchQueue.main.async { completion(.failure(.transport(error.localizedDescription))) }
-                return
-            }
-            guard let http = response as? HTTPURLResponse else {
-                DispatchQueue.main.async { completion(.failure(.transport("no http response"))) }
-                return
-            }
-            let bodyData = data ?? Data()
-            guard (200...299).contains(http.statusCode) else {
-                let bodyStr = String(data: bodyData, encoding: .utf8) ?? ""
-                DispatchQueue.main.async { completion(.failure(.http(status: http.statusCode, body: bodyStr))) }
-                return
-            }
-            do {
-                let parsed = try TonoCoachClient.decode(bodyData)
-                DispatchQueue.main.async { completion(.success(parsed)) }
-            } catch {
-                DispatchQueue.main.async { completion(.failure(.decoding(error.localizedDescription))) }
-            }
-        }
+        let delegate = CoachRequestDelegate(
+            onFirstByte: onFirstByte,
+            completion: completion
+        )
+        let session = URLSession(
+            configuration: .ephemeral,
+            delegate: delegate,
+            delegateQueue: nil
+        )
+        delegate.session = session
+        let task = session.dataTask(with: req)
         task.resume()
+        return task
+    }
+
+    private static func requestResult(
+        data: Data,
+        response: URLResponse?,
+        error: Error?
+    ) -> Result<CoachResponse, CoachError> {
+        if let urlError = error as? URLError {
+            return .failure(urlError.code == .timedOut
+                ? .timeout
+                : .transport(urlError.localizedDescription))
+        }
+        if let error {
+            return .failure(.transport(error.localizedDescription))
+        }
+        guard let http = response as? HTTPURLResponse else {
+            return .failure(.transport("no http response"))
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            return .failure(.http(status: http.statusCode, body: body))
+        }
+        do {
+            return .success(try decode(data))
+        } catch {
+            return .failure(.decoding(error.localizedDescription))
+        }
+    }
+
+    private final class CoachRequestDelegate: NSObject, URLSessionDataDelegate {
+        var session: URLSession?
+        private let onFirstByte: (TimeInterval) -> Void
+        private let completion: (Result<CoachResponse, CoachError>) -> Void
+        private var response: URLResponse?
+        private var body = Data()
+        private var deliveredFirstByte = false
+
+        init(
+            onFirstByte: @escaping (TimeInterval) -> Void,
+            completion: @escaping (Result<CoachResponse, CoachError>) -> Void
+        ) {
+            self.onFirstByte = onFirstByte
+            self.completion = completion
+        }
+
+        func urlSession(
+            _ session: URLSession,
+            dataTask: URLSessionDataTask,
+            didReceive response: URLResponse,
+            completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+        ) {
+            self.response = response
+            if !deliveredFirstByte {
+                deliveredFirstByte = true
+                let timestamp = ProcessInfo.processInfo.systemUptime
+                DispatchQueue.main.async { [onFirstByte] in onFirstByte(timestamp) }
+            }
+            completionHandler(.allow)
+        }
+
+        func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+            body.append(data)
+        }
+
+        func urlSession(
+            _ session: URLSession,
+            task: URLSessionTask,
+            didCompleteWithError error: Error?
+        ) {
+            let result = TonoCoachClient.requestResult(
+                data: body,
+                response: response,
+                error: error
+            )
+            DispatchQueue.main.async { [completion] in completion(result) }
+            session.finishTasksAndInvalidate()
+            self.session = nil
+        }
     }
 
     // MARK: - Pure decoder (testable without UIKit / URLSession)

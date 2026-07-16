@@ -52,6 +52,24 @@ final class CoachContractTests: XCTestCase {
         """)))
     }
 
+    func testCoachLatencyTraceSeparatesFourUserVisibleClocks() throws {
+        var trace = CoachLatencyTrace(tapAt: 100)
+        trace.markAcknowledged(at: 100.040)
+        trace.markDispatched(at: 100.055)
+        trace.markFirstByte(at: 107.723)
+        trace.markResponse(at: 107.825)
+        trace.markRendered(at: 107.835)
+
+        let snapshot = try XCTUnwrap(trace.snapshot)
+        XCTAssertEqual(snapshot.tapToAcknowledgementMilliseconds, 40, accuracy: 0.01)
+        XCTAssertEqual(snapshot.tapToDispatchMilliseconds, 55, accuracy: 0.01)
+        XCTAssertEqual(snapshot.dispatchToFirstByteMilliseconds, 7_668, accuracy: 0.01)
+        XCTAssertEqual(snapshot.responseToRenderMilliseconds, 10, accuracy: 0.01)
+        XCTAssertEqual(snapshot.totalMilliseconds, 7_835, accuracy: 0.01)
+        XCTAssertTrue(snapshot.logLine.contains("tap_to_ack_ms=40"))
+        XCTAssertFalse(snapshot.logLine.contains("Please"), "latency logs must never include draft text")
+    }
+
     func testRewriteTargetReplacesCapturedDraftAfterCaretOnlyMove() throws {
         let target = try XCTUnwrap(CoachRewriteTarget.capture(
             before: "  Please help me  ",
@@ -87,6 +105,8 @@ final class CoachContractTests: XCTestCase {
             liveAfter: " with this",
             replacement: "Could you help me?"
         ))
+        XCTAssertFalse(target.matches(liveBefore: "Please help us", liveAfter: " with this"))
+        XCTAssertTrue(target.matches(liveBefore: "Please help me", liveAfter: " with this"))
     }
 
     func testRewriteTargetRequiresExactPostAdjustmentCaretPosition() throws {

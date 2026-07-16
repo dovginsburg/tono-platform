@@ -138,6 +138,14 @@ struct SpellingDecision: Equatable {
     let automaticReplacement: String?
 }
 
+enum SpellingTypoKind: Int, Equatable {
+    case adjacentTransposition
+    case apostrophe
+    case nearKeySubstitution
+    case singleEdit
+    case other
+}
+
 enum SpellingPolicy {
     static func evaluate(
         request: SpellingRequest,
@@ -159,9 +167,20 @@ enum SpellingPolicy {
         else { return nil }
 
         let lookup = checker.lookup(word: folded, language: language)
+        let rankedCorrections = lookup.corrections.enumerated().sorted { lhs, rhs in
+            let left = typoConfidence(from: folded, to: lhs.element)
+            let right = typoConfidence(from: folded, to: rhs.element)
+            if left.kind.rawValue != right.kind.rawValue {
+                return left.kind.rawValue < right.kind.rawValue
+            }
+            if left.distance != right.distance {
+                return left.distance < right.distance
+            }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
         var seen = Set<String>()
         var replacements: [String] = []
-        for raw in lookup.corrections + lookup.completions {
+        for raw in rankedCorrections + lookup.completions {
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }
             let replacement = preserveCase(of: word, in: trimmed)
@@ -177,10 +196,14 @@ enum SpellingPolicy {
         let candidates = [word] + replacements
         let top = replacements.first
         let looksLikeProperNoun = word.first?.isUppercase == true && !token.followsSentenceBoundary
-        let correctionDistances = lookup.corrections
-            .map { damerauLevenshtein(folded, $0.lowercased()) }
-        let uniqueBestCorrection = correctionDistances.first.map { first in
-            first <= 1 && correctionDistances.dropFirst().allSatisfy { $0 > first }
+        let correctionConfidences = rankedCorrections.map {
+            typoConfidence(from: folded, to: $0)
+        }
+        let uniqueBestCorrection = correctionConfidences.first.map { first in
+            first.distance <= 1 && correctionConfidences.dropFirst().allSatisfy {
+                $0.kind.rawValue > first.kind.rawValue
+                    || ($0.kind == first.kind && $0.distance > first.distance)
+            }
         } == true
         let strong = lookup.isMisspelled
             && !looksLikeProperNoun
@@ -211,6 +234,59 @@ enum SpellingPolicy {
     private static func isMixedCase(_ word: String) -> Bool {
         let tail = String(word.dropFirst())
         return tail != tail.lowercased() && word != word.uppercased()
+    }
+
+    static func typoKind(from original: String, to candidate: String) -> SpellingTypoKind {
+        let lhs = original.lowercased().replacingOccurrences(of: "’", with: "'")
+        let rhs = candidate.lowercased().replacingOccurrences(of: "’", with: "'")
+        guard lhs != rhs else { return .other }
+
+        if lhs.replacingOccurrences(of: "'", with: "")
+            == rhs.replacingOccurrences(of: "'", with: "") {
+            return .apostrophe
+        }
+
+        let left = Array(lhs)
+        let right = Array(rhs)
+        if left.count == right.count {
+            let mismatches = left.indices.filter { left[$0] != right[$0] }
+            if mismatches.count == 2,
+               mismatches[1] == mismatches[0] + 1,
+               left[mismatches[0]] == right[mismatches[1]],
+               left[mismatches[1]] == right[mismatches[0]] {
+                return .adjacentTransposition
+            }
+            if mismatches.count == 1,
+               areNeighboringKeys(left[mismatches[0]], right[mismatches[0]]) {
+                return .nearKeySubstitution
+            }
+        }
+        return damerauLevenshtein(lhs, rhs) <= 1 ? .singleEdit : .other
+    }
+
+    private static func typoConfidence(
+        from original: String,
+        to candidate: String
+    ) -> (kind: SpellingTypoKind, distance: Int) {
+        let foldedCandidate = candidate
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return (
+            typoKind(from: original, to: foldedCandidate),
+            damerauLevenshtein(original, foldedCandidate)
+        )
+    }
+
+    private static func areNeighboringKeys(_ lhs: Character, _ rhs: Character) -> Bool {
+        let neighbors: [Character: String] = [
+            "q": "wa", "w": "qesa", "e": "wsdr", "r": "edft", "t": "rfgy",
+            "y": "tghu", "u": "yhji", "i": "ujko", "o": "iklp", "p": "ol",
+            "a": "qwsz", "s": "awedxz", "d": "serfcx", "f": "drtgvc",
+            "g": "ftyhbv", "h": "gyujnb", "j": "huikmn", "k": "jiolm",
+            "l": "kop", "z": "asx", "x": "zsdc", "c": "xdfv", "v": "cfgb",
+            "b": "vghn", "n": "bhjm", "m": "njk",
+        ]
+        return neighbors[lhs]?.contains(rhs) == true
     }
 
     /// Adjacent transposition counts as one edit, covering conservative
