@@ -48,8 +48,8 @@ The Info.plist `NSPrivacyAccessedAPITypes` key is populated for
 ## 3. Payment Flow — StoreKit 2 Only
 
 The iOS subscription is handled entirely through **StoreKit 2**:
-- Product IDs: `com.tono.pro.monthly` ($5.99/mo) and `com.tono.pro.yearly` ($39.99/yr)
-- Annual plan includes a 7-day free trial
+- Product IDs: `com.tonoit.pro.monthly` ($3.99/mo) and `com.tonoit.pro.yearly` ($39.99/yr)
+- Eligible monthly and annual subscriptions include a 7-day free trial
 - No web checkout, no Stripe redirect, no external links for the iOS
   subscription purchase path
 
@@ -97,22 +97,18 @@ This must be enabled in both targets in Xcode → Signing & Capabilities → App
 ## 6. Suggested Test Account
 
 To test the paywall and Pro features without a real purchase, use a
-Sandbox test account in App Store Connect. Tono has two tiers:
-- **Free**: 3 coaching sessions/day, all four rewrite axes. No card, no trial.
-- **Pro** ($5.99/mo or $39.99/yr): 7-day free trial (real Apple
+Sandbox test account in App Store Connect. Tono offers **Pro** at $3.99/mo or
+$39.99/yr. Eligible subscriptions include a 7-day free trial (real Apple
   introductory offer configured in App Store Connect), then auto-renews
   unless cancelled. Unlimited + thread context + style memory + weekly digest.
 
 The trial disclosure copy reads (from `Product.subscription?.introductoryOffer`,
-dynamically rendered): "Free for 7 days, then auto-renews at $5.99/mo
-unless cancelled" (and the $39.99/yr variant). The paywall also shows
+dynamically rendered): "Free for 7 days, then auto-renews at the StoreKit
+price unless cancelled." The paywall also shows
 the standard App Store boilerplate required by guideline 3.1.2 (payment
 timing, renewal window, free-trial forfeiture) below the buy buttons.
 
-Sign in with the sandbox Apple ID, then either stay on Free or
-start the Pro trial to test the full experience. The FREE_DAILY_LIMIT
-env var on the backend can be used to raise or lower the free cap for
-testing the limit-exceeded path (defaults to 3).
+Sign in with the sandbox Apple ID, then start the Pro trial to test the full experience.
 
 ---
 

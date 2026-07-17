@@ -15,7 +15,7 @@
 - **Product:** a pre-send text-rewriting wedge, embedded in the iOS / Android keyboard (and later Slack, Teams, Outlook, macOS, iMessage). You draft a message → see 3–4 rewrites on different tone axes (warmer / clearer / funnier / safer) plus a risk badge → tap to insert.
 - **Beachhead:** neurodivergent adults navigating social nuance (ADHD, autism-spectrum). Highest pain-per-dollar, strongest organic community, low sales friction. **Launch here.**
 - **Parallel revenue track:** B2B manager-feedback use case on Slack/Teams/Outlook. Highest ARPU, longest sales cycle. Build second, ship via Dov's network.
-- **Pricing:** **$3/mo** consumer Pro · **$25/seat/mo** B2B · free tier with 10 rewrites/day · family plan $19/mo covers 5 · enterprise custom.
+- **Pricing:** **$3.99/mo or $39.99/yr** consumer Pro after an eligible 7-day trial · **$25/seat/mo** B2B · family plan $19/mo covers 5 · enterprise custom.
 - **MVP:** **8 weeks**, single iOS Custom Keyboard extension, backend = an Ezra/Hermes profile with a thin REST API. No greenfield infra.
 - **Run-rate target:** **$400K ARR within 12 months** on **< $80K cash burn** (mostly infra, Apple dev account, design, legal — LLM cost is <$0.001/rewrite, so gross margin is ~90%).
 - **Why this wins *now* and *here*:** Dov's existing investment in Hermes / Ezra is not just infra — it is **a working prototype of this product** with thousands of real group/chat messages of tone feedback already in its logs. The MVP backend is literally an Ezra profile.
@@ -198,8 +198,7 @@ This is the recoupment path for the Hermes investment.
 
 | Tier | Price | Includes |
 |---|---|---|
-| **Free** | $0 | 10 rewrites/day, 1 surface (iOS keyboard), all 4 rewrite axes |
-| **Personal Pro** | **$3/mo** or **$29/yr** | Unlimited rewrites, all surfaces (iOS, Android, macOS), style memory, conversation context, "risk level" badge |
+| **Personal Pro** | **$3.99/mo** or **$39.99/yr** after an eligible 7-day trial | Unlimited rewrites, all surfaces (iOS, Android, macOS), style memory, conversation context, "risk level" badge |
 | **Family** | $19/mo | Up to 5 seats, shared style profiles |
 | **Team** | **$25/user/mo** (annual) | Slack/Teams/Outlook integration, admin console, shared style guide, audit log |
 | **Enterprise** | Custom | SSO, compliance, custom models, dedicated support |
@@ -230,7 +229,7 @@ Ship a **single iOS Custom Keyboard extension** with:
 - [ ] Paste/type your message in the keyboard's secondary view.
 - [ ] Tap "Coach" → see 3 rewrites (warmer, clearer, safer) + risk badge.
 - [ ] One-tap to insert a chosen rewrite into the host app's text field.
-- [ ] Free tier: 10/day. Pro: unlimited via subscription.
+- [ ] Pro: unlimited via subscription after an eligibility-gated trial.
 - [ ] Basic style memory: remember last rewrite the user accepted and prefer that voice.
 - [ ] Receipts optional: how the recipient might read this (short sentence + 3 emoji).
 

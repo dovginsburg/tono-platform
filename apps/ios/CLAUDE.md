@@ -4,7 +4,7 @@
 An iOS keyboard extension that helps people say what they mean. User types a message, taps "Coach", gets risk analysis + 4 rewrites (warmer, clearer, funnier, safer). One-tap to swap in the rewrite.
 
 **Tagline:** Say what you mean. Land how you intend.
-**Price:** $5.99/mo or $39.99/yr (7-day free trial on annual)
+**Price:** $3.99/mo or $39.99/yr (7-day free trial)
 
 ## Architecture
 - **App/** — SwiftUI host app (onboarding, settings, playground)
@@ -51,8 +51,7 @@ An iOS keyboard extension that helps people say what they mean. User types a mes
 - **Keychain Team ID** — Replace `XXXXXXXXXX` placeholder in `SharedKeychain.swift:16`
 
 ## Pricing
-- Free: 10 rewrites/day, all 4 axes
-- Pro: $5.99/mo or $39.99/yr (7-day free trial on annual) — unlimited rewrites, style memory, per-recipient coaching, weekly digest
+- Pro: $3.99/mo or $39.99/yr (7-day free trial) — unlimited rewrites, style memory, per-recipient coaching, weekly digest
 - B2B: $25/seat/mo (year 2)
 
 ## Tech stack

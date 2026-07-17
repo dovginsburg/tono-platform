@@ -12,6 +12,7 @@ import SwiftUI
 struct HomeView: View {
     @Binding var prefs: TonePreferences
     @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject private var store = StoreKitManager.shared
 
     @State private var keyboardEnabled = false
     @State private var isRegistered    = false
@@ -111,23 +112,30 @@ struct HomeView: View {
     private var footer: some View {
         VStack(alignment: .leading, spacing: 6) {
             Group {
-                Text("Free · 3 coaching sessions/day")
+                Text("Subscription plans available in Settings")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .foregroundColor(.white.opacity(0.7))
-                Text("All four rewrite axes on the iOS keyboard. No credit card, no trial — just works.")
+                Text("Apple confirms plan pricing and any trial eligibility before purchase.")
                     .font(.system(size: 13, design: .rounded))
                     .foregroundColor(.white.opacity(0.5))
             }
             Group {
-                Text("Pro · $5.99/mo or $39.99/yr")
+                Text(planPriceSummary)
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .foregroundColor(.white.opacity(0.7))
                     .padding(.top, 4)
-                Text("7-day free trial, then auto-renews unless cancelled. Unlimited rewrites, style memory, per-recipient coaching, weekly digest. Cancel anytime in Settings.")
+                Text("Eligible subscriptions include a 7-day free trial, then auto-renew unless canceled. Cancel anytime in Apple ID subscriptions.")
                     .font(.system(size: 13, design: .rounded))
                     .foregroundColor(.white.opacity(0.5))
             }
         }
+    }
+
+    private var planPriceSummary: String {
+        let monthly = store.products.first { $0.id == StoreKitManager.ProductID.monthly }
+        let yearly = store.products.first { $0.id == StoreKitManager.ProductID.yearly }
+        guard let monthly, let yearly else { return "Pro subscription pricing in Settings" }
+        return "Pro · \(monthly.displayPrice)/month or \(yearly.displayPrice)/year"
     }
 
     // MARK: - Actions

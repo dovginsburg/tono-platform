@@ -61,8 +61,6 @@ enum ShiftState { case none, shiftOnce, capsLock }
 public final class KeyboardModel: ObservableObject {
     @Published var mode: KeyboardMode = .keyboard
     @Published var draft: String = ""
-    @Published var usedToday: Int = 0
-    @Published var dailyLimit: Int = 10
     @Published var isPro: Bool = false
     @Published var hasFullAccess: Bool = true
     @Published var isOfflineResult: Bool = false
@@ -132,7 +130,7 @@ public final class KeyboardModel: ObservableObject {
     /// We deliberately run through `requestCoach()` rather than `runCoach()`
     /// directly so the user always gets a confirmation step — a long-press on
     /// the return key is an exploratory gesture and should not silently burn
-    /// a /v1/coach call against their daily quota.
+    /// a /v1/coach call before explicit confirmation.
     func requestCoach() {
         loadDraft()
         guard !draft.isEmpty else {
@@ -259,11 +257,7 @@ public final class KeyboardModel: ObservableObject {
                     platform: "ios",
                     appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0"
                 )
-                self.usedToday = me.usedToday
-                self.dailyLimit = me.dailyLimit
                 self.isPro = me.isPro
-                SharedStore.defaults.set(me.usedToday, forKey: SharedKeys.widgetUsedToday)
-                SharedStore.defaults.set(max(me.dailyLimit, 0), forKey: SharedKeys.widgetDailyLimit)
             } catch {
                 self.isRefinementLoading = false
                 CrashReporter.setCustomKey(false, forKey: "network_in_flight")
@@ -312,11 +306,7 @@ public final class KeyboardModel: ObservableObject {
 
                 CrashReporter.setCustomKey(false, forKey: "network_in_flight")
                 if let usage = try? await TonoBackend.shared.me() {
-                    self.usedToday = usage.usedToday
-                    self.dailyLimit = usage.dailyLimit
                     self.isPro = usage.isPro
-                    SharedStore.defaults.set(usage.usedToday, forKey: SharedKeys.widgetUsedToday)
-                    SharedStore.defaults.set(usage.dailyLimit, forKey: SharedKeys.widgetDailyLimit)
                     SharedStore.defaults.set(usage.isPro, forKey: SharedKeys.proUnlocked)
                 }
                 SharedStore.defaults.set(result.perception, forKey: SharedKeys.lastPerception)
@@ -351,8 +341,6 @@ public final class KeyboardModel: ObservableObject {
                 self.isRefinementLoading = false
                 CrashReporter.setCustomKey(false, forKey: "network_in_flight")
                 if let usage = try? await TonoBackend.shared.me() {
-                    self.usedToday = usage.usedToday
-                    self.dailyLimit = usage.dailyLimit
                     self.isPro = usage.isPro
                 }
                 self.mode = .error(err.localizedDescription)
@@ -389,8 +377,6 @@ public final class KeyboardModel: ObservableObject {
                     platform: "ios",
                     appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0"
                 )
-                self.usedToday = me.usedToday
-                self.dailyLimit = me.dailyLimit
                 self.isPro = me.isPro
             } catch {
                 CrashReporter.setCustomKey(false, forKey: "network_in_flight")
@@ -900,8 +886,6 @@ private struct ErrorView: View {
     @ObservedObject var model: KeyboardModel
     let message: String
 
-    private var isDailyLimit: Bool { message.lowercased().contains("daily free limit") }
-
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: "exclamationmark.triangle")
@@ -912,18 +896,7 @@ private struct ErrorView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
                 .foregroundColor(.white)
-            if isDailyLimit {
-                VStack(spacing: 6) {
-                    Text("\(model.usedToday) of \(model.dailyLimit) rewrites used today")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundColor(.white.opacity(0.7))
-                    Text("Tono can remember how you talk to each person and get better every time. Unlock the full coach.")
-                        .font(.system(size: 12, design: .rounded))
-                        .foregroundColor(.white.opacity(0.55))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 4)
-                }
-            }
+
             Button("Back") { model.back() }
                 .foregroundColor(.black)
                 .padding(.horizontal, 16)
@@ -1624,7 +1597,7 @@ private struct CoachPromptView: View {
                 .accessibilityLabel("Run Coach on this draft")
             }
 
-            Text("Uses one of your \(model.dailyLimit) daily rewrites. Cancel if you weren't sure.")
+            Text("Your draft is sent only after you confirm. Cancel if you weren't sure.")
                 .font(.system(size: 11, design: .rounded))
                 .foregroundColor(.white.opacity(0.4))
                 .multilineTextAlignment(.center)

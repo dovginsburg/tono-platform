@@ -39,11 +39,7 @@ Most writing tools help you *edit*. Tono helps you *translate*. The pre-send mom
 
 Tono is built on top of a tone-discipline system originally developed for AI agents that write in group chats. The rewrite-axis library is the same one that keeps those agents honest.
 
-**Free tier**
-
-10 rewrites per day, one surface (the keyboard), all four axes. The free tier is meant to feel generous, not stingy.
-
-**Pro — $3/month or $99/year**
+**Pro — eligible 7-day free trial, then $3.99/month or $39.99/year**
 
 - Unlimited rewrites
 - All four axes always on
@@ -64,8 +60,9 @@ Tono requests Full Access only because Apple's Custom Keyboard API requires it t
 
 **In-app purchases**
 
-- Tono Pro Monthly: $3.00 / month, auto-renewable
-- Tono Pro Annual: $99.00 / year, auto-renewable
+- Tono Pro Monthly: $3.99 / month, auto-renewable
+- Tono Pro Annual: $39.99 / year, auto-renewable
+- Eligible subscriptions include a real 7-day free trial.
 - Both cancel anytime in Settings → Apple ID → Subscriptions.
 
 **Made by**
@@ -76,7 +73,7 @@ A small team obsessed with the question: *why do my texts keep misfiring?*
 
 ## What's New (1.0)
 
-Initial release. Custom iOS keyboard with the Coach flow, four rewrite axes, risk badge, style memory, free + Pro tiers.
+Initial release. Custom iOS keyboard with the Coach flow, four rewrite axes, risk badge, style memory, and Pro subscriptions.
 
 ## Support URL
 

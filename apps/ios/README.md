@@ -132,8 +132,8 @@ own group outputs.
 
 ## Pricing model
 
-See `SCOPE.md` §5. Free tier: 10 rewrites/day, one surface (the keyboard).
-Pro: $11/mo — unlimited rewrites, style memory, all surfaces. B2B: $25/seat.
+See `SCOPE.md` §5. Pro is $3.99/month or $39.99/year after an eligible 7-day
+trial — unlimited rewrites, style memory, and all surfaces. B2B: $25/seat.
 The in-app paywall is a stub — wire RevenueCat or StoreKit 2 before launch.
 
 ## App Store review notes

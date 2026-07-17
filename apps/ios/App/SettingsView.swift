@@ -72,6 +72,7 @@ struct SettingsView: View {
                     platform: "ios",
                     appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0"
                 )
+                await store.refreshEntitlements()
                 await refreshUsage()
             }
             .sheet(isPresented: $showPaywall) {
@@ -138,18 +139,11 @@ struct SettingsView: View {
                         .foregroundColor(.secondary)
                 }
             }
-            if let u = usage {
+            if usage != nil {
                 HStack {
                     Text("Plan")
                     Spacer()
-                    Text(u.isPro ? "Pro" : "Free").foregroundColor(.secondary)
-                }
-                if !u.isPro {
-                    HStack {
-                        Text("Today")
-                        Spacer()
-                        Text("\(u.usedToday)/\(u.dailyLimit)").foregroundColor(.secondary)
-                    }
+                    Text(store.statusLabel).foregroundColor(.secondary)
                 }
             } else if let err = usageError {
                 Text(err).font(.caption).foregroundColor(.red)
@@ -489,15 +483,15 @@ struct SettingsView: View {
     }
 
     private var planSection: some View {
-        let isPro = store.isPro || prefs.proUnlocked || (usage?.isPro ?? false)
+        let isPro = store.isPro
         return Section("Plan") {
             HStack {
-                Text(isPro ? "Pro ✓" : "Free")
+                Text(isPro ? "\(store.statusLabel) ✓" : store.statusLabel)
                 Spacer()
                 if !isPro {
-                    // Apple-compliant label: matches the action and names
-                    // the auto-renewing nature of the trial.
-                    Button("Try Pro free for 7 days") { showPaywall = true }
+                    Button(store.eligibleFreeTrialProductIDs.isEmpty ? "Subscribe" : "Start free trial") {
+                        showPaywall = true
+                    }
                         .buttonStyle(.borderedProminent)
                 }
             }
@@ -530,7 +524,7 @@ struct SettingsView: View {
                     }
                 }
             }
-            Text("Free: 3 coaching sessions/day, all four rewrite axes, no card required. Pro (7-day free trial, then auto-renews at $5.99/mo or $39.99/yr unless cancelled): unlimited + thread context + style memory + per-recipient coaching + weekly digest. Cancel anytime in Settings.")
+            Text("Unlimited rewrites, thread context, style memory, per-recipient coaching, and a weekly digest. Manage or cancel anytime in Apple ID subscriptions.")
                 .font(.caption).foregroundColor(.secondary)
         }
     }
@@ -582,8 +576,8 @@ struct SettingsView: View {
         do {
             let me = try await TonoBackend.shared.me()
             await MainActor.run {
-                usage = TonoUsage(usedToday: me.usedToday, dailyLimit: me.dailyLimit,
-                                  plan: me.plan, isPro: me.isPro)
+                store.acceptBackendState(me)
+                usage = TonoUsage(plan: me.plan, isPro: me.isPro)
                 usageError = nil
             }
         } catch let e as TonoBackendError {
@@ -607,6 +601,7 @@ struct SettingsView: View {
             _ = try await TonoBackend.shared.redeemCoupon(code: code)
             promoSuccess = "Pro access activated!"
             promoCode = ""
+            await store.refreshEntitlements()
             await refreshUsage()
         } catch let e as TonoBackendError {
             promoError = e.localizedDescription
@@ -644,13 +639,12 @@ struct PaywallView: View {
 
                 restoreButton
 
-                // Apple App Store Review Guideline 3.1.2 (Subscriptions)
-                // requires this boilerplate be visible on the same screen as
-                // the buy button. Includes trial disclosure if a 7-day free
-                // trial introductory offer is configured in App Store Connect.
+                // App Store Review Guideline 3.1.2 requires renewal disclosure
+                // on the same screen as the buy button. Eligible trial terms are
+                // rendered per product above from StoreKit's live offer.
                 Text(
 """
-Payment will be charged to your Apple ID account at the confirmation of purchase. Subscription automatically renews unless it is cancelled at least 24 hours before the end of the current period. Your account will be charged for renewal within 24 hours prior to the end of the current period. If you start a free trial, any unused portion of the free trial period will be forfeited when you purchase a subscription.
+Payment will be charged to your Apple ID account at confirmation of purchase. The subscription automatically renews unless it is canceled at least 24 hours before the end of the current period. Your account will be charged for renewal within 24 hours before the end of the current period.
 """
                 )
                     .font(.caption2)
@@ -695,7 +689,7 @@ Payment will be charged to your Apple ID account at the confirmation of purchase
                 .foregroundColor(.white.opacity(0.6))
                 .multilineTextAlignment(.center)
             VStack(spacing: 6) {
-                FeatureLine("Unlimited rewrites (Free is 3/day)")
+                FeatureLine("Unlimited rewrites")
                 FeatureLine("Thread context — paste the prior message")
                 FeatureLine("Per-recipient style memory")
                 FeatureLine("Weekly tone report — spot your patterns")
@@ -716,7 +710,11 @@ Payment will be charged to your Apple ID account at the confirmation of purchase
                     .padding(.horizontal, 24)
             }
             ForEach(store.products, id: \.id) { product in
-                ProductRow(product: product, isLoading: store.isLoading) {
+                ProductRow(
+                    product: product,
+                    isLoading: store.isLoading,
+                    isEligibleForFreeTrial: store.isEligibleForFreeTrial(product)
+                ) {
                     Task { await store.purchase(product) }
                 }
             }
@@ -805,6 +803,7 @@ private struct AddRecipientView: View {
 private struct ProductRow: View {
     let product:   Product
     let isLoading: Bool
+    let isEligibleForFreeTrial: Bool
     let onPurchase: () -> Void
 
     private var isYearly: Bool { product.id.contains("yearly") }
@@ -816,21 +815,9 @@ private struct ProductRow: View {
                     HStack(spacing: 6) {
                         Text(isYearly ? "Annual" : "Monthly")
                             .font(.system(size: 16, weight: .semibold, design: .rounded))
-                        if isYearly {
-                            Text("Save 44%")
-                                .font(.system(size: 9, weight: .bold, design: .rounded))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.green.opacity(0.25))
-                                .clipShape(Capsule())
-                                .foregroundColor(.green)
-                        }
                     }
-                    // Show Apple's real intro offer if it exists (set up in
-                    // App Store Connect → Subscriptions → introductory offer).
-                    // Example: "$0.00 / 7 days, then auto-renews at $5.99/mo".
-                    // Falls back to a clear fixed text if no offer is configured
-                    // yet (e.g., during local development without ASC).
+                    // Show Apple's real intro offer only when StoreKit reports
+                    // this account is eligible for it.
                     introOfferLine
                 }
                 Spacer()
@@ -842,7 +829,9 @@ private struct ProductRow: View {
                     // introOffer is only available on iOS 17.2+; older OS
                     // versions just see the regular price.
                     VStack(alignment: .trailing, spacing: 0) {
-                        if let intro = product.subscription?.introductoryOffer {
+                        if let intro = product.subscription?.introductoryOffer,
+                           intro.paymentMode == .freeTrial,
+                           isEligibleForFreeTrial {
                             Text(intro.displayPrice)
                                 .font(.system(size: 16, weight: .bold, design: .rounded))
                                 .foregroundColor(.white)
@@ -866,12 +855,12 @@ private struct ProductRow: View {
         .disabled(isLoading)
     }
 
-    /// Renders the intro-offer disclosure line in Apple-compliant format.
-    /// Example: "7-day free trial, then auto-renews at $5.99/mo unless cancelled".
+    /// Renders intro-offer disclosure only for an eligible StoreKit account.
     @ViewBuilder
     private var introOfferLine: some View {
         if let intro = product.subscription?.introductoryOffer,
-           intro.paymentMode == .freeTrial {
+           intro.paymentMode == .freeTrial,
+           isEligibleForFreeTrial {
             // Render the intro period dynamically from the offer (Apple manages
             // the actual duration). The text below is the standard Apple boilerplate
             // per App Store guideline 3.1.2.

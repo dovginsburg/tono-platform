@@ -47,7 +47,7 @@ nuance — highest pain-per-dollar, strong organic community, low sales friction
 **Coach tab (HomeView)**
 - Setup walkthrough: enable keyboard → grant Full Access → switch to Tono
 - "You're all set" card once keyboard loads
-- Footer: Free · 10 rewrites/day; Pro · $5.99/mo or $39.99/yr with feature list
+- Footer: StoreKit-backed Pro pricing with no hard-coded UI prices
 
 **Playground tab (PlaygroundView)**
 - In-app coaching without the keyboard (for testing / onboarding)
@@ -70,8 +70,8 @@ nuance — highest pain-per-dollar, strong organic community, low sales friction
   - Header: "Your personal coach / Tono gets better the more you use it."
   - Feature lines: remembers how you write to each person · ranks rewrites by your style
     · per-recipient coaching hints · weekly tone report · unlimited rewrites
-  - Annual: $39.99/yr · "Save 44%" badge · "Try free for 7 days · then $3.33/mo"
-  - Monthly: $5.99/mo (secondary option)
+  - Annual: $39.99/yr · eligible 7-day free trial
+  - Monthly: $3.99/mo · eligible 7-day free trial
   - Restore purchases link
 
 ### Memory (MemoryView) — Pro only
@@ -135,9 +135,7 @@ to Keychain on first run.
 
 ## Monetization strategy
 
-**Free:** 10 rewrites/day · all 4 axes · basic keyboard · Playground · History
-
-**Pro ($5.99/mo or $39.99/yr):**
+**Pro ($3.99/mo or $39.99/yr):**
 - Unlimited rewrites
 - StyleMemory re-ranking ("Ranked for your style")
 - Per-recipient coaching (chip strip + per-recipient StyleMemory)
@@ -151,13 +149,11 @@ to Keychain on first run.
 - MemoryView shows MemoryProTeaser — blurred example facts
 - Both teasers have a "Unlock" CTA that opens PaywallView
 
-**Annual-first design:** yearly plan listed first, highlighted in purple, with "Save 44%"
-badge and "Try free for 7 days" trial. Monthly shown below as secondary option.
+**Annual-first design:** yearly plan listed first and highlighted in purple.
+StoreKit controls localized prices and account-specific trial eligibility.
 
-**Rationale for $5.99/$39.99 vs original $3/$29:** the app has moved from
-"tone rewriter" to "relationship-aware communication coach." The memory and per-recipient
-features justify the premium. $5.99 is below the $12/mo Grammarly benchmark but above
-the $3/mo "toy" perception.
+**Approved release contract:** eligible users receive a real 7-day trial, then
+$3.99/month or $39.99/year. Active UI prices come from StoreKit.
 
 ---
 
@@ -182,8 +178,7 @@ the $3/mo "toy" perception.
 5. **Missing features?** What's obviously absent for a v1 that would matter to the
    target user (ND adult, 25–45, heavy texter)?
 
-6. **Pricing sanity check.** $5.99/mo or $39.99/yr with a 7-day annual trial. Does
-   the "Save 44%" framing work, or is there a better anchor?
+6. **Pricing contract.** $3.99/mo or $39.99/yr with an eligibility-gated 7-day trial.
 
 7. **App Store risk.** Apple is known to scrutinize keyboards that send data off-device.
    The Full Access requirement is disclosed; the privacy policy covers this. Any other

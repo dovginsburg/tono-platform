@@ -113,8 +113,8 @@ flags claims that current source does not yet back:
    claim: unsupported until `recipientMemory` ships. Contract **C9** guards the
    default so this cannot silently become false-by-default.
 
-(Out of lane, noted for the owning lane: `description.txt` prices `$2.99/$28.99`
-while `Tono.storekit` / `CLAUDE.md` use `$5.99/$39.99`. Not touched here.)
+(Release pricing is now canonical at $3.99/month or $39.99/year; active iOS UI
+loads localized prices from StoreKit.)
 
 ## Gaps integration must close
 

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# bump-build.sh — Verify the fixed release build number for build 90.
+# bump-build.sh — Verify the fixed release build number for build 91.
 # Build numbers are release inputs, not mutable build output. An Archive must
-# not silently turn reviewed build 90 sources into build 91.
+# not silently change reviewed build 91 sources.
 
 set -eo pipefail
 
 SRCROOT="${SRCROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
-EXPECTED_BUILD=90
+EXPECTED_BUILD=91
 PLISTS=(
   "App/Info.plist"
   "KeyboardExtension/Info.plist"

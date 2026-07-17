@@ -39,12 +39,12 @@ PRIVACY BY DESIGN
 Your drafts are analyzed and immediately discarded. Tono never stores message content. Your account is an anonymous device ID — no email, no phone number, no sign-up.
 
 ─────────────────────────
-FREE & PRO
+TONO PRO
 ─────────────────────────
-Free: 10 rewrites per day across all four axes
+Eligible subscriptions include a real 7-day free trial, then renew at
+$3.99/month or $39.99/year unless canceled.
 
-Pro ($2.99/month or $28.99/year):
-• Unlimited daily rewrites
+• Unlimited rewrites
 • Style memory — your favorite axes surface first
 • Recipient memory with voice hints
 • Widget to track usage at a glance
