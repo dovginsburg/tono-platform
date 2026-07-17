@@ -1,5 +1,13 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "redirects": [
+    {
+      "source": "/:path*",
+      "has": [{ "type": "host", "value": "www.tonoit.com" }],
+      "destination": "https://tonoit.com/:path*",
+      "permanent": true
+    }
+  ],
   "rewrites": [
     { "source": "/", "destination": "/app" },
     { "source": "/pricing", "destination": "/app/pricing" },
