@@ -135,12 +135,20 @@ def test_google_signin_creates_account(client):
     assert body["email"] == "g@example.com"
 
 
-def test_anonymous_device_unaffected_by_account_feature(client):
-    """A device that never signs in behaves exactly as before — no
-    account_id, plan/is_pro resolved purely from the device's own fields."""
+def test_anonymous_device_gets_canonical_account_but_bills_like_a_device(client):
+    """Build-91 §1: every device — even one that never signs in — gets a
+    server-issued canonical account UUID (the entitlement principal). But an
+    anonymous auto-account is NOT identified, so plan/is_pro/quota still resolve
+    from the device's own fields exactly as before accounts existed."""
+    import uuid as _uuid
+
     device = _register(client)
+    # /v1/register returns the non-null account UUID.
+    assert device["account_id"]
+    assert _uuid.UUID(device["account_id"])  # well-formed
+
     me = client.get("/v1/me", headers=_auth_headers(device["api_token"])).json()
-    assert me["account_id"] is None
+    assert me["account_id"] == device["account_id"]  # required non-null, stable
     assert me["plan"] == "free"
     assert me["is_pro"] is False
 

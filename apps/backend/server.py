@@ -46,7 +46,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import passkeys, payments, rate_limit, slack, social_auth
+from . import app_store, passkeys, payments, rate_limit, slack, social_auth
+from .app_store import compute_me_fields
 from .analyze import (
     AnalyzeRequest,
     CANONICAL_COACH_AXES,
@@ -413,6 +414,9 @@ class RegisterResponse(BaseModel):
     device_credential: Optional[str] = None
     plan: str
     is_pro: bool
+    # Server-issued immutable anonymous account UUID — the only entitlement
+    # principal, and what new purchases bind as appAccountToken (contract §1).
+    account_id: str
 
 
 @app.post("/v1/register", response_model=RegisterResponse)
@@ -447,12 +451,20 @@ def register(body: RegisterRequest, request: Request, store: StoreDep) -> Regist
         ) from exc
 
     user = registration.user
+    if not user.account_id:
+        # Registration must always yield a canonical account (contract §1).
+        # This should be unreachable — surfacing it fails closed rather than
+        # returning a device with no entitlement principal.
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, "registration did not establish an account"
+        )
     return RegisterResponse(
         device_id=user.device_id,
         api_token=user.api_token,
         device_credential=registration.device_credential,
-        plan=user.plan,
+        plan=user.plan_resolved,
         is_pro=user.is_pro,
+        account_id=user.account_id,
     )
 
 
@@ -464,32 +476,24 @@ class MeResponse(BaseModel):
     daily_limit: int  # -1 = unlimited
     subscription_status: Optional[str]
     subscription_renews_at: Optional[str]
-    account_id: Optional[str] = None
+    # Required non-null after migration — the canonical entitlement principal
+    # (contract §1). A null here is a contract violation.
+    account_id: str
 
 
 @app.get("/v1/me", response_model=MeResponse)
 def me(user: CurrentUser, store: StoreDep) -> MeResponse:
-    today = _today_utc()
-    # Once a device is linked to an account, the account is the source of
-    # truth for plan/subscription/daily usage — see User.is_pro /
-    # User.plan_resolved, and Store.consume_rewrite for why the counter
-    # itself lives on the account row once signed in (pooled across every
-    # device linked to it, not reset per device).
-    quota_source = user.account if user.account else user
-    used = quota_source.daily_count if quota_source.daily_day == today else 0
-    limit = -1 if user.is_pro else int(os.environ.get("FREE_DAILY_LIMIT", "10"))
-    subscription_status = user.account.subscription_status if user.account else user.subscription_status
-    subscription_renews_at = user.account.subscription_renews_at if user.account else user.subscription_renews_at
-    return MeResponse(
-        device_id=user.device_id,
-        plan=user.plan_resolved,
-        is_pro=user.is_pro,
-        used_today=used,
-        daily_limit=limit,
-        subscription_status=subscription_status,
-        subscription_renews_at=subscription_renews_at,
-        account_id=user.account_id,
-    )
+    # Defensive: a legacy device registered before the account-first contract
+    # may still carry a null account_id until migration runs. Backfill on read
+    # so /v1/me never returns a null principal (contract §1).
+    if not user.account_id:
+        reloaded = store.ensure_account(user.device_id)
+        if reloaded is not None:
+            user = reloaded
+    # Field resolution (identified-account routing, entitlement grants, pooled
+    # quota) lives in the shared entitlement projection so /v1/me and the App
+    # Store endpoint always agree.
+    return MeResponse(**compute_me_fields(user, store))
 
 
 # ---------------------------------------------------------------------------
@@ -533,12 +537,32 @@ def _resolve_provider_signin(
     account owns this identity — creating one on first use. `link=True`
     requires the device to already be signed in and refuses (409) to
     attach an identity that already belongs to someone else's account."""
-    if link and not user.account_id:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "sign in before linking another provider")
     try:
-        account = store.upsert_account_by_provider(
-            provider, sub, email, link_into_account_id=user.account_id if link else None
-        )
+        if link:
+            if not user.account_id:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST, "sign in before linking another provider"
+                )
+            account = store.upsert_account_by_provider(
+                provider, sub, email, link_into_account_id=user.account_id
+            )
+        else:
+            existing = store.get_account_by_provider(provider, sub)
+            if existing is not None:
+                # Plain sign-in: switch to (or reuse) the account that already
+                # owns this identity — never a conflict (existing behavior).
+                account = existing
+            elif user.account is not None and not user.account.is_identified:
+                # Brand-new identity while on an anonymous auto-account: upgrade
+                # that account IN PLACE so its UUID, history, and entitlement
+                # grants carry over (contract §1, hostile 4).
+                account = store.upsert_account_by_provider(
+                    provider, sub, email, link_into_account_id=user.account_id
+                )
+            else:
+                # Brand-new identity while already identified: mint a fresh
+                # account and switch to it.
+                account = store.upsert_account_by_provider(provider, sub, email)
     except AccountConflictError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
     store.link_device_to_account(user.device_id, account.id)
@@ -625,8 +649,10 @@ async def api_analyze(
                 cached = None
         if cached:
             today = _today_utc()
-            # Pooled on the account once signed in — see consume_rewrite.
-            quota_source = user.account if user.account else user
+            # Pooled on the account once signed in (identified) — see
+            # consume_rewrite; anonymous auto-accounts still count per-device.
+            identified = user.account is not None and user.account.is_identified
+            quota_source = user.account if identified else user
             snap_used = quota_source.daily_count if quota_source.daily_day == today else 0
             snap_limit = -1 if user.is_pro else int(os.environ.get("FREE_DAILY_LIMIT", "10"))
             store.log_usage(
@@ -1148,6 +1174,7 @@ def admin_create_coupon(
 app.include_router(payments.router)
 app.include_router(slack.router)
 app.include_router(passkeys.router)
+app.include_router(app_store.router)
 
 
 # ---------------------------------------------------------------------------

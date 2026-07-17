@@ -19,6 +19,13 @@ public enum SharedKeys {
     // Apple-managed 7-day free trial state (set by StoreKit 2 from
     // currentEntitlements; read by both host app and keyboard extension).
     public static let inFreeTrial = "tc.inFreeTrial"
+    // Tri-state entitlement (build 91): the last backend verdict —
+    // "entitled" | "notEntitled" | "unknown". `proUnlocked` above is a mirror;
+    // entitlement authorization is freshness-aware and reads THIS (see
+    // TonePreferences.isProAuthoritative), so a stale cached Bool is never
+    // presented as authoritative when the backend can't be reached.
+    public static let entitlementState = "tc.entitlementState"
+    public static let entitlementCheckedAt = "tc.entitlementCheckedAt"
 
     // Backend-proxy auth (v0.2). The server holds the LLM keys; the
     // client just carries a bearer token + the device id it registered
@@ -116,6 +123,15 @@ public enum SharedStore {
     }
 }
 
+/// Tri-state entitlement (build 91 §7). Fail-closed: only `.entitled` presents
+/// Pro as authoritative. `.unknown` (backend unreachable/invalid) must never let
+/// a cached Bool stand in as authority — there is no offline Pro allowance.
+public enum EntitlementState: String {
+    case entitled
+    case notEntitled
+    case unknown
+}
+
 public struct TonePreferences {
     public var provider: LLMProvider
     public var apiKey: String?
@@ -126,6 +142,10 @@ public struct TonePreferences {
     /// trial (configured in App Store Connect). Mirrored from StoreKit
     /// transactions so the keyboard extension can show "X days left".
     public var inFreeTrial: Bool
+    /// Last backend entitlement verdict. `nil` = never recorded (legacy install
+    /// before build 91) — in that case `isProAuthoritative` trusts the
+    /// `proUnlocked` mirror so upgrades don't spuriously drop Pro.
+    public var entitlementState: EntitlementState?
 
     public init() {
         let d = SharedStore.defaults
@@ -139,6 +159,18 @@ public struct TonePreferences {
         self.axes = stored.compactMap(RewriteAxis.init(rawValue:))
         self.proUnlocked = d.bool(forKey: SharedKeys.proUnlocked)
         self.inFreeTrial = d.bool(forKey: SharedKeys.inFreeTrial)
+        self.entitlementState = d.string(forKey: SharedKeys.entitlementState).flatMap(EntitlementState.init(rawValue:))
+    }
+
+    /// Freshness-aware Pro authorization for extensions and gated features.
+    /// `.entitled` -> true; `.notEntitled`/`.unknown` -> false (fail closed);
+    /// `nil` (legacy, not yet reconciled) -> the last-known `proUnlocked` mirror.
+    public var isProAuthoritative: Bool {
+        switch entitlementState {
+        case .entitled: return true
+        case .notEntitled, .unknown: return false
+        case nil: return proUnlocked
+        }
     }
 
     public func save() {
@@ -154,6 +186,29 @@ public struct TonePreferences {
         d.set(preferredVoice, forKey: SharedKeys.preferredVoice)
         d.set(axes.map(\.rawValue), forKey: SharedKeys.axes)
         d.set(proUnlocked, forKey: SharedKeys.proUnlocked)
+        if let entitlementState {
+            d.set(entitlementState.rawValue, forKey: SharedKeys.entitlementState)
+            d.set(Date().timeIntervalSince1970, forKey: SharedKeys.entitlementCheckedAt)
+        }
+    }
+
+    /// Record a fresh backend verdict from any surface (host app or keyboard
+    /// extension). `.notEntitled` immediately clears the shared Pro mirror;
+    /// `.unknown` leaves the mirror untouched but flips authorization closed via
+    /// `isProAuthoritative` (build 91 §7).
+    public static func recordEntitlement(_ state: EntitlementState, isPro: Bool) {
+        let d = SharedStore.defaults
+        d.set(state.rawValue, forKey: SharedKeys.entitlementState)
+        d.set(Date().timeIntervalSince1970, forKey: SharedKeys.entitlementCheckedAt)
+        switch state {
+        case .entitled:
+            d.set(true, forKey: SharedKeys.proUnlocked)
+        case .notEntitled:
+            d.set(false, forKey: SharedKeys.proUnlocked)
+            d.set(false, forKey: SharedKeys.inFreeTrial)
+        case .unknown:
+            break  // keep the last-known mirror; authorization already fails closed
+        }
     }
 }
 
@@ -177,7 +232,9 @@ public struct FreeTierGate {
 
     /// Returns true if the user can perform another rewrite today.
     public func canAnalyze() -> Bool {
-        if TonePreferences().proUnlocked { return true }
+        // Freshness-aware: an unknown/notEntitled backend state fails closed to
+        // the free tier instead of trusting a stale cached Bool (build 91 §7).
+        if TonePreferences().isProAuthoritative { return true }
         let stored = SharedStore.defaults.string(forKey: SharedKeys.freeTierDay)
         if stored != dayStamp {
             SharedStore.defaults.set(0, forKey: SharedKeys.freeTierUsed)
@@ -188,7 +245,7 @@ public struct FreeTierGate {
     }
 
     public func recordUse() {
-        if TonePreferences().proUnlocked { return }
+        if TonePreferences().isProAuthoritative { return }
         SharedStore.defaults.set(usedToday + 1, forKey: SharedKeys.freeTierUsed)
     }
 }

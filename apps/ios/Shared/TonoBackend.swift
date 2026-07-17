@@ -55,6 +55,12 @@ public struct TonoMe: Codable, Equatable {
     public let isPro: Bool
     public let subscriptionStatus: String?
     public let subscriptionRenewsAt: String?
+    // Canonical server-issued account UUID — the only entitlement principal and
+    // what a new StoreKit purchase binds as `appAccountToken` (build 91 §1).
+    // Decoded as optional purely for robustness against a pre-migration server;
+    // the current backend returns it required non-null. `TonoBackend` validates
+    // its UUID shape and persists it to `KeychainKeys.accountID`.
+    public let accountId: String?
     // Email identity (added 2026-07-03). nil = anonymous user.
     public let email: String?
     public let emailVerifiedAt: String?
@@ -69,6 +75,7 @@ public struct TonoMe: Codable, Equatable {
         case isPro = "is_pro"
         case subscriptionStatus = "subscription_status"
         case subscriptionRenewsAt = "subscription_renews_at"
+        case accountId = "account_id"
         case email
         case emailVerifiedAt = "email_verified_at"
         case deviceCountForEmail = "device_count_for_email"
@@ -235,6 +242,8 @@ public final class TonoBackend: @unchecked Sendable {
             let device_credential: String?
             let plan: String
             let is_pro: Bool
+            // Required non-null from the account-first backend (build 91 §1).
+            let account_id: String?
         }
         let resp: Resp = try await post(
             path: "/v1/register",
@@ -248,6 +257,7 @@ public final class TonoBackend: @unchecked Sendable {
         )
         SharedKeychain.set(resp.device_id, forKey: KeychainKeys.deviceID)
         SharedKeychain.set(resp.api_token, forKey: KeychainKeys.apiToken)
+        persistAccountID(resp.account_id)
         if let credential = resp.device_credential, !credential.isEmpty {
             SharedKeychain.set(credential, forKey: KeychainKeys.deviceCredential)
         }
@@ -260,20 +270,36 @@ public final class TonoBackend: @unchecked Sendable {
     }
 
     public func me() async throws -> TonoMe {
-        try await get(path: "/v1/me")
+        let me: TonoMe = try await get(path: "/v1/me")
+        persistAccountID(me.accountId)
+        return me
     }
 
     /// Sends StoreKit's Apple-signed JWS to the backend. The backend verifies
-    /// it with Apple's official server library and remains the Pro authority.
+    /// it against Apple's signing chain and remains the sole Pro authority; it
+    /// returns authoritative `/v1/me`-equivalent state only after a durable
+    /// grant/denial commit (build 91 §3/§8).
     public func syncAppStoreSubscription(signedTransactionInfo: String) async throws -> TonoMe {
         struct Req: Encodable {
             let signed_transaction_info: String
         }
-        return try await post(
+        let me: TonoMe = try await post(
             path: "/v1/app-store/subscription",
             body: Req(signed_transaction_info: signedTransactionInfo),
             authorize: true
         )
+        persistAccountID(me.accountId)
+        return me
+    }
+
+    /// Persist the canonical account UUID (build 91 §1) as its own secure
+    /// Keychain item — never a `deviceID` alias. Validates the UUID shape and
+    /// ignores a malformed/absent value so a degraded response can't clobber a
+    /// good stored principal. This is the value `StoreKitManager` binds as the
+    /// purchase `appAccountToken`; without it, a new purchase is disabled.
+    private func persistAccountID(_ raw: String?) {
+        guard let raw, let uuid = UUID(uuidString: raw) else { return }
+        SharedKeychain.set(uuid.uuidString, forKey: KeychainKeys.accountID)
     }
 
     // ── Email identity (added 2026-07-03) ──────────────────────────────────

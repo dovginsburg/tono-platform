@@ -154,7 +154,21 @@ public final class StoreKitManager: ObservableObject {
         if backendState == nil {
             backendState = try? await TonoBackend.shared.me()
         }
-        guard let backendState else { return }
+        guard let backendState else {
+            // Backend reconciliation is unavailable/invalid: transition to the
+            // explicit `unknown` state and FAIL CLOSED (build 91 §7). We must
+            // not leave a stale cached Pro Bool standing as authority — there is
+            // no 72-hour offline allowance. `recordEntitlement(.unknown)` keeps
+            // the last-known mirror but flips `isProAuthoritative` false so the
+            // keyboard/extensions and free-tier gate stop presenting Pro.
+            isPro = false
+            isInFreeTrial = false
+            TonePreferences.recordEntitlement(.unknown, isPro: false)
+            if sawVerifiedEntitlement {
+                purchaseError = "Couldn't reach Tono to confirm your subscription. Pro resumes once you're back online."
+            }
+            return
+        }
         applyBackendState(backendState, inTrial: inTrial)
         if sawVerifiedEntitlement, serverSyncFailed, !backendState.isPro {
             purchaseError = "Apple confirmed the purchase, but server verification failed. Try Restore purchases."
@@ -164,8 +178,15 @@ public final class StoreKitManager: ObservableObject {
     private func applyBackendState(_ me: TonoMe, inTrial: Bool) {
         isPro = me.isPro
         isInFreeTrial = me.isPro && inTrial
+        // A successful backend response is authoritative (build 91 §7): record
+        // the verdict as tri-state so extensions and the free-tier gate read a
+        // freshness-aware value rather than a stale Bool. `.notEntitled` clears
+        // the shared Pro mirror immediately; `.entitled` sets it. This replaces
+        // the bare `proUnlocked` write below.
+        TonePreferences.recordEntitlement(me.isPro ? .entitled : .notEntitled, isPro: me.isPro)
+        // recordEntitlement owns `proUnlocked`; here we only persist the
+        // StoreKit-derived trial flag for the entitled+trial case.
         var prefs = TonePreferences()
-        prefs.proUnlocked = isPro
         prefs.inFreeTrial = isInFreeTrial
         prefs.save()
     }
@@ -205,8 +226,14 @@ public final class StoreKitManager: ObservableObject {
     }
 
     private func purchaseAccountToken() throws -> UUID {
-        guard let deviceID = SharedKeychain.get(KeychainKeys.deviceID),
-              let token = UUID(uuidString: deviceID) else {
+        // The canonical server-issued account UUID is the ONLY entitlement
+        // principal, and the only value bound as `appAccountToken` on a new
+        // purchase (build 91 §1/§4). Never the device id, and there is no
+        // fallback: if the canonical account UUID isn't persisted yet, the
+        // purchase is disabled so a paid transaction can't bind to a
+        // non-principal. `registerIfNeeded` (called before purchase) persists it.
+        guard let accountID = SharedKeychain.get(KeychainKeys.accountID),
+              let token = UUID(uuidString: accountID) else {
             throw StoreError.missingAccountToken
         }
         return token

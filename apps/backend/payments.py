@@ -153,11 +153,14 @@ def create_checkout_session(
     # app-sourced subscriptions from web-sourced ones later (web
     # subscriptions have no device row to attach to).
     if user is not None:
-        account_id = user.account_id
+        # Every device now carries a canonical account UUID (build-91 §1), but
+        # billing routes through the account only once it is IDENTIFIED (signed
+        # in). An anonymous auto-account bills per-device exactly as before, so
+        # web/anonymous checkout is unchanged.
+        identified = user.account is not None and user.account.is_identified
+        account_id = user.account.id if identified else None
         customer_id = (
-            user.account.stripe_customer_id
-            if user.account is not None
-            else user.stripe_customer_id
+            user.account.stripe_customer_id if identified else user.stripe_customer_id
         )
         if not customer_id:
             customer_metadata = {"tono_device_id": user.device_id}
@@ -231,10 +234,9 @@ def create_portal_session(
 ) -> PortalResponse:
     if not _is_configured():
         raise HTTPException(503, "Stripe is not configured on this server.")
+    identified = user.account is not None and user.account.is_identified
     customer_id = (
-        user.account.stripe_customer_id
-        if user.account is not None
-        else user.stripe_customer_id
+        user.account.stripe_customer_id if identified else user.stripe_customer_id
     )
     if not customer_id:
         raise HTTPException(400, "No Stripe customer on file. Start checkout first.")

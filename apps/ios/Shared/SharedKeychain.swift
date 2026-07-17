@@ -81,6 +81,11 @@ public enum SharedKeychain {
 public enum KeychainKeys {
     public static let apiToken = "apiToken"
     public static let deviceID = "deviceID"
+    /// Canonical server-issued account UUID — the only entitlement principal
+    /// (build 91). New StoreKit purchases bind this as `appAccountToken`, never
+    /// the device id. Stored as its own secure Keychain item in the shared
+    /// access group; it is NOT an alias of `deviceID`.
+    public static let accountID = "accountID"
     /// High-entropy proof for re-registering an existing public device id.
     public static let deviceCredential = "deviceCredential"
     /// Direct LLM API key (legacy; only used when bypassing the backend proxy).
