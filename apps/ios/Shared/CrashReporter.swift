@@ -46,7 +46,7 @@ public enum CrashReporter {
         }
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         Crashlytics.crashlytics().setCustomValue(version, forKey: "app_version")
-        Crashlytics.crashlytics().setCustomValue(TonePreferences().proUnlocked, forKey: "is_pro")
+        Crashlytics.crashlytics().setCustomValue(TonePreferences().isProAuthoritative, forKey: "is_pro")
         #endif
     }
 

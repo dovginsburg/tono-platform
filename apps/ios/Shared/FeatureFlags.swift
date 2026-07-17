@@ -111,7 +111,10 @@ public enum FeatureFlag: String, CaseIterable {
 public enum FeatureFlags {
 
     public static func isEnabled(_ flag: FeatureFlag) -> Bool {
-        if flag.requiresPro && !TonePreferences().proUnlocked {
+        // Pro gating reads the canonical tri-state authority, not the cached
+        // `proUnlocked` Bool: a missing/unknown backend state fails closed
+        // (build 91 §7).
+        if flag.requiresPro && !TonePreferences().isProAuthoritative {
             return false
         }
         return cached()[flag.rawValue] ?? flag.defaultValue

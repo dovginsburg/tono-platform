@@ -307,7 +307,11 @@ public final class KeyboardModel: ObservableObject {
                 CrashReporter.setCustomKey(false, forKey: "network_in_flight")
                 if let usage = try? await TonoBackend.shared.me() {
                     self.isPro = usage.isPro
-                    SharedStore.defaults.set(usage.isPro, forKey: SharedKeys.proUnlocked)
+                    // A successful backend verdict is authoritative: record it as
+                    // canonical tri-state so the shared mirror is written FROM the
+                    // tri-state, never as a bare Bool (build 91 §7). `.notEntitled`
+                    // clears the mirror immediately.
+                    TonePreferences.recordEntitlement(usage.isPro ? .entitled : .notEntitled, isPro: usage.isPro)
                 }
                 SharedStore.defaults.set(result.perception, forKey: SharedKeys.lastPerception)
                 SharedStore.defaults.set(result.riskLevel.rawValue, forKey: SharedKeys.lastRiskLevel)

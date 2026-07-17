@@ -12,7 +12,9 @@ struct DigestView: View {
     @State private var errorMessage: String?
     @State private var showPaywall = false
 
-    private var isPro: Bool { store.isPro || TonePreferences().proUnlocked }
+    // Presentation reads the canonical tri-state authority (build 91 §7); the
+    // cached `proUnlocked` Bool is never consulted for gating.
+    private var isPro: Bool { store.isPro || TonePreferences().isProAuthoritative }
 
     var body: some View {
         NavigationStack {

@@ -1,0 +1,28 @@
+{
+  "artifact_version": 1,
+  "build": 91,
+  "prerequisite": "build90_charged_before_upgrade_recovery",
+  "description": "Build 91 can only claim a build-90 StoreKit purchase after the user upgrades and uploads signed proof. It cannot protect an immutable build-90 client that was charged but never upgrades. Releasing therefore requires ONE external fact this repo cannot itself prove: (a) provider/TestFlight evidence that build 90 can no longer initiate checkout, or (b) an owner-approved, explicitly bounded charged-before-upgrade recovery policy. This artifact is evaluated by apps/ios/Scripts/build90_recovery_gate.py, which is wired into verify_build91_entitlement_contract.py and FAILS CLOSED until one evidence form is supplied and complete. Do not fabricate evidence.",
+  "status": "unresolved",
+  "evidence": {
+    "checkout_disabled": {
+      "supplied": false,
+      "source": null,
+      "verified_by": null,
+      "verified_at": null,
+      "reference": null
+    },
+    "charged_before_upgrade_policy": {
+      "supplied": false,
+      "owner_approved": false,
+      "approved_by": null,
+      "approved_at": null,
+      "bounded_window_days": null,
+      "policy_reference": null
+    }
+  },
+  "notes": [
+    "Operators may supply real evidence out-of-band via the TONO_BUILD90_RECOVERY_EVIDENCE env var (path to a JSON file with the same 'evidence' object) instead of committing it here.",
+    "The two evidence forms are mutually sufficient: exactly one complete form flips the gate to READY."
+  ]
+}

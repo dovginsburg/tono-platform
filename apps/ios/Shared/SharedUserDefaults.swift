@@ -143,8 +143,9 @@ public struct TonePreferences {
     /// transactions so the keyboard extension can show "X days left".
     public var inFreeTrial: Bool
     /// Last backend entitlement verdict. `nil` = never recorded (legacy install
-    /// before build 91) — in that case `isProAuthoritative` trusts the
-    /// `proUnlocked` mirror so upgrades don't spuriously drop Pro.
+    /// before build 91, or not yet reconciled). Per build 91 §7 a missing/
+    /// unavailable state fails closed — it is NEVER allowed to fall back to a
+    /// cached `proUnlocked` Bool as authority.
     public var entitlementState: EntitlementState?
 
     public init() {
@@ -162,14 +163,17 @@ public struct TonePreferences {
         self.entitlementState = d.string(forKey: SharedKeys.entitlementState).flatMap(EntitlementState.init(rawValue:))
     }
 
-    /// Freshness-aware Pro authorization for extensions and gated features.
-    /// `.entitled` -> true; `.notEntitled`/`.unknown` -> false (fail closed);
-    /// `nil` (legacy, not yet reconciled) -> the last-known `proUnlocked` mirror.
+    /// Freshness-aware Pro authorization for extensions and gated features — the
+    /// SOLE authority for presenting/gating Pro (build 91 §7). Only a fresh
+    /// backend `.entitled` verdict authorizes Pro. `.notEntitled`, `.unknown`,
+    /// AND `nil` (never reconciled / legacy) all fail closed. A cached
+    /// `proUnlocked` Bool is deliberately NOT consulted here: it is a
+    /// write-only compatibility mirror and can never authorize Pro on its own.
     public var isProAuthoritative: Bool {
         switch entitlementState {
         case .entitled: return true
         case .notEntitled, .unknown: return false
-        case nil: return proUnlocked
+        case nil: return false  // fail closed — no cached-Bool fallback
         }
     }
 

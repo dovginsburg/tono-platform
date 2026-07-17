@@ -3,12 +3,16 @@
 Every test runs against a fresh SQLite DB (conftest `_isolate_db`) through the
 real FastAPI app and the real store; none of them merely greps source.
 
-Apple's signing chain is stood up locally: a self-generated EC root → intermediate
-→ leaf. The leaf signs each JWS transaction/notification, the leaf+intermediate+
-root ride in the JWS `x5c` header, and the app's `AppleJWSVerifier` is pointed at
-the test root via `app.dependency_overrides` — the same indirection social_auth
-uses so the suite needs no Apple network path or real signing key. The verifier
-under test is the production one; only its trust anchor is swapped.
+Apple's signing chain is stood up locally in the exact shape the supported App
+Store Server Library requires: a self-generated EC root → WWDR-marked CA
+intermediate → receipt-signing leaf (both marker OIDs + key-usage + basic
+constraints so the library's OpenSSL X509_STRICT path accepts the chain). The
+leaf signs each JWS transaction/notification, the leaf+intermediate+root ride in
+the JWS `x5c` header, and the production `SignedDataVerifier` (wrapped by
+`AppleDataVerifier`) is pointed at the test root via `app.dependency_overrides`
+— the same indirection social_auth uses so the suite needs no Apple network path
+or real signing key. The verifier under test is Apple's own library; only its
+trust anchor is swapped.
 """
 
 from __future__ import annotations
@@ -43,7 +47,16 @@ def _now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
-def _mk_cert(subject_cn, issuer_cert, issuer_key, *, ca: bool):
+# Apple's certificate marker OIDs the App Store Server Library requires:
+# the receipt-signing leaf and the WWDR intermediate.
+LEAF_MARKER_OID = x509.ObjectIdentifier("1.2.840.113635.100.6.11.1")
+WWDR_MARKER_OID = x509.ObjectIdentifier("1.2.840.113635.100.6.2.1")
+
+
+def _mk_cert(subject_cn, issuer_cert, issuer_key, *, ca: bool, marker_oid=None):
+    """Build an EC cert with the extensions Apple's library (OpenSSL X509_STRICT)
+    expects: BasicConstraints, KeyUsage, SKI, and an AKI + Apple marker OID where
+    relevant. A CA cert gets keyCertSign; a leaf gets digitalSignature."""
     key = ec.generate_private_key(ec.SECP256R1())
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, subject_cn)])
     issuer_name = issuer_cert.subject if issuer_cert else subject
@@ -53,29 +66,76 @@ def _mk_cert(subject_cn, issuer_cert, issuer_key, *, ca: bool):
         .issuer_name(issuer_name)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(_now() - dt.timedelta(days=1))
+        # Wide validity window: the library checks the chain against the
+        # transaction's signedDate (online checks off), and build-90 tokenless
+        # claims can be a year+ old, so the signing cert must have been valid then.
+        .not_valid_before(_now() - dt.timedelta(days=3650))
         .not_valid_after(_now() + dt.timedelta(days=3650))
         .add_extension(x509.BasicConstraints(ca=ca, path_length=None), critical=True)
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False
+        )
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=not ca,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=ca,
+                crl_sign=ca,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
     )
+    if marker_oid is not None:
+        builder = builder.add_extension(
+            x509.UnrecognizedExtension(marker_oid, b"\x05\x00"), critical=False
+        )
+    if issuer_cert is not None:
+        builder = builder.add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(issuer_key.public_key()),
+            critical=False,
+        )
     cert = builder.sign(issuer_key or key, hashes.SHA256())
     return key, cert
 
 
+def _der(cert) -> bytes:
+    from cryptography.hazmat.primitives.serialization import Encoding
+
+    return cert.public_bytes(Encoding.DER)
+
+
+def _make_sandbox_verifier(root_cert):
+    """The production Apple library verifier, pointed at a test root."""
+    from appstoreserverlibrary.models.Environment import Environment
+    from appstoreserverlibrary.signed_data_verifier import SignedDataVerifier
+
+    from backend.app_store import AppleDataVerifier
+
+    return AppleDataVerifier(
+        {"Sandbox": SignedDataVerifier([_der(root_cert)], False, Environment.SANDBOX, BUNDLE_ID)}
+    )
+
+
 class AppleFixture:
-    """A local stand-in for Apple's signing chain + the production verifier
-    pointed at it."""
+    """A local stand-in for Apple's signing chain + the production library
+    verifier pointed at it."""
 
     def __init__(self):
-        from backend.app_store import AppleJWSVerifier
-
         self.root_key, self.root_cert = _mk_cert("Tono Test Apple Root CA", None, None, ca=True)
         self.int_key, self.int_cert = _mk_cert(
-            "Tono Test Apple Intermediate", self.root_cert, self.root_key, ca=True
+            "Tono Test Apple WWDR Intermediate", self.root_cert, self.root_key,
+            ca=True, marker_oid=WWDR_MARKER_OID,
         )
         self.leaf_key, self.leaf_cert = _mk_cert(
-            "Tono Test Apple Leaf", self.int_cert, self.int_key, ca=False
+            "Tono Test Apple Leaf", self.int_cert, self.int_key,
+            ca=False, marker_oid=LEAF_MARKER_OID,
         )
-        self.verifier = AppleJWSVerifier([self.root_cert])
+        self.verifier = _make_sandbox_verifier(self.root_cert)
 
     def _x5c(self):
         from cryptography.hazmat.primitives.serialization import Encoding
@@ -828,3 +888,332 @@ def test_20_old_tokenless_purchase_is_never_rejected_for_being_old(client, apple
     assert r.status_code == 200, r.text
     assert r.json()["is_pro"] is True
     assert store.get_legacy_claim(orig)["claimant_account_id"] == dev["account_id"]
+
+
+# ===========================================================================
+# Remediation hostile regressions (close the five P0 falsifications + the
+# current-provider / Set-Token production seams). Each drives real behavior and
+# the DB mutation boundary, not source greps.
+# ===========================================================================
+
+
+# ---- P0 #1: missing/unknown ownership must fail closed (never PURCHASED) ----
+
+
+def test_p0_missing_or_unknown_ownership_fails_closed(client, apple):
+    from backend.store import get_store
+
+    store = get_store()
+    dev = _register(client)
+
+    # Tokenless signed transaction with NO inAppOwnershipType. A prior candidate
+    # defaulted this to PURCHASED and granted Pro; it must now 422 and grant
+    # nothing — no purchase row, no legacy claim, no grant.
+    orig = uuid.uuid4().hex
+    r = _sync(
+        client, dev["api_token"],
+        apple.sign_transaction(originalTransactionId=orig, appAccountToken=None, inAppOwnershipType=None),
+    )
+    assert r.status_code == 422
+    assert _me(client, dev["api_token"])["is_pro"] is False
+    assert _db_scalar("SELECT COUNT(*) FROM provider_purchases WHERE original_transaction_id=?", (orig,)) == 0
+    assert store.get_legacy_claim(orig) is None
+    assert store.list_entitlement_grants(dev["account_id"]) == []
+
+    # An unrecognized ownership string is equally refused.
+    orig2 = uuid.uuid4().hex
+    r2 = _sync(
+        client, dev["api_token"],
+        apple.sign_transaction(originalTransactionId=orig2, appAccountToken=None, inAppOwnershipType="WEIRD_TYPE"),
+    )
+    assert r2.status_code == 422
+    assert _db_scalar("SELECT COUNT(*) FROM provider_purchases WHERE original_transaction_id=?", (orig2,)) == 0
+
+
+# ---- P0 #2: notification must validate the nested transaction (wrong app) ----
+
+
+def test_p0_notification_rejects_wrong_app_nested_transaction(client, apple):
+    from backend.store import get_store
+
+    store = get_store()
+    dev = _register(client)
+    orig = uuid.uuid4().hex
+    assert _sync(
+        client, dev["api_token"],
+        apple.sign_transaction(appAccountToken=dev["account_id"], originalTransactionId=orig),
+    ).status_code == 200
+    assert _me(client, dev["api_token"])["is_pro"] is True
+
+    # A validly Apple-signed REFUND whose NESTED transaction is for a different
+    # app. It must be rejected (403) via the same canonical transaction path and
+    # mutate NOTHING — the active purchase is untouched.
+    base_ms = int(_now().timestamp() * 1000)
+    hostile = apple.sign_notification(
+        "REFUND",
+        tx=apple.transaction(
+            originalTransactionId=orig, bundleId="com.other.vendor.app", signedDate=base_ms + DAY_MS
+        ),
+    )
+    r = _notify(client, hostile)
+    assert r.status_code == 403
+    assert store.get_provider_purchase(orig)["lifecycle_state"] == "active"
+    assert _me(client, dev["api_token"])["is_pro"] is True
+
+
+# ---- P0 #3: terminal beats active on an EQUAL provider timestamp ----
+
+
+def test_p0_equal_timestamp_terminal_beats_active(client, apple):
+    from backend.store import get_store
+
+    store = get_store()
+    dev = _register(client)
+    orig = uuid.uuid4().hex
+    base_ms = int(_now().timestamp() * 1000)
+    assert _sync(
+        client, dev["api_token"],
+        apple.sign_transaction(appAccountToken=dev["account_id"], originalTransactionId=orig, signedDate=base_ms),
+    ).status_code == 200
+
+    t_terminal = base_ms + DAY_MS
+    assert _notify(
+        client,
+        apple.sign_notification("REFUND", tx=apple.transaction(originalTransactionId=orig, signedDate=t_terminal)),
+    ).json()["outcome"] == "refunded"
+    assert _me(client, dev["api_token"])["is_pro"] is False
+
+    # A renewal at the SAME provider timestamp must NOT resurrect: terminal wins
+    # on the tie (deterministic equal-timestamp precedence).
+    same_ts_renew = apple.sign_notification(
+        "DID_RENEW",
+        tx=apple.transaction(originalTransactionId=orig, signedDate=t_terminal, expiresDate=base_ms + 40 * DAY_MS),
+    )
+    assert _notify(client, same_ts_renew).json()["outcome"] == "stale"
+    assert store.get_provider_purchase(orig)["lifecycle_state"] == "refunded"
+    assert _me(client, dev["api_token"])["is_pro"] is False
+
+    # A client replay of an ACTIVE transaction at the SAME signed timestamp also
+    # cannot resurrect (transaction-path equal-timestamp precedence).
+    replay = _sync(
+        client, dev["api_token"],
+        apple.sign_transaction(appAccountToken=dev["account_id"], originalTransactionId=orig, signedDate=t_terminal),
+    )
+    assert replay.json()["is_pro"] is False
+    assert store.get_provider_purchase(orig)["lifecycle_state"] == "refunded"
+
+    # Replay idempotence is preserved: a duplicate refund (same notificationUUID)
+    # is deduped, and terminal state is unchanged.
+    dup = apple.sign_notification("REFUND", tx=apple.transaction(originalTransactionId=orig, signedDate=t_terminal))
+    first = _notify(client, dup).json()["outcome"]
+    assert _notify(client, dup).json()["outcome"] == "duplicate"
+    assert first == "refunded"
+    assert store.get_provider_purchase(orig)["lifecycle_state"] == "refunded"
+
+
+# ---- P0 #4: a TOKENLESS family revoke must not mass-revoke beneficiaries ----
+
+
+def test_p0_tokenless_family_revoke_never_mass_revokes(client, apple):
+    from backend.store import get_store
+
+    store = get_store()
+    orig = uuid.uuid4().hex
+    dev_a = _register(client)
+    dev_b = _register(client)
+    base_ms = int(_now().timestamp() * 1000)
+
+    # Two family beneficiaries share one purchase lineage; each gets a family grant.
+    for dev in (dev_a, dev_b):
+        assert _sync(
+            client, dev["api_token"],
+            apple.sign_transaction(
+                originalTransactionId=orig, inAppOwnershipType="FAMILY_SHARED",
+                appAccountToken=None, signedDate=base_ms,
+            ),
+        ).status_code == 200
+    assert _me(client, dev_a["api_token"])["is_pro"] is True
+    assert _me(client, dev_b["api_token"])["is_pro"] is True
+
+    # A real-shape TOKENLESS FAMILY_SHARED revoke (no appAccountToken — the
+    # contract's own family semantics). No beneficiary can be proven, so it must
+    # NOT revoke anyone; the event is parked for provider reconciliation.
+    revoke = apple.sign_notification(
+        "REVOKE",
+        tx=apple.transaction(
+            originalTransactionId=orig, inAppOwnershipType="FAMILY_SHARED",
+            appAccountToken=None, signedDate=base_ms + DAY_MS,
+        ),
+    )
+    assert _notify(client, revoke).json()["outcome"] == "unresolved_beneficiary"
+
+    # Neither beneficiary lost Pro; the purchase and both grants are intact.
+    assert _me(client, dev_a["api_token"])["is_pro"] is True
+    assert _me(client, dev_b["api_token"])["is_pro"] is True
+    assert store.get_provider_purchase(orig)["lifecycle_state"] == "active"
+    assert [g["state"] for g in store.list_entitlement_grants(dev_a["account_id"])] == ["active"]
+    assert [g["state"] for g in store.list_entitlement_grants(dev_b["account_id"])] == ["active"]
+
+    # The dropped revoke is durably recorded (non-destructive) for reconciliation.
+    unresolved = store.list_unresolved_events()
+    assert len(unresolved) == 1
+    assert unresolved[0]["original_transaction_id"] == orig
+    assert unresolved[0]["reason"] == "family_revoke_no_provable_beneficiary"
+
+    # And a proven-beneficiary (token-present) revoke still targets exactly one.
+    targeted = apple.sign_notification(
+        "REVOKE",
+        tx=apple.transaction(
+            originalTransactionId=orig, inAppOwnershipType="FAMILY_SHARED",
+            appAccountToken=dev_a["account_id"], signedDate=base_ms + 2 * DAY_MS,
+        ),
+    )
+    assert _notify(client, targeted).json()["outcome"] == "beneficiary_revoked"
+    assert _me(client, dev_a["api_token"])["is_pro"] is False
+    assert _me(client, dev_b["api_token"])["is_pro"] is True
+
+
+# ---- P0 #5: a non-CA intermediate in the JWS chain must be rejected ----
+
+
+def test_p0_non_ca_intermediate_is_rejected(client, apple):
+    dev = _register(client)
+
+    # Build a chain whose intermediate is NOT a CA (BasicConstraints ca=False),
+    # signed by the trusted test root, with a leaf under it. A prior home-grown
+    # verifier accepted this; Apple's library rejects it (X509_STRICT / path).
+    bad_int_key, bad_int_cert = _mk_cert(
+        "Tono Test Non-CA Intermediate", apple.root_cert, apple.root_key,
+        ca=False, marker_oid=WWDR_MARKER_OID,
+    )
+    leaf_key, leaf_cert = _mk_cert(
+        "Tono Test Leaf via non-CA int", bad_int_cert, bad_int_key,
+        ca=False, marker_oid=LEAF_MARKER_OID,
+    )
+    from cryptography.hazmat.primitives.serialization import Encoding
+
+    x5c = [
+        base64.b64encode(c.public_bytes(Encoding.DER)).decode("ascii")
+        for c in (leaf_cert, bad_int_cert, apple.root_cert)
+    ]
+    jws = jwt.encode(
+        apple.transaction(appAccountToken=dev["account_id"]),
+        leaf_key, algorithm="ES256", headers={"x5c": x5c},
+    )
+    r = _sync(client, dev["api_token"], jws)
+    assert r.status_code == 422, r.text
+    assert _me(client, dev["api_token"])["is_pro"] is False
+    assert _db_scalar("SELECT COUNT(*) FROM provider_purchases") == 0
+
+
+# ---- Blocker A: current-provider terminal state beats replayed active proof ----
+
+
+def _override_provider_client(app, client_obj):
+    from backend import app_store
+
+    app.dependency_overrides[app_store.get_current_provider_client] = lambda: client_obj
+
+
+def test_blockerA_current_provider_terminal_blocks_replayed_active_proof(client, apple):
+    from backend import app_store
+    from backend.server import app
+    from backend.store import get_store
+
+    store = get_store()
+    dev = _register(client)
+    orig = uuid.uuid4().hex
+
+    class FakeProvider:
+        def current_state(self, original_transaction_id, environment):
+            assert original_transaction_id == orig
+            # Apple's live state for this lineage is REVOKED even though the
+            # client uploads an apparently-active signed transaction.
+            return app_store.ProviderStateSnapshot(lifecycle_state="revoked", signed_ms=0)
+
+    _override_provider_client(app, FakeProvider())
+    try:
+        r = _sync(
+            client, dev["api_token"],
+            apple.sign_transaction(appAccountToken=dev["account_id"], originalTransactionId=orig),
+        )
+        assert r.status_code == 200
+        assert r.json()["is_pro"] is False  # replayed proof did NOT grant
+        assert _me(client, dev["api_token"])["is_pro"] is False
+        assert store.get_provider_purchase(orig)["lifecycle_state"] == "revoked"
+        assert store.list_entitlement_grants(dev["account_id"]) == []
+    finally:
+        app.dependency_overrides.pop(app_store.get_current_provider_client, None)
+
+
+def test_blockerA_current_provider_unavailable_fails_closed_503(client, apple):
+    from backend import app_store
+    from backend.server import app
+
+    dev = _register(client)
+    orig = uuid.uuid4().hex
+
+    class FailingProvider:
+        def current_state(self, original_transaction_id, environment):
+            raise app_store.ProviderUnavailable("Apple App Store Server API 503")
+
+    _override_provider_client(app, FailingProvider())
+    try:
+        r = _sync(
+            client, dev["api_token"],
+            apple.sign_transaction(appAccountToken=dev["account_id"], originalTransactionId=orig),
+        )
+        # Missing/unavailable provider trust fails closed (retryable), never a
+        # silent grant, and writes no durable purchase.
+        assert r.status_code == 503
+        assert _db_scalar("SELECT COUNT(*) FROM provider_purchases WHERE original_transaction_id=?", (orig,)) == 0
+        assert _me(client, dev["api_token"])["is_pro"] is False
+    finally:
+        app.dependency_overrides.pop(app_store.get_current_provider_client, None)
+
+
+# ---- Blocker D: the concrete App Store Server API Set-Token sender ----
+
+
+def test_blockerD_concrete_set_token_sender_calls_api_and_is_retry_safe(client, apple):
+    from backend.app_store import AppStoreServerSetTokenSender, reconcile_set_app_account_token
+    from backend.store import get_store
+
+    store = get_store()
+    dev = _register(client)
+    orig = uuid.uuid4().hex
+    assert _sync(
+        client, dev["api_token"],
+        apple.sign_transaction(originalTransactionId=orig, appAccountToken=None),
+    ).status_code == 200
+    op = store.get_set_token_operation(orig)
+    assert op is not None and op["state"] == "pending"
+
+    # A fake App Store Server API client that first fails transiently, then
+    # succeeds — proving the concrete sender is wired to the real API method and
+    # that a transient failure never erases the already-verified entitlement.
+    class FakeAPIClient:
+        def __init__(self):
+            self.calls = []
+            self.fail_next = True
+
+        def set_app_account_token(self, original_transaction_id, request):
+            self.calls.append((original_transaction_id, request.appAccountToken))
+            if self.fail_next:
+                self.fail_next = False
+                raise RuntimeError("transient App Store Server API failure")
+
+    fake = FakeAPIClient()
+    sender = AppStoreServerSetTokenSender({"Production": fake}, "Production")
+
+    # First reconcile: transient failure -> op retriable, entitlement intact.
+    assert reconcile_set_app_account_token(store, sender) == {"succeeded": 0, "failed": 1}
+    assert store.get_set_token_operation(orig)["state"] == "failed"
+    assert _me(client, dev["api_token"])["is_pro"] is True
+
+    # Retry: success, converges without a duplicate grant; op idempotently done.
+    assert reconcile_set_app_account_token(store, sender) == {"succeeded": 1, "failed": 0}
+    assert store.get_set_token_operation(orig)["state"] == "succeeded"
+    assert reconcile_set_app_account_token(store, sender) == {"succeeded": 0, "failed": 0}
+    assert fake.calls == [(orig, dev["account_id"]), (orig, dev["account_id"])]
+    assert len(store.list_entitlement_grants(dev["account_id"])) == 1

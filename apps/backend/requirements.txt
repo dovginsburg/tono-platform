@@ -8,6 +8,11 @@ stripe>=7,<16
 PyJWT[crypto]>=2.8,<3.0
 webauthn>=2.0,<3.0
 python-multipart>=0.0.9,<1.0
+# Apple's supported App Store Server Library — signed-data (JWS) verification
+# against Apple's root chain (X509_STRICT + marker OIDs) and the App Store
+# Server API (current-provider status + Set-App-Account-Token). Replaces the
+# home-grown PKI a prior build-91 candidate shipped (contract §3).
+app-store-server-library>=1.2,<2.0
 
 # Tests
 pytest>=7,<9

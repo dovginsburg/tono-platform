@@ -186,12 +186,40 @@ class CreateCouponRequest(BaseModel):
 
 @asynccontextmanager
 async def _lifespan(_: "FastAPI"):
-    get_store()  # opens + migrates the DB
+    store = get_store()  # opens + migrates the DB
+
+    # Operational account backfill (contract §1). Runs transactionally and
+    # idempotently on every startup BEFORE any purchase/register route is
+    # served, so no legacy device is left with a NULL entitlement principal.
+    try:
+        backfill = store.backfill_missing_accounts()
+        if backfill.get("backfilled"):
+            logger.info(
+                "account backfill: linked %s legacy device(s); %s remain null",
+                backfill["backfilled"], backfill["remaining_null"],
+            )
+    except Exception:  # never block startup on a backfill hiccup — it retries next boot
+        logger.exception("account backfill failed on startup; will retry next boot")
+
+    # Best-effort drain of pending Set-App-Account-Token operations recorded
+    # after tokenless legacy claims (contract §5/§9). Only runs when the App
+    # Store Server API is configured; a transient failure leaves the op retriable
+    # and NEVER erases an already-verified entitlement.
+    try:
+        sender = app_store.get_set_token_sender()
+        if sender is not None:
+            tally = app_store.reconcile_set_app_account_token(store, sender)
+            if tally.get("succeeded") or tally.get("failed"):
+                logger.info("set-app-account-token reconcile: %s", tally)
+    except Exception:
+        logger.exception("set-app-account-token reconcile failed on startup; will retry")
+
     logger.info(
-        "tono backend ready: provider=%s stripe=%s slack=%s",
+        "tono backend ready: provider=%s stripe=%s slack=%s apple=%s",
         os.environ.get("TONO_PROVIDER", "mock"),
         "configured" if os.environ.get("STRIPE_SECRET_KEY") else "off",
         "configured" if os.environ.get("SLACK_CLIENT_ID") else "off",
+        "configured" if os.environ.get("TONO_APPLE_ROOT_CA_PEM") else "off",
     )
     try:
         yield

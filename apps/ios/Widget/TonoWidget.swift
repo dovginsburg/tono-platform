@@ -58,7 +58,12 @@ struct UsageProvider: TimelineProvider {
         let d = UserDefaults(suiteName: "group.com.tonoit.shared") ?? .standard
         let used  = d.integer(forKey: "tc.widgetUsedToday")
         let limit = d.object(forKey: "tc.widgetDailyLimit") as? Int ?? 10
-        let isPro = limit == -1 || d.bool(forKey: "tc.proUnlocked")
+        // Canonical tri-state (build 91 §7): only a fresh backend "entitled"
+        // verdict authorizes Pro; a missing/unknown state fails closed. We do
+        // NOT read the cached `tc.proUnlocked` Bool. `limit == -1` is the
+        // backend's own unlimited (Pro) signal from the last /v1/me snapshot.
+        let entitled = d.string(forKey: "tc.entitlementState") == "entitled"
+        let isPro = limit == -1 || entitled
         return UsageEntry(
             date: Date(),
             used: used,

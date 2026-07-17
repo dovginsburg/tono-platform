@@ -7,6 +7,9 @@ import plistlib
 import re
 import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import build90_recovery_gate  # noqa: E402 — sibling module, same Scripts dir
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -127,6 +130,61 @@ def main() -> int:
     for bundle in ("TonoKeyboard.appex", "TonoShare.appex", "TonoMessagesExtension.appex"):
         embed_marker = f"{bundle} in Embed Foundation Extensions"
         require(project.count(embed_marker) >= 2, f"host embed missing for {bundle}")
+
+    # Canonical tri-state must be the SOLE Pro authority; a missing/unknown
+    # build-91 state fails closed and never falls back to a cached Bool (§7).
+    shared_defaults = read("Shared/SharedUserDefaults.swift")
+    require(
+        "case nil: return false" in shared_defaults,
+        "isProAuthoritative must fail closed on a missing entitlement state (no proUnlocked fallback)",
+    )
+    require(
+        "case nil: return proUnlocked" not in shared_defaults,
+        "isProAuthoritative still trusts the cached proUnlocked Bool for missing state",
+    )
+    tri_state_consumers = {
+        "FeatureFlags": read("Shared/FeatureFlags.swift"),
+        "MemoryView": read("App/MemoryView.swift"),
+        "DigestView": read("App/DigestView.swift"),
+        "CrashReporter": read("Shared/CrashReporter.swift"),
+    }
+    for label, source in tri_state_consumers.items():
+        require(
+            "TonePreferences().proUnlocked" not in source,
+            f"{label} still authorizes/presents Pro from the cached proUnlocked Bool",
+        )
+    widget = read("Widget/TonoWidget.swift")
+    require(
+        'd.bool(forKey: "tc.proUnlocked")' not in widget,
+        "TonoWidget still reads the cached proUnlocked Bool instead of the tri-state",
+    )
+    require(
+        'd.string(forKey: "tc.entitlementState") == "entitled"' in widget,
+        "TonoWidget must gate Pro on the canonical entitlement tri-state",
+    )
+    keyboard_source = read("KeyboardExtension/KeyboardRootView.swift")
+    require(
+        "SharedStore.defaults.set(usage.isPro, forKey: SharedKeys.proUnlocked)" not in keyboard_source,
+        "keyboard still writes the proUnlocked mirror directly instead of recordEntitlement",
+    )
+    require(
+        "TonePreferences.recordEntitlement(" in keyboard_source,
+        "keyboard must record the backend verdict as canonical tri-state",
+    )
+
+    # Build-90 charged-before-upgrade external prerequisite (contract §5 /
+    # hostile 20). This is the release gate the prior candidate lacked: it FAILS
+    # CLOSED until checkout-disabled evidence or an owner-approved bounded
+    # recovery policy is supplied. We do not fabricate that evidence, so this is
+    # expected to block release until the owner provides it.
+    readiness = build90_recovery_gate.evaluate(
+        build90_recovery_gate.load_artifact(), __import__("os").environ
+    )
+    require(
+        readiness.ready,
+        "build-90 charged-before-upgrade prerequisite is unresolved: "
+        + "; ".join(readiness.reasons),
+    )
 
     print("build91-entitlement-contract: PASS")
     return 0

@@ -291,6 +291,22 @@ CREATE TABLE IF NOT EXISTS provider_operations (
     updated_at              TEXT NOT NULL,
     UNIQUE(provider, op_kind, original_transaction_id)
 );
+
+-- Non-destructive record of a verified provider event we could not safely
+-- apply because the target beneficiary can't be proven — e.g. a tokenless
+-- FAMILY_SHARED revoke, which must NOT mass-revoke every beneficiary. The event
+-- is durably parked here for provider reconciliation instead of guessing who to
+-- revoke (contract §6, P0 tokenless family revoke). Deduped by notificationUUID.
+CREATE TABLE IF NOT EXISTS provider_unresolved_events (
+    id                      TEXT PRIMARY KEY,
+    provider                TEXT NOT NULL,
+    notification_uuid       TEXT NOT NULL,
+    notification_type       TEXT NOT NULL,
+    original_transaction_id TEXT NOT NULL,
+    reason                  TEXT NOT NULL,
+    created_at              TEXT NOT NULL,
+    UNIQUE(provider, notification_uuid)
+);
 """
 
 _DEFAULT_FLAGS = [
@@ -306,6 +322,17 @@ _DEFAULT_FLAGS = [
     # k-anonymity floor (COLLECTIVE_MIN_DEVICES) enforced at aggregation query level.
     ("improve_tono",           1, None, 100, 1, "Share anonymous outcome signals to improve Tono for everyone"),
 ]
+
+
+# Terminal (not-entitled) provider lifecycle states. A purchase in any of these
+# never grants Pro, and — with deterministic equal-timestamp precedence — an
+# older-or-equal active event can never resurrect it (contract §3/§15; P0
+# equal-timestamp resurrection).
+_TERMINAL_STATES = frozenset({"refunded", "revoked", "expired"})
+
+# The only ownership types we will build an entitlement grant for. Anything else
+# is refused before any DB mutation (contract §4/§6; P0 fail-closed ownership).
+_GRANTABLE_OWNERSHIP = frozenset({"PURCHASED", "FAMILY_SHARED"})
 
 
 class AccountConflictError(Exception):
@@ -1700,12 +1727,18 @@ class Store:
         expires_ms: Optional[int] = None,
         revocation_ms: Optional[int] = None,
         is_trial: bool = False,
+        current_provider_state: Optional[str] = None,
         provider: str = "apple",
     ) -> AppleEntitlementResult:
         """Apply one verified Apple transaction as purchase + grant + claim in a
         single DB transaction (contract §3). Adjudication (direct vs family vs
         tokenless-legacy vs conflict vs stale) is decided against durable state
-        so it is idempotent under replay/crash-recovery."""
+        so it is idempotent under replay/crash-recovery.
+
+        `current_provider_state` (when supplied by the App Store Server API
+        current-provider seam) is authoritative: a terminal live state overrides
+        replayed active client proof so a refunded/revoked purchase cannot be
+        resurrected (contract §3)."""
 
         def _do() -> AppleEntitlementResult:
             cur = self._conn.cursor()
@@ -1725,6 +1758,7 @@ class Store:
                     expires_ms=expires_ms,
                     revocation_ms=revocation_ms,
                     is_trial=is_trial,
+                    current_provider_state=current_provider_state,
                     provider=provider,
                 )
                 cur.execute("COMMIT")
@@ -1739,8 +1773,14 @@ class Store:
     def _apply_apple_tx_locked(
         self, cur, now, *, account_id, original_transaction_id, transaction_id,
         product_id, environment, ownership_type, app_account_token,
-        signed_ms, expires_ms, revocation_ms, is_trial, provider,
+        signed_ms, expires_ms, revocation_ms, is_trial, current_provider_state=None,
+        provider="apple",
     ) -> AppleEntitlementResult:
+        # Mutation-safety assertions: never grant on unverified identity/ownership.
+        assert original_transaction_id and transaction_id, "missing transaction identifiers"
+        assert ownership_type in _GRANTABLE_OWNERSHIP, (
+            f"refusing to apply transaction with ownership {ownership_type!r}"
+        )
         now_ms = _now_ms()
         # Durable inbox record for this transaction id (replay observability).
         with contextlib.suppress(sqlite3.IntegrityError):
@@ -1762,6 +1802,13 @@ class Store:
             incoming_state = "expired"
         else:
             incoming_state = "active"
+
+        # Current-provider override (contract §3): when the App Store Server API
+        # reports a terminal live state for this lineage, it is authoritative and
+        # wins over apparently-active replayed client proof — a refunded/revoked
+        # purchase cannot be resurrected even if we never saw the notification.
+        if current_provider_state in _TERMINAL_STATES:
+            incoming_state = current_provider_state
 
         # Stale-replay guard: an older signed transaction can never resurrect a
         # terminated purchase (contract §3/§15). Current provider state wins.
@@ -1927,13 +1974,22 @@ class Store:
         original_transaction_id: str,
         signed_ms: int,
         subtype: Optional[str] = None,
+        ownership_type: Optional[str] = None,
         beneficiary_account_id: Optional[str] = None,
         expires_ms: Optional[int] = None,
         provider: str = "apple",
     ) -> str:
         """Apply one verified App Store Server Notification V2. Deduped by
-        notificationUUID; older-than-current events are ignored so the current
-        provider state always wins (contract §3, hostile 16)."""
+        notificationUUID; older-than-current events are ignored, and on an EQUAL
+        provider timestamp a terminal state deterministically beats an active
+        event so a refund/revoke/expire can never be resurrected (contract §3,
+        hostile 15/16; P0 equal-timestamp resurrection).
+
+        `ownership_type` is the verified nested-transaction ownership. A
+        FAMILY_SHARED-scoped terminal event revokes ONLY a proven beneficiary
+        grant; if no beneficiary can be proven it is parked as a non-destructive
+        unresolved event rather than mass-revoking every beneficiary (contract
+        §6; P0 tokenless family revoke)."""
 
         terminal = {
             "REFUND": "refunded",
@@ -1968,30 +2024,58 @@ class Store:
                     return "unknown_purchase"
 
                 stored_signed = purchase["latest_signed_ms"] or 0
-                # Out-of-order guard: ignore an event older than the newest we've
-                # already applied. Current provider state wins.
+                stored_state = purchase["lifecycle_state"]
+                is_terminal_event = notification_type in terminal
+                is_active_event = notification_type in active
+                # Out-of-order guard: ignore an event strictly older than the
+                # newest we've already applied. Current provider state wins.
                 if signed_ms < stored_signed:
                     cur.execute("COMMIT")
                     return "stale"
+                # Equal-timestamp precedence (P0): a terminal state beats an
+                # active event on a tie, so an equal-or-older active event can
+                # never resurrect a refunded/revoked/expired purchase. Terminal
+                # events still apply on a tie (terminal-over-active), preserving
+                # idempotence for a re-delivered terminal notification.
+                if (
+                    signed_ms == stored_signed
+                    and is_active_event
+                    and stored_state in _TERMINAL_STATES
+                ):
+                    cur.execute("COMMIT")
+                    return "stale"
 
-                if notification_type in terminal:
+                if is_terminal_event:
                     new_state = terminal[notification_type]
-                    if beneficiary_account_id is not None:
-                        # Family beneficiary revocation removes only that
-                        # beneficiary's grant; purchaser/other beneficiaries and
-                        # the purchase record are left intact (contract §6, hostile 14).
-                        self._revoke_grants_for_purchase(
-                            cur, purchase["id"], now, only_account=beneficiary_account_id
-                        )
-                        outcome = "beneficiary_revoked"
+                    if ownership_type == "FAMILY_SHARED":
+                        # Family-scoped revoke: only a cryptographically present,
+                        # valid beneficiary token that maps to an EXISTING family
+                        # grant proves whom to revoke. Never touch the purchase
+                        # lifecycle or any other beneficiary/purchaser grant.
+                        if beneficiary_account_id is not None and _purchase_has_active_grant(
+                            cur, purchase["id"], beneficiary_account_id
+                        ):
+                            self._revoke_grants_for_purchase(
+                                cur, purchase["id"], now, only_account=beneficiary_account_id
+                            )
+                            outcome = "beneficiary_revoked"
+                        else:
+                            # No provable beneficiary -> fail closed: park the
+                            # event for provider reconciliation, mutate nothing.
+                            self._record_unresolved_event(
+                                cur, provider, notification_uuid, notification_type,
+                                original_transaction_id, "family_revoke_no_provable_beneficiary", now,
+                            )
+                            outcome = "unresolved_beneficiary"
                     else:
+                        # Purchaser/direct-scoped terminal: the whole lineage ends.
                         cur.execute(
                             "UPDATE provider_purchases SET lifecycle_state = ?, latest_signed_ms = ?, updated_at = ? WHERE id = ?",
                             (new_state, signed_ms, now, purchase["id"]),
                         )
                         self._revoke_grants_for_purchase(cur, purchase["id"], now)
                         outcome = new_state
-                elif notification_type in active:
+                elif is_active_event:
                     cur.execute(
                         "UPDATE provider_purchases SET lifecycle_state = 'active', latest_signed_ms = ?, "
                         "expires_ms = COALESCE(?, expires_ms), updated_at = ? WHERE id = ?",
@@ -2013,6 +2097,33 @@ class Store:
                 with contextlib.suppress(sqlite3.Error):
                     cur.execute("ROLLBACK")
                 raise
+
+        return self._run(_do).result()
+
+    def _record_unresolved_event(
+        self, cur, provider, notification_uuid, notification_type,
+        original_transaction_id, reason, now,
+    ) -> None:
+        with contextlib.suppress(sqlite3.IntegrityError):
+            cur.execute(
+                """INSERT INTO provider_unresolved_events
+                       (id, provider, notification_uuid, notification_type,
+                        original_transaction_id, reason, created_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (str(uuid.uuid4()), provider, notification_uuid, notification_type,
+                 original_transaction_id, reason, now),
+            )
+
+    def list_unresolved_events(self, provider: str = "apple") -> list[dict]:
+        """Durable, non-destructive events awaiting provider reconciliation
+        (e.g. tokenless family revokes). Support-visible; never auto-applied."""
+        def _do() -> list[dict]:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT * FROM provider_unresolved_events WHERE provider = ? ORDER BY created_at",
+                (provider,),
+            )
+            return [dict(r) for r in cur.fetchall()]
 
         return self._run(_do).result()
 
@@ -2201,6 +2312,19 @@ def _insert_anonymous_account(cur: sqlite3.Cursor, now: str) -> str:
         (account_id, now, now),
     )
     return account_id
+
+
+def _purchase_has_active_grant(cur: sqlite3.Cursor, purchase_id: str, account_id: str) -> bool:
+    """True when `account_id` holds an active grant on this specific purchase —
+    i.e. it is a proven beneficiary/purchaser of this lineage. Used to gate a
+    family-scoped revoke so a token that doesn't map to a known beneficiary
+    can't cause any mutation (contract §6)."""
+    cur.execute(
+        "SELECT 1 FROM entitlement_grants WHERE purchase_id = ? AND account_id = ? "
+        "AND state = 'active' LIMIT 1",
+        (purchase_id, account_id),
+    )
+    return cur.fetchone() is not None
 
 
 def _account_has_active_grant(cur: sqlite3.Cursor, account_id: str) -> bool:
