@@ -61,6 +61,11 @@ from .analyze import (
 )
 from .auth import CurrentUser, StoreDep, current_user
 from .store import AccountConflictError, DeviceRegistrationProofError, Store, User, get_store
+from .store_verification import (
+    StoreVerificationError,
+    verify_apple_transaction,
+    verify_google_play_subscription,
+)
 
 # Locales the LLM providers can respond in. Defines the BCP-47 code → display
 # name mapping for the /v1/locales endpoint AND for any client that wants to
@@ -233,12 +238,22 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 
+def _paywall_required() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+        detail={
+            "code": "paywall_required",
+            "message": "Start a verified 7-day trial or subscribe to use Tono Coach.",
+        },
+    )
+
+
 @app.exception_handler(HTTPException)
 async def http_exc_handler(_: Request, exc: HTTPException) -> JSONResponse:
     detail = exc.detail
     if isinstance(detail, dict):
-        message = detail.pop("message", None) or "error"
-        extra = detail
+        extra = dict(detail)
+        message = extra.pop("message", None) or "error"
     else:
         message = detail if isinstance(detail, str) else "error"
         extra = None
@@ -281,8 +296,8 @@ _PRIVACY_HTML = """<!DOCTYPE html>
 <ul>
   <li><strong>Anonymous device ID</strong> — a random UUID generated on first launch. No name, email, or phone number.</li>
   <li><strong>Draft text (transient)</strong> — your message is sent to our server for analysis and immediately discarded. We never store message content.</li>
-  <li><strong>Usage counters</strong> — how many rewrites you've run today, your plan tier. No content, no recipients.</li>
-  <li><strong>Subscription status</strong> — plan (free/pro) and renewal date, via StoreKit 2 (iOS) or Stripe (web).</li>
+  <li><strong>Access metadata</strong> — entitlement state and content-free security events. No draft content or recipients.</li>
+  <li><strong>Access status</strong> — verified trial/subscription or separately granted promo state and renewal date.</li>
 </ul>
 
 <h2>What we do not collect</h2>
@@ -294,7 +309,7 @@ _PRIVACY_HTML = """<!DOCTYPE html>
 </ul>
 
 <h2>How your data is used</h2>
-<p>Device IDs are used solely to enforce the daily free-tier limit and track subscription status. Aggregate usage counts (how many rewrites per day) may be used to improve the product. No data is sold to or shared with third parties for advertising.</p>
+<p>Device IDs associate verified access with an account or device. Aggregate, content-free usage counts may be used to improve the product. No data is sold to or shared with third parties for advertising.</p>
 
 <h2>How Tono learns and improves</h2>
 <p>With your permission ("Help improve Tono" toggle in Settings, on by default), Tono records content-free outcome signals: which rewrite style you chose, whether you used the suggestion, and a rough message-length bucket (short / medium / long — never the actual length or any words). <strong>Your messages, your rewrites, and who you're messaging are never collected.</strong> These anonymous outcome signals accumulate across users and help us improve axis ordering and rewrite quality for everyone. You can opt out at any time in Settings → Preferences → Help improve Tono; opting out immediately stops any signal from leaving your device and does not affect your personal style memory.</p>
@@ -339,7 +354,6 @@ async def health() -> dict[str, Any]:
         ),
         "stripe_configured": bool(os.environ.get("STRIPE_SECRET_KEY")),
         "slack_configured": bool(os.environ.get("SLACK_CLIENT_ID")),
-        "free_daily_limit": int(os.environ.get("FREE_DAILY_LIMIT", "10")),
     }
 
 
@@ -371,28 +385,14 @@ async def list_locales() -> dict[str, Any]:
 
 @app.post("/v1/analyze", response_model=ToneAnalysis)
 async def v1_analyze(req: AnalyzeRequest, request: Request) -> dict[str, Any]:
-    """Unauthenticated passthrough kept for backward compatibility with
-    the iOS Playground tab and integration tests. No billing is applied,
-    but a per-IP cap protects the shared provider credentials from abuse.
+    """Retired unauthenticated rewrite surface.
+
+    We still feed every attempt into the abuse window, but deliberately return
+    the product paywall response even after that window fills. This prevents an
+    unpaid caller from learning or relying on a daily-product-quota contract.
     """
-    if not _check_ip_rate(_get_client_ip(request)):
-        raise HTTPException(
-            status_code=429,
-            detail="Too many requests. Please retry in a minute.",
-            headers={"Retry-After": "60"},
-        )
-    provider = os.environ.get("TONO_PROVIDER", "mock")
-    try:
-        if provider == "mock":
-            return mock_analyze(req)
-        if provider == "openai":
-            return await openai_analyze(req)
-        if provider == "anthropic":
-            return await anthropic_analyze(req)
-        raise HTTPException(400, f"unknown provider: {provider}")
-    except CoachContractError as error:
-        logger.warning("Invalid Coach response from %s: %s", provider, error)
-        raise HTTPException(502, "Coach response incomplete. Please retry.") from error
+    _check_ip_rate(_get_client_ip(request))
+    raise _paywall_required()
 
 
 # ---------------------------------------------------------------------------
@@ -451,7 +451,7 @@ def register(body: RegisterRequest, request: Request, store: StoreDep) -> Regist
         device_id=user.device_id,
         api_token=user.api_token,
         device_credential=registration.device_credential,
-        plan=user.plan,
+        plan=user.plan_resolved,
         is_pro=user.is_pro,
     )
 
@@ -469,27 +469,75 @@ class MeResponse(BaseModel):
 
 @app.get("/v1/me", response_model=MeResponse)
 def me(user: CurrentUser, store: StoreDep) -> MeResponse:
-    today = _today_utc()
-    # Once a device is linked to an account, the account is the source of
-    # truth for plan/subscription/daily usage — see User.is_pro /
-    # User.plan_resolved, and Store.consume_rewrite for why the counter
-    # itself lives on the account row once signed in (pooled across every
-    # device linked to it, not reset per device).
-    quota_source = user.account if user.account else user
-    used = quota_source.daily_count if quota_source.daily_day == today else 0
-    limit = -1 if user.is_pro else int(os.environ.get("FREE_DAILY_LIMIT", "10"))
     subscription_status = user.account.subscription_status if user.account else user.subscription_status
     subscription_renews_at = user.account.subscription_renews_at if user.account else user.subscription_renews_at
     return MeResponse(
         device_id=user.device_id,
         plan=user.plan_resolved,
         is_pro=user.is_pro,
-        used_today=used,
-        daily_limit=limit,
+        # Kept as wire-compatible tombstones for older clients. They no longer
+        # represent a product entitlement or a daily allowance.
+        used_today=0,
+        daily_limit=-1 if user.is_pro else 0,
         subscription_status=subscription_status,
         subscription_renews_at=subscription_renews_at,
         account_id=user.account_id,
     )
+
+
+class AppleSubscriptionRequest(BaseModel):
+    signed_transaction: str
+
+
+class GooglePlaySubscriptionRequest(BaseModel):
+    package_name: str
+    product_id: str
+    purchase_token: str
+
+
+def _persist_verified_store_subscription(user: User, store: Store, verified: Any) -> MeResponse:
+    if user.account_id:
+        store.update_account_subscription(
+            account_id=user.account_id,
+            subscription_id=verified.subscription_id,
+            status=verified.status,
+            renews_at=verified.renews_at,
+        )
+    else:
+        store.update_subscription(
+            device_id=user.device_id,
+            subscription_id=verified.subscription_id,
+            status=verified.status,
+            renews_at=verified.renews_at,
+        )
+    refreshed = store.get_by_device(user.device_id)
+    if refreshed is None:
+        raise HTTPException(401, "account no longer exists")
+    return me(refreshed, store)
+
+
+@app.post("/v1/apple/subscription", response_model=MeResponse)
+async def sync_apple_subscription(
+    body: AppleSubscriptionRequest, user: CurrentUser, store: StoreDep
+) -> MeResponse:
+    try:
+        verified = await verify_apple_transaction(body.signed_transaction)
+    except StoreVerificationError as error:
+        raise HTTPException(400, str(error)) from error
+    return _persist_verified_store_subscription(user, store, verified)
+
+
+@app.post("/v1/google-play/subscription", response_model=MeResponse)
+async def sync_google_play_subscription(
+    body: GooglePlaySubscriptionRequest, user: CurrentUser, store: StoreDep
+) -> MeResponse:
+    try:
+        verified = await verify_google_play_subscription(
+            body.package_name, body.product_id, body.purchase_token
+        )
+    except StoreVerificationError as error:
+        raise HTTPException(400, str(error)) from error
+    return _persist_verified_store_subscription(user, store, verified)
 
 
 # ---------------------------------------------------------------------------
@@ -516,6 +564,11 @@ class AppleSignInRequest(BaseModel):
 class GoogleSignInRequest(BaseModel):
     id_token: str
     link: bool = False
+
+
+class WebSignInRequest(BaseModel):
+    subject: str = Field(min_length=1, max_length=255)
+    email: Optional[str] = Field(default=None, max_length=320)
 
 
 class SignInResponse(BaseModel):
@@ -554,7 +607,7 @@ async def auth_apple(
 ) -> SignInResponse:
     claims = await verifier(body.identity_token)
     account = _resolve_provider_signin(store, user, "apple", claims.sub, claims.email, body.link)
-    return SignInResponse(account_id=account.id, plan=account.plan, is_pro=account.is_pro, email=account.email)
+    return SignInResponse(account_id=account.id, plan=account.plan_resolved, is_pro=account.is_pro, email=account.email)
 
 
 @app.post("/v1/auth/google", response_model=SignInResponse)
@@ -566,7 +619,33 @@ async def auth_google(
 ) -> SignInResponse:
     claims = await verifier(body.id_token)
     account = _resolve_provider_signin(store, user, "google", claims.sub, claims.email, body.link)
-    return SignInResponse(account_id=account.id, plan=account.plan, is_pro=account.is_pro, email=account.email)
+    return SignInResponse(account_id=account.id, plan=account.plan_resolved, is_pro=account.is_pro, email=account.email)
+
+
+@app.post("/v1/auth/web", response_model=SignInResponse)
+def auth_web(
+    body: WebSignInRequest,
+    request: Request,
+    user: CurrentUser,
+    store: StoreDep,
+) -> SignInResponse:
+    """Link a backend device to a Supabase-authenticated web account.
+
+    The web callback verifies the Supabase session before calling this
+    server-to-server endpoint. A separate shared secret prevents a browser
+    from asserting an arbitrary Supabase subject.
+    """
+    expected = os.environ.get("TONO_WEB_AUTH_SECRET") or os.environ.get("TONO_ADMIN_SECRET", "")
+    provided = request.headers.get("X-Web-Auth-Secret", "")
+    if not expected or not hmac.compare_digest(expected.encode(), provided.encode()):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
+    account = _resolve_provider_signin(store, user, "web", body.subject, body.email, False)
+    return SignInResponse(
+        account_id=account.id,
+        plan=account.plan_resolved,
+        is_pro=account.is_pro,
+        email=account.email,
+    )
 
 
 @app.post("/api/analyze", response_model=ApiAnalyzeResponse)
@@ -584,10 +663,15 @@ async def api_analyze(
     if len(body.text) > _DRAFT_MAX_CHARS:
         raise HTTPException(400, f"text too long (max {_DRAFT_MAX_CHARS} chars)")
 
-    # Per-IP sliding-window cap to block scripted abuse before it touches
-    # any per-user counters or makes LLM calls.
+    # Track every attempt in the abuse window. Entitlement is checked before
+    # returning a throttle response so repeated unpaid attempts remain the
+    # stable 402 product boundary. Paid/trial/coupon traffic is still throttled.
     client_ip = _get_client_ip(request)
-    if not _check_ip_rate(client_ip):
+    within_abuse_limit = _check_ip_rate(client_ip)
+    if not user.is_pro:
+        store.log_usage(user.device_id, "/api/analyze", 402, drafts_chars=len(body.text))
+        raise _paywall_required()
+    if not within_abuse_limit:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="too many requests from this IP — try again in a minute",
@@ -624,33 +708,19 @@ async def api_analyze(
                 logger.warning("Ignoring invalid cached Coach response: %s", e)
                 cached = None
         if cached:
-            today = _today_utc()
-            # Pooled on the account once signed in — see consume_rewrite.
-            quota_source = user.account if user.account else user
-            snap_used = quota_source.daily_count if quota_source.daily_day == today else 0
-            snap_limit = -1 if user.is_pro else int(os.environ.get("FREE_DAILY_LIMIT", "10"))
             store.log_usage(
                 user.device_id, "/api/analyze", 200, provider="cache",
                 drafts_chars=len(body.text),
             )
             return ApiAnalyzeResponse(
-                **cached, used_today=snap_used, daily_limit=snap_limit, plan=user.plan_resolved
+                **cached, used_today=0, daily_limit=-1, plan=user.plan_resolved
             )
 
-    # Rate limit BEFORE we call the LLM so a bad actor can't burn $.
+    # Re-read the durable entitlement immediately before provider use.
     allowed, used, limit = store.consume_rewrite(user.device_id)
     if not allowed:
-        store.log_usage(user.device_id, "/api/analyze", 429, drafts_chars=len(body.text))
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail={
-                "message": "daily free limit reached",
-                "used_today": used,
-                "daily_limit": limit,
-                "plan": user.plan,
-            },
-            headers={"Retry-After": "86400"},
-        )
+        store.log_usage(user.device_id, "/api/analyze", 402, drafts_chars=len(body.text))
+        raise _paywall_required()
 
     try:
         if provider == "mock":
@@ -689,6 +759,30 @@ async def api_analyze(
         drafts_chars=len(body.text),
     )
     return ApiAnalyzeResponse(**result, used_today=used, daily_limit=limit, plan=user.plan_resolved)
+
+
+class CoachRequest(BaseModel):
+    text: str
+
+
+@app.post("/v1/coach")
+async def v1_coach(
+    body: CoachRequest,
+    request: Request,
+    user: CurrentUser,
+    store: StoreDep,
+) -> dict[str, Any]:
+    """Compatibility route used by the iOS keyboard Coach shortcut.
+
+    It delegates to the canonical entitlement/rate-limit/provider path and
+    changes only the response key expected by older clients.
+    """
+    result = await api_analyze(
+        ApiAnalyzeRequest(text=body.text), request=request, user=user, store=store
+    )
+    payload = result.model_dump()
+    payload["rewrites"] = payload["suggestions"]
+    return payload
 
 
 @app.post("/v1/event/axis", status_code=204)

@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     id                      TEXT PRIMARY KEY,
     apple_sub               TEXT UNIQUE,
     google_sub              TEXT UNIQUE,
+    web_sub                 TEXT UNIQUE,
     email                   TEXT,
     plan                    TEXT NOT NULL DEFAULT 'free',
     stripe_customer_id      TEXT,
@@ -221,17 +222,42 @@ class DeviceRegistrationProofError(Exception):
     """An existing public device id was presented without its secret proof."""
 
 
-def _plan_grants_pro(plan: str, subscription_status: Optional[str], coupon_pro_expires_at: Optional[str]) -> bool:
-    if plan == "pro" and subscription_status in ("active", "trialing"):
+def _future_iso(value: Optional[str]) -> bool:
+    if not value:
+        return False
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=dt.timezone.utc)
+        return parsed > dt.datetime.now(dt.timezone.utc)
+    except ValueError:
+        return False
+
+
+def _plan_grants_pro(
+    plan: str,
+    subscription_status: Optional[str],
+    subscription_renews_at: Optional[str],
+    coupon_pro_expires_at: Optional[str],
+) -> bool:
+    if plan == "pro" and subscription_status in ("active", "trialing") and _future_iso(subscription_renews_at):
         return True
     if coupon_pro_expires_at:
-        try:
-            exp = dt.datetime.fromisoformat(coupon_pro_expires_at)
-            if exp > dt.datetime.now(dt.timezone.utc):
-                return True
-        except ValueError:
-            pass
+        return _future_iso(coupon_pro_expires_at)
     return False
+
+
+def _resolved_access_plan(
+    plan: str,
+    subscription_status: Optional[str],
+    subscription_renews_at: Optional[str],
+    coupon_pro_expires_at: Optional[str],
+) -> str:
+    if plan == "pro" and subscription_status in ("active", "trialing") and _future_iso(subscription_renews_at):
+        return "pro"
+    if _future_iso(coupon_pro_expires_at):
+        return "coupon"
+    return "unpaid"
 
 
 @dataclass
@@ -244,6 +270,7 @@ class Account:
     id: str
     apple_sub: Optional[str]
     google_sub: Optional[str]
+    web_sub: Optional[str]
     email: Optional[str]
     plan: str
     stripe_customer_id: Optional[str]
@@ -258,7 +285,11 @@ class Account:
 
     @property
     def is_pro(self) -> bool:
-        return _plan_grants_pro(self.plan, self.subscription_status, self.coupon_pro_expires_at)
+        return _plan_grants_pro(self.plan, self.subscription_status, self.subscription_renews_at, self.coupon_pro_expires_at)
+
+    @property
+    def plan_resolved(self) -> str:
+        return _resolved_access_plan(self.plan, self.subscription_status, self.subscription_renews_at, self.coupon_pro_expires_at)
 
 
 @dataclass
@@ -301,12 +332,17 @@ class User:
         # particular device never itself had a Stripe subscription.
         if self.account is not None:
             return self.account.is_pro
-        return _plan_grants_pro(self.plan, self.subscription_status, self.coupon_pro_expires_at)
+        return _plan_grants_pro(self.plan, self.subscription_status, self.subscription_renews_at, self.coupon_pro_expires_at)
 
     @property
     def plan_resolved(self) -> str:
-        """`plan`, but resolved through the linked account when present."""
-        return self.account.plan if self.account is not None else self.plan
+        """Public access label, preserving legacy DB tier names internally."""
+        if self.account is not None:
+            return self.account.plan_resolved
+        return _resolved_access_plan(
+            self.plan, self.subscription_status,
+            self.subscription_renews_at, self.coupon_pro_expires_at,
+        )
 
 
 @dataclass
@@ -351,6 +387,7 @@ class Store:
             "ALTER TABLE users ADD COLUMN account_id TEXT REFERENCES accounts(id)",
             "ALTER TABLE accounts ADD COLUMN daily_count INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE accounts ADD COLUMN daily_day TEXT",
+            "ALTER TABLE accounts ADD COLUMN web_sub TEXT",
             "ALTER TABLE users ADD COLUMN device_credential_hash TEXT",
             "ALTER TABLE users ADD COLUMN previous_api_token TEXT",
             "ALTER TABLE users ADD COLUMN previous_api_token_expires_at TEXT",
@@ -359,6 +396,9 @@ class Store:
                 self._conn.execute(stmt)
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_users_previous_token ON users(previous_api_token)"
+        )
+        self._conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_web_sub ON accounts(web_sub)"
         )
         self._seed_feature_flags()
 
@@ -604,7 +644,7 @@ class Store:
 
         self._run(_do).result()
 
-    # ---- accounts (Apple/Google sign-in) ----
+    # ---- accounts (Apple/Google/Supabase web sign-in) ----
 
     def upsert_account_by_provider(
         self,
@@ -614,7 +654,7 @@ class Store:
         *,
         link_into_account_id: Optional[str] = None,
     ) -> Account:
-        """Find the account for this Apple/Google subject, creating one on
+        """Find the account for this verified identity subject, creating one on
         first sign-in. Idempotent — signing in again with the same subject
         just returns the existing account (updating email if it changed).
 
@@ -627,7 +667,7 @@ class Store:
         each have their own history — merging is a decision a person
         should confirm explicitly, not something we do for them.
         """
-        assert provider in ("apple", "google"), f"unknown provider: {provider}"
+        assert provider in ("apple", "google", "web"), f"unknown provider: {provider}"
         column = f"{provider}_sub"
 
         def _do() -> Account:
@@ -832,21 +872,17 @@ class Store:
     # ---- rate limit ----
 
     def consume_rewrite(self, device_id: str) -> tuple[bool, int, int]:
-        """Check + increment the daily free-tier counter.
+        """Return durable rewrite access; there is no product usage quota.
 
-        Anonymous devices count against their own `users.daily_count` row,
-        exactly as before accounts existed. A device linked to an account
-        counts against `accounts.daily_count` instead — pooled across every
-        device linked to that account, so a free user's 10/day is one
-        shared allowance across their phone, laptop, etc., not 10 per
-        device. `table`/`key_col` below are fixed internal literals (never
-        user input), picking which row anchors the quota.
+        The legacy counter columns stay in SQLite so existing accounts and
+        history migrate without destructive schema work. They are no longer
+        read or incremented as an entitlement.
         """
 
         def _do() -> tuple[bool, int, int]:
             cur = self._conn.cursor()
             cur.execute(
-                "SELECT plan, subscription_status, coupon_pro_expires_at, daily_count, daily_day, account_id "
+                "SELECT plan, subscription_status, subscription_renews_at, coupon_pro_expires_at, account_id "
                 "FROM users WHERE device_id = ?",
                 (device_id,),
             )
@@ -856,46 +892,20 @@ class Store:
 
             if row["account_id"]:
                 cur.execute(
-                    "SELECT plan, subscription_status, coupon_pro_expires_at, daily_count, daily_day "
+                    "SELECT plan, subscription_status, subscription_renews_at, coupon_pro_expires_at "
                     "FROM accounts WHERE id = ?",
                     (row["account_id"],),
                 )
                 quota_row = cur.fetchone()
-                table, key_col, key_val = "accounts", "id", row["account_id"]
             else:
                 quota_row = row
-                table, key_col, key_val = "users", "device_id", device_id
 
-            if quota_row["plan"] == "pro" and quota_row["subscription_status"] in ("active", "trialing"):
-                return (True, quota_row["daily_count"], -1)
-            if quota_row["coupon_pro_expires_at"] and quota_row["coupon_pro_expires_at"] > _now_iso():
-                return (True, quota_row["daily_count"], -1)
-
-            today = _today_utc()
-            used = quota_row["daily_count"] if quota_row["daily_day"] == today else 0
-            limit = int(os.environ.get("FREE_DAILY_LIMIT", "10"))
-            if used >= limit:
-                return (False, used, limit)
-
-            cur.execute("BEGIN IMMEDIATE")
-            try:
-                if quota_row["daily_day"] != today:
-                    cur.execute(
-                        f"UPDATE {table} SET daily_count=1, daily_day=?, updated_at=? WHERE {key_col}=?",
-                        (today, _now_iso(), key_val),
-                    )
-                    used = 1
-                else:
-                    cur.execute(
-                        f"UPDATE {table} SET daily_count=daily_count+1, updated_at=? WHERE {key_col}=?",
-                        (_now_iso(), key_val),
-                    )
-                    used += 1
-                cur.execute("COMMIT")
-            except Exception:
-                cur.execute("ROLLBACK")
-                raise
-            return (True, used, limit)
+            if _plan_grants_pro(
+                quota_row["plan"], quota_row["subscription_status"],
+                quota_row["subscription_renews_at"], quota_row["coupon_pro_expires_at"],
+            ):
+                return (True, 0, -1)
+            return (False, 0, 0)
 
         return self._run(_do).result()
 
@@ -1442,6 +1452,7 @@ def _row_to_account(row: sqlite3.Row | dict) -> Account:
         id=d["id"],
         apple_sub=d.get("apple_sub"),
         google_sub=d.get("google_sub"),
+        web_sub=d.get("web_sub"),
         email=d.get("email"),
         plan=d.get("plan") or "free",
         stripe_customer_id=d.get("stripe_customer_id"),

@@ -1,5 +1,5 @@
 // Returns plan + daily usage for the current user (via tono_api_token cookie).
-// Falls back to {plan: 'free', used_today: 0, daily_limit: -1} if anonymous.
+// Falls back to an unpaid state if anonymous; there is no product quota.
 
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
@@ -12,10 +12,10 @@ export async function GET() {
   if (!token) {
     return NextResponse.json({
       device_id: null,
-      plan: 'free',
+      plan: 'unpaid',
       is_pro: false,
       used_today: 0,
-      daily_limit: -1,
+      daily_limit: 0,
     });
   }
 

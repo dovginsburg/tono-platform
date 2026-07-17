@@ -2,8 +2,8 @@
 // Tono backend's Stripe Checkout endpoint.
 //
 // Posts to /api/checkout (which proxies to api.tonoit.com/v1/checkout).
-// No Authorization header — the backend allows anonymous checkout for
-// the public pricing flow. On 200, redirects to body.url. On non-200,
+// The server-side proxy forwards the signed-in user's API token. On 200,
+// redirects to body.url. On non-200,
 // shows an inline error message and keeps the user on the page so
 // they can retry. Matches the behavior of the static pricing.html
 // (tono-platform-claude repo) for parity between surfaces.
@@ -13,7 +13,7 @@
 
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 type Interval = 'month' | 'year'
 
@@ -32,6 +32,13 @@ type CheckoutResponse = {
   message?: string
 }
 
+type OfferResponse = {
+  currency: string
+  unit_amount: number
+  trial_eligible: boolean
+  trial_days: number
+}
+
 export default function ProCheckoutButton({
   interval,
   label,
@@ -40,6 +47,32 @@ export default function ProCheckoutButton({
 }: Props) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [offer, setOffer] = useState<OfferResponse | null>(null)
+
+  useEffect(() => {
+    let active = true
+    fetch(`/api/offer?interval=${interval}`, { cache: 'no-store' })
+      .then(async (response) => (response.ok ? (await response.json()) as OfferResponse : null))
+      .then((value) => {
+        if (active && value) setOffer(value)
+      })
+      .catch(() => undefined)
+    return () => {
+      active = false
+    }
+  }, [interval])
+
+  const localizedPrice = offer
+    ? new Intl.NumberFormat(undefined, {
+        style: 'currency',
+        currency: offer.currency.toUpperCase(),
+      }).format(offer.unit_amount / 100)
+    : null
+  const providerOfferLabel = localizedPrice
+    ? offer?.trial_eligible
+      ? `7-day trial, then auto-renews at ${localizedPrice}/${interval} unless canceled`
+      : `auto-renews at ${localizedPrice}/${interval} unless canceled`
+    : null
 
   async function handleClick() {
     if (busy) return
@@ -59,6 +92,10 @@ export default function ProCheckoutButton({
       }
       if (res.ok && body.url) {
         window.location.href = body.url
+        return
+      }
+      if (res.status === 401 || res.status === 403) {
+        window.location.href = `/login?next=${encodeURIComponent('/pricing')}`
         return
       }
       const msg =
@@ -89,7 +126,7 @@ export default function ProCheckoutButton({
           'inline-flex items-center justify-center gap-2 px-5 py-3 rounded-[12px] bg-tono-accent hover:bg-tono-accent-hover disabled:opacity-60 disabled:pointer-events-none text-white font-semibold transition min-h-[44px] text-[14px] shadow-[0_8px_24px_rgba(168,85,247,0.30)]'
         }
       >
-        {busy ? 'opening checkout…' : children ?? label}
+        {busy ? 'opening checkout…' : providerOfferLabel ?? children ?? label}
       </button>
       {error ? (
         <p

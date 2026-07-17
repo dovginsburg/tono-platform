@@ -2,12 +2,11 @@
 //
 // Replaces the static phone-frame screenshot with a real, client-side
 // rewrite tool. Hits POST /api/analyze (which proxies through the
-// Supabase edge to api.tonoit.com → FastAPI). Anonymous calls are
-// permitted; the API returns 4 tones (warmer/clearer/funnier/safer)
-// and a risk assessment.
+// Supabase edge to api.tonoit.com → FastAPI). The backend requires a
+// verified trial/subscription before returning four rewrite tones.
 //
 // Brand voice (lowercase, dry, no exclamation):
-//   - empty:  "paste a draft — pick a tone — copy when it lands."
+//   - empty:  "paste any text. four rewrites in two seconds."
 //   - loading:"thinking…"
 //   - error:  "couldn't reach tono. check your connection and try again."
 //
@@ -28,11 +27,11 @@ type Suggestion = {
 type AnalyzeResponse = {
   perception?: string
   suggestions?: Suggestion[]
-  error?: string
+  error?: string | { code?: string; message?: string }
 }
 
 const EXAMPLE_PLACEHOLDER =
-  'paste a draft — pick a tone — copy when it lands.'
+  'paste any text. four rewrites in two seconds.'
 
 const TONE_ORDER: Axis[] = ['warmer', 'clearer', 'funnier', 'safer']
 
@@ -72,7 +71,12 @@ export default function TonoDemo() {
       if (myId !== reqIdRef.current) return // a newer request superseded this one
       if (!res.ok) {
         const j = await res.json().catch(() => ({}))
-        throw new Error(j.error || `request failed (${res.status})`)
+        if (res.status === 401 || res.status === 402) {
+          setError('sign in and authorize an eligible 7-day trial to rewrite.')
+          return
+        }
+        const message = typeof j.error === 'string' ? j.error : j.error?.message
+        throw new Error(message || `request failed (${res.status})`)
       }
       const data = (await res.json()) as AnalyzeResponse
       if (myId !== reqIdRef.current) return
@@ -130,7 +134,7 @@ export default function TonoDemo() {
             </span>
           </div>
           <span className="text-[10px] font-mono lowercase text-tono-muted">
-            demo · no signup
+            verified trial or subscription required
           </span>
         </div>
 
@@ -171,7 +175,7 @@ export default function TonoDemo() {
             type="button"
             onClick={submit}
             disabled={!draft.trim() || loading}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-[10px] bg-tono-accent hover:bg-tono-accent-hover disabled:bg-tono-bg-elev disabled:text-tono-muted text-white font-semibold text-[13px] transition min-h-[44px]"
+            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-[10px] bg-tono-accent hover:bg-tono-accent-hover disabled:bg-tono-bg-elev disabled:text-tono-muted text-white font-semibold text-[13px] transition min-h-[40px]"
           >
             {loading ? 'rewriting…' : 'rewrite'}
             {!loading && (
@@ -224,7 +228,7 @@ export default function TonoDemo() {
                           type="button"
                           onClick={() => copy(axis, s.text)}
                           aria-label={`copy ${axis} rewrite`}
-                          className="text-[10px] font-mono lowercase text-tono-text-softer hover:text-tono-text-soft transition px-3 py-2 rounded-md hover:bg-tono-bg-card min-h-[44px] min-w-[44px]"
+                          className="text-[10px] font-mono lowercase text-tono-text-softer hover:text-tono-text-soft transition px-2 py-1 rounded-md hover:bg-tono-bg-card"
                         >
                           {copiedFlag ? 'copied' : 'copy'}
                         </button>
@@ -248,7 +252,7 @@ export default function TonoDemo() {
             ⌘/ctrl + enter to rewrite
           </span>
           <span className="text-[10px] font-mono lowercase text-tono-accent-light">
-            sent only when you rewrite
+            drafts stay in your browser
           </span>
         </div>
       </div>

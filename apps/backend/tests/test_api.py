@@ -43,6 +43,16 @@ def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _activate_subscription(device: dict, subscription_status: str = "active") -> None:
+    from backend.store import get_store
+
+    get_store().update_subscription(
+        device_id=device["device_id"], customer_id="cus_test",
+        subscription_id=f"sub_{subscription_status}",
+        status=subscription_status, renews_at="2099-01-01T00:00:00+00:00",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Sanity
 # ---------------------------------------------------------------------------
@@ -54,48 +64,28 @@ def test_health(client):
     j = r.json()
     assert j["status"] == "ok"
     assert "version" in j
-    # Free limit comes from FREE_DAILY_LIMIT (set to 3 in conftest).
-    assert j["free_daily_limit"] == 3
+    assert "free_daily_limit" not in j
     # Stripe off in test env.
     assert j["stripe_configured"] is False
 
 
-def test_v1_analyze_unauthenticated_still_works(client):
-    """The original passthrough is preserved for the iOS Playground tab."""
+def test_v1_analyze_unauthenticated_requires_paywall(client):
 
     r = client.post(
         "/v1/analyze",
         json={"draft": "Sounds good. Let me know when you can."},
     )
-    assert r.status_code == 200, r.text
-    j = r.json()
-    assert "risk_level" in j
-    assert "perception" in j
-    assert "risk_reason" in j
-    assert "suggestions" in j
-    # The mock flags "let me know" without "by" as ambiguous.
-    assert "ambiguous ask" in j["flags"]
-    # And it should produce exactly the 4 axis suggestions by default.
-    assert {s["axis"] for s in j["suggestions"]} == {
-        "warmer",
-        "clearer",
-        "funnier",
-        "safer",
-    }
+    assert r.status_code == 402, r.text
+    assert r.json()["error"]["code"] == "paywall_required"
 
 
-def test_v1_analyze_read_mode(client):
-    """Read mode returns interpretation with no suggestions."""
+def test_v1_analyze_read_mode_also_requires_paywall(client):
     r = client.post(
         "/v1/analyze",
         json={"draft": "as per my last message", "mode": "read"},
     )
-    assert r.status_code == 200, r.text
-    j = r.json()
-    assert j["risk_level"] == "high"
-    assert "passive-aggressive" in j["flags"]
-    assert j["suggestions"] == []
-    assert "risk_reason" in j
+    assert r.status_code == 402, r.text
+    assert r.json()["error"]["code"] == "paywall_required"
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +95,7 @@ def test_v1_analyze_read_mode(client):
 
 def test_register_then_me(client):
     reg = _register(client)
-    assert reg["plan"] == "free"
+    assert reg["plan"] == "unpaid"
     assert reg["is_pro"] is False
     assert len(reg["api_token"]) >= 32
     assert reg["device_id"]
@@ -115,7 +105,7 @@ def test_register_then_me(client):
     me = r.json()
     assert me["device_id"] == reg["device_id"]
     assert me["used_today"] == 0
-    assert me["daily_limit"] == 3  # FREE_DAILY_LIMIT in conftest
+    assert me["daily_limit"] == 0  # compatibility tombstone; no unpaid quota
 
 
 def test_register_idempotent_with_device_credential(client):
@@ -221,6 +211,7 @@ def test_me_rejects_bad_token(client):
 
 def test_api_analyze_happy_path(client):
     reg = _register(client)
+    _activate_subscription(reg)
     r = client.post(
         "/api/analyze",
         headers=_auth(reg["api_token"]),
@@ -230,9 +221,9 @@ def test_api_analyze_happy_path(client):
     j = r.json()
     assert j["risk_level"] == "high"
     assert "passive-aggressive" in j["flags"]
-    assert j["used_today"] == 1
-    assert j["daily_limit"] == 3
-    assert j["plan"] == "free"
+    assert j["used_today"] == 0
+    assert j["daily_limit"] == -1
+    assert j["plan"] == "pro"
     # The "safer" rewrite should drop the passive-aggressive phrase.
     safer = next(s for s in j["suggestions"] if s["axis"] == "safer")
     assert "per my last" not in safer["text"].lower()
@@ -240,6 +231,7 @@ def test_api_analyze_happy_path(client):
 
 def test_api_analyze_enforces_canonical_coach_axes(client):
     reg = _register(client)
+    _activate_subscription(reg, "trialing")
     r = client.post(
         "/api/analyze",
         headers=_auth(reg["api_token"]),
@@ -257,6 +249,7 @@ def test_api_analyze_treats_invalid_cached_coach_payload_as_miss(client, monkeyp
     from backend.store import get_store
 
     reg = _register(client)
+    _activate_subscription(reg)
     text = "Please help with this request."
     axes = list(server.CANONICAL_COACH_AXES)
     cache_key = server._analysis_cache_key(text, axes, None, "en")
@@ -294,7 +287,7 @@ def test_api_analyze_treats_invalid_cached_coach_payload_as_miss(client, monkeyp
     assert response.status_code == 200, response.text
     assert provider_calls == 1
     assert [item["axis"] for item in response.json()["suggestions"]] == axes
-    assert response.json()["used_today"] == 1
+    assert response.json()["used_today"] == 0
 
 
 def test_api_analyze_requires_text(client):
@@ -312,10 +305,15 @@ def test_api_analyze_requires_auth(client):
     assert r.status_code == 401
 
 
-def test_api_analyze_rate_limit(client):
-    """FREE_DAILY_LIMIT=3 in conftest. 3 should succeed, 4th returns 429."""
+def test_api_analyze_security_rate_limit_remains_for_entitled_users(client, monkeypatch):
+    """Security throttling is separate from the removed product quota."""
+
+    from backend import server
 
     reg = _register(client)
+    _activate_subscription(reg)
+    monkeypatch.setattr(server, "_IP_RATE_LIMIT", 3)
+    server._ip_windows.clear()
     headers = _auth(reg["api_token"])
 
     for i in range(3):
@@ -325,7 +323,7 @@ def test_api_analyze_rate_limit(client):
             json={"text": f"message {i}"},
         )
         assert r.status_code == 200, f"call {i}: {r.text}"
-        assert r.json()["used_today"] == i + 1
+        assert r.json()["daily_limit"] == -1
 
     r = client.post(
         "/api/analyze",
@@ -333,10 +331,7 @@ def test_api_analyze_rate_limit(client):
         json={"text": "this should be blocked"},
     )
     assert r.status_code == 429
-    detail = r.json()["error"]["message"]
-    # Detail is a dict for 429s; TestClient's HTTPException handler
-    # serializes whatever detail we passed.
-    assert "daily" in str(detail).lower()
+    assert "minute" in r.json()["error"]["message"].lower()
 
 
 def test_api_analyze_pro_unlimited(client, monkeypatch):
@@ -354,7 +349,7 @@ def test_api_analyze_pro_unlimited(client, monkeypatch):
         customer_id=None,
         subscription_id="sub_fake",
         status="active",
-        renews_at=None,
+        renews_at="2099-01-01T00:00:00+00:00",
     )
 
     headers = _auth(reg["api_token"])
@@ -528,7 +523,7 @@ def test_coupon_unlocks_unlimited_rewrites(client, monkeypatch):
     client.post("/v1/coupon/redeem", headers=_auth(reg["api_token"]), json={"code": "UNLIM"})
 
     headers = _auth(reg["api_token"])
-    for i in range(5):  # well beyond FREE_DAILY_LIMIT=3 in tests
+    for i in range(5):  # coupons are not subscriptions and have no product quota
         r = client.post("/api/analyze", headers=headers, json={"text": f"msg {i}"})
         assert r.status_code == 200, f"call {i}: {r.text}"
         assert r.json()["daily_limit"] == -1
@@ -597,7 +592,7 @@ def test_pro_gated_flag(client):
     reg = _register(client)
     headers = _auth(reg["api_token"])
 
-    # Free user: custom_axes should be False
+    # Unpaid user: custom_axes should be False
     flags = client.get("/v1/features", headers=headers).json()
     assert flags["custom_axes"] is False
 
@@ -607,7 +602,7 @@ def test_pro_gated_flag(client):
         customer_id=None,
         subscription_id="sub_test",
         status="active",
-        renews_at=None,
+        renews_at="2099-01-01T00:00:00+00:00",
     )
 
     # Pro user: custom_axes should be True
@@ -878,7 +873,7 @@ def test_admin_improvement_stats_k_anon(client, monkeypatch):
 
     # Register 3 devices and send improvement events (below k-anon floor of 50)
     for i in range(3):
-        reg = _register(client, device_id=f"test-device-kanon-{i}")
+        reg = _register(client, device_id=f"00000000-0000-4000-8000-{i + 1:012d}")
         client.post(
             "/v1/events",
             headers=_auth(reg["api_token"]),
@@ -905,7 +900,7 @@ def test_admin_improvement_stats_k_anon_floor_configurable(client, monkeypatch):
 
     # Register 2 distinct devices
     for i in range(2):
-        reg = _register(client, device_id=f"test-device-floor-{i}")
+        reg = _register(client, device_id=f"00000000-0000-4000-8001-{i + 1:012d}")
         client.post(
             "/v1/events",
             headers=_auth(reg["api_token"]),

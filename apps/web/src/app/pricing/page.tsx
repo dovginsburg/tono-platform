@@ -1,7 +1,7 @@
 // ──────────────────────────────────────────────────────────────────────
 // /app/pricing — Tono public pricing page.
 //
-// Two tier cards (Trial / Pro) plus a one-line Family waitlist callout
+// Two trial choices plus a one-line Family waitlist callout
 // (the Family backend is not wired in v1 — showing it as a full card
 // with a disabled "coming soon" button was misleading visitors).
 // Source files referenced: ProCheckoutButton.tsx (existing),
@@ -33,58 +33,58 @@ export default function PricingPage() {
             pricing
           </span>
           <h1 className="text-[36px] md:text-[48px] font-bold tracking-[-0.02em] text-tono-text mt-3 leading-[1.05]">
-            free for 7 days. pro when you rewrite all day.
+            eligible new users can start a 7-day trial.
           </h1>
           <p className="text-[16px] md:text-[17px] text-tono-text-soft leading-[1.6] mt-5">
-            cancel anytime. web access starts after checkout; ios is coming soon.
+            cancel anytime. pro features ship on every surface on day one.
           </p>
         </header>
 
-        {/* Two-tier grid — Trial | Pro. md+: 2 cols. <md: stacks.
+        {/* Trial terms | subscription choices. md+: 2 cols. <md: stacks.
             Family is a one-line waitlist callout below the grid. */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          {/* ── Trial ────────────────────────────────────────────── */}
+        <div className="grid md:grid-cols-2 gap-5">
+          {/* ── Trial terms ──────────────────────────────────────── */}
           <article
             data-tier="trial"
             className="bg-tono-bg-card border border-tono-border rounded-[18px] p-7 flex flex-col"
           >
             <p className="text-[11px] uppercase tracking-wider font-semibold text-tono-text-softer">
-              free for 7 days
+              introductory trial
             </p>
             <p className="text-[40px] md:text-[44px] font-bold tracking-[-0.02em] text-tono-text mt-2">
-              $0
+              7 days
               <span className="text-[15px] font-normal text-tono-text-softer ml-2">
-                first 7 days
+                after authorization
               </span>
             </p>
             <p className="text-[14px] text-tono-text-soft leading-[1.55] mt-3">
-              start a real trial. we'll never charge until day 8.
+              real access through the subscription you select.
             </p>
             <ul className="mt-6 space-y-2.5 text-[14px] text-tono-text-soft flex-1">
               <li className="flex gap-2">
                 <CheckIcon />
-                <span>no charge until day 8</span>
+                <span>
+                  <strong className="text-tono-text font-semibold">
+                    both plans include the same 7-day trial
+                  </strong>{' '}
+                  — eligibility is confirmed at checkout
+                </span>
               </li>
               <li className="flex gap-2">
                 <CheckIcon />
-                <span>drafts are sent only when you choose rewrite</span>
+                <span>no access begins before Stripe authorization</span>
               </li>
               <li className="flex gap-2">
                 <CheckIcon />
                 <span>nothing about your writing trains anything</span>
               </li>
-              <li className="flex gap-2">
-                <CheckIcon />
-                <span>cancel anytime during the trial</span>
-              </li>
             </ul>
-            <ProCheckoutButton
-              interval="month"
-              label="start 7-day free trial"
-              className="mt-8 inline-flex items-center justify-center gap-2 px-5 py-3 rounded-[12px] bg-transparent border border-tono-border-strong text-tono-text hover:border-tono-accent disabled:opacity-60 disabled:pointer-events-none font-semibold transition min-h-[44px] text-[14px]"
+            <Link
+              href="/app/login?next=/app/app"
+              className="mt-8 inline-flex items-center justify-center gap-2 px-5 py-3 rounded-[12px] bg-transparent border border-tono-border-strong text-tono-text hover:border-tono-accent hover:text-tono-text font-semibold transition min-h-[44px] text-[14px]"
             >
-              start 7-day free trial
-            </ProCheckoutButton>
+              sign in to start a trial
+            </Link>
           </article>
 
           {/* ── Pro (featured) ───────────────────────────────────── */}
@@ -112,7 +112,7 @@ export default function PricingPage() {
                 <CheckIcon />
                 <span>
                   <strong className="text-tono-text font-semibold">
-                    unlimited rewrites
+                    Coach rewrites
                   </strong>{' '}
                   on the web composer
                 </span>
@@ -131,19 +131,19 @@ export default function PricingPage() {
               </li>
             </ul>
             <div className="mt-8 flex flex-col gap-3">
-              <ProCheckoutButton interval="month" label="go pro — $3.99/mo">
-                go pro — $3.99/mo
+              <ProCheckoutButton interval="month" label="7-day trial, then auto-renews at $3.99/month unless canceled">
+                7-day trial, then auto-renews at $3.99/month unless canceled
               </ProCheckoutButton>
               <ProCheckoutButton
                 interval="year"
-                label="go pro — $39.99/yr · save $7.89"
-                className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-[12px] bg-transparent border border-tono-border-strong text-tono-text hover:border-tono-accent disabled:opacity-60 disabled:pointer-events-none font-semibold transition min-h-[44px] text-[14px] min-w-0 max-w-full text-center whitespace-normal leading-snug"
+                label="7-day trial, then auto-renews at $39.99/year unless canceled"
+                className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-[12px] bg-transparent border border-tono-border-strong text-tono-text hover:border-tono-accent disabled:opacity-60 disabled:pointer-events-none font-semibold transition min-h-[44px] text-[14px]"
               >
-                go pro — $39.99/yr · save $7.89
+                7-day trial, then auto-renews at $39.99/year unless canceled
               </ProCheckoutButton>
             </div>
             <p className="text-[12px] text-tono-text-softer mt-3">
-              billed monthly or yearly. cancel from your inbox.
+              Stripe confirms trial eligibility and the localized regular price before authorization.
             </p>
           </article>
 
@@ -163,12 +163,8 @@ export default function PricingPage() {
           when it ships.
         </p>
 
-        <p className="text-center text-[13px] text-tono-text-softer mt-12">
-          subscriptions auto-renew at $3.99/mo or $39.99/yr after the 7-day free trial unless cancelled. cancel anytime.
-        </p>
-
         {/* Footnote */}
-        <p className="text-center text-[13px] text-tono-text-softer mt-3">
+        <p className="text-center text-[13px] text-tono-text-softer mt-12">
           prices in USD. checkout handled by stripe — your card never touches tono.
         </p>
 

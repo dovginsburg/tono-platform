@@ -1,12 +1,8 @@
 // Authenticated /v1/analyze proxy.
 //
 // Browser sends the request with the tono_api_token httpOnly cookie.
-// We forward to the backend with that token as a bearer, so the
-// server-side rate limiter (FREE_DAILY_LIMIT) applies per user.
-//
-// If the user is not logged in (no cookie), we fall back to the public
-// /v1/analyze (no rate limit, no LLM key) — keeps the page usable
-// before OAuth round-trips in some flows.
+// We forward to the backend with that token as a bearer. Anonymous callers
+// fail closed; paid/trial access is decided only by the backend.
 
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
@@ -22,19 +18,10 @@ export async function POST(request: Request) {
   const backendUrl = process.env.TONO_BACKEND_URL || 'https://api.tonoit.com';
 
   if (!token) {
-    // Anonymous fallback — public endpoint, no rate limit, uses
-    // TONO_PROVIDER on the backend (mock by default — cheap).
-    const res = await fetch(`${backendUrl}/v1/analyze`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        draft: body.text,
-        axes: ['warmer', 'clearer', 'funnier', 'safer'],
-      }),
-      cache: 'no-store',
-    });
-    const data = await res.json();
-    return NextResponse.json(data, { status: res.status });
+    return NextResponse.json(
+      { error: { code: 'paywall_required', message: 'Sign in and authorize a 7-day trial to use Tono Coach.' } },
+      { status: 402 }
+    );
   }
 
   // Authenticated — hit /api/analyze with bearer token.
@@ -51,12 +38,13 @@ export async function POST(request: Request) {
     cache: 'no-store',
   });
 
-  if (res.status === 429) {
-    // Forward the rate-limit body verbatim so the UI can show "N/10 today".
+  if (res.status === 402 || res.status === 429) {
     const data = await res.json();
     return NextResponse.json(data, {
-      status: 429,
-      headers: { 'Retry-After': res.headers.get('Retry-After') || '86400' },
+      status: res.status,
+      headers: res.status === 429
+        ? { 'Retry-After': res.headers.get('Retry-After') || '60' }
+        : undefined,
     });
   }
 

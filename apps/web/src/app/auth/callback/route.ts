@@ -42,54 +42,84 @@ export async function GET(request: Request) {
       return NextResponse.redirect(buildLoginRedirect(next, process.env, error.message));
     }
 
-    // Mint a Tono api_token using the Supabase user_id as device_id.
-    // Server-side only — never expose TONO_BACKEND_ADMIN_SECRET to client.
+    // Mint a stable backend device credential, then link it to the Supabase
+    // identity through a server-to-server authenticated endpoint.
     try {
       const {
         data: { user },
       } = await supabase.auth.getUser();
       if (user?.id) {
         const backendUrl = process.env.TONO_BACKEND_URL || 'https://api.tonoit.com';
-        const adminSecret = process.env.TONO_BACKEND_ADMIN_SECRET || '';
-        const reg = await fetch(`${backendUrl}/v1/register`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Admin-Secret': adminSecret,
-          },
-          body: JSON.stringify({ device_id: `web:${user.id}` }),
-          // Don't cache; don't follow on the auth side
-          cache: 'no-store',
-        });
+        const webAuthSecret =
+          process.env.TONO_WEB_AUTH_SECRET || process.env.TONO_BACKEND_ADMIN_SECRET || '';
+        const cookieStore = await cookies();
+        const existingDeviceId = cookieStore.get('tono_device_id')?.value;
+        const existingCredential = cookieStore.get('tono_device_credential')?.value;
+
+        const register = (reuseExisting: boolean) =>
+          fetch(`${backendUrl}/v1/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              platform: 'web',
+              device_id: reuseExisting ? existingDeviceId : undefined,
+              device_credential: reuseExisting ? existingCredential : undefined,
+            }),
+            cache: 'no-store',
+          });
+
+        let reg = await register(Boolean(existingDeviceId && existingCredential));
+        if (!reg.ok && existingDeviceId) {
+          // Legacy web sessions did not retain registration proof. Create a
+          // fresh proved device rather than bypassing device ownership checks.
+          reg = await register(false);
+        }
         if (reg.ok) {
-          const data = (await reg.json()) as { api_token?: string; plan?: string; is_pro?: boolean };
-          if (data.api_token) {
-            const cookieStore = await cookies();
-            // Set httpOnly cookie so the browser can hit /api/analyze via
-            // the rewrite without re-minting on every request.
-            cookieStore.set('tono_api_token', data.api_token, {
-              httpOnly: true,
-              secure: true,
-              sameSite: 'lax',
-              path: '/',
-              maxAge: 60 * 60 * 24 * 365, // 1y; rotated on register re-call
+          const registration = (await reg.json()) as {
+            api_token?: string;
+            device_id?: string;
+            device_credential?: string;
+          };
+          if (registration.api_token && registration.device_id && webAuthSecret) {
+            const linked = await fetch(`${backendUrl}/v1/auth/web`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${registration.api_token}`,
+                'X-Web-Auth-Secret': webAuthSecret,
+              },
+              body: JSON.stringify({ subject: user.id, email: user.email || null }),
+              cache: 'no-store',
             });
-            cookieStore.set('tono_plan', data.plan || 'free', {
-              httpOnly: false,
-              secure: true,
-              sameSite: 'lax',
-              path: '/',
-              maxAge: 60 * 60 * 24 * 365,
-            });
+            if (linked.ok) {
+              const account = (await linked.json()) as { plan?: string };
+              const oneYear = 60 * 60 * 24 * 365;
+              cookieStore.set('tono_api_token', registration.api_token, {
+                httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: oneYear,
+              });
+              cookieStore.set('tono_device_id', registration.device_id, {
+                httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: oneYear,
+              });
+              if (registration.device_credential) {
+                cookieStore.set('tono_device_credential', registration.device_credential, {
+                  httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: oneYear,
+                });
+              }
+              cookieStore.set('tono_plan', account.plan || 'unpaid', {
+                httpOnly: false, secure: true, sameSite: 'lax', path: '/', maxAge: oneYear,
+              });
+            } else {
+              console.error('[auth/callback] /v1/auth/web failed:', linked.status, await linked.text());
+            }
+          } else {
+            console.error('[auth/callback] missing registration fields or TONO_WEB_AUTH_SECRET');
           }
         } else {
-          // Don't block the login if backend register fails — the user
-          // can still browse; the editor will surface the issue.
           console.error('[auth/callback] /v1/register failed:', reg.status, await reg.text());
         }
       }
     } catch (e) {
-      console.error('[auth/callback] register error:', e);
+      console.error('[auth/callback] account link error:', e);
     }
 
     return NextResponse.redirect(buildAppRedirect(next));

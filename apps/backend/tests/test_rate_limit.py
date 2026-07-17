@@ -36,7 +36,6 @@ def rate_limit_setup(monkeypatch, tmp_path):
     """Configure env BEFORE importing backend.server, then import fresh."""
     monkeypatch.setenv("TONO_DB_PATH", str(tmp_path / "tono_rate.db"))
     monkeypatch.setenv("TONO_PROVIDER", "mock")
-    monkeypatch.setenv("FREE_DAILY_LIMIT", "1000")
     monkeypatch.setenv("TONO_ADMIN_SECRET", "test-secret")
     # Source's limiter: IP_RATE_LIMIT_PER_MIN defaults to 20. Set to 3 for tests.
     monkeypatch.setenv("IP_RATE_LIMIT_PER_MIN", "3")
@@ -55,49 +54,34 @@ def rate_limit_setup(monkeypatch, tmp_path):
     yield srv, TestClient
 
 
-def test_v1_analyze_is_ip_rate_limited(rate_limit_setup):
-    """The LLM passthrough was completely unlimited before; Path A's source
-    limiter caps it per-IP. Verify the cap fires at the configured limit."""
+def test_v1_analyze_remains_paywalled_after_abuse_limit(rate_limit_setup):
     srv, TestClient = rate_limit_setup
     with TestClient(srv.app) as client:
         body = {"draft": "Hello there"}
-        # 3 calls = at limit (IP_RATE_LIMIT_PER_MIN=3 in fixture)
-        for i in range(3):
+        for i in range(4):
             r = client.post("/v1/analyze", json=body)
-            assert r.status_code == 200, f"call {i+1} got {r.status_code}: {r.text}"
-        # 4th = 429
-        r = client.post("/v1/analyze", json=body)
-        assert r.status_code == 429, r.text
-        # Source limiter shape: detail string + Retry-After header (lowercase OK)
-        assert "retry-after" in {k.lower() for k in r.headers.keys()}
+            assert r.status_code == 402, f"call {i+1} got {r.status_code}: {r.text}"
+            assert r.json()["error"]["code"] == "paywall_required"
+        assert len(next(iter(srv._ip_windows.values()))) == 3
 
 
-def test_ip_rate_limit_is_per_ip(rate_limit_setup):
-    """Saturating /v1/analyze on one IP must NOT block a different IP.
-    Source's limiter keys on client_ip (X-Forwarded-For first, then
-    request.client.host), so distinct XFF headers simulate distinct IPs.
-    """
+def test_paywalled_attempts_are_still_tracked_per_ip(rate_limit_setup):
     srv, TestClient = rate_limit_setup
     with TestClient(srv.app) as client:
         body = {"draft": "Hello there"}
-        # Saturate IP-A via XFF header
-        for _ in range(3):
+        for _ in range(4):
             r = client.post(
                 "/v1/analyze", json=body,
                 headers={"X-Forwarded-For": "10.0.0.1"},
             )
-            assert r.status_code == 200, f"IP-A call got {r.status_code}"
-        r = client.post(
-            "/v1/analyze", json=body,
-            headers={"X-Forwarded-For": "10.0.0.1"},
-        )
-        assert r.status_code == 429, "IP-A should be rate-limited"
-        # IP-B is fresh (different XFF) — must NOT be rate-limited
+            assert r.status_code == 402
         r = client.post(
             "/v1/analyze", json=body,
             headers={"X-Forwarded-For": "10.0.0.2"},
         )
-        assert r.status_code == 200, f"IP-B should not be blocked: {r.status_code}"
+        assert r.status_code == 402
+        assert len(srv._ip_windows["10.0.0.1"]) == 3
+        assert len(srv._ip_windows["10.0.0.2"]) == 1
 
 
 def test_register_is_not_rate_limited(rate_limit_setup):

@@ -24,6 +24,7 @@
     { "source": "/api/checkout", "destination": "/app/api/checkout" },
     { "source": "/api/health", "destination": "/app/api/health" },
     { "source": "/api/analyze", "destination": "/app/api/analyze" },
+    { "source": "/api/offer", "destination": "/app/api/offer" },
     { "source": "/api/me", "destination": "/app/api/me" }
   ]
 }

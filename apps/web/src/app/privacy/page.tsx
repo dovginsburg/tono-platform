@@ -1,12 +1,10 @@
-import Link from 'next/link'
-
 export default function PrivacyPage() {
   return (
     <main className="min-h-screen bg-soft text-tono">
       <div className="max-w-3xl mx-auto px-6 py-16">
-        <Link href="/" className="text-sm text-tono-soft hover:underline">
+        <a href="/app" className="text-sm text-tono-soft hover:underline">
           ← back
-        </Link>
+        </a>
         <h1 className="mt-8 text-4xl font-bold tracking-tight">Privacy</h1>
         <p className="mt-2 text-tono-soft text-sm">
           last updated: 2026-07-07
@@ -18,20 +16,18 @@ export default function PrivacyPage() {
             language, what we collect and what we don't.
           </p>
 
-          <h2 className="text-2xl font-semibold pt-6">how drafts are handled</h2>
+          <h2 className="text-2xl font-semibold pt-6">what we don't collect</h2>
           <ul className="list-disc pl-6 space-y-2">
-            <li>your draft stays in your browser until you choose rewrite</li>
-            <li>when you choose rewrite, the draft is sent securely to tono's rewrite service to generate the result</li>
-            <li>your writing is not used to train models</li>
+            <li>the drafts you write in tono — your text stays in your browser</li>
             <li>analytics on who you write to, when, or about what</li>
             <li>your contacts, calendar, or any data outside the active session</li>
           </ul>
 
-          <h2 className="text-2xl font-semibold pt-6">what we do collect (pro tier only)</h2>
+          <h2 className="text-2xl font-semibold pt-6">what we do collect for subscribed accounts</h2>
           <ul className="list-disc pl-6 space-y-2">
             <li>your email address, for subscription receipts</li>
             <li>your subscription tier, to gate the pro features</li>
-            <li>the count of rewrites you make per day, to prevent abuse and enforce subscription limits</li>
+            <li>verified trial, subscription, or separately granted promo-access state</li>
           </ul>
 
           <h2 className="text-2xl font-semibold pt-6">third parties</h2>
@@ -58,11 +54,6 @@ export default function PrivacyPage() {
           <h2 className="text-2xl font-semibold pt-6">contact</h2>
           <p>
             questions: <a href="mailto:hi@tonoit.com" className="underline">hi@tonoit.com</a>
-          </p>
-
-          <h2 className="text-2xl font-semibold pt-6">subscription</h2>
-          <p>
-            Tono Pro is a paid subscription. Every new user starts with a real 7-day free trial. After the trial, the subscription auto-renews at $3.99/month or $39.99/year unless cancelled. Cancel anytime from your account settings — no retention, no dark patterns. Checkout is handled by Stripe (web) or App Store / Google Play (mobile); your card details never touch Tono.
           </p>
         </section>
       </div>

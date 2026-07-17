@@ -37,8 +37,6 @@ def _isolate_db(tmp_path, monkeypatch) -> Iterator[str]:
     db_path = str(tmp_path / "tono_test.db")
     monkeypatch.setenv("TONO_DB_PATH", db_path)
     monkeypatch.setenv("TONO_PROVIDER", "mock")
-    monkeypatch.setenv("FREE_DAILY_LIMIT", "3")  # keep tests fast
-
     _purge_backend_modules()
 
     # Reset the rate-limit buckets between tests. Without this, a test that

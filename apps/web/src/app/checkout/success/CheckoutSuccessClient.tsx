@@ -253,7 +253,7 @@ function PendingPanel({
       </div>
       {me && !me.is_pro ? (
         <p className="text-[13px] text-tono-text-softer">
-          current plan: {me.plan ?? 'free'}. we'll flip it the second stripe confirms.
+          current access: {me.plan ?? 'unpaid'}. we'll update it when Stripe confirms.
         </p>
       ) : null}
       <div className="flex flex-col sm:flex-row gap-3 justify-center pt-2">

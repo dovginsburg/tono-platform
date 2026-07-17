@@ -316,6 +316,19 @@
         "title": "AppleSignInRequest",
         "type": "object"
       },
+      "AppleSubscriptionRequest": {
+        "properties": {
+          "signed_transaction": {
+            "title": "Signed Transaction",
+            "type": "string"
+          }
+        },
+        "required": [
+          "signed_transaction"
+        ],
+        "title": "AppleSubscriptionRequest",
+        "type": "object"
+      },
       "AxisEventRequest": {
         "properties": {
           "axis": {
@@ -347,17 +360,6 @@
             ],
             "title": "Cancel Url"
           },
-          "email": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Email"
-          },
           "interval": {
             "default": "month",
             "title": "Interval",
@@ -384,6 +386,10 @@
             "title": "Session Id",
             "type": "string"
           },
+          "trial_eligible": {
+            "title": "Trial Eligible",
+            "type": "boolean"
+          },
           "url": {
             "title": "Url",
             "type": "string"
@@ -391,9 +397,23 @@
         },
         "required": [
           "url",
-          "session_id"
+          "session_id",
+          "trial_eligible"
         ],
         "title": "CheckoutResponse",
+        "type": "object"
+      },
+      "CoachRequest": {
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "CoachRequest",
         "type": "object"
       },
       "CreateCouponRequest": {
@@ -566,6 +586,29 @@
           "event"
         ],
         "title": "EventRequest",
+        "type": "object"
+      },
+      "GooglePlaySubscriptionRequest": {
+        "properties": {
+          "package_name": {
+            "title": "Package Name",
+            "type": "string"
+          },
+          "product_id": {
+            "title": "Product Id",
+            "type": "string"
+          },
+          "purchase_token": {
+            "title": "Purchase Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "package_name",
+          "product_id",
+          "purchase_token"
+        ],
+        "title": "GooglePlaySubscriptionRequest",
         "type": "object"
       },
       "GoogleSignInRequest": {
@@ -802,6 +845,39 @@
         "title": "MetricsRequest",
         "type": "object"
       },
+      "OfferResponse": {
+        "properties": {
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "interval": {
+            "title": "Interval",
+            "type": "string"
+          },
+          "trial_days": {
+            "title": "Trial Days",
+            "type": "integer"
+          },
+          "trial_eligible": {
+            "title": "Trial Eligible",
+            "type": "boolean"
+          },
+          "unit_amount": {
+            "title": "Unit Amount",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "interval",
+          "currency",
+          "unit_amount",
+          "trial_eligible",
+          "trial_days"
+        ],
+        "title": "OfferResponse",
+        "type": "object"
+      },
       "PasskeyListItem": {
         "properties": {
           "created_at": {
@@ -990,6 +1066,7 @@
           "app_version": {
             "anyOf": [
               {
+                "maxLength": 64,
                 "type": "string"
               },
               {
@@ -998,9 +1075,23 @@
             ],
             "title": "App Version"
           },
+          "device_credential": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 43,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Credential"
+          },
           "device_id": {
             "anyOf": [
               {
+                "format": "uuid",
                 "type": "string"
               },
               {
@@ -1012,6 +1103,14 @@
           "platform": {
             "anyOf": [
               {
+                "enum": [
+                  "ios",
+                  "android",
+                  "macos",
+                  "windows",
+                  "web",
+                  "slack"
+                ],
                 "type": "string"
               },
               {
@@ -1029,6 +1128,17 @@
           "api_token": {
             "title": "Api Token",
             "type": "string"
+          },
+          "device_credential": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Credential"
           },
           "device_id": {
             "title": "Device Id",
@@ -1221,6 +1331,33 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "WebSignInRequest": {
+        "properties": {
+          "email": {
+            "anyOf": [
+              {
+                "maxLength": 320,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "subject": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Subject",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject"
+        ],
+        "title": "WebSignInRequest",
         "type": "object"
       }
     },
@@ -1813,7 +1950,7 @@
     },
     "/v1/analyze": {
       "post": {
-        "description": "Unauthenticated passthrough kept for backward compatibility with\nthe iOS Playground tab and integration tests. No billing is applied,\nbut a per-IP cap protects the shared provider credentials from abuse.",
+        "description": "Retired unauthenticated rewrite surface.\n\nWe still feed every attempt into the abuse window, but deliberately return\nthe product paywall response even after that window fills. This prevents an\nunpaid caller from learning or relying on a daily-product-quota contract.",
         "operationId": "v1_analyze_v1_analyze_post",
         "requestBody": {
           "content": {
@@ -1848,6 +1985,49 @@
           }
         },
         "summary": "V1 Analyze"
+      }
+    },
+    "/v1/apple/subscription": {
+      "post": {
+        "operationId": "sync_apple_subscription_v1_apple_subscription_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppleSubscriptionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Sync Apple Subscription"
       }
     },
     "/v1/auth/apple": {
@@ -2142,6 +2322,50 @@
         ]
       }
     },
+    "/v1/auth/web": {
+      "post": {
+        "description": "Link a backend device to a Supabase-authenticated web account.\n\nThe web callback verifies the Supabase session before calling this\nserver-to-server endpoint. A separate shared secret prevents a browser\nfrom asserting an arbitrary Supabase subject.",
+        "operationId": "auth_web_v1_auth_web_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebSignInRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Auth Web"
+      }
+    },
     "/v1/checkout": {
       "post": {
         "operationId": "create_checkout_session_v1_checkout_post",
@@ -2186,6 +2410,52 @@
         "tags": [
           "payments"
         ]
+      }
+    },
+    "/v1/coach": {
+      "post": {
+        "description": "Compatibility route used by the iOS keyboard Coach shortcut.\n\nIt delegates to the canonical entitlement/rate-limit/provider path and\nchanges only the response key expected by older clients.",
+        "operationId": "v1_coach_v1_coach_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoachRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response V1 Coach V1 Coach Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "V1 Coach"
       }
     },
     "/v1/coupon/redeem": {
@@ -2417,6 +2687,49 @@
         "summary": "Set Feature Preference"
       }
     },
+    "/v1/google-play/subscription": {
+      "post": {
+        "operationId": "sync_google_play_subscription_v1_google_play_subscription_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GooglePlaySubscriptionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Sync Google Play Subscription"
+      }
+    },
     "/v1/locales": {
       "get": {
         "description": "Locales the LLM providers can respond in. Clients use this to build\na language switcher without hardcoding the list.",
@@ -2496,6 +2809,54 @@
           }
         ],
         "summary": "Ingest Metrics"
+      }
+    },
+    "/v1/offer": {
+      "get": {
+        "description": "Return Stripe-backed price and trial eligibility for the signed-in account.",
+        "operationId": "get_offer_v1_offer_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "interval",
+            "required": true,
+            "schema": {
+              "title": "Interval",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfferResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Offer",
+        "tags": [
+          "payments"
+        ]
       }
     },
     "/v1/portal": {

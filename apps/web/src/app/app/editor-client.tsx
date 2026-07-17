@@ -30,14 +30,10 @@ type AnalyzeResponse = {
   flags?: string[];
   // 429 shape
   message?: string;
-  used_today?: number;
-  daily_limit?: number;
-  plan?: string;
+  error?: { code?: string; message?: string };
 };
 
-type Quota = {
-  used_today: number;
-  daily_limit: number;
+type Entitlement = {
   plan: string;
   is_pro?: boolean;
 };
@@ -64,29 +60,25 @@ export function RewriteEditor({
   const [perception, setPerception] = useState<{ risk_level?: string; subtext?: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [limit, setLimit] = useState<{ used: number; max: number } | null>(null);
+  const [entitlement, setEntitlement] = useState<Entitlement | null>(null);
   const [selected, setSelected] = useState<Axis | null>(null);
   const [copied, setCopied] = useState<Axis | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const loadQuota = useCallback(async () => {
+  const loadEntitlement = useCallback(async () => {
     try {
       const res = await fetch('/api/me', { cache: 'no-store' });
       if (res.ok) {
-        const data: Quota = await res.json();
-        setLimit({
-          used: data.used_today,
-          max: data.daily_limit === -1 ? Infinity : data.daily_limit,
-        });
+        setEntitlement(await res.json());
       }
     } catch {
-      // Quota is decorative; don't surface errors.
+      // Entitlement label is decorative; the API remains authoritative.
     }
   }, []);
 
   useEffect(() => {
-    loadQuota();
-  }, [loadQuota]);
+    loadEntitlement();
+  }, [loadEntitlement]);
 
   const rewrite = useCallback(async () => {
     if (!draft.trim() || loading) return;
@@ -102,19 +94,16 @@ export function RewriteEditor({
         body: JSON.stringify({ text: draft }),
       });
       const data: AnalyzeResponse = await res.json();
+      if (res.status === 402) {
+        setError(data.error?.message || 'start a verified 7-day trial to use tono coach');
+        return;
+      }
       if (res.status === 429) {
-        setError(
-          data.message
-            ? `${data.message}. ${data.used_today ?? '?'} of ${data.daily_limit ?? '?'} today.`
-            : 'daily limit reached'
-        );
-        if (typeof data.used_today === 'number' && typeof data.daily_limit === 'number') {
-          setLimit({ used: data.used_today, max: data.daily_limit });
-        }
+        setError(data.error?.message || 'too many requests. try again in a minute.');
         return;
       }
       if (!res.ok) {
-        setError(data?.message || `couldn't reach tono (${res.status})`);
+        setError(data.error?.message || data?.message || `couldn't reach tono (${res.status})`);
         return;
       }
       // Map suggestions to our axis whitelist, in canonical order.
@@ -135,14 +124,13 @@ export function RewriteEditor({
         perception: data.perception || '',
       });
 
-      // Refresh quota after a successful rewrite
-      loadQuota();
+      loadEntitlement();
     } catch (e) {
       setError("couldn't reach tono. check your connection and try again.");
     } finally {
       setLoading(false);
     }
-  }, [draft, loading, loadQuota]);
+  }, [draft, loading, loadEntitlement]);
 
   // ⌘+Enter / Ctrl+Enter to rewrite
   useEffect(() => {
@@ -217,10 +205,10 @@ export function RewriteEditor({
             <Link href="/app/app/history" style={ghostBtn} title="history">
               history
             </Link>
-            <span style={quotaStyle} title={limit ? `${limit.used} of ${limit.max} free today` : ''}>
+            <span style={quotaStyle} title="verified access status">
               <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)' }} />
               <span>
-                <strong>{limit ? limit.used : '–'}</strong> / {limit ? (limit.max === Infinity ? '∞' : limit.max) : '–'} today
+                <strong>{entitlement?.is_pro ? 'access active' : 'trial required'}</strong>
               </span>
             </span>
             <span style={avatarStyle} title={email}>
@@ -408,7 +396,7 @@ export function RewriteEditor({
           <span>draft auto-saved</span>
           {!hasApiToken && (
             <span style={{ color: 'var(--warning, #F59E0B)' }}>
-              (anonymous — sign in for daily quota)
+              (sign in and authorize a trial to use Coach)
             </span>
           )}
         </div>

@@ -40,6 +40,29 @@ def _override_google(app, sub: str, email: str | None = "person@example.com"):
     app.dependency_overrides[social_auth.get_google_verifier] = lambda: fake_verifier
 
 
+def test_web_signin_requires_server_secret_and_links_verified_subject(client, monkeypatch):
+    monkeypatch.setenv("TONO_WEB_AUTH_SECRET", "web-auth-test-secret")
+    device = _register(client)
+    headers = _auth_headers(device["api_token"])
+
+    denied = client.post(
+        "/v1/auth/web",
+        json={"subject": "supabase-user-1", "email": "web@example.com"},
+        headers=headers,
+    )
+    assert denied.status_code == 403
+
+    linked = client.post(
+        "/v1/auth/web",
+        json={"subject": "supabase-user-1", "email": "web@example.com"},
+        headers={**headers, "X-Web-Auth-Secret": "web-auth-test-secret"},
+    )
+    assert linked.status_code == 200, linked.text
+    assert linked.json()["email"] == "web@example.com"
+    me = client.get("/v1/me", headers=headers).json()
+    assert me["account_id"] == linked.json()["account_id"]
+
+
 def test_apple_signin_creates_account_and_links_device(client):
     from backend.server import app
 
@@ -54,7 +77,7 @@ def test_apple_signin_creates_account_and_links_device(client):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["account_id"]
-    assert body["plan"] == "free"
+    assert body["plan"] == "unpaid"
     assert body["is_pro"] is False
     assert body["email"] == "person@example.com"
 
@@ -141,7 +164,7 @@ def test_anonymous_device_unaffected_by_account_feature(client):
     device = _register(client)
     me = client.get("/v1/me", headers=_auth_headers(device["api_token"])).json()
     assert me["account_id"] is None
-    assert me["plan"] == "free"
+    assert me["plan"] == "unpaid"
     assert me["is_pro"] is False
 
 
@@ -268,14 +291,11 @@ def test_reauth_with_same_identity_on_linked_device_is_not_a_conflict(client):
 
 
 # ---------------------------------------------------------------------------
-# Pooled daily free-tier allowance across an account's linked devices.
-# conftest sets FREE_DAILY_LIMIT=3 for the whole suite.
+# Trial-only access across linked devices.
 # ---------------------------------------------------------------------------
 
 
-def test_free_daily_limit_pools_across_linked_devices(client):
-    """Two devices signed into the SAME account share one daily allowance —
-    not 3/day each, 3/day total. This is the actual point of pooling."""
+def test_trial_entitlement_is_shared_across_linked_devices(client):
     from backend.server import app
 
     device_a = _register(client)
@@ -291,31 +311,22 @@ def test_free_daily_limit_pools_across_linked_devices(client):
     me_b = client.get("/v1/me", headers=_auth_headers(device_b["api_token"])).json()
     assert me_b["account_id"] == account_id
 
-    def analyze(device, text):
-        return client.post(
-            "/api/analyze",
-            json={"text": text},
+    from backend.store import get_store
+    get_store().update_account_subscription(
+        account_id=account_id, subscription_id="sub_trial",
+        status="trialing", renews_at="2026-07-20T00:00:00+00:00",
+    )
+
+    for device in (device_a, device_b):
+        response = client.post(
+            "/api/analyze", json={"text": "shared trial"},
             headers=_auth_headers(device["api_token"]),
         )
-
-    # 2 on device A, 1 on device B — that's the full pooled limit of 3.
-    assert analyze(device_a, "first message").status_code == 200
-    assert analyze(device_a, "second message").status_code == 200
-    r3 = analyze(device_b, "third message")
-    assert r3.status_code == 200
-    assert r3.json()["used_today"] == 3
-    assert r3.json()["daily_limit"] == 3
-
-    # A 4th call from EITHER device is rate-limited — it's one shared pool.
-    r4 = analyze(device_b, "fourth message")
-    assert r4.status_code == 429
-    r5 = analyze(device_a, "fifth message")
-    assert r5.status_code == 429
+        assert response.status_code == 200, response.text
+        assert response.json()["daily_limit"] == -1
 
 
-def test_free_daily_limit_still_per_device_when_anonymous(client):
-    """Unchanged pre-accounts behavior: two anonymous devices each get
-    their own independent 3/day, since there's no account to pool through."""
+def test_anonymous_devices_have_no_product_allowance(client):
 
     def analyze(device, text):
         return client.post(
@@ -327,9 +338,7 @@ def test_free_daily_limit_still_per_device_when_anonymous(client):
     device_a = _register(client)
     device_b = _register(client)
 
-    for _ in range(3):
-        assert analyze(device_a, "msg").status_code == 200
-    assert analyze(device_a, "one too many").status_code == 429
-
-    # Device B's own allowance is untouched by device A's usage.
-    assert analyze(device_b, "msg").status_code == 200
+    for device in (device_a, device_b):
+        response = analyze(device, "msg")
+        assert response.status_code == 402
+        assert response.json()["error"]["code"] == "paywall_required"

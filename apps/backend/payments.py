@@ -33,7 +33,7 @@ import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
-from .auth import CurrentUser, OptionalCurrentUser
+from .auth import CurrentUser
 from .store import Store, get_store
 
 logger = logging.getLogger(__name__)
@@ -81,13 +81,8 @@ router = APIRouter(prefix="/v1", tags=["payments"])
 
 class CheckoutRequest(BaseModel):
     interval: str = "month"  # "month" | "year"
-    # Optional email for anonymous web checkout so Stripe can prefill the
-    # receipt address / create the customer without prompting. iOS flows
-    # already have an account, this is just a passthrough.
-    email: Optional[str] = None
     # Optional landing-page overrides. Defaults below point at tonoit.com
-    # so unauthenticated website visitors land on the welcome page;
-    # authenticated app flows can still override per-request.
+    # so hosted Checkout returns to the intended product surface.
     success_url: Optional[str] = None
     cancel_url: Optional[str] = None
 
@@ -95,6 +90,15 @@ class CheckoutRequest(BaseModel):
 class CheckoutResponse(BaseModel):
     url: str
     session_id: str
+    trial_eligible: bool
+
+
+class OfferResponse(BaseModel):
+    interval: str
+    currency: str
+    unit_amount: int
+    trial_eligible: bool
+    trial_days: int
 
 
 class PortalResponse(BaseModel):
@@ -115,11 +119,68 @@ def _store_dep() -> Store:
 # ---------------------------------------------------------------------------
 
 
+def _require_account(user: CurrentUser) -> None:
+    if not user.account_id or user.account is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sign in to a Tono account before starting checkout.",
+        )
+
+
+def _trial_eligible(customer_id: str) -> bool:
+    """Ask Stripe whether this customer has ever had a subscription."""
+    try:
+        subscriptions = stripe.Subscription.list(customer=customer_id, status="all", limit=1)
+        data = subscriptions.data
+    except Exception as exc:
+        logger.exception("Stripe trial eligibility lookup failed for customer=%s", customer_id)
+        raise HTTPException(503, "Could not verify trial eligibility.") from exc
+    return not bool(data)
+
+
+def _offer(interval: str, user: CurrentUser) -> OfferResponse:
+    if not _is_configured():
+        raise HTTPException(503, "Stripe is not configured on this server.")
+    if interval not in ("month", "year"):
+        raise HTTPException(400, "interval must be 'month' or 'year'")
+    _require_account(user)
+    price_id = _price_for("pro", interval)
+    if not price_id:
+        raise HTTPException(503, "Stripe price is not configured.")
+    stripe.api_key = _secret()
+    try:
+        price = stripe.Price.retrieve(price_id)
+        unit_amount = price.unit_amount
+        currency = price.currency
+    except Exception as exc:
+        logger.exception("Stripe price lookup failed for price=%s", price_id)
+        raise HTTPException(503, "Could not load the current price.") from exc
+    if not isinstance(unit_amount, int) or not isinstance(currency, str):
+        raise HTTPException(503, "Stripe returned an incomplete price.")
+    account = user.account
+    assert account is not None
+    customer_id = account.stripe_customer_id
+    eligible = True if not customer_id else _trial_eligible(customer_id)
+    return OfferResponse(
+        interval=interval,
+        currency=currency.lower(),
+        unit_amount=unit_amount,
+        trial_eligible=eligible,
+        trial_days=7 if eligible else 0,
+    )
+
+
+@router.get("/offer", response_model=OfferResponse)
+def get_offer(interval: str, user: CurrentUser) -> OfferResponse:
+    """Return Stripe-backed price and trial eligibility for the signed-in account."""
+    return _offer(interval, user)
+
+
 @router.post("/checkout", response_model=CheckoutResponse)
 def create_checkout_session(
     body: CheckoutRequest,
     request: Request,
-    user: OptionalCurrentUser,
+    user: CurrentUser,
     store: Annotated[Store, Depends(_store_dep)],
 ) -> CheckoutResponse:
     if not _is_configured():
@@ -129,6 +190,7 @@ def create_checkout_session(
         )
     if body.interval not in ("month", "year"):
         raise HTTPException(400, "interval must be 'month' or 'year'")
+    _require_account(user)
 
     price_id = _price_for("pro", body.interval)
     if not price_id:
@@ -140,46 +202,32 @@ def create_checkout_session(
 
     stripe.api_key = _secret()
 
-    # Two callers share this endpoint:
-    #  - iOS app (authenticated, ``user`` is a real row): reuse the
-    #    existing Stripe customer; the subscription is attached to that
-    #    device via ``client_reference_id``.
-    #  - Public website (anonymous, ``user`` is None): no customer on
-    #    file. We let Stripe Checkout create the customer at session
-    #    time and use ``customer_email`` so the receipt already has an
-    #    address when the buyer hits the hosted page.
-    #
-    # Both flows set ``metadata.tono_source`` so the webhook can tell
-    # app-sourced subscriptions from web-sourced ones later (web
-    # subscriptions have no device row to attach to).
-    if user is not None:
-        account_id = user.account_id
-        customer_id = (
-            user.account.stripe_customer_id
-            if user.account is not None
-            else user.stripe_customer_id
-        )
-        if not customer_id:
-            customer_metadata = {"tono_device_id": user.device_id}
-            if account_id:
-                customer_metadata["tono_account_id"] = account_id
-            customer = stripe.Customer.create(metadata=customer_metadata)
-            customer_id = customer["id"]
-            if account_id:
-                store.attach_account_stripe_customer(account_id, customer_id)
-            else:
-                store.attach_stripe_customer(user.device_id, customer_id)
-        metadata = {
-            "tono_device_id": user.device_id,
-            "tono_source": "app",
-        }
+    # Checkout is account/device authenticated so the authorized purchase can
+    # always be reconciled to a durable Tono identity. Hosted Checkout still
+    # performs the explicit payment authorization before the trial begins.
+    account_id = user.account_id
+    customer_id = (
+        user.account.stripe_customer_id
+        if user.account is not None
+        else user.stripe_customer_id
+    )
+    new_customer = not customer_id
+    if new_customer:
+        customer_metadata = {"tono_device_id": user.device_id}
         if account_id:
-            metadata["tono_account_id"] = account_id
-        client_reference_id = user.device_id
-    else:
-        customer_id = None
-        metadata = {"tono_source": "web"}
-        client_reference_id = None
+            customer_metadata["tono_account_id"] = account_id
+        customer = stripe.Customer.create(metadata=customer_metadata)
+        customer_id = customer["id"]
+        if account_id:
+            store.attach_account_stripe_customer(account_id, customer_id)
+        else:
+            store.attach_stripe_customer(user.device_id, customer_id)
+    metadata = {
+        "tono_device_id": user.device_id,
+        "tono_source": "web",
+    }
+    if account_id:
+        metadata["tono_account_id"] = account_id
 
     # PUBLIC_BASE_URL wins over the request host so deployments behind
     # Railway's proxy don't surface ``*.up.railway.app`` in the user's
@@ -188,6 +236,11 @@ def create_checkout_session(
     base = os.environ.get("PUBLIC_BASE_URL") or _public_base_url(request)
     success_url = body.success_url or f"{base.rstrip('/')}/welcome-pro?s=1"
     cancel_url = body.cancel_url or f"{base.rstrip('/')}/pricing"
+
+    trial_eligible = True if new_customer else _trial_eligible(customer_id)
+    subscription_data: dict[str, Any] = {"metadata": metadata}
+    if trial_eligible:
+        subscription_data["trial_period_days"] = 7
 
     session_kwargs: dict[str, Any] = dict(
         mode="subscription",
@@ -206,22 +259,21 @@ def create_checkout_session(
         # the express-checkout row when the buyer's browser supports
         # them. This matches how Stripe-hosted Checkout Pages work.
         payment_method_types=["card"],
-        subscription_data={"metadata": metadata},
+        # The trial begins only after the customer authorizes this hosted
+        # subscription Checkout. Keep this aligned with both store products.
+        subscription_data=subscription_data,
         metadata=metadata,
+        customer=customer_id,
+        client_reference_id=user.device_id,
     )
-    if customer_id is not None:
-        session_kwargs["customer"] = customer_id
-        if client_reference_id is not None:
-            session_kwargs["client_reference_id"] = client_reference_id
-    else:
-        # Anonymous web flow — let Stripe create the customer from the
-        # email we pass, or prompt for one if the request didn't carry
-        # one (the static-site JS doesn't collect email up front).
-        session_kwargs["customer_email"] = body.email or None
 
     session = stripe.checkout.Session.create(**session_kwargs)
 
-    return CheckoutResponse(url=session["url"], session_id=session["id"])
+    return CheckoutResponse(
+        url=session["url"],
+        session_id=session["id"],
+        trial_eligible=trial_eligible,
+    )
 
 
 @router.post("/portal", response_model=PortalResponse)
@@ -284,6 +336,7 @@ async def stripe_webhook(
             "customer.subscription.created",
             "customer.subscription.updated",
             "customer.subscription.deleted",
+            "invoice.payment_failed",
         ):
             _handle_subscription_event(store, etype, obj)
         else:
@@ -321,15 +374,19 @@ def _handle_subscription_event(store: Store, etype: str, obj: dict) -> None:
     status_str: Optional[str] = None
     renews_at: Optional[str] = None
 
-    if etype == "checkout.session.completed":
+    if etype == "invoice.payment_failed":
+        customer_id = obj.get("customer")
+        subscription_id = obj.get("subscription")
+        status_str = "past_due"
+        device_id = _meta(obj, "tono_device_id")
+    elif etype == "checkout.session.completed":
         device_id = obj.get("client_reference_id") or _meta(obj, "tono_device_id")
         customer_id = obj.get("customer")
         subscription_id = obj.get("subscription")
         # Pull the subscription to get the real status + renewal date.
-        # This is the call most likely to fail in production (network
-        # glitch, Stripe API outage, expired test/live key after a
-        # dashboard config change). Fall back to the checkout session's
-        # own status so we still record the event instead of 500-ing.
+        # This is the call most likely to fail in production. Never infer paid
+        # access from Checkout completion when subscription verification is
+        # uncertain; persist an incomplete state and await a verified event.
         if subscription_id:
             try:
                 sub = stripe.Subscription.retrieve(subscription_id)
@@ -343,10 +400,10 @@ def _handle_subscription_event(store: Store, etype: str, obj: dict) -> None:
                     subscription_id,
                     e,
                 )
-                status_str = obj.get("status") or "active"
+                status_str = "incomplete"
                 renews_at = _iso(obj.get("current_period_end"))
         else:
-            status_str = "active"
+            status_str = "incomplete"
     else:
         customer_id = obj.get("customer")
         subscription_id = obj.get("id")
