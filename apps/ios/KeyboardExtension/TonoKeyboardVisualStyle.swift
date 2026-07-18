@@ -58,7 +58,7 @@ struct TonoKeyboardMetrics: Equatable {
             preferredContentHeight: preferredHeight,
             coachResultsContentHeight: preferredHeight + 36,
             topBarHeight: 46,
-            coachControlHeight: 36,
+            coachControlHeight: ControlGeometry.minimumTouchTarget,
             keyMinHeight: 44,
             rowSpacing: 8,
             edgePadding: 4,
@@ -68,6 +68,40 @@ struct TonoKeyboardMetrics: Equatable {
             keyShadowRadius: 0.75,
             keyShadowOffset: CGSize(width: 0, height: 1)
         )
+    }
+}
+
+/// Minimum interactive-control geometry for the keyboard extension. Every
+/// tappable control must present an effective hit target of at least
+/// `minimumTouchTarget`×`minimumTouchTarget` points in every state. This is the
+/// single exported source of truth the runtime layout constrains against; the
+/// values are width-independent so key construction can read them before the
+/// first layout pass.
+extension TonoKeyboardMetrics {
+    enum ControlGeometry {
+        /// Apple's minimum comfortable touch target.
+        static let minimumTouchTarget: CGFloat = 44
+
+        static let emojiToggleWidth: CGFloat = minimumTouchTarget
+        static let quickCharacterWidth: CGFloat = minimumTouchTarget
+        static let emojiCategoryTabHeight: CGFloat = minimumTouchTarget
+        static let emojiCategoryTabWidth: CGFloat = minimumTouchTarget
+        static let emojiPanelFooterHeight: CGFloat = minimumTouchTarget
+        static let emojiResultCellHeight: CGFloat = minimumTouchTarget
+        static let emojiResultCellWidth: CGFloat = minimumTouchTarget
+        static let coachBackControlHeight: CGFloat = minimumTouchTarget
+        static let coachBackControlWidth: CGFloat = minimumTouchTarget
+
+        static func emojiGridColumns(availableWidth: CGFloat, insets: CGFloat = 4, spacing: CGFloat = 2) -> Int {
+            let usable = max(0, availableWidth - insets)
+            return max(1, min(8, Int(floor((usable + spacing) / (emojiResultCellWidth + spacing)))))
+        }
+
+        static func emojiGridCellWidth(availableWidth: CGFloat, insets: CGFloat = 4, spacing: CGFloat = 2) -> CGFloat {
+            let columns = emojiGridColumns(availableWidth: availableWidth, insets: insets, spacing: spacing)
+            let gaps = CGFloat(columns - 1) * spacing
+            return floor((availableWidth - insets - gaps) / CGFloat(columns))
+        }
     }
 }
 
@@ -98,9 +132,19 @@ enum TonoCoachPalette {
     }
 }
 
+class TonoMinimumHitTargetButton: UIButton {
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        guard !isHidden, isUserInteractionEnabled, alpha > 0.01 else { return false }
+        let minimum = TonoKeyboardMetrics.ControlGeometry.minimumTouchTarget
+        let dx = max(0, (minimum - bounds.width) / 2)
+        let dy = max(0, (minimum - bounds.height) / 2)
+        return bounds.insetBy(dx: -dx, dy: -dy).contains(point)
+    }
+}
+
 /// Stateful semantic Coach control. It centralizes normal, pressed and disabled
 /// presentation so Coach actions cannot drift back to generic system blue.
-final class TonoCoachButton: UIButton {
+final class TonoCoachButton: TonoMinimumHitTargetButton {
     override init(frame: CGRect) {
         super.init(frame: frame)
         adjustsImageWhenHighlighted = false

@@ -118,6 +118,9 @@
 		870000000000000000000001 /* TonoKeyboardVisualStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 870000000000000000000004 /* TonoKeyboardVisualStyle.swift */; };
 		870000000000000000000002 /* TonoKeyboardVisualStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 870000000000000000000004 /* TonoKeyboardVisualStyle.swift */; };
 		870000000000000000000003 /* KeyboardVisualStyleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 870000000000000000000005 /* KeyboardVisualStyleTests.swift */; };
+		920000000000000000000011 /* BuildNumberGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 920000000000000000000010 /* BuildNumberGuardTests.swift */; };
+		920000000000000000000021 /* KeyboardControlGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 920000000000000000000020 /* KeyboardControlGeometryTests.swift */; };
+		920000000000000000000031 /* CoachSpellingHostSessionContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 920000000000000000000030 /* CoachSpellingHostSessionContractTests.swift */; };
 		FD395AA136FAAF23914CA72A /* TonoCoachClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EE5759E683FD2ECA633D8FC /* TonoCoachClient.swift */; };
 		FE1397E60BD23EA5225588DB /* MetricKitReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 640260545EC970E83D72B3B0 /* MetricKitReporter.swift */; };
 		FED5706B3648E7E30CC10E3E /* FeatureFlags.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8F4E5BEB850F3FDD9485F10 /* FeatureFlags.swift */; };
@@ -222,6 +225,9 @@
 		860000000000000000000003 /* CoachContractTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CoachContractTests.swift; sourceTree = "<group>"; };
 		870000000000000000000004 /* TonoKeyboardVisualStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoKeyboardVisualStyle.swift; sourceTree = "<group>"; };
 		870000000000000000000005 /* KeyboardVisualStyleTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = KeyboardVisualStyleTests.swift; sourceTree = "<group>"; };
+		920000000000000000000010 /* BuildNumberGuardTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BuildNumberGuardTests.swift; sourceTree = "<group>"; };
+		920000000000000000000020 /* KeyboardControlGeometryTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = KeyboardControlGeometryTests.swift; sourceTree = "<group>"; };
+		920000000000000000000030 /* CoachSpellingHostSessionContractTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CoachSpellingHostSessionContractTests.swift; sourceTree = "<group>"; };
 		B3861F3AF2390477CF4D567E /* CoachDraftIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachDraftIntent.swift; sourceTree = "<group>"; };
 		B44BF0A224058437A1D2B6CB /* OnboardingEntryPointsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = OnboardingEntryPointsView.swift; sourceTree = "<group>"; };
 		B88FDB62F52944069CC31478 /* CoachView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachView.swift; sourceTree = "<group>"; };
@@ -292,6 +298,9 @@
 				045FE2F8B15471B8BFD56595 /* ContactsAccessTests.swift */,
 				860000000000000000000003 /* CoachContractTests.swift */,
 				870000000000000000000005 /* KeyboardVisualStyleTests.swift */,
+				920000000000000000000010 /* BuildNumberGuardTests.swift */,
+				920000000000000000000020 /* KeyboardControlGeometryTests.swift */,
+				920000000000000000000030 /* CoachSpellingHostSessionContractTests.swift */,
 				8A0000000000000000000006 /* LiveToneCoreTests.swift */,
 				8A0000000000000000000007 /* LiveTonePrivacyTests.swift */,
 				850000000000000000000005 /* SpellingCorrectionTests.swift */,
@@ -668,6 +677,9 @@
 				860000000000000000000002 /* TonoCoachClient.swift in Sources */,
 				870000000000000000000002 /* TonoKeyboardVisualStyle.swift in Sources */,
 				870000000000000000000003 /* KeyboardVisualStyleTests.swift in Sources */,
+				920000000000000000000011 /* BuildNumberGuardTests.swift in Sources */,
+				920000000000000000000021 /* KeyboardControlGeometryTests.swift in Sources */,
+				920000000000000000000031 /* CoachSpellingHostSessionContractTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -940,6 +952,7 @@
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -991,6 +1004,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tonoit.app.tests;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = TONO_BUILD92_HOSTSESSION;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Tono.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Tono";
@@ -1007,6 +1021,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tonoit.app.tests;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = TONO_BUILD92_HOSTSESSION;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Tono.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Tono";

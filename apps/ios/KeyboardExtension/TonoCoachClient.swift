@@ -38,9 +38,35 @@
 
 import Foundation
 
-/// Immutable request-time text range. A rewrite is permitted only while the
-/// same visible document is present; caret-only moves are handled by returning
-/// to the captured range, while any edit fails closed.
+/// Identifies the host/editing session a keyboard authorization was captured
+/// in. Text alone is not a safe key: two hosts — or two focused fields in one
+/// host — can hold identical text, so a rewrite or suggestion authorized in one
+/// session must not apply after a switch to another. `.unbound` is the sentinel
+/// for callers that do not scope by host (unit contracts exercising only the
+/// text math); two `.unbound` identities compare equal.
+struct HostSessionIdentity: Equatable {
+    let host: String
+    let session: Int
+
+    static let unbound = HostSessionIdentity(host: "", session: 0)
+}
+
+/// Privacy-safe production identity builder. `UITextDocumentProxy` exposes a
+/// per-document UUID; using it closes the identical-text/same-trait focus-switch
+/// hole without learning or persisting the host application's bundle id.
+struct HostSessionIdentityFactory {
+    static func make(documentIdentifier: UUID?, traitSignature: String, session: Int) -> HostSessionIdentity {
+        HostSessionIdentity(
+            host: documentIdentifier.map { "document:\($0.uuidString)" } ?? "traits:\(traitSignature)",
+            session: session
+        )
+    }
+}
+
+/// Immutable request-time text range bound to the host/session it was captured
+/// in. A rewrite is permitted only while the same visible document is present
+/// in the same host/session; caret-only moves are handled by returning to the
+/// captured range, while any edit — or a same-content host switch — fails closed.
 struct CoachRewriteTarget: Equatable {
     struct MutationPlan: Equatable {
         let initialCursorOffset: Int
@@ -54,8 +80,13 @@ struct CoachRewriteTarget: Equatable {
     private let after: String
     private let draftEndOffset: Int
     private let trailingWhitespaceCount: Int
+    private let host: HostSessionIdentity
 
-    static func capture(before: String, after: String) -> Self? {
+    static func capture(
+        before: String,
+        after: String,
+        host: HostSessionIdentity = .unbound
+    ) -> Self? {
         guard let first = before.firstIndex(where: { !$0.isWhitespace }),
               let last = before.lastIndex(where: { !$0.isWhitespace }) else { return nil }
         let end = before.index(after: last)
@@ -65,11 +96,21 @@ struct CoachRewriteTarget: Equatable {
             before: before,
             after: after,
             draftEndOffset: before.distance(from: before.startIndex, to: end),
-            trailingWhitespaceCount: before.distance(from: end, to: before.endIndex)
+            trailingWhitespaceCount: before.distance(from: end, to: before.endIndex),
+            host: host
         )
     }
 
-    func mutationPlan(liveBefore: String, liveAfter: String, replacement: String) -> MutationPlan? {
+    func mutationPlan(
+        liveBefore: String,
+        liveAfter: String,
+        replacement: String,
+        host: HostSessionIdentity = .unbound
+    ) -> MutationPlan? {
+        // Reject a stale callback arriving after a same-content host/session
+        // switch: the visible text can be byte-identical yet belong to a
+        // different host, so the captured identity must match too.
+        guard host == self.host else { return nil }
         guard liveBefore + liveAfter == before + after else { return nil }
         return MutationPlan(
             initialCursorOffset: draftEndOffset - liveBefore.count,
@@ -77,6 +118,10 @@ struct CoachRewriteTarget: Equatable {
             insertion: replacement,
             finalCursorOffset: trailingWhitespaceCount
         )
+    }
+
+    func isCurrent(liveBefore: String, liveAfter: String, host: HostSessionIdentity) -> Bool {
+        host == self.host && liveBefore + liveAfter == before + after
     }
 
     /// Re-validates the exact caret position after the host has been asked to
@@ -163,22 +208,27 @@ public final class TonoCoachClient {
 
     public let endpoint: URL
     public let timeout: TimeInterval
+    private let session: URLSession
 
-    public init(endpoint: String, timeout: TimeInterval) {
+    public init(endpoint: String, timeout: TimeInterval, session: URLSession = .shared) {
         // The endpoint string is fixed by the build configuration, so we
         // trust the caller — but we still guard so a future regression
         // can't crash on a bad constant.
         self.endpoint = URL(string: endpoint) ?? URL(string: "https://api.tonoit.com/v1/analyze")!
         self.timeout = timeout
+        self.session = session
     }
 
     // MARK: - Public entry point
 
-    /// Fire a Coach request. The completion is invoked on the main queue.
+    /// Fire a Coach request. The completion is invoked on the main queue. The
+    /// retained task is returned so the controller can cancel it at every
+    /// editing-session boundary instead of merely ignoring late callbacks.
+    @discardableResult
     public func coach(
         draft: String,
         completion: @escaping (Result<CoachResponse, CoachError>) -> Void
-    ) {
+    ) -> URLSessionDataTask? {
         var req = URLRequest(url: endpoint)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -193,10 +243,10 @@ public final class TonoCoachClient {
             req.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
         } catch {
             DispatchQueue.main.async { completion(.failure(.decoding("encode body: \(error.localizedDescription)"))) }
-            return
+            return nil
         }
 
-        let task = URLSession.shared.dataTask(with: req) { data, response, error in
+        let task = session.dataTask(with: req) { data, response, error in
             if let urlErr = error as? URLError {
                 if urlErr.code == .timedOut {
                     DispatchQueue.main.async { completion(.failure(.timeout)) }
@@ -227,6 +277,7 @@ public final class TonoCoachClient {
             }
         }
         task.resume()
+        return task
     }
 
     // MARK: - Pure decoder (testable without UIKit / URLSession)

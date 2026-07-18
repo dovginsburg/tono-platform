@@ -10,7 +10,7 @@
 //     an accessible semantic-violet Coach action, and no build-number label.
 //   * One delete in row 3; conventional mode/emoji/space/return bottom row;
 //     the globe is created only when `needsInputModeSwitchKey` requires it.
-//   * Lazy 8-column UICollectionView emoji grid with reusable cells, compact
+//   * Lazy adaptive-column UICollectionView emoji grid with reusable cells, compact
 //     spacing, substantial category datasets, repeated insertion, and recents.
 //   * Monochrome SF Symbols category strip for Recents, Smileys, People,
 //     Animals, Food, Activities, Travel, Objects, Symbols, and Flags.
@@ -68,7 +68,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
         // Bottom-row widths — match the visible iOS layout.
         static let modeToggleWidth: CGFloat = 46
-        static let emojiButtonWidth: CGFloat = 42
+        static let emojiButtonWidth: CGFloat = TonoKeyboardMetrics.ControlGeometry.emojiToggleWidth
         static let backspaceWidth: CGFloat = 54
         static let returnWidth: CGFloat = 72
 
@@ -82,9 +82,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         static let deleteRepeatMinimumInterval: TimeInterval = 0.055
 
         // Emoji panel sizing.
-        static let emojiCellsPerRow: Int = 8
-        static let emojiCategoryTabHeight: CGFloat = 28
-        static let emojiPanelFooterHeight: CGFloat = 38
+        static let emojiCategoryTabHeight: CGFloat = TonoKeyboardMetrics.ControlGeometry.emojiCategoryTabHeight
+        static let emojiPanelFooterHeight: CGFloat = TonoKeyboardMetrics.ControlGeometry.emojiPanelFooterHeight
         static let emojiCellReuseIdentifier = "TonoEmojiCell"
 
         // Accessibility identifiers. Each is also written into the
@@ -257,6 +256,33 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     private var coachRewriteTarget: CoachRewriteTarget?
     private var coachRequestID: UUID?
+    private var coachTask: URLSessionDataTask?
+
+    /// Monotonic host/editing-session serial. It advances at every lifecycle
+    /// boundary where the editing context may have changed (appear, disappear,
+    /// host-configuration change) so an authorization captured in one session
+    /// is not honored after a switch even when the visible text is identical.
+    private var hostSessionSerial = 0
+
+    /// Current host/editing-session identity: a privacy-safe host-configuration
+    /// signature (no bundle id, no message text) plus the session serial.
+    private var currentHostSession: HostSessionIdentity {
+        let signature: String
+        if let c = hostConfiguration {
+            signature = "\(c.keyboardType).\(c.returnKeyType).\(c.keyboardAppearance).\(c.autocapitalizationType).\(c.autocorrectionType).\(c.spellCheckingType)"
+        } else {
+            signature = ""
+        }
+        return HostSessionIdentityFactory.make(
+            documentIdentifier: textDocumentProxy.documentIdentifier,
+            traitSignature: signature,
+            session: hostSessionSerial
+        )
+    }
+
+    private func advanceHostSession() {
+        hostSessionSerial &+= 1
+    }
 
     private var keysStack: UIStackView?
     private var coachContainer: UIView?
@@ -284,6 +310,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private var emojiPanelView: UIView?
     private var emojiActiveCategory: EmojiCategory = .smileys
     private var emojiCollectionView: UICollectionView?
+    private weak var emojiCategoryStack: UIStackView?
     private var emojiVisibleGlyphs: [String] = []
     private let spellingService = SpellingCorrectionService()
     private var spellingDecision: SpellingDecision?
@@ -331,12 +358,19 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     public override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         NSLog("TONO_KB BUILD86 04: viewDidAppear")
+        advanceHostSession()
         refreshHostConfigurationIfNeeded()
         applyAutoCapitalizationIfNeeded()
         refreshSpellingSuggestions()
     }
 
     public override func textDidChange(_ textInput: UITextInput?) {
+        // A proxy notification is also the only lifecycle signal iOS guarantees
+        // for a same-trait field/document focus switch. Advance even when the
+        // visible text is identical, then invalidate previous authorization.
+        advanceHostSession()
+        invalidateCoachWork(restoreKeyboard: true)
+        spellingService.cancel()
         refreshHostConfigurationIfNeeded()
         DispatchQueue.main.async { [weak self] in
             self?.refreshHostConfigurationIfNeeded()
@@ -382,16 +416,22 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     public override func viewWillDisappear(_ animated: Bool) {
+        advanceHostSession()
+        invalidateCoachWork(restoreKeyboard: false)
+        spellingService.cancel()
         cancelTransientInteractions()
         super.viewWillDisappear(animated)
     }
 
     public override func viewDidDisappear(_ animated: Bool) {
+        invalidateCoachWork(restoreKeyboard: false)
+        spellingService.cancel()
         cancelTransientInteractions()
         super.viewDidDisappear(animated)
     }
 
     deinit {
+        coachTask?.cancel()
         spellingService.cancel()
         cancelDeleteRepeat()
         dismissKeyPreview()
@@ -406,6 +446,22 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private func cancelTransientInteractions() {
         cancelDeleteRepeat()
         dismissKeyPreview()
+    }
+
+    private func invalidateCoachWork(restoreKeyboard: Bool, clearTarget: Bool = true) {
+        coachTask?.cancel()
+        coachTask = nil
+        coachRequestID = nil
+        if clearTarget { coachRewriteTarget = nil }
+        coachBusy = false
+        coachButton?.isEnabled = true
+        guard restoreKeyboard, coachContainer != nil, keysInstalled, !isRebuildingLayout else { return }
+        coachContainer?.removeFromSuperview()
+        coachContainer = nil
+        coachResultsStack = nil
+        coachErrorContainer = nil
+        coachErrorLabel = nil
+        installKeyboardLayout()
     }
 
     // MARK: - Minimal Coach bar
@@ -437,7 +493,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         candidates.accessibilityIdentifier = Const.idCandidates
         bar.addSubview(candidates)
         for index in 0..<3 {
-            let button = UIButton(type: .system)
+            let button = TonoMinimumHitTargetButton(type: .system)
             button.tag = index
             button.titleLabel?.font = UIFontMetrics(forTextStyle: .caption1).scaledFont(
                 for: .systemFont(ofSize: 13, weight: .regular)
@@ -543,6 +599,11 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         let next = currentHostConfiguration
         guard previous != next else { return }
         hostConfiguration = next
+        advanceHostSession()
+        if previous != nil {
+            invalidateCoachWork(restoreKeyboard: true)
+            spellingService.cancel()
+        }
         applyKeyboardAppearance(hostKeyboardAppearance)
 
         if previous?.keyboardType != next.keyboardType {
@@ -999,7 +1060,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         let button = makeControlButton(
             title: character,
             action: #selector(quickCharacterTapped(_:)),
-            width: 32,
+            width: TonoKeyboardMetrics.ControlGeometry.quickCharacterWidth,
             bg: keyboardKeyBackground(.secondary),
             id: "quick.\(character)"
         )
@@ -1307,7 +1368,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         }
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         let after = textDocumentProxy.documentContextAfterInput ?? ""
-        guard let token = SpellingToken.current(before: before, after: after) else {
+        guard let token = SpellingToken.current(before: before, after: after, host: currentHostSession) else {
             spellingService.cancel()
             spellingDecision = nil
             spellingToken = nil
@@ -1329,7 +1390,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             guard let self = self else { return }
             let live = SpellingToken.current(
                 before: self.textDocumentProxy.documentContextBeforeInput ?? "",
-                after: self.textDocumentProxy.documentContextAfterInput ?? ""
+                after: self.textDocumentProxy.documentContextAfterInput ?? "",
+                host: self.currentHostSession
             )
             guard live == token else { return }
             self.spellingDecision = decision
@@ -1375,7 +1437,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
               let plan = SpellingMutationPlan.candidate(
                 liveToken: SpellingToken.current(
                     before: textDocumentProxy.documentContextBeforeInput ?? "",
-                    after: textDocumentProxy.documentContextAfterInput ?? ""
+                    after: textDocumentProxy.documentContextAfterInput ?? "",
+                    host: currentHostSession
                 ),
                 expected: expected,
                 replacement: value
@@ -1390,7 +1453,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     private func commitBoundary(_ boundary: String) {
         let live = SpellingToken.current(
-            in: textDocumentProxy.documentContextBeforeInput ?? ""
+            in: textDocumentProxy.documentContextBeforeInput ?? "",
+            host: currentHostSession
         )
         let plan = SpellingMutationPlan.boundary(
             liveToken: live,
@@ -1612,6 +1676,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         emojiPanelView?.removeFromSuperview()
         emojiPanelView = nil
         emojiCollectionView = nil
+        emojiCategoryStack = nil
         preferredHeightConstraint?.constant = currentVisualMetrics.preferredContentHeight
 
         keysStack?.removeFromSuperview()
@@ -1634,19 +1699,29 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             panel.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
 
-        // Top: category tabs.
+        // Top: horizontally scrollable category tabs. Ten 44pt tabs cannot fit
+        // side-by-side on compact phones, so scrolling preserves honest hit
+        // targets rather than compressing them below the minimum.
+        let tabsScroll = UIScrollView()
+        tabsScroll.translatesAutoresizingMaskIntoConstraints = false
+        tabsScroll.showsHorizontalScrollIndicator = false
+        tabsScroll.alwaysBounceHorizontal = true
+        panel.addSubview(tabsScroll)
+
         let tabsRow = UIStackView()
         tabsRow.axis = .horizontal
         tabsRow.alignment = .fill
-        tabsRow.distribution = .fillEqually
+        tabsRow.distribution = .fill
         tabsRow.spacing = 0
         tabsRow.translatesAutoresizingMaskIntoConstraints = false
         tabsRow.accessibilityIdentifier = Const.idEmojiCategory
-        panel.addSubview(tabsRow)
+        tabsScroll.addSubview(tabsRow)
         for category in EmojiCategory.allCases {
             let tab = makeEmojiCategoryTab(category)
+            tab.widthAnchor.constraint(greaterThanOrEqualToConstant: TonoKeyboardMetrics.ControlGeometry.emojiCategoryTabWidth).isActive = true
             tabsRow.addArrangedSubview(tab)
         }
+        emojiCategoryStack = tabsRow
 
         // Body: dense, memory-safe reusable grid. Only visible cells exist.
         let flow = UICollectionViewFlowLayout()
@@ -1723,14 +1798,19 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         footer.addArrangedSubview(emojiReturn)
 
         NSLayoutConstraint.activate([
-            tabsRow.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
-            tabsRow.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
-            tabsRow.topAnchor.constraint(equalTo: panel.topAnchor),
-            tabsRow.heightAnchor.constraint(equalToConstant: Const.emojiCategoryTabHeight),
+            tabsScroll.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
+            tabsScroll.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
+            tabsScroll.topAnchor.constraint(equalTo: panel.topAnchor),
+            tabsScroll.heightAnchor.constraint(equalToConstant: Const.emojiCategoryTabHeight),
+            tabsRow.leadingAnchor.constraint(equalTo: tabsScroll.contentLayoutGuide.leadingAnchor),
+            tabsRow.trailingAnchor.constraint(equalTo: tabsScroll.contentLayoutGuide.trailingAnchor),
+            tabsRow.topAnchor.constraint(equalTo: tabsScroll.contentLayoutGuide.topAnchor),
+            tabsRow.bottomAnchor.constraint(equalTo: tabsScroll.contentLayoutGuide.bottomAnchor),
+            tabsRow.heightAnchor.constraint(equalTo: tabsScroll.frameLayoutGuide.heightAnchor),
 
             collection.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
             collection.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
-            collection.topAnchor.constraint(equalTo: tabsRow.bottomAnchor),
+            collection.topAnchor.constraint(equalTo: tabsScroll.bottomAnchor),
             collection.bottomAnchor.constraint(equalTo: footer.topAnchor),
 
             footer.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
@@ -1753,6 +1833,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         emojiPanelView?.removeFromSuperview()
         emojiPanelView = nil
         emojiCollectionView = nil
+        emojiCategoryStack = nil
         emojiVisibleGlyphs = []
         isEmojiPanelVisible = false
         installKeyboardLayout()
@@ -1760,7 +1841,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     private func makeEmojiCategoryTab(_ category: EmojiCategory) -> UIButton {
-        let b = UIButton(type: .system)
+        let b = TonoMinimumHitTargetButton(type: .system)
         b.setImage(UIImage(systemName: category.symbolName), for: .normal)
         b.imageView?.contentMode = .scaleAspectFit
         let isActive = (category == emojiActiveCategory)
@@ -1780,9 +1861,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     private func emojiCategoryTapped(_ category: EmojiCategory) {
-        guard let panel = emojiPanelView, let collection = emojiCollectionView else { return }
+        guard emojiPanelView != nil, let collection = emojiCollectionView else { return }
         emojiActiveCategory = category
-        if let tabsRow = panel.subviews.first(where: { $0.accessibilityIdentifier == Const.idEmojiCategory }) as? UIStackView {
+        if let tabsRow = emojiCategoryStack {
             for (idx, sub) in tabsRow.arrangedSubviews.enumerated() {
                 if let b = sub as? UIButton, let cat = EmojiCategory(rawValue: idx) {
                     let isActive = (cat == emojiActiveCategory)
@@ -1828,9 +1909,14 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     ) -> CGSize {
         let flow = collectionViewLayout as! UICollectionViewFlowLayout
         let horizontalInsets = flow.sectionInset.left + flow.sectionInset.right
-        let gaps = CGFloat(Const.emojiCellsPerRow - 1) * flow.minimumInteritemSpacing
-        let width = floor((collectionView.bounds.width - horizontalInsets - gaps) / CGFloat(Const.emojiCellsPerRow))
-        return CGSize(width: width, height: 34)
+        let columns = TonoKeyboardMetrics.ControlGeometry.emojiGridColumns(
+            availableWidth: collectionView.bounds.width,
+            insets: horizontalInsets,
+            spacing: flow.minimumInteritemSpacing
+        )
+        let gaps = CGFloat(columns - 1) * flow.minimumInteritemSpacing
+        let width = floor((collectionView.bounds.width - horizontalInsets - gaps) / CGFloat(columns))
+        return CGSize(width: width, height: TonoKeyboardMetrics.ControlGeometry.emojiResultCellHeight)
     }
 
     public func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
@@ -1878,7 +1964,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         let proxy = textDocumentProxy
         guard let target = CoachRewriteTarget.capture(
             before: proxy.documentContextBeforeInput ?? "",
-            after: proxy.documentContextAfterInput ?? ""
+            after: proxy.documentContextAfterInput ?? "",
+            host: currentHostSession
         ) else {
             presentCoachEmptyState()
             return
@@ -1920,6 +2007,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     private func runCoach(draft: String) {
+        invalidateCoachWork(restoreKeyboard: false, clearTarget: false)
         cancelTransientInteractions()
         coachBusy = true
         coachButton?.isEnabled = false
@@ -1928,9 +2016,17 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         let requestID = UUID()
         coachRequestID = requestID
         NSLog("TONO_KB BUILD86 coach: begin POST /v1/analyze (len=\(draft.count))")
-        client.coach(draft: draft) { [weak self] result in
+        coachTask = client.coach(draft: draft) { [weak self] result in
             DispatchQueue.main.async {
-                guard let self = self, self.coachRequestID == requestID else { return }
+                guard let self = self,
+                      self.coachRequestID == requestID,
+                      let target = self.coachRewriteTarget,
+                      target.isCurrent(
+                        liveBefore: self.textDocumentProxy.documentContextBeforeInput ?? "",
+                        liveAfter: self.textDocumentProxy.documentContextAfterInput ?? "",
+                        host: self.currentHostSession
+                      ) else { return }
+                self.coachTask = nil
                 self.coachRequestID = nil
                 self.coachBusy = false
                 self.coachButton?.isEnabled = true
@@ -2025,7 +2121,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         title.accessibilityIdentifier = Const.idRiskBadge
         panel.addSubview(title)
 
-        let back = UIButton(type: .system)
+        let back = TonoMinimumHitTargetButton(type: .system)
         back.setTitle("Back", for: .normal)
         back.titleLabel?.font = .systemFont(ofSize: 14, weight: .semibold)
         back.translatesAutoresizingMaskIntoConstraints = false
@@ -2064,7 +2160,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
             back.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -12),
             back.centerYAnchor.constraint(equalTo: title.centerYAnchor),
-            back.heightAnchor.constraint(greaterThanOrEqualToConstant: 32),
+            back.heightAnchor.constraint(greaterThanOrEqualToConstant: TonoKeyboardMetrics.ControlGeometry.coachBackControlHeight),
+            back.widthAnchor.constraint(greaterThanOrEqualToConstant: TonoKeyboardMetrics.ControlGeometry.coachBackControlWidth),
 
             stack.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
@@ -2155,7 +2252,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
               let plan = target.mutationPlan(
             liveBefore: originalBefore,
             liveAfter: originalAfter,
-            replacement: rewrite
+            replacement: rewrite,
+            host: currentHostSession
         ) else {
             NSLog("TONO_KB BUILD86 rewrite: rejected stale or edited draft")
             presentCoachError(.staleDraft)
@@ -2239,7 +2337,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         retry.addTarget(self, action: #selector(retryTapped), for: .touchUpInside)
         panel.addSubview(retry)
 
-        let back = UIButton(type: .system)
+        let back = TonoMinimumHitTargetButton(type: .system)
         back.setTitle("Back", for: .normal)
         back.titleLabel?.font = .systemFont(ofSize: 14, weight: .medium)
         back.translatesAutoresizingMaskIntoConstraints = false
@@ -2257,11 +2355,12 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
             retry.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 12),
             retry.topAnchor.constraint(equalTo: detail.bottomAnchor, constant: 12),
-            retry.heightAnchor.constraint(greaterThanOrEqualToConstant: 36),
+            retry.heightAnchor.constraint(greaterThanOrEqualToConstant: TonoKeyboardMetrics.ControlGeometry.coachBackControlHeight),
 
             back.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -12),
             back.centerYAnchor.constraint(equalTo: retry.centerYAnchor),
-            back.heightAnchor.constraint(greaterThanOrEqualToConstant: 36),
+            back.heightAnchor.constraint(greaterThanOrEqualToConstant: TonoKeyboardMetrics.ControlGeometry.coachBackControlHeight),
+            back.widthAnchor.constraint(greaterThanOrEqualToConstant: TonoKeyboardMetrics.ControlGeometry.coachBackControlWidth),
         ])
 
         coachContainer = panel
@@ -2275,7 +2374,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachErrorLabel = nil
         guard let target = CoachRewriteTarget.capture(
             before: textDocumentProxy.documentContextBeforeInput ?? "",
-            after: textDocumentProxy.documentContextAfterInput ?? ""
+            after: textDocumentProxy.documentContextAfterInput ?? "",
+            host: currentHostSession
         ) else {
             presentCoachEmptyState()
             return
@@ -2287,7 +2387,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
 /// Shared keycap press treatment. It changes in the same event frame as
 /// UIButton's highlighted state and always restores on UIKit cancellation.
-private final class KeyboardButton: UIButton {
+private final class KeyboardButton: TonoMinimumHitTargetButton {
     var accessibilityActivationHandler: (() -> Bool)?
     var normalBackgroundColor: UIColor? {
         didSet { if !isHighlighted { backgroundColor = normalBackgroundColor } }
