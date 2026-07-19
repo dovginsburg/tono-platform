@@ -341,12 +341,14 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         updateHostConfiguration(rebuildIfNeeded: false)
         installKeyboardLayout()
         keysInstalled = true
+        #if !TONO_BUILD92_HOSTSESSION
         requestSupplementaryLexicon { [weak self] lexicon in
             let words = Set(lexicon.entries.lazy.flatMap { [$0.userInput, $0.documentText] })
             self?.spellingService.updateSupplementaryWords(words)
             self?.refreshSpellingSuggestions()
         }
         refreshSpellingSuggestions()
+        #endif
         NSLog("TONO_KB BUILD86 02: UIKit hierarchy installed")
     }
 

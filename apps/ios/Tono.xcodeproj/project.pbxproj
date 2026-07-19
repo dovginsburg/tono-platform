@@ -121,6 +121,7 @@
 		920000000000000000000011 /* BuildNumberGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 920000000000000000000010 /* BuildNumberGuardTests.swift */; };
 		920000000000000000000021 /* KeyboardControlGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 920000000000000000000020 /* KeyboardControlGeometryTests.swift */; };
 		920000000000000000000031 /* CoachSpellingHostSessionContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 920000000000000000000030 /* CoachSpellingHostSessionContractTests.swift */; };
+		920000000000000000000041 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA287EC754705B7065C31935 /* KeyboardViewController.swift */; };
 		FD395AA136FAAF23914CA72A /* TonoCoachClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EE5759E683FD2ECA633D8FC /* TonoCoachClient.swift */; };
 		FE1397E60BD23EA5225588DB /* MetricKitReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 640260545EC970E83D72B3B0 /* MetricKitReporter.swift */; };
 		FED5706B3648E7E30CC10E3E /* FeatureFlags.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8F4E5BEB850F3FDD9485F10 /* FeatureFlags.swift */; };
@@ -680,6 +681,7 @@
 				920000000000000000000011 /* BuildNumberGuardTests.swift in Sources */,
 				920000000000000000000021 /* KeyboardControlGeometryTests.swift in Sources */,
 				920000000000000000000031 /* CoachSpellingHostSessionContractTests.swift in Sources */,
+				920000000000000000000041 /* KeyboardViewController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

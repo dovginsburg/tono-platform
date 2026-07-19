@@ -49,38 +49,44 @@ final class KeyboardControlGeometryTests: XCTestCase {
     @MainActor
     func testActualCompactKeyboardAndEmojiControlsExpose44PointEffectiveTargetsAtAccessibilityType() throws {
         let traits = UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)
-        try traits.performAsCurrent {
-            let controller = KeyboardViewController()
-            controller.loadViewIfNeeded()
-            controller.view.frame = CGRect(x: 0, y: 0, width: 375, height: 320)
-            controller.view.setNeedsLayout()
-            controller.view.layoutIfNeeded()
+        var capturedError: Error?
+        traits.performAsCurrent {
+            do {
+                let controller = KeyboardViewController()
+                controller.loadViewIfNeeded()
+                controller.view.frame = CGRect(x: 0, y: 0, width: 375, height: 320)
+                controller.view.setNeedsLayout()
+                controller.view.layoutIfNeeded()
 
-            try Self.assertEffectiveTargets(in: controller.view, state: "typing")
+                try Self.assertEffectiveTargets(in: controller.view, state: "typing")
 
-            let emoji = try XCTUnwrap(Self.control(identifier: "TonoKB.emojiToggle", in: controller.view) as? UIButton)
-            emoji.sendActions(for: .touchUpInside)
-            controller.view.setNeedsLayout()
-            controller.view.layoutIfNeeded()
-            Self.layoutRecursively(controller.view)
+                let emoji = try XCTUnwrap(Self.control(identifier: "TonoKB.emojiToggle", in: controller.view) as? UIButton)
+                emoji.sendActions(for: .touchUpInside)
+                controller.view.setNeedsLayout()
+                controller.view.layoutIfNeeded()
+                Self.layoutRecursively(controller.view)
 
-            try Self.assertEffectiveTargets(in: controller.view, state: "emoji")
-            let cells = Self.descendants(of: controller.view).compactMap { $0 as? UICollectionViewCell }
-            XCTAssertFalse(cells.isEmpty, "the real emoji collection must lay out visible runtime cells")
-            for cell in cells where !cell.isHidden {
-                XCTAssertGreaterThanOrEqual(cell.bounds.width, Self.minimum)
-                XCTAssertGreaterThanOrEqual(cell.bounds.height, Self.minimum)
-            }
+                try Self.assertEffectiveTargets(in: controller.view, state: "emoji")
+                let cells = Self.descendants(of: controller.view).compactMap { $0 as? UICollectionViewCell }
+                XCTAssertFalse(cells.isEmpty, "the real emoji collection must lay out visible runtime cells")
+                for cell in cells where !cell.isHidden {
+                    XCTAssertGreaterThanOrEqual(cell.bounds.width, Self.minimum)
+                    XCTAssertGreaterThanOrEqual(cell.bounds.height, Self.minimum)
+                }
 
-            let tabs = Self.descendants(of: controller.view)
-                .compactMap { $0 as? UIControl }
-                .filter { $0.accessibilityIdentifier?.hasPrefix("TonoKB.emojiCategory.") == true }
-            XCTAssertEqual(tabs.count, 10, "all ten real category controls must be present in the scroll strip")
-            for tab in tabs {
-                XCTAssertGreaterThanOrEqual(tab.bounds.width, Self.minimum)
-                XCTAssertGreaterThanOrEqual(tab.bounds.height, Self.minimum)
+                let tabs = Self.descendants(of: controller.view)
+                    .compactMap { $0 as? UIControl }
+                    .filter { $0.accessibilityIdentifier?.hasPrefix("TonoKB.emojiCategory.") == true }
+                XCTAssertEqual(tabs.count, 10, "all ten real category controls must be present in the scroll strip")
+                for tab in tabs {
+                    XCTAssertGreaterThanOrEqual(tab.bounds.width, Self.minimum)
+                    XCTAssertGreaterThanOrEqual(tab.bounds.height, Self.minimum)
+                }
+            } catch {
+                capturedError = error
             }
         }
+        if let capturedError { throw capturedError }
     }
 
     @MainActor
@@ -119,4 +125,17 @@ final class KeyboardControlGeometryTests: XCTestCase {
         root.layoutIfNeeded()
         root.subviews.forEach(layoutRecursively)
     }
+}
+
+// The production controller is compiled into TonoTests so this suite exercises
+// its real UIKit hierarchy. It only needs the emoji-recents slice of the shared
+// defaults surface; these test-module definitions avoid pulling unrelated app
+// settings and Keychain dependencies into the unit-test binary.
+enum SharedKeys {
+    static let recipients = "tc.recipients"
+    static let emojiRecents = "tc.emojiRecents"
+}
+
+enum SharedStore {
+    static let defaults = UserDefaults.standard
 }
