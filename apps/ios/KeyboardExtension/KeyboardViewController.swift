@@ -19,6 +19,19 @@
 
 import UIKit
 
+/// Reads the optional Objective-C document identity without invoking Swift's
+/// `UUID._unconditionallyBridgeFromObjectiveC` thunk. UIKit can legitimately
+/// return nil until the keyboard has connected to its host application.
+enum HostDocumentIdentifier {
+    private static let selector = NSSelectorFromString("documentIdentifier")
+
+    static func read(from proxy: UITextDocumentProxy) -> UUID? {
+        let object = proxy as AnyObject
+        guard object.responds(to: selector) else { return nil }
+        return object.value(forKey: "documentIdentifier") as? UUID
+    }
+}
+
 @objc(KeyboardViewController)
 public final class KeyboardViewController: UIInputViewController, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout, UIInputViewAudioFeedback {
 
@@ -274,7 +287,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             signature = ""
         }
         return HostSessionIdentityFactory.make(
-            documentIdentifier: textDocumentProxy.documentIdentifier,
+            documentIdentifier: HostDocumentIdentifier.read(from: textDocumentProxy),
             traitSignature: signature,
             session: hostSessionSerial
         )
@@ -347,8 +360,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             self?.spellingService.updateSupplementaryWords(words)
             self?.refreshSpellingSuggestions()
         }
-        refreshSpellingSuggestions()
         #endif
+        refreshSpellingSuggestions()
         NSLog("TONO_KB BUILD86 02: UIKit hierarchy installed")
     }
 

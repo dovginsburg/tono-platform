@@ -64,9 +64,25 @@ final class CoachSpellingHostSessionContractTests: XCTestCase {
         XCTAssertNotEqual(first, second, "production identity must distinguish identical-text/same-trait documents")
     }
 
+    @MainActor
+    func testProductionControllerInitializationAcceptsUnavailableDocumentIdentifier() {
+        let controller = KeyboardViewController()
+
+        XCTAssertNil(
+            HostDocumentIdentifier.read(from: controller.textDocumentProxy),
+            "a controller that is not connected to a host must expose no document identity"
+        )
+
+        // Exercise the real viewDidLoad path, including its initial production
+        // spelling refresh. This used to trap while Swift bridged the proxy's
+        // nil Objective-C documentIdentifier to UUID.
+        controller.loadViewIfNeeded()
+        XCTAssertTrue(controller.isViewLoaded)
+    }
+
     func testControllerUsesDocumentIdentifierAndInvalidatesOnTextChangeAndDisappearance() throws {
         let source = try Self.source("KeyboardExtension/KeyboardViewController.swift")
-        XCTAssertTrue(source.contains("textDocumentProxy.documentIdentifier"))
+        XCTAssertTrue(source.contains("HostDocumentIdentifier.read(from: textDocumentProxy)"))
         XCTAssertTrue(source.contains("public override func textDidChange"))
         XCTAssertTrue(source.contains("advanceHostSession()\n        invalidateCoachWork(restoreKeyboard: true)"))
         XCTAssertTrue(source.contains("coachTask?.cancel()"))
