@@ -1,0 +1,79 @@
+# RED receipt — tests run BEFORE implementation is present
+# (implementation dir temporarily removed; restored immediately after)
+# date: 2026-07-19T10:17:09Z  python: Python 3.9.6
+
+EEEEE
+======================================================================
+ERROR: tests.test_engine (unittest.loader._FailedTest)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: tests.test_engine
+Traceback (most recent call last):
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/unittest/loader.py", line 436, in _find_test_path
+    module = self._get_module_from_name(name)
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/unittest/loader.py", line 377, in _get_module_from_name
+    __import__(name)
+  File "/Users/dovginsburg/Projects/cloud-t_e971802b/release-control-successor-v4/repo/packages/tonoit-release-control-v4/tests/test_engine.py", line 7, in <module>
+    import tonoit_release_control_v4 as rc
+ModuleNotFoundError: No module named 'tonoit_release_control_v4'
+
+
+======================================================================
+ERROR: tests.test_hostile_gates (unittest.loader._FailedTest)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: tests.test_hostile_gates
+Traceback (most recent call last):
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/unittest/loader.py", line 436, in _find_test_path
+    module = self._get_module_from_name(name)
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/unittest/loader.py", line 377, in _get_module_from_name
+    __import__(name)
+  File "/Users/dovginsburg/Projects/cloud-t_e971802b/release-control-successor-v4/repo/packages/tonoit-release-control-v4/tests/test_hostile_gates.py", line 8, in <module>
+    import tonoit_release_control_v4 as rc
+ModuleNotFoundError: No module named 'tonoit_release_control_v4'
+
+
+======================================================================
+ERROR: tests.test_immutability (unittest.loader._FailedTest)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: tests.test_immutability
+Traceback (most recent call last):
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/unittest/loader.py", line 436, in _find_test_path
+    module = self._get_module_from_name(name)
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/unittest/loader.py", line 377, in _get_module_from_name
+    __import__(name)
+  File "/Users/dovginsburg/Projects/cloud-t_e971802b/release-control-successor-v4/repo/packages/tonoit-release-control-v4/tests/test_immutability.py", line 8, in <module>
+    import tonoit_release_control_v4 as rc
+ModuleNotFoundError: No module named 'tonoit_release_control_v4'
+
+
+======================================================================
+ERROR: tests.test_malformed_models (unittest.loader._FailedTest)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: tests.test_malformed_models
+Traceback (most recent call last):
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/unittest/loader.py", line 436, in _find_test_path
+    module = self._get_module_from_name(name)
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/unittest/loader.py", line 377, in _get_module_from_name
+    __import__(name)
+  File "/Users/dovginsburg/Projects/cloud-t_e971802b/release-control-successor-v4/repo/packages/tonoit-release-control-v4/tests/test_malformed_models.py", line 12, in <module>
+    import tonoit_release_control_v4 as rc
+ModuleNotFoundError: No module named 'tonoit_release_control_v4'
+
+
+======================================================================
+ERROR: tests.test_telemetry_serialize (unittest.loader._FailedTest)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: tests.test_telemetry_serialize
+Traceback (most recent call last):
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/unittest/loader.py", line 436, in _find_test_path
+    module = self._get_module_from_name(name)
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/unittest/loader.py", line 377, in _get_module_from_name
+    __import__(name)
+  File "/Users/dovginsburg/Projects/cloud-t_e971802b/release-control-successor-v4/repo/packages/tonoit-release-control-v4/tests/test_telemetry_serialize.py", line 9, in <module>
+    import tonoit_release_control_v4 as rc
+ModuleNotFoundError: No module named 'tonoit_release_control_v4'
+
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.000s
+
+FAILED (errors=5)

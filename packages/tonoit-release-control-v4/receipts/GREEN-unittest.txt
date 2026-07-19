@@ -1,0 +1,51 @@
+# GREEN receipt — stdlib unittest, AFTER implementation
+# date: 2026-07-19T10:22:50Z  python: Python 3.9.6
+
+test_both_malformed_default_off (tests.test_engine.TestEngineTotality) ... ok
+test_malformed_config_does_not_propagate_indexerror (tests.test_engine.TestEngineTotality) ... ok
+test_malformed_context_does_not_propagate_indexerror (tests.test_engine.TestEngineTotality) ... ok
+test_build_before_schema (tests.test_engine.TestGatePrecedence) ... ok
+test_disabled_default_off (tests.test_engine.TestGatePrecedence) ... ok
+test_happy_path_released (tests.test_engine.TestGatePrecedence) ... ok
+test_is_released_returns_exact_bool (tests.test_engine.TestGatePrecedence) ... ok
+test_kill_switch_beats_everything (tests.test_engine.TestGatePrecedence) ... ok
+test_readiness_before_build (tests.test_engine.TestGatePrecedence) ... ok
+test_schema_before_ttl (tests.test_engine.TestGatePrecedence) ... ok
+test_ttl_expiry (tests.test_engine.TestGatePrecedence) ... ok
+test_zero_rollout_default_off (tests.test_engine.TestGatePrecedence) ... ok
+test_base_exception_not_swallowed_generic (tests.test_hostile_gates.TestBaseExceptionPropagates) ... ok
+test_keyboardinterrupt_not_swallowed (tests.test_hostile_gates.TestBaseExceptionPropagates) ... ok
+test_ordinary_exception_is_swallowed (tests.test_hostile_gates.TestBaseExceptionPropagates) ... ok
+test_systemexit_not_swallowed (tests.test_hostile_gates.TestBaseExceptionPropagates) ... ok
+test_no_grant_api_exposed (tests.test_hostile_gates.TestEntitlementNonGrant) ... ok
+test_no_membership_probe_api_exists (tests.test_hostile_gates.TestEntitlementNonGrant) ... ok
+test_protected_capabilities_readonly_frozenset (tests.test_hostile_gates.TestEntitlementNonGrant) ... ok
+test_callable_field_never_invoked (tests.test_hostile_gates.TestNoBackdoor) ... ok
+test_hostile_key_in_every_position_never_executes (tests.test_hostile_gates.TestNoBackdoor) ... ok
+test_hostile_keys_never_hashed_or_compared (tests.test_hostile_gates.TestNoBackdoor) ... ok
+test_cannot_mutate_tuple_slots (tests.test_immutability.TestImmutability) ... ok
+test_cannot_set_attribute_on_instance (tests.test_immutability.TestImmutability) ... ok
+test_canonical_config_is_valid_and_releasable (tests.test_immutability.TestImmutability) ... ok
+test_capabilities_field_is_frozenset (tests.test_immutability.TestImmutability) ... ok
+test_models_have_no_instance_dict (tests.test_immutability.TestImmutability) ... ok
+test_public_constants_are_immutable_types (tests.test_immutability.TestImmutability) ... ok
+test_no_dunder_all_leaks_private (tests.test_immutability.TestNoRuntimeWiring) ... ok
+test_package_imports_no_network_or_storage_module (tests.test_immutability.TestNoRuntimeWiring) ... ok
+test_canonical_config_is_valid (tests.test_malformed_models.TestMalformedRejected) ... ok
+test_empty_tuple_new_rejected_by_every_validator (tests.test_malformed_models.TestMalformedRejected) ... ok
+test_foreign_tuple_not_falsely_accepted (tests.test_malformed_models.TestMalformedRejected) ... ok
+test_forged_tuples_with_wrong_types_rejected (tests.test_malformed_models.TestMalformedRejected) ... ok
+test_nan_inf_scalars_rejected (tests.test_malformed_models.TestMalformedRejected) ... ok
+test_short_tuples_rejected (tests.test_malformed_models.TestMalformedRejected) ... ok
+test_validators_never_raise_on_hostile_input (tests.test_malformed_models.TestMalformedRejected) ... ok
+test_serialize_malformed_config_never_raises (tests.test_telemetry_serialize.TestSerializeConfig) ... ok
+test_serialize_valid_config_scalar_only_no_echo (tests.test_telemetry_serialize.TestSerializeConfig) ... ok
+test_fresh_telemetry_each_call (tests.test_telemetry_serialize.TestTelemetry) ... ok
+test_telemetry_does_not_echo_caller_strings (tests.test_telemetry_serialize.TestTelemetry) ... ok
+test_telemetry_of_malformed_receipt_never_raises (tests.test_telemetry_serialize.TestTelemetry) ... ok
+test_telemetry_of_valid_receipt_is_finite_scalar_only (tests.test_telemetry_serialize.TestTelemetry) ... ok
+
+----------------------------------------------------------------------
+Ran 43 tests in 0.002s
+
+OK

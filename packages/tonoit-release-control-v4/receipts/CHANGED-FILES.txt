@@ -1,0 +1,36 @@
+# Changed-file manifest (staged against baseline b4cf8b76)
+# date: 2026-07-19T10:44:07Z
+# format: <status>	<path>
+
+A	packages/tonoit-release-control-v4/ADOPTION.md
+A	packages/tonoit-release-control-v4/README.md
+A	packages/tonoit-release-control-v4/ROLLBACK.md
+A	packages/tonoit-release-control-v4/pyproject.toml
+A	packages/tonoit-release-control-v4/receipts/BASELINE-backend-tests.txt
+A	packages/tonoit-release-control-v4/receipts/GREEN-pytest.txt
+A	packages/tonoit-release-control-v4/receipts/GREEN-unittest.txt
+A	packages/tonoit-release-control-v4/receipts/RED-unittest.txt
+A	packages/tonoit-release-control-v4/receipts/SAFETY-DEMO.txt
+A	packages/tonoit-release-control-v4/receipts/VERIFICATION.md
+A	packages/tonoit-release-control-v4/receipts/credential-scan.txt
+A	packages/tonoit-release-control-v4/receipts/git-diff-check.txt
+A	packages/tonoit-release-control-v4/receipts/imported-by-nothing.txt
+A	packages/tonoit-release-control-v4/tests/__init__.py
+A	packages/tonoit-release-control-v4/tests/_helpers.py
+A	packages/tonoit-release-control-v4/tests/test_engine.py
+A	packages/tonoit-release-control-v4/tests/test_hostile_gates.py
+A	packages/tonoit-release-control-v4/tests/test_immutability.py
+A	packages/tonoit-release-control-v4/tests/test_malformed_models.py
+A	packages/tonoit-release-control-v4/tests/test_telemetry_serialize.py
+A	packages/tonoit-release-control-v4/tonoit_release_control_v4/__init__.py
+A	packages/tonoit-release-control-v4/tonoit_release_control_v4/_safety.py
+A	packages/tonoit-release-control-v4/tonoit_release_control_v4/capabilities.py
+A	packages/tonoit-release-control-v4/tonoit_release_control_v4/engine.py
+A	packages/tonoit-release-control-v4/tonoit_release_control_v4/models.py
+A	packages/tonoit-release-control-v4/tonoit_release_control_v4/reasons.py
+A	packages/tonoit-release-control-v4/tonoit_release_control_v4/safety_demo.py
+A	packages/tonoit-release-control-v4/tonoit_release_control_v4/telemetry.py
+A	packages/tonoit-release-control-v4/tonoit_release_control_v4/validators.py
+
+# Total staged files:
+29

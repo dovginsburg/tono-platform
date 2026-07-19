@@ -1,0 +1,5 @@
+# git diff --check (staged) — whitespace & conflict-marker check
+# date: 2026-07-19T10:34:03Z
+
+diff-check-exit=0
+(empty output above = clean)

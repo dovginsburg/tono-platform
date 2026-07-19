@@ -1,0 +1,8 @@
+# Imported-by-nothing check
+# date: 2026-07-19T10:38:36Z
+
+$ git grep -n 'tonoit_release_control_v4' -- ':!packages/tonoit-release-control-v4'
+(exit=1; git grep exits 1 when no matches -> nothing outside the package imports it)
+
+# Also confirm no package/app manifest references it:
+(exit=1; expected: no matches)

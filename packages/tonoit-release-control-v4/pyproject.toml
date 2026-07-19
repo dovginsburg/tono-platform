@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tonoit-release-control-v4"
+version = "4.0.0"
+description = "Inert, stdlib-only, hardened release-control malformed-model successor (v4)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Proprietary" }
+keywords = ["release-control", "feature-flags", "defensive", "inert", "malformed-model"]
+# Deliberately no runtime dependencies: stdlib-only, additive, imported by nothing.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/dovginsburg/tono-platform"
+
+[tool.setuptools]
+packages = ["tonoit_release_control_v4"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

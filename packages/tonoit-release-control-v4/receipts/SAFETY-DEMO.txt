@@ -1,0 +1,19 @@
+# Safety demo — runnable invariant assertions
+# date: 2026-07-19T10:22:50Z
+
+[PASS] empty config rejected
+[PASS] short context rejected
+[PASS] forged receipt rejected
+[PASS] evaluate returns valid receipt
+[PASS] malformed -> not released
+[PASS] is_released default-off
+[PASS] hostile-key config rejected
+[PASS] serialize hostile config safe
+[PASS] callable-field config rejected
+[PASS] released on canonical
+[PASS] telemetry scalar-only
+[PASS] telemetry has no strings
+[PASS] protected capabilities frozen
+
+13/13 invariants held
+demo-exit=0
