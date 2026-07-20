@@ -28,6 +28,8 @@ struct SettingsView: View {
     @State private var liveTonePaused:    Bool       = false
     @State private var liveToneAllowed:   Set<LiveToneHostCategory> = []
     @State private var healthState:       HealthState = .unknown
+    @State private var coachVariants = CoachVariantSettings()
+    private let coachVariantStore = CoachVariantSettingsStore()
 
     // Live Tone control surface (build-90 experiment). A value type over the
     // shared App Group store — writes are visible to the keyboard on its next
@@ -62,6 +64,7 @@ struct SettingsView: View {
                 recipients = RecipientMemory.all()
                 loadFeatureToggles()
                 loadLiveTone()
+                coachVariants = coachVariantStore.load()
                 Task {
                     await runHealthCheck()
                     await refreshUsage()
@@ -396,13 +399,74 @@ struct SettingsView: View {
     }
 
     private var axesSection: some View {
-        Section("Rewrite axes") {
-            ForEach(RewriteAxis.allCases) { axis in
-                Toggle(axis.displayName, isOn: axisBinding(axis))
+        // Build 94 — Safer is mandatory and rendered separately as
+        // "Safer — Always on"; the optional toggle list lives below and is
+        // bounded to three enabled variants. Tapping a fourth when three are
+        // already enabled shows exactly the spec text "Turn one off first (3 max)"
+        // without silently replacing or auto-disabling any selection.
+        Group {
+            Section {
+                Toggle("Safer — Always on", isOn: .constant(true))
+                    .disabled(true)
+                    .accessibilityHint("Always generated first; cannot be turned off")
+            } header: {
+                Text("Required")
+            } footer: {
+                Text("Safer is the mandatory first stage of every Coach request.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
-            Text("Each rewrite differs on exactly one axis. Disable axes you never want.")
-                .font(.caption).foregroundColor(.secondary)
+
+            Section {
+                HStack {
+                    Text("Choose up to 3")
+                    Spacer()
+                    Text("\(coachVariants.selectedCount)/3")
+                        .foregroundColor(.secondary)
+                        .accessibilityLabel("\(coachVariants.selectedCount) of 3 selected")
+                }
+
+                ForEach(CoachOptionalVariant.allCases, id: \.self) { variant in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Toggle(variant.displayName, isOn: coachVariantBinding(variant))
+                            .disabled(!coachVariants.enabled.contains(variant) && !coachVariants.canEnable(variant))
+                            .accessibilityHint(coachVariantAccessibilityHint(variant))
+                        if variant == .custom {
+                            TextField(
+                                "One instruction, up to \(CoachVariantSettings.maximumCustomLength) characters",
+                                text: customInstructionBinding,
+                                axis: .vertical
+                            )
+                            .lineLimit(2...4)
+                            .textInputAutocapitalization(.sentences)
+                            Text("Custom cannot override safety, privacy, entitlement, freshness, or cancellation checks.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            } header: {
+                Text("Optional variants")
+            } footer: {
+                if let hint = fourthToggleHint {
+                    Text(hint)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .accessibilityIdentifier("build94.fourthToggleHint")
+                } else {
+                    Text("Clearer and Funnier are on by default. Affectionate, Professional, Concise, and Custom are off.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
         }
+    }
+
+    /// Spec-exact message shown when the user attempts to enable a fourth
+    /// optional variant while three are already selected. `nil` when no such
+    /// attempt is pending; otherwise the literal text "Turn one off first (3 max)".
+    private var fourthToggleHint: String? {
+        coachVariants.pendingFourthBlocked ? "Turn one off first (3 max)" : nil
     }
 
     // MARK: - Live Tone (build-90 experiment)
@@ -561,15 +625,41 @@ struct SettingsView: View {
         )
     }
 
-    private func axisBinding(_ axis: RewriteAxis) -> Binding<Bool> {
+    private func coachVariantBinding(_ variant: CoachOptionalVariant) -> Binding<Bool> {
         Binding(
-            get: { prefs.axes.contains(axis) },
-            set: { on in
-                if on { if !prefs.axes.contains(axis) { prefs.axes.append(axis) } }
-                else  { prefs.axes.removeAll { $0 == axis } }
-                prefs.save()
+            get: { coachVariants.enabled.contains(variant) },
+            set: { enabled in
+                guard coachVariants.set(variant, enabled: enabled) else { return }
+                coachVariantStore.save(coachVariants)
             }
         )
+    }
+
+    private var customInstructionBinding: Binding<String> {
+        Binding(
+            get: { coachVariants.customInstruction },
+            set: { text in
+                coachVariants.customInstruction = String(text.prefix(CoachVariantSettings.maximumCustomLength))
+                coachVariants.pendingFourthBlocked = false
+                coachVariants.normalize()
+                coachVariantStore.save(coachVariants)
+            }
+        )
+    }
+
+    private func coachVariantAccessibilityHint(_ variant: CoachOptionalVariant) -> String {
+        if coachVariants.enabled.contains(variant) { return "Double tap to deselect" }
+        // Spec-exact hint when a fourth optional toggle is tapped while three
+        // are already selected. Surfaced both in the section footer (as a
+        // visible Text) and as the per-row accessibility hint so VoiceOver
+        // users hear the same message.
+        if coachVariants.selectedCount >= CoachVariantSettings.maximumOptionalCount {
+            return "Turn one off first (3 max)"
+        }
+        if variant == .custom && !coachVariants.isCustomInstructionValid {
+            return "Enter a non-empty Custom instruction before enabling"
+        }
+        return "Double tap to select"
     }
 
     private func refreshUsage() async {

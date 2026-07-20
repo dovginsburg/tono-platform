@@ -16,7 +16,7 @@ import XCTest
 /// build-91 base it fails on the version values (91 ≠ 93), never on a
 /// syntax/type error.
 final class BuildNumberGuardTests: XCTestCase {
-    private static let expectedBuild = "93"
+    private static let expectedBuild = "94"
 
     private static let shippedPlists = [
         "App/Info.plist",
@@ -44,7 +44,7 @@ final class BuildNumberGuardTests: XCTestCase {
             let actual = plist?["CFBundleVersion"] as? String
             XCTAssertEqual(
                 actual, Self.expectedBuild,
-                "\(relative) declares CFBundleVersion \(actual ?? "nil"); build 93 requires \(Self.expectedBuild) across every shipped bundle"
+                "\(relative) declares CFBundleVersion \(actual ?? "nil"); build 94 requires \(Self.expectedBuild) across every shipped bundle"
             )
         }
     }
@@ -66,7 +66,7 @@ final class BuildNumberGuardTests: XCTestCase {
         )
 
         // …and the guard must still cover all four shipped bundles so none can
-        // silently drift off build 93.
+        // silently drift off build 94.
         for relative in Self.shippedPlists {
             XCTAssertTrue(
                 script.contains(relative),

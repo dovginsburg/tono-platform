@@ -128,32 +128,38 @@ enum TonoCoachPalette {
     /// Canonical tonoit.com semantic tokens. The exact accent remains visible
     /// as the card rule/dot; labels use a contrast-safe dynamic companion.
     enum Axis: String, CaseIterable {
-        case warmer, clearer, funnier, safer
+        case safer, clearer, funnier, affectionate, professional, concise, custom
 
         var label: String { rawValue.capitalized }
 
         var accent: UIColor {
             switch self {
-            case .warmer: return UIColor(hexRGB: "F472B6")
+            case .safer: return UIColor(hexRGB: "34D399")
             case .clearer: return UIColor(hexRGB: "38BDF8")
             case .funnier: return UIColor(hexRGB: "FBBF24")
-            case .safer: return UIColor(hexRGB: "34D399")
+            case .affectionate: return UIColor(hexRGB: "F472B6")
+            case .professional: return UIColor(hexRGB: "A78BFA")
+            case .concise: return UIColor(hexRGB: "22D3EE")
+            case .custom: return UIColor(hexRGB: "FB7185")
             }
         }
 
         var accessibleLabel: UIColor {
             let light: UIColor
             switch self {
-            case .warmer: light = UIColor(hexRGB: "9D174D")
+            case .safer: light = UIColor(hexRGB: "065F46")
             case .clearer: light = UIColor(hexRGB: "075985")
             case .funnier: light = UIColor(hexRGB: "92400E")
-            case .safer: light = UIColor(hexRGB: "065F46")
+            case .affectionate: light = UIColor(hexRGB: "9D174D")
+            case .professional: light = UIColor(hexRGB: "5B21B6")
+            case .concise: light = UIColor(hexRGB: "155E75")
+            case .custom: light = UIColor(hexRGB: "9F1239")
             }
             return TonoCoachPalette.dynamic(light: light, dark: accent)
         }
     }
 
-    static let orderedAxes: [Axis] = [.warmer, .clearer, .funnier, .safer]
+    static let orderedAxes: [Axis] = [.safer, .clearer, .funnier, .affectionate, .professional, .concise, .custom]
 
     static func axis(_ rawValue: String) -> Axis? {
         Axis(rawValue: rawValue.lowercased())

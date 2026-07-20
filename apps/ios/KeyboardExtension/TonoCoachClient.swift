@@ -227,6 +227,7 @@ public final class TonoCoachClient {
     @discardableResult
     public func coach(
         draft: String,
+        settings: CoachVariantSettings = CoachVariantSettings(),
         completion: @escaping (Result<CoachResponse, CoachError>) -> Void
     ) -> URLSessionDataTask? {
         var req = URLRequest(url: endpoint)
@@ -235,10 +236,14 @@ public final class TonoCoachClient {
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.timeoutInterval = timeout
 
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "draft": draft,
             "mode":  "coach",
+            "optional_variants": settings.enabled.map(\.rawValue),
         ]
+        if settings.enabled.contains(.custom) {
+            body["custom_instruction"] = settings.customInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         do {
             req.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
         } catch {
@@ -270,7 +275,7 @@ public final class TonoCoachClient {
                 return
             }
             do {
-                let parsed = try TonoCoachClient.decode(bodyData)
+                let parsed = try TonoCoachClient.decode(bodyData, optionalVariants: settings.enabled)
                 DispatchQueue.main.async { completion(.success(parsed)) }
             } catch {
                 DispatchQueue.main.async { completion(.failure(.decoding(error.localizedDescription))) }
@@ -284,7 +289,10 @@ public final class TonoCoachClient {
 
     /// Decode the JSON body of a `/v1/analyze` 200 response.
     /// Throws on malformed payload; returns a `CoachResponse` on success.
-    public static func decode(_ data: Data) throws -> CoachResponse {
+    public static func decode(
+        _ data: Data,
+        optionalVariants: [CoachOptionalVariant] = [.clearer, .funnier]
+    ) throws -> CoachResponse {
         guard let any = try? JSONSerialization.jsonObject(with: data, options: []),
               let dict = any as? [String: Any] else {
             throw NSError(domain: "TonoCoachClient", code: 1, userInfo: [NSLocalizedDescriptionKey: "not a JSON object"])
@@ -309,7 +317,7 @@ public final class TonoCoachClient {
                 riskAfter: raw["risk_after"] as? String
             ))
         }
-        let canonical = try canonicalSuggestions(suggestions)
+        let canonical = try canonicalSuggestions(suggestions, optionalVariants: optionalVariants)
         return CoachResponse(
             riskLevel: riskLevel,
             perception: perception,
@@ -320,11 +328,19 @@ public final class TonoCoachClient {
         )
     }
 
-    /// The keyboard has four fixed semantic result slots. Normalize backend
-    /// casing/whitespace, reject unsupported, blank, duplicate, or missing axes,
-    /// and return exactly one rewrite per axis in stable semantic order.
-    public static func canonicalSuggestions(_ raw: [CoachRewrite]) throws -> [CoachRewrite] {
-        let canonicalAxes = ["warmer", "clearer", "funnier", "safer"]
+    /// Safer is mandatory and committed first. Normalize backend casing and
+    /// whitespace, reject unsupported, blank, duplicate, missing, or unrequested
+    /// axes, then return complete atomic cards in stable settings order.
+    public static func canonicalSuggestions(
+        _ raw: [CoachRewrite],
+        optionalVariants: [CoachOptionalVariant]
+    ) throws -> [CoachRewrite] {
+        let selected = Set(optionalVariants)
+        let stableOptional = CoachOptionalVariant.allCases.filter(selected.contains)
+        guard stableOptional.count <= CoachVariantSettings.maximumOptionalCount else {
+            throw contractError("too many optional variants")
+        }
+        let canonicalAxes = ["safer"] + stableOptional.map(\.rawValue)
         var byAxis: [String: CoachRewrite] = [:]
 
         for rewrite in raw {

@@ -55,6 +55,7 @@ from .analyze import (
     RewriteSuggestion,
     ToneAnalysis,
     mock_analyze,
+    mock_variant_analyze,
     openai_analyze,
     anthropic_analyze,
     build_user_prompt,
@@ -412,6 +413,12 @@ async def v1_analyze(req: AnalyzeRequest, request: Request) -> dict[str, Any]:
         )
     provider = os.environ.get("TONO_PROVIDER", "mock")
     try:
+        if req.optional_variants is not None:
+            # Build 94 is always safer-first Sonnet in production. Mock remains
+            # available for deterministic offline tests; OpenAI is never used.
+            if provider == "mock":
+                return await mock_variant_analyze(req)
+            return await anthropic_analyze(req)
         if provider == "mock":
             return mock_analyze(req)
         if provider == "openai":

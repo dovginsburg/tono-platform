@@ -264,6 +264,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private var preferredHeightConstraint: NSLayoutConstraint?
 
     private var coachRewriteTarget: CoachRewriteTarget?
+    private var coachVariantSettings = CoachVariantSettings()
     private var coachRequestID: UUID?
     private var coachTask: URLSessionDataTask?
 
@@ -2130,11 +2131,12 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachBusy = true
         coachButton?.isEnabled = false
         presentCoachLoading()
+        coachVariantSettings = CoachVariantSettingsStore().load()
         let client = TonoCoachClient(endpoint: Const.backendURL, timeout: Const.coachTimeout)
         let requestID = UUID()
         coachRequestID = requestID
-        NSLog("TONO_KB BUILD86 coach: begin POST /v1/analyze (len=\(draft.count))")
-        coachTask = client.coach(draft: draft) { [weak self] result in
+        NSLog("TONO_KB BUILD94 coach: begin atomic POST /v1/analyze (len=\(draft.count), optional=\(coachVariantSettings.selectedCount))")
+        coachTask = client.coach(draft: draft, settings: coachVariantSettings) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self = self,
                       self.coachRequestID == requestID,
@@ -2150,10 +2152,10 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
                 self.coachButton?.isEnabled = true
                 switch result {
                 case .success(let response):
-                    NSLog("TONO_KB BUILD86 coach: OK risk=\(response.riskLevel) suggestions=\(response.suggestions.count)")
+                    NSLog("TONO_KB BUILD94 coach: OK risk=\(response.riskLevel) suggestions=\(response.suggestions.count)")
                     self.presentCoachResults(response)
                 case .failure(let err):
-                    NSLog("TONO_KB BUILD86 coach: FAIL \(err.userFacingMessage)")
+                    NSLog("TONO_KB BUILD94 coach: FAIL \(err.userFacingMessage)")
                     self.presentCoachError(err)
                 }
             }

@@ -179,7 +179,7 @@ final class KeyboardControlGeometryTests: XCTestCase {
                     perception: "The message may read as abrupt.",
                     subtext: "The recipient may need a clearer request.",
                     reason: "The ask is terse.",
-                    suggestions: TonoCoachPalette.orderedAxes.map { axis in
+                    suggestions: TonoCoachPalette.orderedAxes.prefix(4).map { axis in
                         TonoCoachClient.CoachRewrite(
                             axis: axis.rawValue,
                             text: "A deliberately long \(axis.label.lowercased()) rewrite that wraps to two lines at compact width without clipping accessibility text.",
@@ -221,11 +221,14 @@ final class KeyboardControlGeometryTests: XCTestCase {
     }
 
     func testSemanticCoachAxisOrderAndExactTonoitTokens() {
-        XCTAssertEqual(TonoCoachPalette.orderedAxes.map(\.rawValue), ["warmer", "clearer", "funnier", "safer"])
-        XCTAssertEqual(Self.hex(TonoCoachPalette.Axis.warmer.accent), "F472B6")
+        XCTAssertEqual(
+            TonoCoachPalette.orderedAxes.map(\.rawValue),
+            ["safer", "clearer", "funnier", "affectionate", "professional", "concise", "custom"]
+        )
+        XCTAssertEqual(Self.hex(TonoCoachPalette.Axis.safer.accent), "34D399")
         XCTAssertEqual(Self.hex(TonoCoachPalette.Axis.clearer.accent), "38BDF8")
         XCTAssertEqual(Self.hex(TonoCoachPalette.Axis.funnier.accent), "FBBF24")
-        XCTAssertEqual(Self.hex(TonoCoachPalette.Axis.safer.accent), "34D399")
+        XCTAssertEqual(Self.hex(TonoCoachPalette.Axis.affectionate.accent), "F472B6")
     }
 
     func testOneShotShiftConsumesSynchronouslyAndRejectsStaleRearm() {
@@ -359,7 +362,7 @@ final class KeyboardControlGeometryTests: XCTestCase {
                     perception: "The message may read as abrupt.",
                     subtext: "The recipient may need a clearer request.",
                     reason: "The ask is terse.",
-                    suggestions: TonoCoachPalette.orderedAxes.map { axis in
+                    suggestions: TonoCoachPalette.orderedAxes.prefix(4).map { axis in
                         TonoCoachClient.CoachRewrite(
                             axis: axis.rawValue,
                             text: "A deliberately long hostile QA \(axis.label.lowercased()) rewrite that must remain deterministic after compact-width rotation.",
