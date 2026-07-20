@@ -174,11 +174,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     /// Letter-key shift state. Symbols/numbers ignore shift entirely.
-    enum ShiftState {
-        case lowercase
-        case oneShotUppercase
-        case capsLock
-    }
+    typealias ShiftState = TonoShiftStateMachine.State
 
     private struct HostConfiguration: Equatable {
         let keyboardType: Int
@@ -305,10 +301,12 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private var coachErrorLabel: UILabel?
     private var coachBusy: Bool = false
 
-    // Build 79 — layout, shift, emoji state.
+    // Build 93 — explicit Shift state plus monotonic document-mutation tracking.
     private var layoutMode: KeyboardLayoutMode = .letters
-    private var shiftState: ShiftState = .lowercase
-    private var shiftWasAutomatic = false
+    private var shiftMachine = TonoShiftStateMachine()
+    private var shiftState: ShiftState { shiftMachine.state }
+    private var documentMutationGeneration: UInt64 = 0
+    private var pendingDocumentMutation: TonoPendingDocumentMutation?
     private weak var shiftButton: UIButton?
     private weak var returnButton: UIButton?
     private var hostConfiguration: HostConfiguration?
@@ -387,11 +385,34 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         invalidateCoachWork(restoreKeyboard: true)
         spellingService.cancel()
         refreshHostConfigurationIfNeeded()
+        let liveContext = textDocumentProxy.documentContextBeforeInput ?? ""
+        let pending = pendingDocumentMutation
+        let isExpectedLocalNotification = pending?.canExplain(
+            notificationContext: liveContext
+        ) == true
+        if !isExpectedLocalNotification {
+            documentMutationGeneration &+= 1
+            pendingDocumentMutation = nil
+        }
+        let generation = documentMutationGeneration
+        let effectiveContext: String
+        if isExpectedLocalNotification, let pending, pending.generation == generation {
+            effectiveContext = pending.contextAfter
+        } else {
+            effectiveContext = liveContext
+        }
         DispatchQueue.main.async { [weak self] in
-            self?.refreshHostConfigurationIfNeeded()
-            self?.applyAutoCapitalizationIfNeeded()
-            self?.validateAutocorrectionRecord()
-            self?.refreshSpellingSuggestions()
+            guard let self, self.documentMutationGeneration == generation else { return }
+            self.refreshHostConfigurationIfNeeded()
+            self.applyAutoCapitalizationIfNeeded(
+                context: effectiveContext,
+                callbackGeneration: generation
+            )
+            self.validateAutocorrectionRecord()
+            self.refreshSpellingSuggestions()
+            if self.pendingDocumentMutation?.generation == generation {
+                self.pendingDocumentMutation = nil
+            }
         }
     }
 
@@ -401,9 +422,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         guard width > 0 else { return }
         let changed = lastLayoutWidth.map { abs($0 - width) > 0.5 } ?? true
         lastLayoutWidth = width
-        if coachResultsStack == nil {
-            preferredHeightConstraint?.constant = currentVisualMetrics.preferredContentHeight
-        }
+        preferredHeightConstraint?.constant = currentVisualMetrics.preferredContentHeight
         guard changed, keysInstalled, !isRebuildingLayout, coachContainer == nil else { return }
         if isEmojiPanelVisible { showEmojiPanel() } else { installKeyboardLayout() }
     }
@@ -523,6 +542,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             candidates.addArrangedSubview(button)
         }
         bar.accessibilityElements = candidates.arrangedSubviews + [coach]
+        let approvedCoachWidth = ceil(coach.intrinsicContentSize.width)
+        coach.setContentHuggingPriority(.required, for: .horizontal)
+        coach.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         NSLayoutConstraint.activate([
             bar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -533,6 +555,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             coach.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
             coach.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
             coach.heightAnchor.constraint(equalToConstant: Const.baselineMetrics.coachControlHeight),
+            coach.widthAnchor.constraint(equalToConstant: approvedCoachWidth),
 
             candidates.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 3),
             candidates.trailingAnchor.constraint(equalTo: coach.leadingAnchor, constant: -5),
@@ -799,7 +822,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private func displayLetter(_ ch: String) -> String {
         switch layoutMode {
         case .letters:
-            return shiftState == .lowercase ? ch : ch.uppercased()
+            return shiftMachine.display(ch)
         case .numbers, .symbols:
             return ch
         }
@@ -1196,22 +1219,21 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     @objc private func charTapped(_ sender: UIButton) {
         guard let title = sender.title(for: .normal) else { return }
+        let beforeMutation = effectiveDocumentContextBeforeInput
+        let afterMutation: String
         if isSpellingBoundary(title) {
-            commitBoundary(title)
+            afterMutation = commitBoundary(title, contextBeforeInput: beforeMutation)
         } else {
             autocorrectionRecord = nil
             textDocumentProxy.insertText(title)
+            afterMutation = beforeMutation + title
         }
         playInputClick()
-        if layoutMode == .letters, shiftState == .oneShotUppercase {
-            shiftState = .lowercase
-            shiftWasAutomatic = false
-            updateShiftButtonAppearance()
-        }
-        DispatchQueue.main.async { [weak self] in
-            self?.applyAutoCapitalizationIfNeeded()
-            self?.refreshSpellingSuggestions()
-        }
+        recordDocumentMutation(
+            from: beforeMutation,
+            to: afterMutation,
+            consumingEligibleCapital: layoutMode == .letters ? title : nil
+        )
     }
 
     @objc private func characterTouchDown(_ sender: UIButton) {
@@ -1223,22 +1245,13 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     @objc private func shiftSingleTapped() {
-        shiftWasAutomatic = false
-        switch shiftState {
-        case .capsLock:
-            shiftState = .lowercase
-        case .lowercase:
-            shiftState = .oneShotUppercase
-        case .oneShotUppercase:
-            shiftState = .lowercase
-        }
+        shiftMachine.tapShift()
         relayoutLettersForShift()
         playInputClick()
     }
 
     @objc private func shiftDoubleTapped() {
-        shiftWasAutomatic = false
-        shiftState = shiftState == .capsLock ? .lowercase : .capsLock
+        shiftMachine.doubleTapShift()
         relayoutLettersForShift()
         playInputClick()
     }
@@ -1263,21 +1276,65 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         handleInputModeList(from: sender, with: event)
     }
 
-    private func applyAutoCapitalizationIfNeeded() {
-        guard shiftState != .capsLock else { return }
+    private var effectiveDocumentContextBeforeInput: String {
+        if let pending = pendingDocumentMutation,
+           pending.generation == documentMutationGeneration {
+            return pending.contextAfter
+        }
+        return textDocumentProxy.documentContextBeforeInput ?? ""
+    }
+
+    private func recordDocumentMutation(
+        from contextBefore: String,
+        to contextAfter: String,
+        consumingEligibleCapital text: String? = nil
+    ) {
+        documentMutationGeneration &+= 1
+        let generation = documentMutationGeneration
+        pendingDocumentMutation = TonoPendingDocumentMutation(
+            generation: generation,
+            contextBefore: contextBefore,
+            contextAfter: contextAfter
+        )
+
+        if let text { shiftMachine.consumeEligibleCapital(text) }
+        applyAutoCapitalizationIfNeeded(
+            context: contextAfter,
+            callbackGeneration: generation
+        )
+        relayoutLettersForShift()
+
+        // UIKit may publish textDidChange before UITextDocumentProxy catches up.
+        // A pending mutation is accepted only while the live proxy is either its
+        // known before- or after-context. Any third context is an external host
+        // mutation and advances the generation, invalidating stale callbacks.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.documentMutationGeneration == generation else { return }
+            self.refreshSpellingSuggestions()
+            if self.pendingDocumentMutation?.generation == generation {
+                self.pendingDocumentMutation = nil
+            }
+        }
+    }
+
+    private func applyAutoCapitalizationIfNeeded(
+        context: String? = nil,
+        callbackGeneration: UInt64? = nil
+    ) {
         guard layoutMode == .letters else { return }
-        if shiftState == .oneShotUppercase, !shiftWasAutomatic { return }
-        let before = textDocumentProxy.documentContextBeforeInput ?? ""
+        let generation = callbackGeneration ?? documentMutationGeneration
+        let before = context ?? effectiveDocumentContextBeforeInput
         let shouldCapitalize = automaticCapitalizationRecommended(
             policy: hostAutocapitalizationType,
             context: before
         )
-        let next: ShiftState = shouldCapitalize ? .oneShotUppercase : .lowercase
-        if shiftState != next {
-            shiftState = next
+        if shiftMachine.applyAutomaticCapitalization(
+            recommended: shouldCapitalize,
+            callbackGeneration: generation,
+            documentGeneration: documentMutationGeneration
+        ) {
             relayoutLettersForShift()
         }
-        shiftWasAutomatic = shouldCapitalize
     }
 
     private func automaticCapitalizationRecommended(
@@ -1443,9 +1500,14 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         guard candidateValues.indices.contains(sender.tag) else { return }
         let value = candidateValues[sender.tag]
         if let record = autocorrectionRecord, value == record.original {
-            guard restoreAutocorrection(record, keepBoundary: true) else { return }
+            let beforeMutation = effectiveDocumentContextBeforeInput
+            guard let afterMutation = restoreAutocorrection(
+                record,
+                keepBoundary: true,
+                contextBeforeInput: beforeMutation
+            ) else { return }
             playInputClick()
-            refreshSpellingSuggestions()
+            recordDocumentMutation(from: beforeMutation, to: afterMutation)
             return
         }
         guard let expected = spellingToken,
@@ -1466,9 +1528,12 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         refreshSpellingSuggestions()
     }
 
-    private func commitBoundary(_ boundary: String) {
+    private func commitBoundary(
+        _ boundary: String,
+        contextBeforeInput: String
+    ) -> String {
         let live = SpellingToken.current(
-            in: textDocumentProxy.documentContextBeforeInput ?? "",
+            in: contextBeforeInput,
             host: currentHostSession
         )
         let plan = SpellingMutationPlan.boundary(
@@ -1477,11 +1542,13 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             decision: spellingDecision,
             boundary: boundary
         )
+        let appliedPlan: SpellingMutationPlan
         if plan.deleteCount > 0,
            let live = live,
            let replacement = spellingDecision?.automaticReplacement,
            spellingHostPolicy.allowsSuggestions {
             applySpellingMutation(plan)
+            appliedPlan = plan
             autocorrectionRecord = AutoCorrectionRecord(
                 original: live.text,
                 replacement: replacement,
@@ -1492,9 +1559,23 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             spellingToken = nil
             updateCandidateStrip(values: [live.text])
         } else {
+            let boundaryPlan = SpellingMutationPlan(deleteCount: 0, insertion: boundary)
             autocorrectionRecord = nil
-            applySpellingMutation(SpellingMutationPlan(deleteCount: 0, insertion: boundary))
+            applySpellingMutation(boundaryPlan)
+            appliedPlan = boundaryPlan
         }
+        return contextAfterApplying(appliedPlan, to: contextBeforeInput)
+    }
+
+    private func contextAfterApplying(
+        _ plan: SpellingMutationPlan,
+        to contextBeforeInput: String
+    ) -> String {
+        TonoDocumentContextMutation.applying(
+            deleteCount: plan.deleteCount,
+            insertion: plan.insertion,
+            to: contextBeforeInput
+        )
     }
 
     private func applySpellingMutation(_ plan: SpellingMutationPlan) {
@@ -1517,76 +1598,94 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         }
     }
 
-    private func restoreOriginalAfterBackspaceIfPossible() -> Bool {
-        guard let record = autocorrectionRecord else { return false }
-        return restoreAutocorrection(record, keepBoundary: false)
+    private func restoreOriginalAfterBackspaceIfPossible(
+        contextBeforeInput: String
+    ) -> String? {
+        guard let record = autocorrectionRecord else { return nil }
+        return restoreAutocorrection(
+            record,
+            keepBoundary: false,
+            contextBeforeInput: contextBeforeInput
+        )
     }
 
     private func restoreAutocorrection(
         _ record: AutoCorrectionRecord,
-        keepBoundary: Bool
-    ) -> Bool {
-        let context = textDocumentProxy.documentContextBeforeInput ?? ""
-        guard context.hasSuffix(record.correctedSuffix) else {
+        keepBoundary: Bool,
+        contextBeforeInput: String
+    ) -> String? {
+        guard contextBeforeInput.hasSuffix(record.correctedSuffix) else {
             autocorrectionRecord = nil
-            return false
+            return nil
         }
         for _ in record.correctedSuffix { textDocumentProxy.deleteBackward() }
-        textDocumentProxy.insertText(keepBoundary ? record.restoredText : record.original)
+        let restored = keepBoundary ? record.restoredText : record.original
+        textDocumentProxy.insertText(restored)
         autocorrectionRecord = nil
         spellingDecision = nil
         spellingToken = nil
         updateCandidateStrip(values: keepBoundary ? [] : [record.original])
-        return true
+        return TonoDocumentContextMutation.restoring(
+            correctedSuffix: record.correctedSuffix,
+            restoredText: restored,
+            in: contextBeforeInput
+        )
     }
 
     @objc private func spaceTapped() {
-        let contextSuffix = String(
-            (textDocumentProxy.documentContextBeforeInput ?? "").suffix(8)
-        )
-        if DoubleSpacePolicy.shouldTransform(
+        let beforeMutation = effectiveDocumentContextBeforeInput
+        let contextSuffix = String(beforeMutation.suffix(8))
+        let transformedDoubleSpace = DoubleSpacePolicy.shouldTransform(
             contextSuffix: contextSuffix,
             host: spellingHostPolicy,
             hasPendingAutocorrectionUndo: autocorrectionRecord != nil
-        ) {
+        )
+        let afterMutation: String
+        if transformedDoubleSpace {
             textDocumentProxy.deleteBackward()
             textDocumentProxy.insertText(". ")
             spellingService.cancel()
             spellingDecision = nil
             spellingToken = nil
             updateCandidateStrip(values: [])
+            afterMutation = String(beforeMutation.dropLast()) + ". "
         } else {
-            commitBoundary(" ")
+            afterMutation = commitBoundary(" ", contextBeforeInput: beforeMutation)
         }
         playInputClick()
-        DispatchQueue.main.async { [weak self] in
-            self?.applyAutoCapitalizationIfNeeded()
-            self?.refreshSpellingSuggestions()
-        }
+        recordDocumentMutation(from: beforeMutation, to: afterMutation)
     }
 
     @objc private func quickCharacterTapped(_ sender: UIButton) {
         guard let character = sender.title(for: .normal), !character.isEmpty else { return }
+        let beforeMutation = effectiveDocumentContextBeforeInput
+        let afterMutation: String
         if isSpellingBoundary(character) {
-            commitBoundary(character)
+            afterMutation = commitBoundary(character, contextBeforeInput: beforeMutation)
         } else {
             autocorrectionRecord = nil
             textDocumentProxy.insertText(character)
+            afterMutation = beforeMutation + character
         }
         playInputClick()
-        DispatchQueue.main.async { [weak self] in
-            self?.applyAutoCapitalizationIfNeeded()
-            self?.refreshSpellingSuggestions()
-        }
+        recordDocumentMutation(from: beforeMutation, to: afterMutation)
     }
 
     @objc private func backspaceTouchDown() {
         cancelDeleteRepeat()
-        if !restoreOriginalAfterBackspaceIfPossible() {
+        let beforeMutation = effectiveDocumentContextBeforeInput
+        let afterMutation: String
+        if let restored = restoreOriginalAfterBackspaceIfPossible(
+            contextBeforeInput: beforeMutation
+        ) {
+            afterMutation = restored
+        } else {
             autocorrectionRecord = nil
             textDocumentProxy.deleteBackward()
+            afterMutation = String(beforeMutation.dropLast())
         }
         playInputClick()
+        recordDocumentMutation(from: beforeMutation, to: afterMutation)
         deleteRepeatCount = 0
         let generation = deleteRepeatGeneration
         scheduleDeleteRepeat(after: Const.deleteRepeatInitialDelay, generation: generation)
@@ -1594,16 +1693,22 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     @objc private func backspaceTouchEnded() {
         cancelDeleteRepeat()
-        DispatchQueue.main.async { [weak self] in
-            self?.applyAutoCapitalizationIfNeeded()
-            self?.refreshSpellingSuggestions()
-        }
+        applyAutoCapitalizationIfNeeded(
+            context: effectiveDocumentContextBeforeInput,
+            callbackGeneration: documentMutationGeneration
+        )
+        refreshSpellingSuggestions()
     }
 
     private func scheduleDeleteRepeat(after delay: TimeInterval, generation: Int) {
         let item = DispatchWorkItem { [weak self] in
             guard let self = self, generation == self.deleteRepeatGeneration else { return }
+            let beforeMutation = self.effectiveDocumentContextBeforeInput
             self.textDocumentProxy.deleteBackward()
+            self.recordDocumentMutation(
+                from: beforeMutation,
+                to: String(beforeMutation.dropLast())
+            )
             self.playInputClick()
             self.deleteRepeatCount += 1
             let accelerated = Const.deleteRepeatInterval - Double(self.deleteRepeatCount) * 0.004
@@ -1622,12 +1727,10 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     @objc private func returnTapped() {
-        commitBoundary("\n")
+        let beforeMutation = effectiveDocumentContextBeforeInput
+        let afterMutation = commitBoundary("\n", contextBeforeInput: beforeMutation)
         playInputClick()
-        DispatchQueue.main.async { [weak self] in
-            self?.applyAutoCapitalizationIfNeeded()
-            self?.refreshSpellingSuggestions()
-        }
+        recordDocumentMutation(from: beforeMutation, to: afterMutation)
     }
 
     private func showKeyPreview(for button: UIButton) {
@@ -2104,7 +2207,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachStatusLabel = label
     }
 
-    private func presentCoachResults(_ response: TonoCoachClient.CoachResponse) {
+    // Internal so the XCTest target can exercise the real UIKit results state.
+    // This is not API surface outside the keyboard module.
+    func presentCoachResults(_ response: TonoCoachClient.CoachResponse) {
         guard let container = bodyContainer else { return }
         cancelTransientInteractions()
         preferredHeightConstraint?.constant = currentVisualMetrics.coachResultsContentHeight
@@ -2144,16 +2249,32 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         back.addTarget(self, action: #selector(backToKeysTapped), for: .touchUpInside)
         panel.addSubview(back)
 
+        let scroll = UIScrollView()
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.alwaysBounceVertical = false
+        scroll.showsVerticalScrollIndicator = true
+        scroll.accessibilityIdentifier = "\(Const.idRewrites).scroll"
+        panel.addSubview(scroll)
+
         let stack = UIStackView()
         stack.axis = .vertical
-        stack.distribution = .fillEqually
+        // Each card's top-to-bottom label chain determines its exact natural
+        // height. `.fillEqually` plus a merely minimum scroll-frame height left
+        // the content height underdetermined at accessibility Dynamic Type.
+        stack.distribution = .fill
         stack.alignment = .fill
         stack.spacing = 4
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.accessibilityIdentifier = Const.idRewrites
-        panel.addSubview(stack)
+        scroll.addSubview(stack)
 
-        let shown = Array(response.suggestions.prefix(4))
+        let suggestionsByAxis = Dictionary(
+            response.suggestions.map { ($0.axis.lowercased(), $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let shown = TonoCoachPalette.orderedAxes.compactMap {
+            suggestionsByAxis[$0.rawValue]
+        }
         if shown.isEmpty {
             let empty = UILabel()
             empty.text = "No rewrites available."
@@ -2178,10 +2299,17 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             back.heightAnchor.constraint(greaterThanOrEqualToConstant: TonoKeyboardMetrics.ControlGeometry.coachBackControlHeight),
             back.widthAnchor.constraint(greaterThanOrEqualToConstant: TonoKeyboardMetrics.ControlGeometry.coachBackControlWidth),
 
-            stack.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 8),
-            stack.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
+            scroll.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 8),
+            scroll.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
+
+            stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+            stack.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor),
+            stack.heightAnchor.constraint(greaterThanOrEqualTo: scroll.frameLayoutGuide.heightAnchor),
         ])
 
         coachContainer = panel
@@ -2190,21 +2318,22 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     private func makeRewriteChip(suggestion: TonoCoachClient.CoachRewrite, index: Int) -> UIView {
         let chip = TonoCoachChoiceControl()
+        let style = coachAxisStyle(for: suggestion.axis)
         chip.layer.cornerRadius = Const.keyCornerRadius
-        chip.layer.borderWidth = Const.keyBorderWidth
-        chip.layer.borderColor = keyboardKeyBorder().cgColor
+        chip.layer.borderWidth = 2
+        chip.layer.borderColor = style.accent.cgColor
+        chip.semanticAccent = style.accent
         chip.translatesAutoresizingMaskIntoConstraints = false
         chip.accessibilityIdentifier = Const.rewriteId(suggestion.axis, index)
         chip.accessibilityLabel = "Tono rewrite \(suggestion.axis)"
 
-        let style = coachAxisStyle(for: suggestion.axis)
         let axis = UILabel()
         axis.text = "● \(style.label)"
         axis.font = UIFontMetrics(forTextStyle: .caption1).scaledFont(
             for: .systemFont(ofSize: 11, weight: .bold)
         )
         axis.adjustsFontForContentSizeCategory = true
-        axis.textColor = style.color
+        axis.textColor = style.labelColor
         axis.translatesAutoresizingMaskIntoConstraints = false
         chip.addSubview(axis)
 
@@ -2214,7 +2343,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             for: .systemFont(ofSize: 14, weight: .regular)
         )
         text.adjustsFontForContentSizeCategory = true
-        text.textColor = TonoCoachPalette.foreground
+        text.textColor = .label
         text.numberOfLines = 2
         text.translatesAutoresizingMaskIntoConstraints = false
         chip.addSubview(text)
@@ -2229,7 +2358,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             text.leadingAnchor.constraint(equalTo: chip.leadingAnchor, constant: 10),
             text.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -10),
             text.topAnchor.constraint(equalTo: axis.bottomAnchor, constant: 2),
-            text.bottomAnchor.constraint(lessThanOrEqualTo: chip.bottomAnchor, constant: -6),
+            text.bottomAnchor.constraint(equalTo: chip.bottomAnchor, constant: -6),
         ])
 
         let rewriteText = suggestion.text
@@ -2239,14 +2368,13 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         return chip
     }
 
-    private func coachAxisStyle(for axis: String) -> (label: String, color: UIColor) {
-        switch axis {
-        case "warmer": return ("Warmer", TonoCoachPalette.foreground)
-        case "clearer": return ("Clearer", TonoCoachPalette.foreground)
-        case "funnier": return ("Funnier", TonoCoachPalette.foreground)
-        case "safer": return ("Safer", TonoCoachPalette.foreground)
-        default: return (axis.capitalized, TonoCoachPalette.foreground)
+    private func coachAxisStyle(
+        for axis: String
+    ) -> (label: String, labelColor: UIColor, accent: UIColor) {
+        guard let semantic = TonoCoachPalette.axis(axis) else {
+            return (axis.capitalized, .label, .separator)
         }
+        return (semantic.label, semantic.accessibleLabel, semantic.accent)
     }
 
     @objc private func backToKeysTapped() {

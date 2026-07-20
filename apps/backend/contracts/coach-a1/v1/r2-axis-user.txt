@@ -1,0 +1,10 @@
+DRAFT:
+{{draft}}
+
+PRIMARY REWRITE (already shown; do not mutate it):
+{{primary_rewrite}}
+
+TARGET AXIS:
+{{axis}}
+
+Return exactly one independently valid {{axis}} rewrite.

@@ -45,18 +45,23 @@ struct TonoKeyboardMetrics: Equatable {
     let keyShadowOffset: CGSize
 
     static func portrait(availableWidth: CGFloat) -> Self {
-        let preferredHeight: CGFloat
+        let typingHeight: CGFloat
         if availableWidth < 390 {
-            preferredHeight = 252
+            typingHeight = 252
         } else if availableWidth >= 430 {
-            preferredHeight = 264
+            typingHeight = 264
         } else {
-            preferredHeight = 256
+            typingHeight = 256
         }
 
+        // Build 86 already established +36pt as the reviewed results geometry.
+        // Build 93 reserves that space in every state so idle/loading/error/results
+        // and Back never resize the keyboard extension around the host field.
+        let stableHeight = typingHeight + 36
+
         return Self(
-            preferredContentHeight: preferredHeight,
-            coachResultsContentHeight: preferredHeight + 36,
+            preferredContentHeight: stableHeight,
+            coachResultsContentHeight: stableHeight,
             topBarHeight: 46,
             coachControlHeight: ControlGeometry.minimumTouchTarget,
             keyMinHeight: 44,
@@ -120,15 +125,131 @@ enum TonoCoachPalette {
     static let disabledBackground = disabled
     static let foreground = UIColor.white
 
+    /// Canonical tonoit.com semantic tokens. The exact accent remains visible
+    /// as the card rule/dot; labels use a contrast-safe dynamic companion.
+    enum Axis: String, CaseIterable {
+        case warmer, clearer, funnier, safer
+
+        var label: String { rawValue.capitalized }
+
+        var accent: UIColor {
+            switch self {
+            case .warmer: return UIColor(hexRGB: "F472B6")
+            case .clearer: return UIColor(hexRGB: "38BDF8")
+            case .funnier: return UIColor(hexRGB: "FBBF24")
+            case .safer: return UIColor(hexRGB: "34D399")
+            }
+        }
+
+        var accessibleLabel: UIColor {
+            let light: UIColor
+            switch self {
+            case .warmer: light = UIColor(hexRGB: "9D174D")
+            case .clearer: light = UIColor(hexRGB: "075985")
+            case .funnier: light = UIColor(hexRGB: "92400E")
+            case .safer: light = UIColor(hexRGB: "065F46")
+            }
+            return TonoCoachPalette.dynamic(light: light, dark: accent)
+        }
+    }
+
+    static let orderedAxes: [Axis] = [.warmer, .clearer, .funnier, .safer]
+
+    static func axis(_ rawValue: String) -> Axis? {
+        Axis(rawValue: rawValue.lowercased())
+    }
+
     static func background(enabled: Bool, highlighted: Bool) -> UIColor {
         guard enabled else { return disabledBackground }
         return highlighted ? pressed : normal
     }
 
-    private static func dynamic(light: UIColor, dark: UIColor) -> UIColor {
+    fileprivate static func dynamic(light: UIColor, dark: UIColor) -> UIColor {
         UIColor { traits in
             traits.userInterfaceStyle == .dark ? dark : light
         }
+    }
+}
+
+/// Explicit normal / one-shot / Caps Lock transition model. It also rejects
+/// automatic-capitalization callbacks captured before a newer document mutation.
+struct TonoShiftStateMachine: Equatable {
+    enum State: Equatable {
+        case lowercase
+        case oneShotUppercase
+        case capsLock
+    }
+
+    private(set) var state: State = .lowercase
+    private(set) var oneShotWasAutomatic = false
+
+    func display(_ text: String) -> String {
+        state == .lowercase ? text.lowercased() : text.uppercased()
+    }
+
+    mutating func tapShift() {
+        oneShotWasAutomatic = false
+        switch state {
+        case .lowercase: state = .oneShotUppercase
+        case .oneShotUppercase, .capsLock: state = .lowercase
+        }
+    }
+
+    mutating func doubleTapShift() {
+        oneShotWasAutomatic = false
+        state = state == .capsLock ? .lowercase : .capsLock
+    }
+
+    mutating func consumeEligibleCapital(_ text: String) {
+        guard state == .oneShotUppercase,
+              text.unicodeScalars.contains(where: CharacterSet.letters.contains) else { return }
+        state = .lowercase
+        oneShotWasAutomatic = false
+    }
+
+    @discardableResult
+    mutating func applyAutomaticCapitalization(
+        recommended: Bool,
+        callbackGeneration: UInt64,
+        documentGeneration: UInt64
+    ) -> Bool {
+        guard callbackGeneration == documentGeneration, state != .capsLock else { return false }
+        guard state != .oneShotUppercase || oneShotWasAutomatic else { return false }
+        let next: State = recommended ? .oneShotUppercase : .lowercase
+        let changed = state != next
+        state = next
+        oneShotWasAutomatic = recommended
+        return changed
+    }
+}
+
+struct TonoPendingDocumentMutation: Equatable {
+    let generation: UInt64
+    let contextBefore: String
+    let contextAfter: String
+
+    func canExplain(notificationContext: String) -> Bool {
+        notificationContext == contextBefore || notificationContext == contextAfter
+    }
+}
+
+enum TonoDocumentContextMutation {
+    static func applying(
+        deleteCount: Int,
+        insertion: String,
+        to contextBeforeInput: String
+    ) -> String {
+        let boundedDeleteCount = min(max(0, deleteCount), contextBeforeInput.count)
+        return String(contextBeforeInput.dropLast(boundedDeleteCount)) + insertion
+    }
+
+    static func restoring(
+        correctedSuffix: String,
+        restoredText: String,
+        in contextBeforeInput: String
+    ) -> String? {
+        guard contextBeforeInput.hasSuffix(correctedSuffix) else { return nil }
+        return String(contextBeforeInput.dropLast(correctedSuffix.count)) + restoredText
     }
 }
 
@@ -186,6 +307,12 @@ final class TonoCoachButton: TonoMinimumHitTargetButton {
 /// Branded rewrite choice with the same mechanically verified color states as
 /// the Coach entry and retry actions.
 final class TonoCoachChoiceControl: UIControl {
+    /// Axis cards opt into their canonical tonoit.com accent. Generic Coach
+    /// choices retain the branded purple state palette used elsewhere.
+    var semanticAccent: UIColor? {
+        didSet { updateCoachAppearance() }
+    }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         isAccessibilityElement = true
@@ -217,10 +344,22 @@ final class TonoCoachChoiceControl: UIControl {
     }
 
     private func updateCoachAppearance() {
-        backgroundColor = TonoCoachPalette.background(
-            enabled: isEnabled,
-            highlighted: isHighlighted || isSelected
-        )
+        if let semanticAccent {
+            let stateAlpha: CGFloat
+            if !isEnabled {
+                stateAlpha = 0.06
+            } else if isHighlighted || isSelected {
+                stateAlpha = 0.24
+            } else {
+                stateAlpha = 0.12
+            }
+            backgroundColor = semanticAccent.withAlphaComponent(stateAlpha)
+        } else {
+            backgroundColor = TonoCoachPalette.background(
+                enabled: isEnabled,
+                highlighted: isHighlighted || isSelected
+            )
+        }
         alpha = 1
     }
 }

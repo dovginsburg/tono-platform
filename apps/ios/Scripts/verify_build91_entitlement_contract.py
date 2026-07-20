@@ -121,10 +121,20 @@ def main() -> int:
         "ShareExtension/Info.plist",
         "TonoMessagesExtension/Info.plist",
     )
+    build_versions = {}
     for relative in plist_paths:
         with (ROOT / relative).open("rb") as handle:
             plist = plistlib.load(handle)
-        require(str(plist["CFBundleVersion"]) == "91", f"{relative} is not build 91")
+        build_versions[relative] = str(plist["CFBundleVersion"])
+    require(
+        len(set(build_versions.values())) == 1,
+        "embedded bundle versions disagree: " + repr(build_versions),
+    )
+    build_number = next(iter(build_versions.values()))
+    require(
+        build_number.isdigit() and int(build_number) >= 91,
+        f"entitlement-contract successor must be build 91 or newer, got {build_number}",
+    )
 
     project = read("Tono.xcodeproj/project.pbxproj")
     for bundle in ("TonoKeyboard.appex", "TonoShare.appex", "TonoMessagesExtension.appex"):

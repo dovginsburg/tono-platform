@@ -4,7 +4,7 @@ import XCTest
 ///
 /// The shipped build number is a reviewed release input, not mutable build
 /// output. Every shipped bundle — App, KeyboardExtension, ShareExtension and
-/// TonoMessagesExtension — must declare exactly `CFBundleVersion` 92, and the
+/// TonoMessagesExtension — must declare exactly `CFBundleVersion` 93, and the
 /// `Scripts/bump-build.sh` archive guard must require the *same* number. The
 /// rejected build-92 candidate moved all four plists to 92 but left the guard
 /// pinned at 91; the Release build/full test run then aborted in the "Verify
@@ -13,10 +13,10 @@ import XCTest
 /// This contract reads the reviewed source of truth (the four `Info.plist`
 /// files and the guard script) exactly as the build phase does. It is
 /// compile-safe — pure Foundation, no keyboard/UIKit symbols — so on the
-/// build-91 base it fails on the version values (91 ≠ 92), never on a
+/// build-91 base it fails on the version values (91 ≠ 93), never on a
 /// syntax/type error.
 final class BuildNumberGuardTests: XCTestCase {
-    private static let expectedBuild = "92"
+    private static let expectedBuild = "93"
 
     private static let shippedPlists = [
         "App/Info.plist",
@@ -44,7 +44,7 @@ final class BuildNumberGuardTests: XCTestCase {
             let actual = plist?["CFBundleVersion"] as? String
             XCTAssertEqual(
                 actual, Self.expectedBuild,
-                "\(relative) declares CFBundleVersion \(actual ?? "nil"); build 92 requires \(Self.expectedBuild) across every shipped bundle"
+                "\(relative) declares CFBundleVersion \(actual ?? "nil"); build 93 requires \(Self.expectedBuild) across every shipped bundle"
             )
         }
     }
@@ -56,7 +56,7 @@ final class BuildNumberGuardTests: XCTestCase {
             encoding: .utf8
         )
 
-        // The guard's own expected number must be 92 so it agrees with the
+        // The guard's own expected number must be 93 so it agrees with the
         // shipped plists. This is the exact mismatch that failed the rejected
         // candidate (plists 92, guard 91 → exit 65, zero executed tests).
         let guardValue = Self.value(ofAssignment: "EXPECTED_BUILD", in: script)
@@ -66,7 +66,7 @@ final class BuildNumberGuardTests: XCTestCase {
         )
 
         // …and the guard must still cover all four shipped bundles so none can
-        // silently drift off build 92.
+        // silently drift off build 93.
         for relative in Self.shippedPlists {
             XCTAssertTrue(
                 script.contains(relative),

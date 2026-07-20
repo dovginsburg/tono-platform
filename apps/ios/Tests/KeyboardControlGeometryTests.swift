@@ -117,8 +117,240 @@ final class KeyboardControlGeometryTests: XCTestCase {
         descendants(of: root).compactMap { $0 as? UIControl }.first { $0.accessibilityIdentifier == identifier }
     }
 
+    private static func view(identifier: String, in root: UIView) -> UIView? {
+        ([root] + descendants(of: root)).first { $0.accessibilityIdentifier == identifier }
+    }
+
     private static func descendants(of root: UIView) -> [UIView] {
         root.subviews.flatMap { [$0] + descendants(of: $0) }
+    }
+
+    func testCoachGeometryIsInvariantAcrossEveryStateAndApprovedWidthBucket() {
+        for width in [CGFloat(320), 375, 390, 430, 768] {
+            let metrics = TonoKeyboardMetrics.portrait(availableWidth: width)
+            XCTAssertEqual(
+                metrics.preferredContentHeight,
+                metrics.coachResultsContentHeight,
+                "idle/loading/error/results/Back must reserve one stable height at \(width)pt"
+            )
+            XCTAssertEqual(metrics.topBarHeight, 46)
+            XCTAssertEqual(metrics.coachControlHeight, Self.minimum)
+        }
+    }
+
+    @MainActor
+    func testCoachButtonKeepsOneFrameAcrossNormalPressedDisabledAndAccessibilityType() throws {
+        let traits = UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)
+        var capturedError: Error?
+        traits.performAsCurrent {
+            do {
+                let controller = KeyboardViewController()
+                controller.loadViewIfNeeded()
+                controller.view.frame = CGRect(x: 0, y: 0, width: 320, height: 288)
+                controller.view.layoutIfNeeded()
+                let button = try XCTUnwrap(Self.control(identifier: "TonoKB.coachButton", in: controller.view) as? UIButton)
+                let frame = button.frame
+                button.isHighlighted = true
+                controller.view.layoutIfNeeded()
+                XCTAssertEqual(button.frame, frame)
+                button.isHighlighted = false
+                button.isEnabled = false
+                controller.view.layoutIfNeeded()
+                XCTAssertEqual(button.frame, frame)
+                XCTAssertEqual(frame.height, Self.minimum)
+            } catch {
+                capturedError = error
+            }
+        }
+        if let capturedError { throw capturedError }
+    }
+
+    @MainActor
+    func testAXXXLCoachResultsHaveDeterministicScrollableContentHeight() throws {
+        let traits = UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)
+        var capturedError: Error?
+        traits.performAsCurrent {
+            do {
+                let controller = KeyboardViewController()
+                controller.loadViewIfNeeded()
+                controller.view.frame = CGRect(x: 0, y: 0, width: 320, height: 288)
+                controller.presentCoachResults(TonoCoachClient.CoachResponse(
+                    riskLevel: "medium",
+                    perception: "The message may read as abrupt.",
+                    subtext: "The recipient may need a clearer request.",
+                    reason: "The ask is terse.",
+                    suggestions: TonoCoachPalette.orderedAxes.map { axis in
+                        TonoCoachClient.CoachRewrite(
+                            axis: axis.rawValue,
+                            text: "A deliberately long \(axis.label.lowercased()) rewrite that wraps to two lines at compact width without clipping accessibility text.",
+                            rationale: nil,
+                            riskAfter: "low"
+                        )
+                    },
+                    flags: []
+                ))
+
+                for _ in 0..<3 {
+                    controller.view.setNeedsLayout()
+                    controller.view.layoutIfNeeded()
+                    Self.layoutRecursively(controller.view)
+                }
+
+                let results = try XCTUnwrap(Self.view(identifier: "TonoKB.coachResults", in: controller.view))
+                let scroll = try XCTUnwrap(Self.view(identifier: "TonoKB.rewrites.scroll", in: results) as? UIScrollView)
+                let stack = try XCTUnwrap(Self.view(identifier: "TonoKB.rewrites", in: scroll) as? UIStackView)
+                let visibleHierarchy = [results] + Self.descendants(of: results).filter { !$0.isHidden }
+
+                for view in visibleHierarchy {
+                    XCTAssertFalse(
+                        view.hasAmbiguousLayout,
+                        "AXXXL results layout is ambiguous for \(view.accessibilityIdentifier ?? String(describing: type(of: view))) frame=\(view.frame)"
+                    )
+                }
+                XCTAssertEqual(stack.arrangedSubviews.count, 4)
+                XCTAssertGreaterThan(scroll.bounds.height, 0)
+                XCTAssertGreaterThan(scroll.contentSize.height, scroll.bounds.height, "AXXXL cards must scroll instead of compressing or clipping")
+                XCTAssertEqual(scroll.contentSize.height, stack.frame.height, accuracy: 0.5)
+                XCTAssertGreaterThan(stack.frame.height, 0)
+                XCTAssertTrue(stack.arrangedSubviews.allSatisfy { $0.frame.height >= Self.minimum })
+            } catch {
+                capturedError = error
+            }
+        }
+        if let capturedError { throw capturedError }
+    }
+
+    func testSemanticCoachAxisOrderAndExactTonoitTokens() {
+        XCTAssertEqual(TonoCoachPalette.orderedAxes.map(\.rawValue), ["warmer", "clearer", "funnier", "safer"])
+        XCTAssertEqual(Self.hex(TonoCoachPalette.Axis.warmer.accent), "F472B6")
+        XCTAssertEqual(Self.hex(TonoCoachPalette.Axis.clearer.accent), "38BDF8")
+        XCTAssertEqual(Self.hex(TonoCoachPalette.Axis.funnier.accent), "FBBF24")
+        XCTAssertEqual(Self.hex(TonoCoachPalette.Axis.safer.accent), "34D399")
+    }
+
+    func testOneShotShiftConsumesSynchronouslyAndRejectsStaleRearm() {
+        var machine = TonoShiftStateMachine()
+        var generation: UInt64 = 0
+        machine.tapShift()
+        XCTAssertEqual(machine.state, .oneShotUppercase)
+        var output = machine.display("a")
+        machine.consumeEligibleCapital(output)
+        generation += 1
+        XCTAssertEqual(machine.state, .lowercase, "Shift+a must lowercase labels before b")
+        XCTAssertFalse(machine.applyAutomaticCapitalization(
+            recommended: true,
+            callbackGeneration: generation - 1,
+            documentGeneration: generation
+        ))
+        XCTAssertEqual(machine.state, .lowercase, "stale proxy callback must not re-arm one-shot Shift")
+        output += machine.display("b")
+        machine.consumeEligibleCapital("b")
+        XCTAssertEqual(output, "Ab")
+        XCTAssertEqual(machine.state, .lowercase)
+    }
+
+    func testCapsLockAndSentenceAutoCapitalizationTransitions() {
+        var machine = TonoShiftStateMachine()
+        machine.doubleTapShift()
+        let capsOutput = machine.display("a") + machine.display("b")
+        machine.consumeEligibleCapital("A")
+        machine.consumeEligibleCapital("B")
+        XCTAssertEqual(capsOutput, "AB")
+        XCTAssertEqual(machine.state, .capsLock, "double Shift+a+b must remain AB")
+        machine.tapShift()
+        machine.consumeEligibleCapital("c")
+        XCTAssertEqual(machine.state, .lowercase, "Caps Lock then Shift+c must produce lowercase c")
+
+        XCTAssertTrue(machine.applyAutomaticCapitalization(
+            recommended: true,
+            callbackGeneration: 4,
+            documentGeneration: 4
+        ))
+        XCTAssertEqual(machine.state, .oneShotUppercase)
+        machine.consumeEligibleCapital("S")
+        XCTAssertEqual(machine.state, .lowercase, "sentence auto-cap must be one-shot")
+    }
+
+    func testRapidInputBoundariesAndAutocorrectCallbacksCannotRearmConsumedShift() {
+        var machine = TonoShiftStateMachine()
+        var generation: UInt64 = 40
+
+        machine.tapShift()
+        XCTAssertEqual(machine.display("a"), "A")
+        machine.consumeEligibleCapital("A")
+        generation += 1
+
+        // Rapid b, space, Return and a host autocorrect mutation each advance
+        // the document generation. Every callback captured before that mutation
+        // must be rejected, even if stale proxy context recommended caps.
+        for mutation in ["b", " ", "return", "autocorrect"] {
+            let staleGeneration = generation
+            generation += 1
+            XCTAssertFalse(machine.applyAutomaticCapitalization(
+                recommended: true,
+                callbackGeneration: staleGeneration,
+                documentGeneration: generation
+            ), "stale callback after \(mutation) must be ignored")
+            XCTAssertEqual(machine.state, .lowercase)
+        }
+
+        // Effective post-Return context is current-generation evidence and may
+        // legitimately arm exactly one automatic capital.
+        XCTAssertTrue(machine.applyAutomaticCapitalization(
+            recommended: true,
+            callbackGeneration: generation,
+            documentGeneration: generation
+        ))
+        XCTAssertEqual(machine.display("c"), "C")
+        machine.consumeEligibleCapital("C")
+        XCTAssertEqual(machine.display("d"), "d")
+    }
+
+    func testPendingLocalMutationRejectsUnrelatedHostAutocorrectContext() {
+        let pending = TonoPendingDocumentMutation(
+            generation: 9,
+            contextBefore: "Shift+A",
+            contextAfter: "Shift+A "
+        )
+        XCTAssertTrue(pending.canExplain(notificationContext: "Shift+A"))
+        XCTAssertTrue(pending.canExplain(notificationContext: "Shift+A "))
+        XCTAssertFalse(
+            pending.canExplain(notificationContext: "Shift+An "),
+            "host autocorrect must not be mistaken for the pending local mutation"
+        )
+    }
+
+    func testEffectiveContextModelsBoundaryReplacementAndFullAutocorrectionUndo() {
+        let corrected = TonoDocumentContextMutation.applying(
+            deleteCount: 3,
+            insertion: "the ",
+            to: "send teh"
+        )
+        XCTAssertEqual(corrected, "send the ")
+        XCTAssertEqual(
+            TonoDocumentContextMutation.restoring(
+                correctedSuffix: "the ",
+                restoredText: "teh",
+                in: corrected
+            ),
+            "send teh"
+        )
+        XCTAssertNil(
+            TonoDocumentContextMutation.restoring(
+                correctedSuffix: "the ",
+                restoredText: "teh",
+                in: "host changed the document"
+            )
+        )
+    }
+
+    private static func hex(_ color: UIColor) -> String? {
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        guard color.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return nil }
+        return String(format: "%02X%02X%02X", Int(round(red * 255)), Int(round(green * 255)), Int(round(blue * 255)))
     }
 
     private static func layoutRecursively(_ root: UIView) {

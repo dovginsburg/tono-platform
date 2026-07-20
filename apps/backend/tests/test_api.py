@@ -878,7 +878,10 @@ def test_admin_improvement_stats_k_anon(client, monkeypatch):
 
     # Register 3 devices and send improvement events (below k-anon floor of 50)
     for i in range(3):
-        reg = _register(client, device_id=f"test-device-kanon-{i}")
+        reg = _register(
+            client,
+            device_id=f"00000000-0000-4000-8000-{i + 1:012x}",
+        )
         client.post(
             "/v1/events",
             headers=_auth(reg["api_token"]),
@@ -905,7 +908,10 @@ def test_admin_improvement_stats_k_anon_floor_configurable(client, monkeypatch):
 
     # Register 2 distinct devices
     for i in range(2):
-        reg = _register(client, device_id=f"test-device-floor-{i}")
+        reg = _register(
+            client,
+            device_id=f"00000000-0000-4000-9000-{i + 1:012x}",
+        )
         client.post(
             "/v1/events",
             headers=_auth(reg["api_token"]),

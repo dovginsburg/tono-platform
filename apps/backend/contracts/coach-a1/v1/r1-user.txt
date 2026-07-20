@@ -1,0 +1,4 @@
+DRAFT:
+{{draft}}
+
+Return the single best rewrite. Choose exactly one axis: warmer, clearer, funnier, or safer.
