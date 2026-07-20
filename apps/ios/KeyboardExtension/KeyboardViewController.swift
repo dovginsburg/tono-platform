@@ -2240,6 +2240,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         title.translatesAutoresizingMaskIntoConstraints = false
         title.accessibilityIdentifier = Const.idRiskBadge
         panel.addSubview(title)
+        let titleHeight = ceil(title.font.lineHeight)
 
         let back = TonoMinimumHitTargetButton(type: .system)
         back.setTitle("Back", for: .normal)
@@ -2258,9 +2259,10 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
         let stack = UIStackView()
         stack.axis = .vertical
-        // Each card's top-to-bottom label chain determines its exact natural
-        // height. `.fillEqually` plus a merely minimum scroll-frame height left
-        // the content height underdetermined at accessibility Dynamic Type.
+        // Each card's required top-to-bottom label chain determines the exact
+        // content height. Do not also make the stack at least as tall as the
+        // viewport: when natural content is shorter than the viewport that
+        // inequality leaves every arranged-subview height underdetermined.
         stack.distribution = .fill
         stack.alignment = .fill
         stack.spacing = 4
@@ -2293,10 +2295,11 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             title.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 12),
             title.topAnchor.constraint(equalTo: panel.topAnchor, constant: 4),
             title.trailingAnchor.constraint(lessThanOrEqualTo: back.leadingAnchor, constant: -8),
+            title.heightAnchor.constraint(equalToConstant: titleHeight),
 
             back.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -12),
             back.centerYAnchor.constraint(equalTo: title.centerYAnchor),
-            back.heightAnchor.constraint(greaterThanOrEqualToConstant: TonoKeyboardMetrics.ControlGeometry.coachBackControlHeight),
+            back.heightAnchor.constraint(equalToConstant: TonoKeyboardMetrics.ControlGeometry.coachBackControlHeight),
             back.widthAnchor.constraint(greaterThanOrEqualToConstant: TonoKeyboardMetrics.ControlGeometry.coachBackControlWidth),
 
             scroll.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
@@ -2309,7 +2312,6 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
             stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
             stack.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor),
-            stack.heightAnchor.constraint(greaterThanOrEqualTo: scroll.frameLayoutGuide.heightAnchor),
         ])
 
         coachContainer = panel
@@ -2336,6 +2338,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         axis.textColor = style.labelColor
         axis.translatesAutoresizingMaskIntoConstraints = false
         chip.addSubview(axis)
+        let axisHeight = ceil(axis.font.lineHeight)
 
         let text = UILabel()
         text.text = suggestion.text
@@ -2347,6 +2350,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         text.numberOfLines = 2
         text.translatesAutoresizingMaskIntoConstraints = false
         chip.addSubview(text)
+        let textHeight = ceil(text.font.lineHeight * CGFloat(text.numberOfLines))
 
         NSLayoutConstraint.activate([
             chip.heightAnchor.constraint(greaterThanOrEqualToConstant: 48),
@@ -2354,11 +2358,13 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             axis.leadingAnchor.constraint(equalTo: chip.leadingAnchor, constant: 10),
             axis.topAnchor.constraint(equalTo: chip.topAnchor, constant: 6),
             axis.trailingAnchor.constraint(lessThanOrEqualTo: chip.trailingAnchor, constant: -10),
+            axis.heightAnchor.constraint(equalToConstant: axisHeight),
 
             text.leadingAnchor.constraint(equalTo: chip.leadingAnchor, constant: 10),
             text.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -10),
             text.topAnchor.constraint(equalTo: axis.bottomAnchor, constant: 2),
             text.bottomAnchor.constraint(equalTo: chip.bottomAnchor, constant: -6),
+            text.heightAnchor.constraint(equalToConstant: textHeight),
         ])
 
         let rewriteText = suggestion.text

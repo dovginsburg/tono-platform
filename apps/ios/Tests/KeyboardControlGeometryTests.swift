@@ -344,6 +344,77 @@ final class KeyboardControlGeometryTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testHostileCompactRotationKeepsCoachResultsDeterministicAndUnambiguous() throws {
+        let traits = UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)
+        var capturedError: Error?
+        traits.performAsCurrent {
+            do {
+                let controller = KeyboardViewController()
+                controller.loadViewIfNeeded()
+                controller.view.frame = CGRect(x: 0, y: 0, width: 768, height: 300)
+                controller.viewDidLayoutSubviews()
+                controller.presentCoachResults(TonoCoachClient.CoachResponse(
+                    riskLevel: "medium",
+                    perception: "The message may read as abrupt.",
+                    subtext: "The recipient may need a clearer request.",
+                    reason: "The ask is terse.",
+                    suggestions: TonoCoachPalette.orderedAxes.map { axis in
+                        TonoCoachClient.CoachRewrite(
+                            axis: axis.rawValue,
+                            text: "A deliberately long hostile QA \(axis.label.lowercased()) rewrite that must remain deterministic after compact-width rotation.",
+                            rationale: nil,
+                            riskAfter: "low"
+                        )
+                    },
+                    flags: []
+                ))
+
+                func snapshot(_ width: CGFloat, _ height: CGFloat) throws -> (CGFloat, CGFloat, CGFloat) {
+                    controller.view.frame = CGRect(x: 0, y: 0, width: width, height: height)
+                    controller.viewDidLayoutSubviews()
+                    for _ in 0..<4 {
+                        controller.view.setNeedsLayout()
+                        controller.view.layoutIfNeeded()
+                        Self.layoutRecursively(controller.view)
+                    }
+                    let results = try XCTUnwrap(Self.view(identifier: "TonoKB.coachResults", in: controller.view))
+                    let scroll = try XCTUnwrap(Self.view(identifier: "TonoKB.rewrites.scroll", in: results) as? UIScrollView)
+                    let stack = try XCTUnwrap(Self.view(identifier: "TonoKB.rewrites", in: scroll) as? UIStackView)
+                    for view in [results] + Self.descendants(of: results).filter({ !$0.isHidden }) {
+                        XCTAssertFalse(view.hasAmbiguousLayout, "rotation made \(view.accessibilityIdentifier ?? String(describing: type(of: view))) ambiguous at \(width)x\(height)")
+                    }
+                    XCTAssertEqual(scroll.contentSize.height, stack.frame.height, accuracy: 0.5)
+                    XCTAssertEqual(stack.frame.width, scroll.bounds.width, accuracy: 0.5)
+                    XCTAssertGreaterThan(scroll.bounds.height, 0)
+                    return (scroll.contentSize.height, stack.frame.height, scroll.bounds.height)
+                }
+
+                let wideInitial = try snapshot(768, 300)
+                let wideInitialAgain = try snapshot(768, 300)
+                XCTAssertEqual(wideInitial.0, wideInitialAgain.0, accuracy: 0.5)
+                XCTAssertEqual(wideInitial.1, wideInitialAgain.1, accuracy: 0.5)
+
+                let compactA = try snapshot(320, 288)
+                let compactB = try snapshot(320, 288)
+                XCTAssertEqual(compactA.0, compactB.0, accuracy: 0.5)
+                XCTAssertEqual(compactA.1, compactB.1, accuracy: 0.5)
+
+                let rotatedA = try snapshot(768, 300)
+                let rotatedB = try snapshot(768, 300)
+                XCTAssertEqual(rotatedA.0, rotatedB.0, accuracy: 0.5)
+                XCTAssertEqual(rotatedA.1, rotatedB.1, accuracy: 0.5)
+
+                let compactAgain = try snapshot(320, 288)
+                XCTAssertEqual(compactA.0, compactAgain.0, accuracy: 0.5)
+                XCTAssertEqual(compactA.1, compactAgain.1, accuracy: 0.5)
+            } catch {
+                capturedError = error
+            }
+        }
+        if let capturedError { throw capturedError }
+    }
+
     private static func hex(_ color: UIColor) -> String? {
         var red: CGFloat = 0
         var green: CGFloat = 0
