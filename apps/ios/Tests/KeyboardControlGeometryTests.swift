@@ -382,6 +382,7 @@ final class KeyboardControlGeometryTests: XCTestCase {
                         Self.layoutRecursively(controller.view)
                     }
                     let results = try XCTUnwrap(Self.view(identifier: "TonoKB.coachResults", in: controller.view))
+                    let back = try XCTUnwrap(Self.view(identifier: "TonoKB.coachBack", in: results))
                     let scroll = try XCTUnwrap(Self.view(identifier: "TonoKB.rewrites.scroll", in: results) as? UIScrollView)
                     let stack = try XCTUnwrap(Self.view(identifier: "TonoKB.rewrites", in: scroll) as? UIStackView)
                     for view in [results] + Self.descendants(of: results).filter({ !$0.isHidden }) {
@@ -390,6 +391,12 @@ final class KeyboardControlGeometryTests: XCTestCase {
                     XCTAssertEqual(scroll.contentSize.height, stack.frame.height, accuracy: 0.5)
                     XCTAssertEqual(stack.frame.width, scroll.bounds.width, accuracy: 0.5)
                     XCTAssertGreaterThan(scroll.bounds.height, 0)
+                    let backFrame = back.convert(back.bounds, to: results)
+                    XCTAssertEqual(backFrame.height, Self.minimum, accuracy: 0.5)
+                    XCTAssertTrue(
+                        results.bounds.contains(backFrame),
+                        "Back must remain fully contained and hittable at \(width)x\(height): back=\(backFrame), results=\(results.bounds)"
+                    )
                     return (scroll.contentSize.height, stack.frame.height, scroll.bounds.height)
                 }
 

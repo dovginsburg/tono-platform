@@ -2300,13 +2300,13 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             title.heightAnchor.constraint(equalToConstant: titleHeight),
 
             back.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -12),
-            back.centerYAnchor.constraint(equalTo: title.centerYAnchor),
+            back.topAnchor.constraint(equalTo: panel.topAnchor, constant: 4),
             back.heightAnchor.constraint(equalToConstant: TonoKeyboardMetrics.ControlGeometry.coachBackControlHeight),
             back.widthAnchor.constraint(greaterThanOrEqualToConstant: TonoKeyboardMetrics.ControlGeometry.coachBackControlWidth),
 
             scroll.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
-            scroll.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 8),
+            scroll.topAnchor.constraint(equalTo: back.bottomAnchor, constant: 4),
             scroll.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
 
             stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
