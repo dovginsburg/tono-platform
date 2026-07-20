@@ -62,14 +62,94 @@ def test_missing_axis_is_rejected_instead_of_silently_hidden():
         enforce_coach_contract(incomplete, req)
 
 
-def test_subset_or_reordered_request_axes_are_rejected():
-    complete = _result([
+def test_subset_or_reordered_request_axes_are_accepted_and_canonicalized():
+    """P0 t_a34717a8: subsets and reorders of canonical axes must NOT 502.
+
+    Pre-fix the validator at apps/backend/analyze.py:213 rejected any
+    req.axes value that wasn't exactly ('warmer','clearer','funnier','safer').
+    Post-fix the validator accepts any subset of canonical axes in any
+    order and canonicalizes the output order via CANONICAL_COACH_AXES.
+    The provider is expected to emit only the requested axes (any extras
+    are still rejected by the downstream loop) — this preserves the
+    "fail closed" stance and only loosens the request shape contract.
+    """
+
+    # Single-axis subset: provider returns only that axis.
+    req_single = AnalyzeRequest(
+        draft="Please help with this request.",
+        axes=["warmer"],
+    )
+    out_single = enforce_coach_contract(
+        _result([{"axis": "warmer", "text": "Please help with this warmer request."}]),
+        req_single,
+    )
+    assert [item["axis"] for item in out_single["suggestions"]] == ["warmer"]
+
+    # Reverse order of all 4 canonical: provider returns all 4, validator
+    # canonicalizes output to (warmer, clearer, funnier, safer).
+    req_reversed = AnalyzeRequest(
+        draft="Please help with this request.",
+        axes=list(reversed(AXES)),
+    )
+    out_reversed = enforce_coach_contract(
+        _result([
+            {"axis": axis, "text": f"Please help with this {axis} request."}
+            for axis in AXES
+        ]),
+        req_reversed,
+    )
+    assert [item["axis"] for item in out_reversed["suggestions"]] == AXES
+
+    # Partial subset of three (out of order): provider returns only those 3,
+    # validator canonicalizes output to (warmer, clearer, safer).
+    requested = ["clearer", "safer", "warmer"]
+    req_partial = AnalyzeRequest(
+        draft="Please help with this request.",
+        axes=requested,
+    )
+    out_partial = enforce_coach_contract(
+        _result([
+            {"axis": axis, "text": f"Please help with this {axis} request."}
+            for axis in requested
+        ]),
+        req_partial,
+    )
+    assert [item["axis"] for item in out_partial["suggestions"]] == [
+        "warmer", "clearer", "safer",
+    ]
+
+
+def test_subset_request_rejects_unrequested_axes_from_provider():
+    """P0 t_a34717a8: when the user requests a subset, the provider is still
+    held to that subset — extras are rejected (failed-closed preserved)."""
+    req = AnalyzeRequest(
+        draft="Please help with this request.",
+        axes=["warmer"],
+    )
+    provider_payload = _result([
         {"axis": axis, "text": f"Please help with this {axis} request."}
         for axis in AXES
     ])
-    for axes in (["warmer"], list(reversed(AXES))):
-        with pytest.raises(CoachContractError, match="requires"):
-            enforce_coach_contract(complete, AnalyzeRequest(draft="Please help with this request.", axes=axes))
+    with pytest.raises(CoachContractError, match="unexpected axis"):
+        enforce_coach_contract(provider_payload, req)
+
+
+def test_unknown_axis_is_rejected_at_contract_layer():
+    """P0 t_a34717a8: unknown axes (e.g. 'warmth' / 'clarity' synonyms)
+    must fail at the contract layer — the pre-fix path wasted a full
+    Anthropic call before rejecting as 502. Post-fix they fail fast at
+    the validate-input boundary (mapped by the server to 422)."""
+    req = AnalyzeRequest(
+        draft="hey can we grab lunch tomorrow?",
+        axes=["warmth", "clarity"],
+        mode="coach",
+    )
+    complete = _result([
+        {"axis": axis, "text": f"please help with this {axis} request."}
+        for axis in AXES
+    ])
+    with pytest.raises(CoachContractError, match="unknown axes:"):
+        enforce_coach_contract(complete, req)
 
 
 def test_exact_axis_label_prefix_is_removed_without_touching_legitimate_content():

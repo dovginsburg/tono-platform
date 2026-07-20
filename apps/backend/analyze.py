@@ -210,9 +210,14 @@ def enforce_coach_contract(result: dict[str, Any], req: AnalyzeRequest) -> dict[
     requested = [axis.strip().lower() for axis in req.axes]
     if not requested:
         requested = list(CANONICAL_COACH_AXES)
-    if tuple(requested) != CANONICAL_COACH_AXES:
-        raise CoachContractError("Coach requires warmer, clearer, funnier, safer in order")
-    expected = list(CANONICAL_COACH_AXES)
+    # P0 t_a34717a8: accept any subset of canonical axes in any order.
+    # Pre-fix this required exact equality against CANONICAL_COACH_AXES,
+    # which 502'd legitimate single-axis, subset, and reordered requests.
+    # Canonicalize output order below via `expected`.
+    unknown_axes = [axis for axis in requested if axis not in CANONICAL_COACH_AXES]
+    if unknown_axes:
+        raise CoachContractError(f"unknown axes: {', '.join(unknown_axes)}")
+    expected = [axis for axis in CANONICAL_COACH_AXES if axis in requested]  # canonical order
     raw = result.get("suggestions")
     if not isinstance(raw, list):
         raise CoachContractError("missing suggestions")
