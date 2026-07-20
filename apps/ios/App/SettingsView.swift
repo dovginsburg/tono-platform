@@ -24,16 +24,15 @@ struct SettingsView: View {
     @State private var promoSuccess:      String?
     @State private var isRedeemingCode:   Bool       = false
     @State private var featureToggles:    [FeatureFlag: Bool] = [:]
-    @State private var liveToneOptIn:     Bool       = false
-    @State private var liveTonePaused:    Bool       = false
-    @State private var liveToneAllowed:   Set<LiveToneHostCategory> = []
+    @State private var liveToneEnabled:   Bool       = true
     @State private var healthState:       HealthState = .unknown
     @State private var coachVariants = CoachVariantSettings()
     private let coachVariantStore = CoachVariantSettingsStore()
 
-    // Live Tone control surface (build-90 experiment). A value type over the
+    // Live Tone v1 control surface (shipping release). A value type over the
     // shared App Group store — writes are visible to the keyboard on its next
-    // read, with no networking, timer, or background work.
+    // read, with no networking, timer, or background work. Default ON per the
+    // binding Live Tone v1 Acceptance Contract.
     private let liveTonePrefs = LiveTonePreference()
     @State private var isSettingUp:        Bool       = false
     @State private var showWhySetup:       Bool       = false
@@ -469,81 +468,35 @@ struct SettingsView: View {
         coachVariants.pendingFourthBlocked ? "Turn one off first (3 max)" : nil
     }
 
-    // MARK: - Live Tone (build-90 experiment)
+    // MARK: - Live Tone (shipping release — Live Tone v1 contract)
 
-    /// Opt-in, per-category allowlist, and pause switch for Live Tone. Default
-    /// OFF: with the toggle off — or with no categories enabled — the keyboard's
-    /// eligibility check fails closed and nothing is inspected.
+    /// Master toggle (default ON per the contract). The keyboard never
+    /// auto-rewrites / never blocks send; the toggle only gates whether
+    /// the on-device heuristic executes. The contract-exact disclosure
+    /// sits below the toggle.
     @ViewBuilder
     private var liveToneSection: some View {
-        Section("Live Tone (Experimental)") {
-            Toggle("Check drafts as I type", isOn: liveToneOptInBinding)
-            // Required one-line privacy disclosure (contract item 1). Kept in
-            // sync with the actual behavior: the eligibility check is on-device
-            // and text only ever leaves when the user deliberately taps Coach.
-            Text("Tono checks the draft on-device and sends text only when you tap Coach.")
-                .font(.caption).foregroundColor(.secondary)
-
-            if liveToneOptIn {
-                ForEach(LiveToneHostCategory.allCases, id: \.self) { category in
-                    Toggle(liveToneCategoryLabel(category), isOn: liveToneCategoryBinding(category))
-                        .font(.subheadline)
-                }
-                Text("Live Tone only runs in the app categories you turn on. Nothing is inferred from the app you're in.")
-                    .font(.caption).foregroundColor(.secondary)
-
-                Toggle("Pause Live Tone", isOn: liveTonePausedBinding)
-                Text("Pausing stops on-device checks immediately, keeping your opt-in and category choices.")
-                    .font(.caption).foregroundColor(.secondary)
-            }
+        Section("Live Tone") {
+            Toggle("Live Tone", isOn: liveToneEnabledBinding)
+            // Exact contract disclosure — must not be paraphrased.
+            Text(LiveTonePreference.settingsCopy)
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
     }
 
-    private var liveToneOptInBinding: Binding<Bool> {
+    private var liveToneEnabledBinding: Binding<Bool> {
         Binding(
-            get: { liveToneOptIn },
+            get: { liveToneEnabled },
             set: { on in
-                liveToneOptIn = on
-                liveTonePrefs.isOptedIn = on
+                liveToneEnabled = on
+                liveTonePrefs.setMasterEnabled(on)
             }
         )
-    }
-
-    private var liveTonePausedBinding: Binding<Bool> {
-        Binding(
-            get: { liveTonePaused },
-            set: { on in
-                liveTonePaused = on
-                liveTonePrefs.isUserPaused = on
-            }
-        )
-    }
-
-    private func liveToneCategoryBinding(_ category: LiveToneHostCategory) -> Binding<Bool> {
-        Binding(
-            get: { liveToneAllowed.contains(category) },
-            set: { on in
-                if on { liveToneAllowed.insert(category) } else { liveToneAllowed.remove(category) }
-                liveTonePrefs.allowedHostCategories = liveToneAllowed
-            }
-        )
-    }
-
-    private func liveToneCategoryLabel(_ category: LiveToneHostCategory) -> String {
-        switch category {
-        case .messaging: return "Messaging"
-        case .email:     return "Email"
-        case .social:    return "Social"
-        case .notes:     return "Notes"
-        case .work:      return "Work chat"
-        case .other:     return "Other apps"
-        }
     }
 
     private func loadLiveTone() {
-        liveToneOptIn   = liveTonePrefs.isOptedIn
-        liveTonePaused  = liveTonePrefs.isUserPaused
-        liveToneAllowed = liveTonePrefs.allowedHostCategories
+        liveToneEnabled = liveTonePrefs.masterEnabled
     }
 
     private var planSection: some View {

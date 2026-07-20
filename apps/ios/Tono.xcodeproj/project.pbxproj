@@ -26,8 +26,14 @@
 		8A0000000000000000000013 /* LiveTonePrivacy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A0000000000000000000003 /* LiveTonePrivacy.swift */; };
 		8A0000000000000000000014 /* LiveToneEligibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A0000000000000000000004 /* LiveToneEligibility.swift */; };
 		8A0000000000000000000015 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 8A0000000000000000000005 /* PrivacyInfo.xcprivacy */; };
-		8A0000000000000000000016 /* LiveToneCoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A0000000000000000000006 /* LiveToneCoreTests.swift */; };
-		8A0000000000000000000017 /* LiveTonePrivacyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A0000000000000000000007 /* LiveTonePrivacyTests.swift */; };
+		8C0000000000000000000001 /* LiveToneKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B0000000000000000000005 /* LiveToneKeys.swift */; };
+		8C0000000000000000000002 /* LiveToneCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B0000000000000000000006 /* LiveToneCopy.swift */; };
+		8C0000000000000000000003 /* LiveToneMasterToggle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B0000000000000000000007 /* LiveToneMasterToggle.swift */; };
+		8C0000000000000000000004 /* LiveToneCounters.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B0000000000000000000008 /* LiveToneCounters.swift */; };
+		8C0000000000000000000010 /* LiveToneEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B0000000000000000000010 /* LiveToneEngine.swift */; };
+		8C0000000000000000000011 /* LiveToneIndicatorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B0000000000000000000011 /* LiveToneIndicatorView.swift */; };
+		8C0000000000000000000012 /* LiveToneManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B0000000000000000000012 /* LiveToneManager.swift */; };
+		8C0000000000000000000020 /* LiveToneV1AcceptanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B0000000000000000000020 /* LiveToneV1AcceptanceTests.swift */; };
 		1F625673B188289A9DEBCA36 /* ContactsSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E33B6F18B213E414885CCCA /* ContactsSync.swift */; };
 		2006FA0CC979F68A4F917014 /* MockToneAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C69903847843E133412E1E5 /* MockToneAnalyzer.swift */; };
 		20D1B23B844C847F7AB362C3 /* RecipientMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58D322318012F6E3758FBE16 /* RecipientMemory.swift */; };
@@ -191,8 +197,14 @@
 		8A0000000000000000000003 /* LiveTonePrivacy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTonePrivacy.swift; sourceTree = "<group>"; };
 		8A0000000000000000000004 /* LiveToneEligibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveToneEligibility.swift; sourceTree = "<group>"; };
 		8A0000000000000000000005 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
-		8A0000000000000000000006 /* LiveToneCoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveToneCoreTests.swift; sourceTree = "<group>"; };
-		8A0000000000000000000007 /* LiveTonePrivacyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTonePrivacyTests.swift; sourceTree = "<group>"; };
+		8B0000000000000000000005 /* LiveToneKeys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveToneKeys.swift; sourceTree = "<group>"; };
+		8B0000000000000000000006 /* LiveToneCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveToneCopy.swift; sourceTree = "<group>"; };
+		8B0000000000000000000007 /* LiveToneMasterToggle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveToneMasterToggle.swift; sourceTree = "<group>"; };
+		8B0000000000000000000008 /* LiveToneCounters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveToneCounters.swift; sourceTree = "<group>"; };
+		8B0000000000000000000010 /* LiveToneEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveToneEngine.swift; sourceTree = "<group>"; };
+		8B0000000000000000000011 /* LiveToneIndicatorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveToneIndicatorView.swift; sourceTree = "<group>"; };
+		8B0000000000000000000012 /* LiveToneManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveToneManager.swift; sourceTree = "<group>"; };
+		8B0000000000000000000020 /* LiveToneV1AcceptanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveToneV1AcceptanceTests.swift; sourceTree = "<group>"; };
 		3BEE71892FA8D9333320C272 /* Tono.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = Tono.storekit; sourceTree = "<group>"; };
 		3C69903847843E133412E1E5 /* MockToneAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockToneAnalyzer.swift; sourceTree = "<group>"; };
 		3C73FA31B4F44D8110957849 /* MemoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryView.swift; sourceTree = "<group>"; };
@@ -306,8 +318,7 @@
 				920000000000000000000010 /* BuildNumberGuardTests.swift */,
 				920000000000000000000020 /* KeyboardControlGeometryTests.swift */,
 				920000000000000000000030 /* CoachSpellingHostSessionContractTests.swift */,
-				8A0000000000000000000006 /* LiveToneCoreTests.swift */,
-				8A0000000000000000000007 /* LiveTonePrivacyTests.swift */,
+				8B0000000000000000000020 /* LiveToneV1AcceptanceTests.swift */,
 				850000000000000000000005 /* SpellingCorrectionTests.swift */,
 			);
 			name = Tests;
@@ -339,6 +350,10 @@
 				8A0000000000000000000001 /* LiveToneClassifier.swift */,
 				8A0000000000000000000003 /* LiveTonePrivacy.swift */,
 				8A0000000000000000000002 /* LiveToneSession.swift */,
+				8B0000000000000000000005 /* LiveToneKeys.swift */,
+				8B0000000000000000000006 /* LiveToneCopy.swift */,
+				8B0000000000000000000007 /* LiveToneMasterToggle.swift */,
+				8B0000000000000000000008 /* LiveToneCounters.swift */,
 				640260545EC970E83D72B3B0 /* MetricKitReporter.swift */,
 				3C69903847843E133412E1E5 /* MockToneAnalyzer.swift */,
 				A20246E7AA254A3BFC26B2ED /* NotificationManager.swift */,
@@ -414,6 +429,9 @@
 				870000000000000000000004 /* TonoKeyboardVisualStyle.swift */,
 				850000000000000000000004 /* SpellingCorrection.swift */,
 				6EE5759E683FD2ECA633D8FC /* TonoCoachClient.swift */,
+				8B0000000000000000000010 /* LiveToneEngine.swift */,
+				8B0000000000000000000011 /* LiveToneIndicatorView.swift */,
+				8B0000000000000000000012 /* LiveToneManager.swift */,
 				FF0B5EB3DADDC595EEDC1B0B /* TonoKeyboard.entitlements */,
 			);
 			path = KeyboardExtension;
@@ -635,6 +653,17 @@
 				C2C9DD7206A65B1579A5190A /* RecipientMemory.swift in Sources */,
 				6A419FF921198D93A073AB0E /* SharedKeychain.swift in Sources */,
 				A4FDDCB7F7C0264C39FF6732 /* SharedUserDefaults.swift in Sources */,
+				8A0000000000000000000011 /* LiveToneClassifier.swift in Sources */,
+				8A0000000000000000000012 /* LiveToneSession.swift in Sources */,
+				8A0000000000000000000013 /* LiveTonePrivacy.swift in Sources */,
+				8A0000000000000000000014 /* LiveToneEligibility.swift in Sources */,
+				8C0000000000000000000001 /* LiveToneKeys.swift in Sources */,
+				8C0000000000000000000002 /* LiveToneCopy.swift in Sources */,
+				8C0000000000000000000003 /* LiveToneMasterToggle.swift in Sources */,
+				8C0000000000000000000004 /* LiveToneCounters.swift in Sources */,
+				8C0000000000000000000010 /* LiveToneEngine.swift in Sources */,
+				8C0000000000000000000011 /* LiveToneIndicatorView.swift in Sources */,
+				8C0000000000000000000012 /* LiveToneManager.swift in Sources */,
 				8638A0EAAAB038498BE22829 /* StoreKitManager.swift in Sources */,
 				AF282DE8A0AFCB8E77D1DAD8 /* StyleMemory.swift in Sources */,
 				CAC1F787FB6D455F9E2ED646 /* ToneEngine.swift in Sources */,
@@ -680,8 +709,18 @@
 				850000000000000000000003 /* SpellingCorrectionTests.swift in Sources */,
 				860000000000000000000001 /* CoachContractTests.swift in Sources */,
 				940000000000000000000002 /* CoachVariantSettings.swift in Sources */,
-				8A0000000000000000000016 /* LiveToneCoreTests.swift in Sources */,
-				8A0000000000000000000017 /* LiveTonePrivacyTests.swift in Sources */,
+				8C0000000000000000000020 /* LiveToneV1AcceptanceTests.swift in Sources */,
+				8C0000000000000000000010 /* LiveToneEngine.swift in Sources */,
+				8C0000000000000000000011 /* LiveToneIndicatorView.swift in Sources */,
+				8C0000000000000000000012 /* LiveToneManager.swift in Sources */,
+				8A0000000000000000000011 /* LiveToneClassifier.swift in Sources */,
+				8A0000000000000000000012 /* LiveToneSession.swift in Sources */,
+				8A0000000000000000000013 /* LiveTonePrivacy.swift in Sources */,
+				8A0000000000000000000014 /* LiveToneEligibility.swift in Sources */,
+				8C0000000000000000000001 /* LiveToneKeys.swift in Sources */,
+				8C0000000000000000000002 /* LiveToneCopy.swift in Sources */,
+				8C0000000000000000000003 /* LiveToneMasterToggle.swift in Sources */,
+				8C0000000000000000000004 /* LiveToneCounters.swift in Sources */,
 				860000000000000000000002 /* TonoCoachClient.swift in Sources */,
 				870000000000000000000002 /* TonoKeyboardVisualStyle.swift in Sources */,
 				870000000000000000000003 /* KeyboardVisualStyleTests.swift in Sources */,
@@ -734,6 +773,10 @@
 				8A0000000000000000000012 /* LiveToneSession.swift in Sources */,
 				8A0000000000000000000013 /* LiveTonePrivacy.swift in Sources */,
 				8A0000000000000000000014 /* LiveToneEligibility.swift in Sources */,
+				8C0000000000000000000001 /* LiveToneKeys.swift in Sources */,
+				8C0000000000000000000002 /* LiveToneCopy.swift in Sources */,
+				8C0000000000000000000003 /* LiveToneMasterToggle.swift in Sources */,
+				8C0000000000000000000004 /* LiveToneCounters.swift in Sources */,
 				2F986D1C30D60DF7044A1827 /* HomeView.swift in Sources */,
 				5A3F5B2DEE787882EB6A04AC /* MemoryView.swift in Sources */,
 				BCE86246C1AA22B4751B06C8 /* MetricKitReporter.swift in Sources */,

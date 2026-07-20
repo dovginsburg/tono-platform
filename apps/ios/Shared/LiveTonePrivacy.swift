@@ -1,80 +1,44 @@
 // LiveTonePrivacy.swift
-// Local, deterministic control surface for Tono "Live Tone" (build-90
-// experiment). Holds the explicit opt-in, the user kill switch, the
-// user-declared host allowlist, and the local-only remote-disable directive.
+// Tono Live Tone v1 — shipping release control surface.
 //
-// Everything here is App Group `UserDefaults` I/O plus `Codable`. There is no
-// networking, no timer, and no background work in this file — the keyboard
-// process observes state by reading fresh from the shared store, so a user
-// kill or an applied remote directive takes effect on the very next read.
+// The v1 contract collapses the build-90 experiment's three-axis gate
+// (opt-in + user-paused + remote-disable + host-category allowlist) into
+// a single default-ON master toggle persisted in App Group
+// `UserDefaults`. The keyboard and host app share the same store via
+// `LiveToneKeys.appGroupSuite`.
 //
-// The remote-disable *refresh* is intentionally NOT performed here: per the
-// contract it may only ride an existing, deliberate Coach round-trip. This
-// file defines the typed directive, the pure flag→directive parser, and the
-// local persistence; the integration lane calls `refreshRemoteDirective`
-// from the Coach completion handler it already owns. No new network client,
-// polling loop, or timer is introduced.
-//
-// Preference keys live here (not in SharedKeys) so this control surface and
-// its verifier stay self-contained; SharedUserDefaults.swift carries a
-// pointer comment. All keys share the existing `tc.` namespace and the
-// existing App Group suite.
+// Pure `Foundation` + App Group `UserDefaults`. No networking, no timer,
+// no background work, no analytics. Every read returns the freshest
+// value the host wrote — the engine consults the toggle before every
+// classification invocation so a flip is observed on the very next
+// keystroke.
 
 import Foundation
 
-// MARK: - Keys
+// MARK: - Keys (kept here for backward-compatible reference).
 
 public enum LiveTonePrivacyKeys {
-    /// Existing shared App Group suite (matches SharedStore.suiteName).
+    /// App Group suite used by all Tono extensions. Mirrors
+    /// `SharedStore.suiteName`.
     public static let appGroupSuite = "group.com.tonoit.shared"
 
-    /// Bool. Explicit, deliberate opt-in. Absent ⇒ false ⇒ Live Tone OFF.
-    public static let optIn = "tc.liveTone.optIn"
-    /// Bool. User kill switch. Absent ⇒ false ⇒ not paused. Setting true
-    /// disables Live Tone immediately without discarding the opt-in/allowlist.
-    public static let userPaused = "tc.liveTone.userPaused"
-    /// Data (JSON `LiveToneRemoteDirective`). Absent ⇒ allowed.
-    public static let remoteDirective = "tc.liveTone.remoteDirective"
-    /// [String] of `LiveToneHostCategory` raw values the user has allowed.
-    public static let allowedHostCategories = "tc.liveTone.allowedHostCategories"
-}
+    /// Master toggle key. Absent ⇒ default ON.
+    public static let masterEnabled = "tc.liveTone.masterEnabled"
 
-// MARK: - Remote-disable directive
-
-/// Typed, versioned remote-disable contract. It is refreshed only during an
-/// existing Coach round-trip and stored locally; it is never fetched on a
-/// timer or background schedule.
-public struct LiveToneRemoteDirective: Equatable, Codable {
-    public static let currentSchema = 1
-
-    public let schema: Int
-    public let disabled: Bool
-    /// Optional coarse, non-PII reason code for diagnostics (e.g. "rollback").
-    public let reasonCode: String?
-
-    public init(disabled: Bool, reasonCode: String? = nil, schema: Int = LiveToneRemoteDirective.currentSchema) {
-        self.schema = schema
-        self.disabled = disabled
-        self.reasonCode = reasonCode
-    }
-
-    /// The default, permissive directive used before any Coach round-trip.
-    public static let allowed = LiveToneRemoteDirective(disabled: false)
-
-    public var isDisabled: Bool { disabled }
+    /// JSON-encoded `LiveToneLocalCounters`.
+    public static let localCounters = "tc.liveTone.localCounters"
 }
 
 // MARK: - Preference facade
 
-/// Reads/writes the Live Tone control state in App Group `UserDefaults`.
-/// A value type over an injected store so the keyboard, the host app, and
-/// tests can each point at the right defaults; it caches nothing.
+/// A value type over an injected `UserDefaults` instance so the host
+/// app, the keyboard extension, and the tests can each point at the
+/// right defaults. Caches nothing — every read is fresh.
 public struct LiveTonePreference {
 
-    /// Sentinel `flags` value the backend can include in an ordinary Coach
-    /// response (`CoachResponse.flags`) to disable Live Tone client-side. No
-    /// new endpoint or payload field is required.
-    public static let disableFlag = "live_tone_disabled"
+    /// Exact wording for the Settings disclosure row. Must match
+    /// `LiveToneCopy.settingsDisclosure` byte-for-byte.
+    public static let settingsCopy = LiveToneCopy.settingsDisclosure
 
     private let defaults: UserDefaults
 
@@ -82,87 +46,26 @@ public struct LiveTonePreference {
         self.defaults = defaults
     }
 
-    /// Points at the shared App Group store used by the app and extensions.
-    /// Falls back to `.standard` only if the suite is somehow unavailable.
+    /// Convenience initializer pointing at the shared App Group store.
+    /// Falls back to `.standard` only when the suite is unavailable.
     public init() {
         self.defaults = UserDefaults(suiteName: LiveTonePrivacyKeys.appGroupSuite) ?? .standard
     }
 
-    // MARK: Opt-in (default false)
-
-    public var isOptedIn: Bool {
-        get { defaults.bool(forKey: LiveTonePrivacyKeys.optIn) }
-        nonmutating set { defaults.set(newValue, forKey: LiveTonePrivacyKeys.optIn) }
-    }
-
-    // MARK: User kill switch
-
-    public var isUserPaused: Bool {
-        get { defaults.bool(forKey: LiveTonePrivacyKeys.userPaused) }
-        nonmutating set { defaults.set(newValue, forKey: LiveTonePrivacyKeys.userPaused) }
-    }
-
-    /// Immediate user kill: the next fresh read in the keyboard sees it.
-    public func kill() { isUserPaused = true }
-
-    /// Undo a kill without touching the opt-in or allowlist.
-    public func resume() { isUserPaused = false }
-
-    // MARK: Host allowlist
-
-    public var allowedHostCategories: Set<LiveToneHostCategory> {
-        get {
-            let raw = defaults.array(forKey: LiveTonePrivacyKeys.allowedHostCategories) as? [String] ?? []
-            return Set(raw.compactMap(LiveToneHostCategory.init(rawValue:)))
-        }
-        nonmutating set {
-            // Stored sorted for a deterministic on-disk representation.
-            defaults.set(newValue.map(\.rawValue).sorted(), forKey: LiveTonePrivacyKeys.allowedHostCategories)
-        }
-    }
-
-    // MARK: Remote directive
-
-    public var remoteDirective: LiveToneRemoteDirective {
-        guard let data = defaults.data(forKey: LiveTonePrivacyKeys.remoteDirective),
-              let decoded = try? JSONDecoder().decode(LiveToneRemoteDirective.self, from: data) else {
-            return .allowed
-        }
-        return decoded
-    }
-
-    public var isRemoteDisabled: Bool { remoteDirective.isDisabled }
-
-    /// Persist a directive locally. Called only from the Coach completion
-    /// handler (integration) — never on a timer or background task.
-    public func applyRemoteDirective(_ directive: LiveToneRemoteDirective) {
-        guard let data = try? JSONEncoder().encode(directive) else { return }
-        defaults.set(data, forKey: LiveTonePrivacyKeys.remoteDirective)
-    }
-
-    /// Pure map from an existing Coach response's `flags` array to a directive.
-    /// Kept static + pure so it can be unit-tested without any store.
-    public static func directive(fromCoachFlags flags: [String]) -> LiveToneRemoteDirective {
-        LiveToneRemoteDirective(disabled: flags.contains(disableFlag))
-    }
-
-    /// Convenience the integration calls from the Coach completion handler:
-    /// derive the directive from the flags it already received and persist it.
-    /// This is the ONLY sanctioned refresh path — it piggybacks the deliberate
-    /// round-trip the user initiated and adds no new network activity.
-    @discardableResult
-    public func refreshRemoteDirective(fromCoachFlags flags: [String]) -> LiveToneRemoteDirective {
-        let directive = LiveTonePreference.directive(fromCoachFlags: flags)
-        applyRemoteDirective(directive)
-        return directive
-    }
-
-    // MARK: Resolved master gate
-
-    /// The single gate eligibility consults: the user opted in, has not killed
-    /// it, and no remote directive has disabled it. Any of the three flipping
-    /// off disables Live Tone on the next read.
+    /// The contract-binding default-ON master toggle. `true` means the
+    /// heuristic runs (subject to per-field eligibility); `false` means
+    /// zero evaluation runs.
     public var masterEnabled: Bool {
-        isOptedIn && !isUserPaused && !isRemoteDisabled
+        if defaults.object(forKey: LiveTonePrivacyKeys.masterEnabled) == nil {
+            return true
+        }
+        return defaults.bool(forKey: LiveTonePrivacyKeys.masterEnabled)
     }
+
+    public func setMasterEnabled(_ on: Bool) {
+        defaults.set(on, forKey: LiveTonePrivacyKeys.masterEnabled)
+    }
+
+    /// Synchronous read used by the engine on every classification pass.
+    public func evaluateNow() -> Bool { masterEnabled }
 }

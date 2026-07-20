@@ -292,6 +292,12 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     private func advanceHostSession() {
         hostSessionSerial &+= 1
+        #if !TONO_BUILD92_HOSTSESSION
+        // Live Tone v1 — field / editing-session boundary. Per-draft
+        // suppression must reset here so a new field starts fresh.
+        // Pure observer call; never touches the keystroke path.
+        liveToneManager?.fieldDidReset()
+        #endif
     }
 
     private var keysStack: UIStackView?
@@ -332,6 +338,18 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private weak var coachButton: TonoCoachButton?
     private var candidateValues: [String] = []
 
+    // Live Tone v1 — shipping release. Pure observer; never touches the
+    // keystroke path. The manager owns the debouncer, the session state
+    // machine, the preference reads, and the indicator view.
+    #if !TONO_BUILD92_HOSTSESSION
+    private var liveToneManager: LiveToneManager?
+    /// The most recent character we observed via the proxy. Used to
+    /// decide whether a sentence-ending punctuation should flush the
+    /// debounce immediately (500 ms typing-idle OR punctuation, whichever
+    /// fires first — binding Live Tone v1 contract).
+    private var liveToneLastCommittedCharacter: Character?
+    #endif
+
     // MARK: - Lifecycle
 
     public override func viewDidLoad() {
@@ -353,6 +371,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         updateHostConfiguration(rebuildIfNeeded: false)
         installKeyboardLayout()
         keysInstalled = true
+        #if !TONO_BUILD92_HOSTSESSION
+        installLiveTone()
+        #endif
         #if !TONO_BUILD92_HOSTSESSION
         requestSupplementaryLexicon { [weak self] lexicon in
             let words = Set(lexicon.entries.lazy.flatMap { [$0.userInput, $0.documentText] })
@@ -402,6 +423,13 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         } else {
             effectiveContext = liveContext
         }
+        // Live Tone v1 — passive observer. The keystroke path is untouched.
+        // We forward the post-mutation context plus the last committed
+        // character so the engine can decide whether to flush on
+        // sentence-ending punctuation.
+        #if !TONO_BUILD92_HOSTSESSION
+        liveToneDidMutate(context: effectiveContext)
+        #endif
         DispatchQueue.main.async { [weak self] in
             guard let self, self.documentMutationGeneration == generation else { return }
             self.refreshHostConfigurationIfNeeded()
@@ -2534,6 +2562,48 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachRewriteTarget = target
         runCoach(draft: target.draft)
     }
+
+    // MARK: - Live Tone v1 integration
+
+#if !TONO_BUILD92_HOSTSESSION
+    /// Construct + install the Live Tone manager. Called once from
+    /// `viewDidLoad` after the keyboard layout is in place. The manager
+    /// owns its own indicator view which is added as a passive
+    /// subview on top of the keyboard container so the warning never
+    /// blocks typing.
+    private func installLiveTone() {
+        let manager = LiveToneManager()
+        // Wire the [Rewrite] button to the existing Coach flow so the
+        // user-invoked rewrite surface stays a single tap away. The
+        // handler is the only path that opens the rewrite flow; Live
+        // Tone never opens it uninvited.
+        manager.setRewriteHandler { [weak self] in
+            self?.coachTapped()
+        }
+        if let container = bodyContainer {
+            manager.indicator.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(manager.indicator)
+            NSLayoutConstraint.activate([
+                manager.indicator.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                manager.indicator.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+                manager.indicator.topAnchor.constraint(equalTo: container.topAnchor),
+                manager.indicator.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor)
+            ])
+        }
+        liveToneManager = manager
+    }
+
+    /// Observer hook called from `textDidChange(_:)`. Pure observer:
+    /// never modifies the document, never blocks the keystroke path,
+    /// never opens the rewrite flow. The manager debounces; punctuation
+    /// is detected from the post-mutation context's trailing character.
+    private func liveToneDidMutate(context: String) {
+        guard let manager = liveToneManager else { return }
+        let trailing = context.last
+        manager.observe(character: trailing ?? " ", draft: context)
+        liveToneLastCommittedCharacter = trailing
+    }
+#endif
 }
 
 /// Shared keycap press treatment. It changes in the same event frame as
