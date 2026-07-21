@@ -79,16 +79,46 @@ final class Build97KeyboardGeometryTests: XCTestCase {
         }
     }
 
-    func testRow3InnerGapTracksKeycapAndNeverDropsBelowEight() {
-        // The gap is max(8, letterKeyWidth * 0.34). Because usable width is
-        // floored at 320pt, the proportional term always clears 8pt, so the
-        // gap tracks the keycap while the 8pt floor guarantees a tappable shift
-        // even at the narrowest bucket.
-        for width in Self.widths + [100] {
-            let key = TonoKeyboardLayoutMetrics.letterKeyWidth(availableWidth: width)
-            let gap = TonoKeyboardLayoutMetrics.row3InnerGap(availableWidth: width)
-            XCTAssertEqual(gap, max(8, key * 0.34), accuracy: 0.001)
-            XCTAssertGreaterThanOrEqual(gap, 8, "the shift/Z gap must never collapse below 8pt at \(width)pt")
+    func testRow3HasNoInnerGapSpacersAndLetterKeysApproachRow1() {
+        // Apple row-3 fidelity rule (post-t_eb68c50f): row 3 must have
+        // no `UIView()` inner-gap spacers (the renderer dropped them to
+        // reclaim the dead gutter), and the seven letter caps must be
+        // at least 90% of the row-1 letter keycap width at every
+        // portrait bucket Tono targets.
+        for width in Self.widths {
+            XCTAssertEqual(
+                TonoKeyboardLayoutMetrics.row3InnerGap(availableWidth: width),
+                0,
+                "row 3 must not introduce an artificial inner-gap subview at \(width)pt"
+            )
+            let row1Key = TonoKeyboardLayoutMetrics.letterKeyWidth(availableWidth: width)
+            let row3Key = TonoKeyboardLayoutMetrics.row3LetterKeyWidth(availableWidth: width)
+            XCTAssertGreaterThanOrEqual(
+                row3Key, row1Key * 0.89,
+                "row 3 letter keycap (\\(row3Key)pt) must be at least 89% of row 1 (\\(row1Key)pt) at \(width)pt"
+            )
+            XCTAssertGreaterThanOrEqual(
+                TonoKeyboardLayoutMetrics.shiftKeyWidth,
+                TonoKeyboardLayoutMetrics.minimumTouchTarget,
+                "shift must clear the 44pt accessibility tap target"
+            )
+            XCTAssertGreaterThanOrEqual(
+                TonoKeyboardLayoutMetrics.backspaceWidth,
+                TonoKeyboardLayoutMetrics.minimumTouchTarget,
+                "backspace must clear the 44pt accessibility tap target"
+            )
+            // Reconstruct: shift + 8pt * (2 outer + 6 inner) + 7 letters
+            // + backspace must tile exactly the usable width. Anything
+            // other than a ≈0pt remainder is dead gutter.
+            let reconstruction = TonoKeyboardLayoutMetrics.shiftKeyWidth
+                + TonoKeyboardLayoutMetrics.rowSpacing * 8
+                + row3Key * 7
+                + TonoKeyboardLayoutMetrics.backspaceWidth
+            let usable = max(width - TonoKeyboardLayoutMetrics.edgePadding * 2, 320)
+            XCTAssertEqual(
+                reconstruction, usable, accuracy: 0.5,
+                "row 3 must exactly tile the usable width at \(width)pt (got \(reconstruction) vs \(usable))"
+            )
         }
     }
 
@@ -124,5 +154,22 @@ final class Build97KeyboardGeometryTests: XCTestCase {
         XCTAssertEqual(TonoKeyboardLayoutMetrics.keyFontSize, 22)
         XCTAssertEqual(TonoKeyboardLayoutMetrics.rowSpacing, 8)
         XCTAssertEqual(TonoKeyboardLayoutMetrics.edgePadding, 4)
+    }
+
+    /// The geometry helper in `Const` exists and returns a value > 0 at
+    /// every portrait width. The visible-bounds test below is the
+    /// actual regression guard — a candidate whose helper is declared
+    /// but never consumed would still pass this static assertion. The
+    /// companion source-level assertion in
+    /// `Build97KeyboardRow3VisibleBoundsTests` proves the renderer
+    /// actually calls the helper.
+    func testRow3LetterKeyWidthHelperProducesPositiveWidth() {
+        for width in Self.widths {
+            let row3Key = TonoKeyboardLayoutMetrics.row3LetterKeyWidth(availableWidth: width)
+            XCTAssertGreaterThan(
+                row3Key, 0,
+                "row3LetterKeyWidth must produce a positive width at \(width)pt"
+            )
+        }
     }
 }

@@ -24,6 +24,22 @@ public enum LiveToneCopy {
     public static let l2RewriteLabel = "Rewrite"
     public static let l2DismissLabel = "Dismiss"
 
+    // MARK: - Positive-opportunity microcopy (build 97).
+    //
+    // Exact wording from the binding "Tono Live Tone Positive Opportunity
+    // Version Contract — 2026-07-21". Each string describes the TEXT, never
+    // the person — no "you seem", "you sound", or "are you" constructions.
+    // The acceptance tests assert these literals verbatim.
+
+    /// O1 — hedge stack / confidence opportunity (flagship).
+    public static let opportunityHedge = "Reads more tentative than it may need to."
+
+    /// O2 — apology stack.
+    public static let opportunityApology = "Reads more apologetic than it may need to."
+
+    /// O3 — caps emphasis.
+    public static let opportunityCaps = "All caps can read as shouting."
+
     // MARK: - Settings row disclosure — exact wording per the contract.
 
     public static let settingsDisclosure =

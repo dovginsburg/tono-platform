@@ -666,7 +666,10 @@ final class LiveToneV1PrivacySourceGuardTests: XCTestCase {
                      "LiveToneCopy.swift",
                      "LiveToneKeys.swift",
                      "LiveTonePrivacy.swift",
-                     "LiveToneEligibility.swift"] {
+                     "LiveToneEligibility.swift",
+                     "LiveToneOpportunity.swift",
+                     "LiveToneOpportunitySession.swift",
+                     "LiveToneOpportunityCounters.swift"] {
             let path = sharedDir.appendingPathComponent(name)
             let source = try String(contentsOf: path, encoding: .utf8)
             for token in forbidden where source.contains(token) {

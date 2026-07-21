@@ -75,14 +75,40 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             (letterKeyWidth(availableWidth: availableWidth) + rowSpacing) / 2
         }
 
-        static func row3InnerGap(availableWidth: CGFloat) -> CGFloat {
-            max(8, letterKeyWidth(availableWidth: availableWidth) * 0.34)
+        // Row 3 has no separate "inner gap" subview — the row stack's
+        // 8pt `row.spacing` already separates shift / letters / backspace.
+        // The two old `UIView()` spacers were pure dead gutters that ate
+        // the very width the spec calls for on z..m (Sherlock regression
+        // evidence, parent task t_eb68c50f).
+        static func row3InnerGap(availableWidth: CGFloat) -> CGFloat { 0 }
+
+        // Width each row-3 letter cap SHOULD occupy after the shift and
+        // backspace modifiers take their fixed portions. The renderer
+        // actually consumes this — see `makeRow3`'s middle-stack width
+        // constraint. This helper is the single source of truth for both
+        // SwiftUI (AppleFidelity) and UIKit (`KeyboardViewController`),
+        // so the visible-bounds regression test below cannot drift.
+        //
+        // Apple portrait measurements: shift ≈ 44pt, backspace ≈ 54pt,
+        // letterKeyWidth ≈ 30pt. The eight row spacings include the two
+        // visible neighbours of the middle stack plus the six between
+        // the seven letter caps.
+        static func row3LetterKeyWidth(availableWidth: CGFloat) -> CGFloat {
+            let usable = max(availableWidth - edgePadding * 2, 320)
+            let shiftAndBackspace = shiftKeyWidth + backspaceWidth
+            let spacings = rowSpacing * 8
+            return max((usable - shiftAndBackspace - spacings) / 7, 0)
         }
 
         // Bottom-row widths — match the visible iOS layout.
         static let modeToggleWidth: CGFloat = 46
         static let emojiButtonWidth: CGFloat = TonoKeyboardMetrics.ControlGeometry.emojiToggleWidth
         static let backspaceWidth: CGFloat = 54
+        // Apple-portrait shift key — narrower than the backspace but
+        // still clears the 44pt accessibility tap target. Sourced once
+        // here so the geometry helper and the button constraint agree
+        // (Sherlock regression evidence, parent task t_eb68c50f).
+        static let shiftKeyWidth: CGFloat = 44
         static let returnWidth: CGFloat = 72
 
         // Coach UX.
@@ -985,14 +1011,14 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             }
         }
 
-        if layoutMode == .letters {
-            let innerGap = UIView()
-            innerGap.translatesAutoresizingMaskIntoConstraints = false
-            innerGap.widthAnchor.constraint(
-                equalToConstant: Const.row3InnerGap(availableWidth: currentKeyboardWidth)
-            ).isActive = true
-            row.addArrangedSubview(innerGap)
-        }
+        // Row 3 has no separate "inner gap" UIView subview. The row
+        // stack's 8pt `row.spacing` already separates shift / letters /
+        // backspace. The two old `UIView()` spacers here were pure dead
+        // gutters that ate the very width the spec calls for on z..m —
+        // Sherlock regression evidence, parent task t_eb68c50f. The
+        // middle stack's width is now anchored to
+        // `row3LetterKeyWidth * 7` so the letters actually consume the
+        // reclaimed space.
 
         let middle = UIStackView()
         middle.axis = .horizontal
@@ -1002,16 +1028,15 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         for ch in row3BaseChars() {
             middle.addArrangedSubview(makeCharButton(ch))
         }
+        // Wire the middle stack to the helper's computed width so the
+        // letters actually get the reclaimed space (the failure mode in
+        // the 339775cf candidate — helper defined but never consumed by
+        // the UIKit row). The fillEqually distribution inside `middle`
+        // then tiles its width into seven equal keycaps.
+        middle.widthAnchor.constraint(
+            equalToConstant: Const.row3LetterKeyWidth(availableWidth: currentKeyboardWidth) * 7
+        ).isActive = true
         row.addArrangedSubview(middle)
-
-        if layoutMode == .letters {
-            let trailingInnerGap = UIView()
-            trailingInnerGap.translatesAutoresizingMaskIntoConstraints = false
-            trailingInnerGap.widthAnchor.constraint(
-                equalToConstant: Const.row3InnerGap(availableWidth: currentKeyboardWidth)
-            ).isActive = true
-            row.addArrangedSubview(trailingInnerGap)
-        }
 
         let backspace = makeSymbolControlButton(
             systemName: "delete.left",
@@ -1065,7 +1090,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         b.layer.borderColor = keyboardKeyBorder().cgColor
         b.accessibilityLabel = shiftAccessibilityLabel()
         b.accessibilityIdentifier = Const.idShift
-        b.widthAnchor.constraint(equalToConstant: Const.backspaceWidth).isActive = true
+        b.widthAnchor.constraint(equalToConstant: Const.shiftKeyWidth).isActive = true
         b.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight).isActive = true
         let singleTap = UITapGestureRecognizer(target: self, action: #selector(shiftSingleTapped))
         let doubleTap = UITapGestureRecognizer(target: self, action: #selector(shiftDoubleTapped))

@@ -12,15 +12,18 @@
 #   ./run_live_tone_focused.sh
 #
 # Exit codes:
-#   0  — both verifiers passed; logs under /tmp/litone/
+#   0  — all verifiers passed; logs under /tmp/litone/
 #   1  — privacy verifier compile/runtime failure
 #   2  — focused verifier compile/runtime failure
+#   3  — positive-opportunity verifier compile/runtime failure
 #
 # Artifacts (created on success):
 #   /tmp/litone/lt_verify          — privacy verifier binary
 #   /tmp/litone/lt_verify.log      — privacy verifier stdout/stderr
 #   /tmp/litone/lt_focused         — focused verifier binary
 #   /tmp/litone/lt_focused.log     — focused verifier stdout/stderr
+#   /tmp/litone/lt_opp             — positive-opportunity verifier binary
+#   /tmp/litone/lt_opp.log         — positive-opportunity verifier stdout/stderr
 
 set -euo pipefail
 
@@ -69,6 +72,24 @@ swiftc -o "$ART_DIR/lt_focused" \
 echo "==> run focused verifier"
 "$ART_DIR/lt_focused" 2>&1 | tee "$ART_DIR/lt_focused.log"
 
+echo "==> compile positive-opportunity verifier"
+if ! swiftc -o "$ART_DIR/lt_opp" \
+  Shared/LiveToneClassifier.swift \
+  Shared/LiveToneCopy.swift \
+  Shared/LiveToneOpportunity.swift \
+  Shared/LiveToneOpportunitySession.swift \
+  Shared/LiveToneOpportunityCounters.swift \
+  Shared/LiveToneOpportunityFixtures.swift \
+  Scripts/verify_live_tone_opportunity.swift; then
+  echo "positive-opportunity verifier failed to compile" >&2
+  exit 3
+fi
+
+echo "==> run positive-opportunity verifier"
+if ! "$ART_DIR/lt_opp" 2>&1 | tee "$ART_DIR/lt_opp.log"; then
+  exit 3
+fi
+
 echo
 echo "==> SHA-256 receipts"
-shasum -a 256 "$ART_DIR/lt_verify.log"  "$ART_DIR/lt_focused.log"
+shasum -a 256 "$ART_DIR/lt_verify.log"  "$ART_DIR/lt_focused.log"  "$ART_DIR/lt_opp.log"

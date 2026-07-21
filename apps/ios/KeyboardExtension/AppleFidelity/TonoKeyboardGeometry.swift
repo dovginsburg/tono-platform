@@ -11,7 +11,10 @@
 //   * letterKeyWidth      = (usable - rowSpacing*9) / 10 at portrait widths
 //   * row2HorizontalInset = (letterKeyWidth + rowSpacing) / 2   — half keycap
 //                          so row 2 sits visually centered under row 1
-//   * row3InnerGap        = max(8, letterKeyWidth * 0.34)        — matches iOS
+//   * row3InnerGap        = 0 (no inner-gap UIView — row.stack's 8pt
+//                          `spacing` already separates shift / letters
+//                          / backspace; the renderer anchors the
+//                          letter middle stack to `row3LetterKeyWidth*7`)
 //   * cornerRadius        = 5pt
 //   * fontSize            = 22pt        (Apple system keyboard)
 //   * rowSpacing          = 8pt
@@ -68,11 +71,35 @@ public enum TonoKeyboardLayoutMetrics {
         (letterKeyWidth(availableWidth: availableWidth) + rowSpacing) / 2
     }
 
-    /// Row 3 inner gap between the shift key and the Z key. Apple uses
-    /// ~letterKeyWidth * 0.34; we floor at 8pt so very narrow widths still
-    /// keep a tappable shift.
-    public static func row3InnerGap(availableWidth: CGFloat) -> CGFloat {
-        max(8, letterKeyWidth(availableWidth: availableWidth) * 0.34)
+    /// Row 3 has no separate "inner gap" subview — the seven letter caps use
+    /// the space between the two modifier controls. The outer row spacing
+    /// remains the intentional Apple rhythm, while the modifiers retain
+    /// full targets. The two old `UIView()` spacers in `makeRow3` were
+    /// pure dead gutters that ate the very width the spec calls for on
+    /// z..m (Sherlock regression evidence, parent task t_eb68c50f).
+    public static func row3InnerGap(availableWidth: CGFloat) -> CGFloat { 0 }
+
+    /// Apple-portrait shift key — narrower than the backspace but still
+    /// clears the 44pt accessibility tap target. Single source of truth
+    /// for both SwiftUI Apple-fidelity helper and the UIKit
+    /// `KeyboardViewController.Const.shiftKeyWidth`.
+    public static let shiftKeyWidth: CGFloat = 44
+
+    /// Width each row-3 letter cap SHOULD occupy after the shift and
+    /// backspace modifiers take their fixed portions. The renderer must
+    /// consume this — see `KeyboardViewController.makeRow3`'s middle-stack
+    /// width constraint. Both layers (SwiftUI AppleFidelity and UIKit
+    /// KeyboardViewController) read this helper so the geometry cannot
+    /// silently drift between layers.
+    ///
+    /// Apple portrait measurements: shift ≈ 44pt, backspace ≈ 54pt,
+    /// letterKeyWidth ≈ 30pt. Eight row spacings = 2 around the middle
+    /// stack + 6 between the seven letter caps.
+    public static func row3LetterKeyWidth(availableWidth: CGFloat) -> CGFloat {
+        let usable = max(availableWidth - edgePadding * 2, 320)
+        let shiftAndBackspace = shiftKeyWidth + backspaceWidth
+        let spacings = rowSpacing * 8
+        return max((usable - shiftAndBackspace - spacings) / 7, 0)
     }
 
     // Bottom-row widths — Apple's portrait proportions.
