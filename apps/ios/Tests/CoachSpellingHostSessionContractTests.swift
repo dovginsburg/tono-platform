@@ -84,7 +84,9 @@ final class CoachSpellingHostSessionContractTests: XCTestCase {
         let source = try Self.source("KeyboardExtension/KeyboardViewController.swift")
         XCTAssertTrue(source.contains("HostDocumentIdentifier.read(from: textDocumentProxy)"))
         XCTAssertTrue(source.contains("public override func textDidChange"))
-        XCTAssertTrue(source.contains("advanceHostSession()\n        invalidateCoachWork(restoreKeyboard: true)"))
+        XCTAssertTrue(source.contains("if requestAction == .cancel"))
+        XCTAssertTrue(source.contains("advanceHostSession()"))
+        XCTAssertTrue(source.contains("invalidateCoachWork(restoreKeyboard: true)"))
         XCTAssertTrue(source.contains("coachTask?.cancel()"))
         XCTAssertTrue(source.contains("target.isCurrent("))
     }

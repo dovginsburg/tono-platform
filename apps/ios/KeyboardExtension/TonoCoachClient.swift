@@ -145,7 +145,41 @@ struct CoachRewriteTarget: Equatable {
     }
 }
 
+/// Decides whether a proxy notification is benign or revokes an in-flight
+/// selected-tone request. Text equality alone is not enough across hosts, but
+/// an unchanged notification from the same bound host is not a mutation.
+struct CoachRequestLifecycleGuard: Equatable {
+    enum Action: Equatable { case preserve, cancel }
+
+    let before: String
+    let after: String
+    let host: HostSessionIdentity
+
+    func action(liveBefore: String, liveAfter: String, host: HostSessionIdentity) -> Action {
+        host == self.host && liveBefore == before && liveAfter == after ? .preserve : .cancel
+    }
+}
+
 public final class TonoCoachClient {
+
+    public struct CoachClocks: Equatable {
+        public let requestAccepted: Date
+        public let preflightEnd: Date
+        public let providerStart: Date
+        public let responseSent: Date
+
+        public init(
+            requestAccepted: Date,
+            preflightEnd: Date,
+            providerStart: Date,
+            responseSent: Date
+        ) {
+            self.requestAccepted = requestAccepted
+            self.preflightEnd = preflightEnd
+            self.providerStart = providerStart
+            self.responseSent = responseSent
+        }
+    }
 
     public struct CoachRewrite: Equatable, Codable {
         public let axis: String
@@ -175,6 +209,14 @@ public final class TonoCoachClient {
             default:       return riskLevel.capitalized
             }
         }
+    }
+
+    public struct VariantResponse: Equatable {
+        public let axis: String
+        public let text: String
+        public let rationale: String?
+        public let riskAfter: String?
+        public let clocks: CoachClocks
     }
 
     public enum CoachError: Error, Equatable {
@@ -238,7 +280,7 @@ public final class TonoCoachClient {
 
         var body: [String: Any] = [
             "draft": draft,
-            "mode":  "coach",
+            "mode": "coach",
             "optional_variants": settings.enabled.map(\.rawValue),
         ]
         if settings.enabled.contains(.custom) {
@@ -277,6 +319,77 @@ public final class TonoCoachClient {
             do {
                 let parsed = try TonoCoachClient.decode(bodyData, optionalVariants: settings.enabled)
                 DispatchQueue.main.async { completion(.success(parsed)) }
+            } catch {
+                DispatchQueue.main.async { completion(.failure(.decoding(error.localizedDescription))) }
+            }
+        }
+        task.resume()
+        return task
+    }
+
+    /// One selected tone maps to one HTTP request. The body has no model or
+    /// provider knob; routing remains entirely server-side.
+    @discardableResult
+    public func variant(
+        draft: String,
+        axis: String,
+        customPrompt: String? = nil,
+        completion: @escaping (Result<VariantResponse, CoachError>) -> Void
+    ) -> URLSessionDataTask? {
+        let requestAccepted = Date()
+        var req = URLRequest(url: endpoint)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.timeoutInterval = timeout
+        var body: [String: Any] = ["text": draft, "axis": axis]
+        if axis == "custom", let customPrompt {
+            body["custom_prompt"] = customPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        do {
+            req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            DispatchQueue.main.async { completion(.failure(.decoding("encode body: \(error.localizedDescription)"))) }
+            return nil
+        }
+
+        let task = session.dataTask(with: req) { data, response, error in
+            let preflightEnd = Date()
+            let providerStart = preflightEnd
+            if let urlError = error as? URLError {
+                let mapped: CoachError = urlError.code == .timedOut
+                    ? .timeout
+                    : .transport(urlError.localizedDescription)
+                DispatchQueue.main.async { completion(.failure(mapped)) }
+                return
+            }
+            if let error {
+                DispatchQueue.main.async { completion(.failure(.transport(error.localizedDescription))) }
+                return
+            }
+            guard let http = response as? HTTPURLResponse else {
+                DispatchQueue.main.async { completion(.failure(.transport("no http response"))) }
+                return
+            }
+            let responseSent = Date()
+            let bodyData = data ?? Data()
+            guard (200...299).contains(http.statusCode) else {
+                let text = String(data: bodyData, encoding: .utf8) ?? ""
+                DispatchQueue.main.async { completion(.failure(.http(status: http.statusCode, body: text))) }
+                return
+            }
+            do {
+                let decoded = try Self.decodeVariant(
+                    bodyData,
+                    expectedAxis: axis,
+                    clocks: CoachClocks(
+                        requestAccepted: requestAccepted,
+                        preflightEnd: preflightEnd,
+                        providerStart: providerStart,
+                        responseSent: responseSent
+                    )
+                )
+                DispatchQueue.main.async { completion(.success(decoded)) }
             } catch {
                 DispatchQueue.main.async { completion(.failure(.decoding(error.localizedDescription))) }
             }
@@ -325,6 +438,35 @@ public final class TonoCoachClient {
             reason: reason,
             suggestions: canonical,
             flags: flags
+        )
+    }
+
+    public static func decodeVariant(
+        _ data: Data,
+        expectedAxis: String,
+        clocks: CoachClocks = CoachClocks(
+            requestAccepted: .distantPast,
+            preflightEnd: .distantPast,
+            providerStart: .distantPast,
+            responseSent: .distantPast
+        )
+    ) throws -> VariantResponse {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let dict = object as? [String: Any],
+              dict["status"] as? String == "ok",
+              let axis = dict["axis"] as? String,
+              axis == expectedAxis,
+              let rawText = dict["text"] as? String else {
+            throw contractError("blocked or malformed selected variant")
+        }
+        let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { throw contractError("blank selected variant") }
+        return VariantResponse(
+            axis: axis,
+            text: text,
+            rationale: dict["rationale"] as? String,
+            riskAfter: dict["risk_after"] as? String,
+            clocks: clocks
         )
     }
 

@@ -264,9 +264,16 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private var preferredHeightConstraint: NSLayoutConstraint?
 
     private var coachRewriteTarget: CoachRewriteTarget?
+    private var coachRequestGuard: CoachRequestLifecycleGuard?
     private var coachVariantSettings = CoachVariantSettings()
+    private var toneChipsEnabled = false
+    private var selectedToneAxes: [String] = []
     private var coachRequestID: UUID?
     private var coachTask: URLSessionDataTask?
+    private lazy var coachClient = TonoCoachClient(
+        endpoint: Const.backendURL.replacingOccurrences(of: "/v1/analyze", with: "/api/analyze/variant"),
+        timeout: Const.coachTimeout
+    )
 
     /// Monotonic host/editing-session serial. It advances at every lifecycle
     /// boundary where the editing context may have changed (appear, disappear,
@@ -400,14 +407,20 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     public override func textDidChange(_ textInput: UITextInput?) {
-        // A proxy notification is also the only lifecycle signal iOS guarantees
-        // for a same-trait field/document focus switch. Advance even when the
-        // visible text is identical, then invalidate previous authorization.
-        advanceHostSession()
-        invalidateCoachWork(restoreKeyboard: true)
-        spellingService.cancel()
         refreshHostConfigurationIfNeeded()
-        let liveContext = textDocumentProxy.documentContextBeforeInput ?? ""
+        let liveBefore = textDocumentProxy.documentContextBeforeInput ?? ""
+        let liveAfter = textDocumentProxy.documentContextAfterInput ?? ""
+        let requestAction = coachRequestGuard?.action(
+            liveBefore: liveBefore,
+            liveAfter: liveAfter,
+            host: currentHostSession
+        )
+        if requestAction == .cancel {
+            advanceHostSession()
+            invalidateCoachWork(restoreKeyboard: true)
+        }
+        spellingService.cancel()
+        let liveContext = liveBefore
         let pending = pendingDocumentMutation
         let isExpectedLocalNotification = pending?.canExplain(
             notificationContext: liveContext
@@ -515,7 +528,10 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachTask?.cancel()
         coachTask = nil
         coachRequestID = nil
-        if clearTarget { coachRewriteTarget = nil }
+        if clearTarget {
+            coachRewriteTarget = nil
+            coachRequestGuard = nil
+        }
         coachBusy = false
         coachButton?.isEnabled = true
         guard restoreKeyboard, coachContainer != nil, keysInstalled, !isRebuildingLayout else { return }
@@ -536,7 +552,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         view.addSubview(bar)
 
         let coach = TonoCoachButton(type: .custom)
-        coach.setTitle("Coach", for: .normal)
+        coach.setTitle("TONO", for: .normal)
         coach.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
         coach.layer.cornerRadius = Const.keyCornerRadius
         coach.layer.masksToBounds = true
@@ -2104,10 +2120,29 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     @objc private func coachTapped() {
         guard !coachBusy else { return }
+        setToneChipsEnabled(!toneChipsEnabled)
+    }
+
+    private func setToneChipsEnabled(_ enabled: Bool) {
+        toneChipsEnabled = enabled
+        coachVariantSettings = CoachVariantSettingsStore().load()
+        selectedToneAxes = ["safer"] + coachVariantSettings.enabled.map(\.rawValue)
+        if !enabled {
+            refreshSpellingSuggestions()
+            return
+        }
+        updateCandidateStrip(values: Array(selectedToneAxes.prefix(3)).map { $0.capitalized })
+        for view in candidateStack?.arrangedSubviews ?? [] {
+            guard let button = view as? UIButton else { continue }
+            button.removeTarget(self, action: #selector(candidateTapped(_:)), for: .touchUpInside)
+            button.addTarget(self, action: #selector(toneChipTapped(_:)), for: .touchUpInside)
+        }
+    }
+
+    @objc private func toneChipTapped(_ sender: UIButton) {
+        guard !coachBusy, selectedToneAxes.indices.contains(sender.tag) else { return }
         cancelTransientInteractions()
         spellingService.cancel()
-        updateCandidateStrip(values: [])
-        if isEmojiPanelVisible { hideEmojiPanel() }
         let proxy = textDocumentProxy
         guard let target = CoachRewriteTarget.capture(
             before: proxy.documentContextBeforeInput ?? "",
@@ -2118,7 +2153,12 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             return
         }
         coachRewriteTarget = target
-        runCoach(draft: target.draft)
+        coachRequestGuard = CoachRequestLifecycleGuard(
+            before: proxy.documentContextBeforeInput ?? "",
+            after: proxy.documentContextAfterInput ?? "",
+            host: currentHostSession
+        )
+        runCoach(draft: target.draft, axis: selectedToneAxes[sender.tag])
     }
 
     private func presentCoachEmptyState() {
@@ -2153,18 +2193,17 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         }
     }
 
-    private func runCoach(draft: String) {
+    private func runCoach(draft: String, axis: String) {
         invalidateCoachWork(restoreKeyboard: false, clearTarget: false)
         cancelTransientInteractions()
         coachBusy = true
         coachButton?.isEnabled = false
         presentCoachLoading()
-        coachVariantSettings = CoachVariantSettingsStore().load()
-        let client = TonoCoachClient(endpoint: Const.backendURL, timeout: Const.coachTimeout)
         let requestID = UUID()
         coachRequestID = requestID
-        NSLog("TONO_KB BUILD94 coach: begin atomic POST /v1/analyze (len=\(draft.count), optional=\(coachVariantSettings.selectedCount))")
-        coachTask = client.coach(draft: draft, settings: coachVariantSettings) { [weak self] result in
+        NSLog("TONO_KB BUILD95 coach: begin selected variant axis=\(axis) len=\(draft.count)")
+        let customPrompt = axis == "custom" ? coachVariantSettings.customInstruction : nil
+        coachTask = coachClient.variant(draft: draft, axis: axis, customPrompt: customPrompt) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self = self,
                       self.coachRequestID == requestID,
@@ -2180,11 +2219,23 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
                 self.coachButton?.isEnabled = true
                 switch result {
                 case .success(let response):
-                    NSLog("TONO_KB BUILD94 coach: OK risk=\(response.riskLevel) suggestions=\(response.suggestions.count)")
-                    self.presentCoachResults(response)
-                case .failure(let err):
-                    NSLog("TONO_KB BUILD94 coach: FAIL \(err.userFacingMessage)")
-                    self.presentCoachError(err)
+                    let rewrite = TonoCoachClient.CoachRewrite(
+                        axis: response.axis,
+                        text: response.text,
+                        rationale: response.rationale,
+                        riskAfter: response.riskAfter
+                    )
+                    let atomic = TonoCoachClient.CoachResponse(
+                        riskLevel: response.riskAfter ?? "medium",
+                        perception: "",
+                        subtext: "",
+                        reason: nil,
+                        suggestions: [rewrite],
+                        flags: []
+                    )
+                    self.presentCoachResults(atomic)
+                case .failure(let error):
+                    self.presentCoachError(error)
                 }
             }
         }
@@ -2393,14 +2444,38 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             text.leadingAnchor.constraint(equalTo: chip.leadingAnchor, constant: 10),
             text.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -10),
             text.topAnchor.constraint(equalTo: axis.bottomAnchor, constant: 2),
-            text.bottomAnchor.constraint(equalTo: chip.bottomAnchor, constant: -6),
+            text.bottomAnchor.constraint(equalTo: chip.bottomAnchor, constant: -52),
             text.heightAnchor.constraint(equalToConstant: textHeight),
         ])
 
         let rewriteText = suggestion.text
-        chip.addAction(UIAction { [weak self] _ in
+        let actions = UIStackView()
+        actions.axis = .horizontal
+        actions.distribution = .fillEqually
+        actions.spacing = 8
+        actions.translatesAutoresizingMaskIntoConstraints = false
+        chip.addSubview(actions)
+
+        let replace = TonoMinimumHitTargetButton(type: .system)
+        replace.setTitle("Replace", for: .normal)
+        replace.addAction(UIAction { [weak self] _ in
             self?.applyRewrite(rewriteText)
         }, for: .touchUpInside)
+        actions.addArrangedSubview(replace)
+
+        let dismiss = TonoMinimumHitTargetButton(type: .system)
+        dismiss.setTitle("Dismiss", for: .normal)
+        dismiss.addAction(UIAction { [weak self] _ in
+            self?.backToKeysTapped()
+        }, for: .touchUpInside)
+        actions.addArrangedSubview(dismiss)
+
+        NSLayoutConstraint.activate([
+            actions.leadingAnchor.constraint(equalTo: chip.leadingAnchor, constant: 10),
+            actions.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -10),
+            actions.bottomAnchor.constraint(equalTo: chip.bottomAnchor, constant: -4),
+            actions.heightAnchor.constraint(equalToConstant: 44),
+        ])
         return chip
     }
 
@@ -2464,6 +2539,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             proxy.adjustTextPosition(byCharacterOffset: plan.finalCursorOffset)
         }
         coachRewriteTarget = nil
+        coachRequestGuard = nil
         NSLog("TONO_KB BUILD86 rewrite: inserted len=\(rewrite.count) (deleted \(plan.deleteCount))")
     }
 
@@ -2560,7 +2636,13 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             return
         }
         coachRewriteTarget = target
-        runCoach(draft: target.draft)
+        let axis = selectedToneAxes.first ?? "safer"
+        coachRequestGuard = CoachRequestLifecycleGuard(
+            before: textDocumentProxy.documentContextBeforeInput ?? "",
+            after: textDocumentProxy.documentContextAfterInput ?? "",
+            host: currentHostSession
+        )
+        runCoach(draft: target.draft, axis: axis)
     }
 
     // MARK: - Live Tone v1 integration
