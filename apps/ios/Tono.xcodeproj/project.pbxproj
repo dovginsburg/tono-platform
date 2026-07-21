@@ -121,6 +121,7 @@
 		850000000000000000000003 /* SpellingCorrectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 850000000000000000000005 /* SpellingCorrectionTests.swift */; };
 		860000000000000000000001 /* CoachContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 860000000000000000000003 /* CoachContractTests.swift */; };
 		950000000000000000000001 /* Build95CoachContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 950000000000000000000002 /* Build95CoachContractTests.swift */; };
+		950000000000000000000011 /* Build95LifecycleClockTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 950000000000000000000012 /* Build95LifecycleClockTests.swift */; };
 		860000000000000000000002 /* TonoCoachClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EE5759E683FD2ECA633D8FC /* TonoCoachClient.swift */; };
 		870000000000000000000001 /* TonoKeyboardVisualStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 870000000000000000000004 /* TonoKeyboardVisualStyle.swift */; };
 		870000000000000000000002 /* TonoKeyboardVisualStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 870000000000000000000004 /* TonoKeyboardVisualStyle.swift */; };
@@ -241,6 +242,7 @@
 		850000000000000000000005 /* SpellingCorrectionTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SpellingCorrectionTests.swift; sourceTree = "<group>"; };
 		860000000000000000000003 /* CoachContractTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CoachContractTests.swift; sourceTree = "<group>"; };
 		950000000000000000000002 /* Build95CoachContractTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build95CoachContractTests.swift; sourceTree = "<group>"; };
+		950000000000000000000012 /* Build95LifecycleClockTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build95LifecycleClockTests.swift; sourceTree = "<group>"; };
 		870000000000000000000004 /* TonoKeyboardVisualStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoKeyboardVisualStyle.swift; sourceTree = "<group>"; };
 		870000000000000000000005 /* KeyboardVisualStyleTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = KeyboardVisualStyleTests.swift; sourceTree = "<group>"; };
 		920000000000000000000010 /* BuildNumberGuardTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BuildNumberGuardTests.swift; sourceTree = "<group>"; };
@@ -317,6 +319,7 @@
 				045FE2F8B15471B8BFD56595 /* ContactsAccessTests.swift */,
 				860000000000000000000003 /* CoachContractTests.swift */,
 				950000000000000000000002 /* Build95CoachContractTests.swift */,
+				950000000000000000000012 /* Build95LifecycleClockTests.swift */,
 				870000000000000000000005 /* KeyboardVisualStyleTests.swift */,
 				920000000000000000000010 /* BuildNumberGuardTests.swift */,
 				920000000000000000000020 /* KeyboardControlGeometryTests.swift */,
@@ -712,6 +715,7 @@
 				850000000000000000000003 /* SpellingCorrectionTests.swift in Sources */,
 				860000000000000000000001 /* CoachContractTests.swift in Sources */,
 				950000000000000000000001 /* Build95CoachContractTests.swift in Sources */,
+				950000000000000000000011 /* Build95LifecycleClockTests.swift in Sources */,
 				940000000000000000000002 /* CoachVariantSettings.swift in Sources */,
 				8C0000000000000000000020 /* LiveToneV1AcceptanceTests.swift in Sources */,
 				8C0000000000000000000010 /* LiveToneEngine.swift in Sources */,
