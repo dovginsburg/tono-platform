@@ -444,6 +444,23 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         // character so the engine can decide whether to flush on
         // sentence-ending punctuation. Wired unconditionally (build 96).
         liveToneDidMutate(context: effectiveContext)
+        // Build 96 Live Tone deferred proxy read: UIKit may publish
+        // textDidChange before UITextDocumentProxy catches up (see
+        // comment above `applyDocumentMutation`). Without a deferred
+        // re-read the engine can repeatedly classify a stale/empty
+        // pre-mutation draft. Schedule a one-tick-late Live Tone drive
+        // that uses the freshly-catch-up live proxy as the post-
+        // mutation context. The engine's own debounce + stale-result
+        // discard mean the second drive is a safe no-op when nothing
+        // changed. Live Tone never touches the document, never opens
+        // the rewrite flow, never blocks the keystroke path.
+        let deferredGeneration = generation
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  self.documentMutationGeneration == deferredGeneration else { return }
+            let liveNow = self.textDocumentProxy.documentContextBeforeInput ?? ""
+            self.liveToneDidMutate(context: liveNow)
+        }
         DispatchQueue.main.async { [weak self] in
             guard let self, self.documentMutationGeneration == generation else { return }
             self.refreshHostConfigurationIfNeeded()
@@ -803,6 +820,19 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         stack.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight * 4 + Const.rowSpacing * 3).isActive = true
 
         self.keysStack = stack
+
+        // Build 96 Live Tone z-order fix: every layout rebuild appends a
+        // fresh full-edge keyboard stack after the indicator, demoting
+        // it in z-order so a published warning becomes invisible
+        // (parent Sherlock diagnosis t_08d08e43). Re-promote the
+        // indicator to the top of bodyContainer so the warning is
+        // actually drawn over the keyboard stack. The manager-owned
+        // indicator contract is preserved: we only re-order existing
+        // subviews, never re-create or relocate the indicator view.
+        if let indicator = liveToneManager?.indicator, indicator.superview === container {
+            container.bringSubviewToFront(indicator)
+        }
+
         NSLog("TONO_KB BUILD86 05: keyboard layout installed mode=\(modeName(layoutMode))")
     }
 
