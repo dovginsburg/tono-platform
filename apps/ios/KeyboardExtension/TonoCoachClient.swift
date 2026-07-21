@@ -557,26 +557,20 @@ public final class TonoCoachClient {
             "response_sent_ms",
         ]
         for key in requiredKeys {
-            guard let raw = envelope[key] else {
+            guard envelope[key] != nil else {
                 throw contractError("lifecycle clocks envelope missing key: \(key)")
             }
             // Integer-only: rejects fractional ms (which would imply a
-            // monotonic_ns source not pinned to ms precision).
-            guard let value = raw as? Int64 ?? (raw as? Int).map(Int64.init) ?? (raw as? NSNumber).map({ Int64(truncating: $0) }) else {
-                throw contractError("lifecycle clock \(key) is not integer ms")
-            }
-            // Store into the correct slot during a second pass so we can
-            // validate monotonicity as we read.
-            _ = value
+            // monotonic_ns source not pinned to ms precision) and any
+            // NSNumber value whose underlying objCType is a float or
+            // bool — `Int64(truncating:)` would otherwise silently
+            // collapse `10.5 -> 10` and bypass this guard.
+            _ = try strictInt64Ms(envelope[key], key: key)
         }
-        let request = (envelope["request_accepted_ms"] as? NSNumber)?.int64Value
-            ?? Int64((envelope["request_accepted_ms"] as? Int) ?? -1)
-        let preflight = (envelope["preflight_end_ms"] as? NSNumber)?.int64Value
-            ?? Int64((envelope["preflight_end_ms"] as? Int) ?? -1)
-        let provider = (envelope["provider_start_ms"] as? NSNumber)?.int64Value
-            ?? Int64((envelope["provider_start_ms"] as? Int) ?? -1)
-        let response = (envelope["response_sent_ms"] as? NSNumber)?.int64Value
-            ?? Int64((envelope["response_sent_ms"] as? Int) ?? -1)
+        let request   = try strictInt64Ms(envelope["request_accepted_ms"], key: "request_accepted_ms")
+        let preflight = try strictInt64Ms(envelope["preflight_end_ms"],   key: "preflight_end_ms")
+        let provider  = try strictInt64Ms(envelope["provider_start_ms"],  key: "provider_start_ms")
+        let response  = try strictInt64Ms(envelope["response_sent_ms"],   key: "response_sent_ms")
 
         guard request >= 0, preflight >= 0, provider >= 0, response >= 0 else {
             throw contractError("lifecycle clock anchor must be non-negative")
@@ -654,6 +648,40 @@ public final class TonoCoachClient {
             throw contractError("missing rewrite axes: \(missing.joined(separator: ", "))")
         }
         return canonicalAxes.compactMap { byAxis[$0] }
+    }
+
+    /// Strictly coerce a JSON-decoded lifecycle-clock value into an
+    /// `Int64` ms anchor. Rejects:
+    ///   • missing or non-NSNumber scalars,
+    ///   • `NSNumber` values whose underlying `objCType` is a float
+    ///     (`"d"`, `"f"`) or a bool (`"c"`). JSON literals like `10.5`
+    ///     bridge into NSNumber with `objCType == "d"`; without this
+    ///     guard `Int64(truncating:)` silently collapses them to `10`
+    ///     and the fraction disappears.
+    ///   • `NSNumber` values whose `int64Value` does not round-trip
+    ///     exactly through `Double` (catches mantissa truncation in
+    ///     long timestamps).
+    /// Otherwise returns the original integer-ms value untouched.
+    private static func strictInt64Ms(_ raw: Any?, key: String) throws -> Int64 {
+        guard let raw else {
+            throw contractError("lifecycle clock \(key) is not integer ms")
+        }
+        if let v = raw as? Int64 { return v }
+        if let v = raw as? Int   { return Int64(v) }
+        guard let n = raw as? NSNumber else {
+            throw contractError("lifecycle clock \(key) is not integer ms")
+        }
+        let typeString = String(cString: n.objCType)
+        // "d"=double, "f"=float, "c"=bool. The contract pins integer-ms
+        // anchors; anything else is a coercion, not a faithful read.
+        if typeString == "d" || typeString == "f" || typeString == "c" {
+            throw contractError("lifecycle clock \(key) is not integer ms")
+        }
+        let asInt = n.int64Value
+        if Double(asInt) != n.doubleValue {
+            throw contractError("lifecycle clock \(key) is not integer ms")
+        }
+        return asInt
     }
 
     private static func contractError(_ message: String) -> NSError {
