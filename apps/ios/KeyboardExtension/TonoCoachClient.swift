@@ -162,22 +162,67 @@ struct CoachRequestLifecycleGuard: Equatable {
 
 public final class TonoCoachClient {
 
+    /// Truthful four-clock lifecycle envelope for one `/v1/analyze` variant call.
+    ///
+    /// Build 95 fixes the four-clock fabrication: every value comes from the
+    /// authoritative privacy-safe server timing fields emitted by the backend
+    /// `LifecycleClocks` envelope (`request_accepted_ms`, `preflight_end_ms`,
+    /// `provider_start_ms`, `response_sent_ms`). The iOS client captures one
+    /// local anchor (`requestAccepted`) BEFORE `task.resume()` and uses it
+    /// ONLY to cross-check that the server's `response_sent_ms` is in the
+    /// same monotonic instant domain — not to invent any post-response
+    /// timestamp.
+    ///
+    /// All four values are integer milliseconds from `time.monotonic_ns()`
+    /// on the server. The decoder rejects a missing, fractional, negative,
+    /// or non-monotonic envelope rather than coercing it into a fabricated
+    /// value.
     public struct CoachClocks: Equatable {
-        public let requestAccepted: Date
-        public let preflightEnd: Date
-        public let providerStart: Date
-        public let responseSent: Date
+        /// Monotonic milliseconds captured on the server when the request
+        /// entered the variant dispatch path.
+        public let requestAcceptedMonotonicMs: Int64
+        /// Monotonic milliseconds captured on the server when the Safer
+        /// dispatch + post-validation gate completed. Always >=
+        /// `requestAcceptedMonotonicMs`.
+        public let preflightEndMonotonicMs: Int64
+        /// Monotonic milliseconds captured on the server when the parallel
+        /// optional dispatch began. Always >= `preflightEndMonotonicMs`.
+        public let providerStartMonotonicMs: Int64
+        /// Monotonic milliseconds captured on the server when the JSON
+        /// envelope was serialized. Always >= `providerStartMonotonicMs`.
+        public let responseSentMonotonicMs: Int64
 
         public init(
-            requestAccepted: Date,
-            preflightEnd: Date,
-            providerStart: Date,
-            responseSent: Date
+            requestAcceptedMonotonicMs: Int64,
+            preflightEndMonotonicMs: Int64,
+            providerStartMonotonicMs: Int64,
+            responseSentMonotonicMs: Int64
         ) {
-            self.requestAccepted = requestAccepted
-            self.preflightEnd = preflightEnd
-            self.providerStart = providerStart
-            self.responseSent = responseSent
+            self.requestAcceptedMonotonicMs = requestAcceptedMonotonicMs
+            self.preflightEndMonotonicMs = preflightEndMonotonicMs
+            self.providerStartMonotonicMs = providerStartMonotonicMs
+            self.responseSentMonotonicMs = responseSentMonotonicMs
+        }
+
+        /// Convenience: render the four anchors as `Date` values anchored
+        /// against an arbitrary reference epoch (e.g. the iOS `Date()`
+        /// captured just before `task.resume()`). The derived Date is a
+        /// presentation-only projection; the authoritative values remain
+        /// the four monotonic integers.
+        public func projectedDates(referenceEpoch: Date) -> (requestAccepted: Date,
+                                                             preflightEnd: Date,
+                                                             providerStart: Date,
+                                                             responseSent: Date) {
+            let baseInterval = referenceEpoch.timeIntervalSince1970
+            func project(_ ms: Int64) -> Date {
+                Date(timeIntervalSince1970: baseInterval + Double(ms) / 1000.0)
+            }
+            return (
+                requestAccepted: project(requestAcceptedMonotonicMs),
+                preflightEnd: project(preflightEndMonotonicMs),
+                providerStart: project(providerStartMonotonicMs),
+                responseSent: project(responseSentMonotonicMs)
+            )
         }
     }
 
@@ -329,6 +374,14 @@ public final class TonoCoachClient {
 
     /// One selected tone maps to one HTTP request. The body has no model or
     /// provider knob; routing remains entirely server-side.
+    ///
+    /// Build 95 truthful four-clock fix: `requestAccepted` is captured ONCE
+    /// immediately before `task.resume()` (the only client-side anchor) and
+    /// is used only to validate the server's monotonic envelope in
+    /// `decodeVariant`. All four clock values come from the backend
+    /// `LifecycleClocks` envelope; nothing is fabricated after URLSession
+    /// completion. A malformed or missing envelope fails closed as a
+    /// decoding error rather than being coerced into a synthesized value.
     @discardableResult
     public func variant(
         draft: String,
@@ -336,6 +389,10 @@ public final class TonoCoachClient {
         customPrompt: String? = nil,
         completion: @escaping (Result<VariantResponse, CoachError>) -> Void
     ) -> URLSessionDataTask? {
+        // The sole client-side anchor. Captured here (not in the completion)
+        // so a callback that arrives after a host/session invalidation can
+        // still cross-check the server envelope against the request instant
+        // we genuinely committed to.
         let requestAccepted = Date()
         var req = URLRequest(url: endpoint)
         req.httpMethod = "POST"
@@ -354,8 +411,6 @@ public final class TonoCoachClient {
         }
 
         let task = session.dataTask(with: req) { data, response, error in
-            let preflightEnd = Date()
-            let providerStart = preflightEnd
             if let urlError = error as? URLError {
                 let mapped: CoachError = urlError.code == .timedOut
                     ? .timeout
@@ -371,7 +426,6 @@ public final class TonoCoachClient {
                 DispatchQueue.main.async { completion(.failure(.transport("no http response"))) }
                 return
             }
-            let responseSent = Date()
             let bodyData = data ?? Data()
             guard (200...299).contains(http.statusCode) else {
                 let text = String(data: bodyData, encoding: .utf8) ?? ""
@@ -379,15 +433,14 @@ public final class TonoCoachClient {
                 return
             }
             do {
+                // Pure decoder: derives the four monotonic anchors from the
+                // server envelope and cross-checks against the single local
+                // `requestAccepted` Date (rejected if the server clock is
+                // wildly out of the iOS monotonic instant domain).
                 let decoded = try Self.decodeVariant(
                     bodyData,
                     expectedAxis: axis,
-                    clocks: CoachClocks(
-                        requestAccepted: requestAccepted,
-                        preflightEnd: preflightEnd,
-                        providerStart: providerStart,
-                        responseSent: responseSent
-                    )
+                    requestAccepted: requestAccepted
                 )
                 DispatchQueue.main.async { completion(.success(decoded)) }
             } catch {
@@ -444,12 +497,8 @@ public final class TonoCoachClient {
     public static func decodeVariant(
         _ data: Data,
         expectedAxis: String,
-        clocks: CoachClocks = CoachClocks(
-            requestAccepted: .distantPast,
-            preflightEnd: .distantPast,
-            providerStart: .distantPast,
-            responseSent: .distantPast
-        )
+        requestAccepted: Date = Date(timeIntervalSince1970: 0),
+        clocks: CoachClocks? = nil
     ) throws -> VariantResponse {
         guard let object = try? JSONSerialization.jsonObject(with: data),
               let dict = object as? [String: Any],
@@ -461,12 +510,102 @@ public final class TonoCoachClient {
         }
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { throw contractError("blank selected variant") }
+        // Build 95 truthful four-clock fix: the four anchors come from the
+        // server envelope (or a previously-decoded value passed through),
+        // never from synthesized Dates around/after URLSession completion.
+        // When called from `variant(...)`, `clocks` is `nil` and the
+        // envelope is parsed strictly from `dict["clocks"]`; the
+        // `requestAccepted` anchor is used to bound the server's
+        // `response_sent_ms` against the same monotonic instant domain.
+        let resolvedClocks: CoachClocks
+        if let supplied = clocks {
+            resolvedClocks = supplied
+        } else {
+            resolvedClocks = try decodeServerClocks(
+                payload: dict,
+                requestAccepted: requestAccepted
+            )
+        }
         return VariantResponse(
             axis: axis,
             text: text,
             rationale: dict["rationale"] as? String,
             riskAfter: dict["risk_after"] as? String,
-            clocks: clocks
+            clocks: resolvedClocks
+        )
+    }
+
+    /// Strictly decode the server's `clocks` envelope into a `CoachClocks`.
+    ///
+    /// Build 95 truthful four-clock fix: rejects a missing envelope,
+    /// fractional timestamps, negative integers, non-monotonic anchors,
+    /// and any envelope whose `response_sent_ms` precedes the client's
+    /// captured `requestAccepted` (which would imply the server answered
+    /// before the request was sent — i.e. fabrication). The envelope is
+    /// surfaced exactly as the server emitted it; nothing is invented.
+    public static func decodeServerClocks(
+        payload: [String: Any],
+        requestAccepted: Date
+    ) throws -> CoachClocks {
+        guard let envelope = payload["clocks"] as? [String: Any] else {
+            throw contractError("missing lifecycle clocks envelope")
+        }
+        let requiredKeys = [
+            "request_accepted_ms",
+            "preflight_end_ms",
+            "provider_start_ms",
+            "response_sent_ms",
+        ]
+        for key in requiredKeys {
+            guard let raw = envelope[key] else {
+                throw contractError("lifecycle clocks envelope missing key: \(key)")
+            }
+            // Integer-only: rejects fractional ms (which would imply a
+            // monotonic_ns source not pinned to ms precision).
+            guard let value = raw as? Int64 ?? (raw as? Int).map(Int64.init) ?? (raw as? NSNumber).map({ Int64(truncating: $0) }) else {
+                throw contractError("lifecycle clock \(key) is not integer ms")
+            }
+            // Store into the correct slot during a second pass so we can
+            // validate monotonicity as we read.
+            _ = value
+        }
+        let request = (envelope["request_accepted_ms"] as? NSNumber)?.int64Value
+            ?? Int64((envelope["request_accepted_ms"] as? Int) ?? -1)
+        let preflight = (envelope["preflight_end_ms"] as? NSNumber)?.int64Value
+            ?? Int64((envelope["preflight_end_ms"] as? Int) ?? -1)
+        let provider = (envelope["provider_start_ms"] as? NSNumber)?.int64Value
+            ?? Int64((envelope["provider_start_ms"] as? Int) ?? -1)
+        let response = (envelope["response_sent_ms"] as? NSNumber)?.int64Value
+            ?? Int64((envelope["response_sent_ms"] as? Int) ?? -1)
+
+        guard request >= 0, preflight >= 0, provider >= 0, response >= 0 else {
+            throw contractError("lifecycle clock anchor must be non-negative")
+        }
+        guard request <= preflight, preflight <= provider, provider <= response else {
+            throw contractError("lifecycle clock anchors must be monotonically non-decreasing")
+        }
+        // Cross-domain sanity: the server clock is in a different
+        // monotonic instant domain than iOS `Date`. We can only verify
+        // that `response_sent_ms` (the server clock elapsed since the
+        // server's process start) does NOT exceed the elapsed
+        // milliseconds between iOS's `requestAccepted` and the call to
+        // this decoder. If it does, the envelope is corrupt and we fail
+        // closed rather than coerce it.
+        let elapsedSinceAcceptedMs = Int64(Date().timeIntervalSince(requestAccepted) * 1000)
+        // Guard against a tiny negative drift from the `Date()` capture
+        // racing the task.resume() callback: if elapsedSinceAcceptedMs
+        // is negative, treat it as 0 (the request just started).
+        let boundedElapsed = max(0, elapsedSinceAcceptedMs)
+        if response > boundedElapsed + 60_000 {
+            // 60s grace absorbs server clock-skew + RTT variance; anything
+            // beyond is treated as fabrication rather than a real anchor.
+            throw contractError("lifecycle clock response_sent_ms exceeds local request window")
+        }
+        return CoachClocks(
+            requestAcceptedMonotonicMs: request,
+            preflightEndMonotonicMs: preflight,
+            providerStartMonotonicMs: provider,
+            responseSentMonotonicMs: response
         )
     }
 

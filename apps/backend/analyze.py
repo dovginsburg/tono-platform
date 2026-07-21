@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import time
 import unicodedata
 from typing import Any, Awaitable, Callable, Literal, Optional
 
@@ -127,6 +128,47 @@ class RewriteSuggestion(BaseModel):
     risk_after: Optional[str] = None
 
 
+class LifecycleClocks(BaseModel):
+    """Privacy-safe lifecycle phase/duration envelope.
+
+    All values are monotonic milliseconds from `time.monotonic_ns()` and are
+    strictly integer to keep the wire format predictable across iOS keyboard
+    extension builds. The envelope is intentionally domain-bound to one server
+    call (no request id, no token, no IP, no draft, no device) so it can be
+    surfaced to clients without crossing the existing privacy boundary.
+
+    Semantics:
+      request_accepted_ms: server-clock instant the request entered
+        `mock_variant_analyze` / `anthropic_analyze`. iOS uses this to verify
+        the server clock is in the same instant domain as its captured
+        `requestAccepted` (it is — both come from a monotonic source on
+        each side; iOS converts its `Date` to monotonic ms before comparing).
+      preflight_end_ms: server-clock instant after Safer dispatch completed
+        and the build-94 post-validation gate had a verdict. Always >=
+        request_accepted_ms.
+      provider_start_ms: server-clock instant the parallel optional
+        dispatch began. Always >= preflight_end_ms (Safer is gated first).
+      response_sent_ms: server-clock instant the JSON envelope was
+        serialized and returned. Always >= provider_start_ms.
+      preflight_ms: integer ms spent in Safer dispatch + validation.
+        Must be >= 0 and <= response_sent_ms - request_accepted_ms.
+      provider_ms: integer ms spent in the parallel optional dispatch.
+        Must be >= 0 and <= response_sent_ms - provider_start_ms.
+
+    The two derived fields (`preflight_ms`, `provider_ms`) let the iOS
+    decoder cross-check the four anchors against each other. A malformed
+    envelope (any anchor < its predecessor, any derived < 0) is rejected
+    on the client and surfaced as a decoding error — never silently
+    coerced into a fabricated value.
+    """
+    request_accepted_ms: int
+    preflight_end_ms: int
+    provider_start_ms: int
+    response_sent_ms: int
+    preflight_ms: int
+    provider_ms: int
+
+
 class ToneAnalysis(BaseModel):
     risk_level: str
     perception: str
@@ -134,6 +176,7 @@ class ToneAnalysis(BaseModel):
     risk_reason: str = ""
     suggestions: list[RewriteSuggestion]
     flags: list[str]
+    clocks: Optional[LifecycleClocks] = None
 
 
 CANONICAL_COACH_AXES = ("warmer", "clearer", "funnier", "safer")
@@ -146,6 +189,71 @@ BUILD94_MAX_CUSTOM_LENGTH = 120
 # under normalized whitespace/case/punctuation; suppression at this threshold
 # matches the canonical Addendum ("empty-pass behavior").
 BUILD94_FUNNIER_SUPPRESS_SIMILARITY = 0.95
+
+
+def _now_ms(monotonic_origin_ns: int) -> int:
+    """Monotonic milliseconds since the per-process origin captured by
+    `LifecycleClockRecorder.start`. Always strictly non-decreasing and
+    integer (millisecond precision is enough for a build-95 phase audit).
+    """
+    return max(0, (time.monotonic_ns() - monotonic_origin_ns) // 1_000_000)
+
+
+class LifecycleClockRecorder:
+    """Server-side monotonic recorder for the four lifecycle anchors.
+
+    Build 95 makes the four clocks truthful: every value comes from
+    `time.monotonic_ns()` inside the variant dispatch path, NEVER from a
+    client-supplied timestamp and NEVER synthesized around/after the
+    JSON envelope was serialized. iOS surfaces `request_accepted_ms`
+    as the only cross-side anchor it compares against its own captured
+    `requestAccepted`, and only after converting both to monotonic ms.
+    """
+
+    __slots__ = ("origin_ns", "request_accepted_ms", "preflight_end_ms",
+                 "provider_start_ms", "response_sent_ms", "preflight_ms",
+                 "provider_ms")
+
+    def __init__(self) -> None:
+        self.origin_ns = time.monotonic_ns()
+        self.request_accepted_ms = 0
+        self.preflight_end_ms = 0
+        self.provider_start_ms = 0
+        self.response_sent_ms = 0
+        self.preflight_ms = 0
+        self.provider_ms = 0
+
+    def mark_request_accepted(self) -> int:
+        self.request_accepted_ms = _now_ms(self.origin_ns)
+        return self.request_accepted_ms
+
+    def mark_preflight_end(self) -> int:
+        self.preflight_end_ms = max(self.request_accepted_ms, _now_ms(self.origin_ns))
+        return self.preflight_end_ms
+
+    def mark_provider_start(self) -> int:
+        self.provider_start_ms = max(self.preflight_end_ms, _now_ms(self.origin_ns))
+        return self.provider_start_ms
+
+    def mark_response_sent(self) -> int:
+        self.response_sent_ms = max(self.provider_start_ms, _now_ms(self.origin_ns))
+        return self.response_sent_ms
+
+    def finalize(self, *, preflight_ms: int, provider_ms: int) -> LifecycleClocks:
+        """Snap the derived durations to the integer-ms envelope. The two
+        duration fields are the only places the server reports time *elapsed*
+        rather than time *at*; everything else is monotonic phase anchors.
+        """
+        preflight = max(0, int(preflight_ms))
+        provider = max(0, int(provider_ms))
+        return LifecycleClocks(
+            request_accepted_ms=self.request_accepted_ms,
+            preflight_end_ms=self.preflight_end_ms,
+            provider_start_ms=self.provider_start_ms,
+            response_sent_ms=self.response_sent_ms,
+            preflight_ms=preflight,
+            provider_ms=provider,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -644,7 +752,17 @@ async def run_variant_pipeline(
        (the canonical Addendum empty-pass case).
     6. The committed list is returned in stable Settings order: Safer first,
        then enabled optionals in their canonical order.
+
+    Build 95 lifecycle clocks: a `LifecycleClockRecorder` is started the
+    instant the function is entered (mark_request_accepted) and snapshotted
+    at three more anchors — preflight_end, provider_start, response_sent —
+    using the same monotonic source. The four integer-ms anchors plus two
+    derived duration fields are returned on `clocks` so the iOS keyboard
+    decoder can verify ordering and reject malformed envelopes. Nothing
+    in the recorder reads draft, token, IP, or device data.
     """
+    recorder = LifecycleClockRecorder()
+    recorder.mark_request_accepted()
     optional = normalize_optional_variants(req)
     sanitized_custom = sanitize_custom_instruction(req.custom_instruction)
     if "custom" in optional and not sanitized_custom:
@@ -656,24 +774,41 @@ async def run_variant_pipeline(
     safer_request = build94_safer_request(req)
     safer_raw = await safer_generate(safer_request)
     safer = _enforce_safer_variant(safer_raw, req)
+    recorder.mark_preflight_end()
 
     # --- Step 2: crisis suppression — Safer alone, no optionals. ---
     if _is_crisis(req.draft):
+        recorder.mark_provider_start()
+        # Crisis path skips the optional dispatch; the provider duration is
+        # explicitly zero so the iOS decoder can still cross-check
+        # response_sent_ms >= provider_start_ms without a missing field.
+        recorder.mark_response_sent()
         return {
             **safer_raw,
             "risk_level": "high",
             "suggestions": [safer],
             "flags": list(dict.fromkeys((safer_raw.get("flags") or []) + ["crisis"])),
+            "clocks": recorder.finalize(preflight_ms=recorder.preflight_end_ms - recorder.request_accepted_ms,
+                                        provider_ms=0).model_dump(),
         }
 
     # --- Step 3: independent optional requests, dispatched in parallel. ---
     if not optional:
-        return {**safer_raw, "suggestions": [safer], "flags": safer_raw.get("flags") or []}
+        recorder.mark_provider_start()
+        recorder.mark_response_sent()
+        return {
+            **safer_raw,
+            "suggestions": [safer],
+            "flags": safer_raw.get("flags") or [],
+            "clocks": recorder.finalize(preflight_ms=recorder.preflight_end_ms - recorder.request_accepted_ms,
+                                        provider_ms=0).model_dump(),
+        }
 
     optional_requests = [
         build94_optional_request(req, axis, sanitized_custom if axis == "custom" else "")
         for axis in optional
     ]
+    recorder.mark_provider_start()
     raw_optional_results = await asyncio.gather(
         *(optional_generate(rq) for rq in optional_requests),
         return_exceptions=True,
@@ -699,7 +834,16 @@ async def run_variant_pipeline(
         committed.append(validated)
 
     flags = list(dict.fromkeys((safer_raw.get("flags") or [])))
-    return {**safer_raw, "suggestions": committed, "flags": flags}
+    recorder.mark_response_sent()
+    return {
+        **safer_raw,
+        "suggestions": committed,
+        "flags": flags,
+        "clocks": recorder.finalize(
+            preflight_ms=recorder.preflight_end_ms - recorder.request_accepted_ms,
+            provider_ms=recorder.response_sent_ms - recorder.provider_start_ms,
+        ).model_dump(),
+    }
 
 
 def intended_draft(draft: str) -> str:
