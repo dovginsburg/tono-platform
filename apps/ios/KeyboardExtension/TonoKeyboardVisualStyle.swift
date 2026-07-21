@@ -140,7 +140,13 @@ enum TonoCoachPalette {
             case .affectionate: return UIColor(hexRGB: "F472B6")
             case .professional: return UIColor(hexRGB: "A78BFA")
             case .concise: return UIColor(hexRGB: "22D3EE")
-            case .custom: return UIColor(hexRGB: "FB7185")
+            // Build-97 contract: no normal/custom/fallback chip may
+            // ever wear red or rose — the only hue reserved for the
+            // red lane is severe recipient-directed Radar. The
+            // website-blue #38BDF8 (matches .clearer) is the
+            // spec-exact fallback so a Custom-selected chip is
+            // visually consistent with the Safer + two strip.
+            case .custom: return UIColor(hexRGB: "38BDF8")
             }
         }
 

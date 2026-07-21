@@ -49,10 +49,14 @@ final class Build95LifecycleClockTests: XCTestCase {
             expectedAxis: "safer",
             requestAccepted: Date()
         )
-        XCTAssertEqual(response.clocks.requestAcceptedMonotonicMs, 0)
-        XCTAssertEqual(response.clocks.preflightEndMonotonicMs, 12)
-        XCTAssertEqual(response.clocks.providerStartMonotonicMs, 13)
-        XCTAssertEqual(response.clocks.responseSentMonotonicMs, 47)
+        let envelopeClocks = try XCTUnwrap(
+            response.clocks,
+            "a server response with a well-formed clocks envelope must surface its four anchors"
+        )
+        XCTAssertEqual(envelopeClocks.requestAcceptedMonotonicMs, 0)
+        XCTAssertEqual(envelopeClocks.preflightEndMonotonicMs, 12)
+        XCTAssertEqual(envelopeClocks.providerStartMonotonicMs, 13)
+        XCTAssertEqual(envelopeClocks.responseSentMonotonicMs, 47)
     }
 
     func testDecodeServerClocksPreservesServerAnchorValuesExactly() throws {
@@ -80,28 +84,68 @@ final class Build95LifecycleClockTests: XCTestCase {
 
     // MARK: - RED: missing envelope
 
-    func testDecodeVariantRejectsPayloadWithoutClocksEnvelope() {
-        // Truthful unavailable state: a 200 OK with no `clocks` envelope
-        // is malformed and MUST fail closed. The previous build fabricated
-        // four values around/after URLSession completion instead; this test
-        // is the RED that pins the absence of that behavior.
+    // MARK: - Build 97: envelope absence is a truthful `clocks: nil` state
+
+    func testDecodeVariantAcceptsPayloadWithoutClocksEnvelopeAndReportsAbsenceTruthfully() throws {
+        // Build 97 production-shape compatibility: the deployed
+        // `/api/analyze/variant` route does not currently emit a
+        // `clocks` envelope on its 200 OK. iOS does NOT fabricate
+        // values the server did not emit — the absence is itself the
+        // truthful state. The decoder must decode the variant
+        // successfully and surface `clocks == nil`. The build 95
+        // strict validation still runs when the envelope IS present
+        // (see `testDecodeVariantReturnsServerSourcedMonotonicClocks`
+        // and the `decodeServerClocks` red tests below).
         let payload = #"""
         {
           "status": "ok",
           "axis": "safer",
           "text": "Could you help me?",
+          "rationale": "Direct ask",
           "risk_after": "low"
         }
         """#.data(using: .utf8)!
-        XCTAssertThrowsError(
-            try TonoCoachClient.decodeVariant(payload, expectedAxis: "safer", requestAccepted: Date())
-        ) { error in
-            let nsError = error as NSError
-            XCTAssertTrue(
-                nsError.localizedDescription.contains("clocks"),
-                "decoder must surface a clocks-related error, got: \(nsError.localizedDescription)"
-            )
+        let response = try TonoCoachClient.decodeVariant(
+            payload,
+            expectedAxis: "safer",
+            requestAccepted: Date()
+        )
+        XCTAssertEqual(response.axis, "safer")
+        XCTAssertEqual(response.text, "Could you help me?")
+        XCTAssertNil(
+            response.clocks,
+            "missing server envelope is the truthful state — iOS must not fabricate"
+        )
+    }
+
+    func testDecodeVariantProductionShapeFromDeployedServerDecodesSuccessfully() throws {
+        // Production-shape capture: this is the exact JSON shape
+        // `/api/analyze/variant` returns today on api.tonoit.com
+        // (verified against the deployed OpenAPI on 2026-07-21):
+        //   status, axis, text, rationale, risk_after, model, tier, reason
+        // No `clocks` field. iOS decodes this to a usable variant
+        // response with `clocks: nil` — no fabrication, no error.
+        let payload = #"""
+        {
+          "status": "ok",
+          "axis": "safer",
+          "text": "Could you help me tomorrow?",
+          "rationale": "Softens the ask without changing the request.",
+          "risk_after": "low",
+          "model": "claude-sonnet-4-5",
+          "tier": "sonnet",
+          "reason": null
         }
+        """#.data(using: .utf8)!
+        let response = try TonoCoachClient.decodeVariant(
+            payload,
+            expectedAxis: "safer",
+            requestAccepted: Date()
+        )
+        XCTAssertEqual(response.axis, "safer")
+        XCTAssertEqual(response.text, "Could you help me tomorrow?")
+        XCTAssertEqual(response.riskAfter, "low")
+        XCTAssertNil(response.clocks)
     }
 
     func testDecodeServerClocksRejectsMissingEnvelope() {

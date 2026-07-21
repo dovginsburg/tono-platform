@@ -13,10 +13,18 @@ public enum CoachOptionalVariant: String, Codable, CaseIterable, Hashable {
     public var displayName: String { rawValue.capitalized }
 }
 
-/// Device-local build-94 selection. Safer is intentionally absent: it is a
-/// mandatory pipeline stage, not a user preference.
+/// Device-local build-97 selection. Safer is intentionally absent: it is
+/// a mandatory pipeline stage, not a user preference. The user picks
+/// exactly two optional tones; the keyboard renders them under the
+/// fixed Safer chip. Legacy builds that persisted three optional tones
+/// are deterministically migrated to the first two on next load — the
+/// pick order in the legacy array IS preserved (never reordered).
 public struct CoachVariantSettings: Codable, Equatable {
-    public static let maximumOptionalCount = 3
+    /// Build-97 contract: exactly two user-selected optional tones, no
+    /// more. Legacy build-94/95 installs that persisted up to three are
+    /// deterministically truncated to the first two by `normalize()` and
+    /// `load()`; the user never sees a fourth choice.
+    public static let maximumOptionalCount = 2
     /// Per Ezra's canonical packet: one free-text instruction, max 120 chars.
     /// Matches backend `BUILD94_MAX_CUSTOM_LENGTH`.
     public static let maximumCustomLength = 120
@@ -39,7 +47,7 @@ public struct CoachVariantSettings: Codable, Equatable {
         enabled: [CoachOptionalVariant] = [.clearer, .funnier],
         customInstruction: String = ""
     ) {
-        self.enabled = Self.canonical(enabled)
+        self.enabled = Self.legacyPreservingCanonical(enabled)
         self.customInstruction = customInstruction
         self.pendingFourthBlocked = false
         normalize()
@@ -60,9 +68,19 @@ public struct CoachVariantSettings: Codable, Equatable {
 
     public var selectedCount: Int { enabled.count }
 
+    /// Build-97 chip count includes Safer plus the user's selection:
+    /// Safer (mandatory) + up to `maximumOptionalCount` optional tones.
+    /// The keyboard renders exactly `1 + selectedCount` chips.
+    public var totalShippedChipCount: Int { 1 + selectedCount }
+
+    /// `true` while the user has fewer than the maximum allowed
+    /// optional tones selected. Used by the Settings UI to gate the
+    /// "Add tone" affordance — there is no fourth chip, ever.
+    public var canSelectAnother: Bool { selectedCount < Self.maximumOptionalCount }
+
     public func canEnable(_ variant: CoachOptionalVariant) -> Bool {
         if enabled.contains(variant) { return true }
-        guard enabled.count < Self.maximumOptionalCount else { return false }
+        guard canSelectAnother else { return false }
         return variant != .custom || isCustomInstructionValid
     }
 
@@ -71,18 +89,15 @@ public struct CoachVariantSettings: Codable, Equatable {
         return !trimmed.isEmpty && trimmed.count <= Self.maximumCustomLength
     }
 
-    /// Returns false without mutating when a fourth option or invalid Custom is
-    /// requested. Existing selections are never silently replaced. When a
-    /// fourth-toggle attempt is blocked, `pendingFourthBlocked` is set so the
-    /// UI can surface the spec-exact "Turn one off first (3 max)" hint.
+    /// Returns false without mutating when the cap is reached. Existing
+    /// selections are never silently replaced. When a beyond-cap toggle
+    /// attempt is blocked, `pendingFourthBlocked` is set so the UI can
+    /// surface the spec-exact "Two tones max" hint.
     @discardableResult
     public mutating func set(_ variant: CoachOptionalVariant, enabled shouldEnable: Bool) -> Bool {
         if shouldEnable {
             guard canEnable(variant) else {
-                // Record the blocked attempt if the user is at the cap AND
-                // the variant they tried to enable is currently OFF (so they
-                // were actually trying to enable, not re-enable something).
-                if !enabled.contains(variant) && selectedCount >= Self.maximumOptionalCount {
+                if !enabled.contains(variant) && !canSelectAnother {
                     pendingFourthBlocked = true
                 }
                 return false
@@ -95,20 +110,34 @@ public struct CoachVariantSettings: Codable, Equatable {
             enabled.removeAll { $0 == variant }
             pendingFourthBlocked = false
         }
-        enabled = Self.canonical(enabled)
+        enabled = Self.legacyPreservingCanonical(enabled)
         return true
     }
 
     public mutating func normalize() {
-        enabled = Array(Self.canonical(enabled).prefix(Self.maximumOptionalCount))
+        enabled = Array(Self.legacyPreservingCanonical(enabled).prefix(Self.maximumOptionalCount))
         if enabled.contains(.custom), !isCustomInstructionValid {
             enabled.removeAll { $0 == .custom }
         }
     }
 
-    private static func canonical(_ variants: [CoachOptionalVariant]) -> [CoachOptionalVariant] {
-        let selected = Set(variants)
-        return CoachOptionalVariant.allCases.filter(selected.contains)
+    /// Build-97 canonical: dedupe but preserve the FIRST occurrence
+    /// order of each variant. This is the deterministic migration
+    /// contract — a legacy user with `[funnier, clearer, professional]`
+    /// lands on `[funnier, clearer]`, NOT the alphabetical reorder
+    /// `[clearer, funnier, professional]`. New users always see the
+    /// declared order, which is already preserved by this rule.
+    private static func legacyPreservingCanonical(
+        _ variants: [CoachOptionalVariant]
+    ) -> [CoachOptionalVariant] {
+        var seen = Set<CoachOptionalVariant>()
+        var result: [CoachOptionalVariant] = []
+        for variant in variants {
+            if seen.insert(variant).inserted {
+                result.append(variant)
+            }
+        }
+        return result
     }
 }
 
@@ -117,7 +146,15 @@ public struct CoachVariantSettings: Codable, Equatable {
 public struct CoachVariantSettingsStore {
     public static let settingsKey = "tc.coachVariantSettings.v1"
     public static let versionKey = "tc.coachVariantSettingsVersion"
-    public static let currentVersion = 1
+    /// Build 97 — bump when the persisted schema changes again. The
+    /// load() migration step relies on this constant to know whether a
+    /// legacy payload needs deterministic 3→2 migration.
+    public static let currentVersion = 2
+    /// Legacy build-94/95 schema version. If a payload is read under
+    /// this version (or any version < current), the load() path
+    /// deterministically migrates the legacy 3-selection list down to
+    /// exactly two via the FIRST-OCCURRENCE order-preserving canonical.
+    public static let legacyBuild94Version = 1
 
     private let defaults: UserDefaults
 
@@ -126,15 +163,32 @@ public struct CoachVariantSettingsStore {
     }
 
     public func load() -> CoachVariantSettings {
-        if defaults.integer(forKey: Self.versionKey) == Self.currentVersion,
+        let storedVersion = defaults.integer(forKey: Self.versionKey)
+
+        if storedVersion == Self.currentVersion,
            let data = defaults.data(forKey: Self.settingsKey),
            var decoded = try? JSONDecoder().decode(CoachVariantSettings.self, from: data) {
             decoded.normalize()
             return decoded
         }
 
-        // Every pre-build-94 install migrates to the reviewed defaults. Legacy
-        // axes cannot represent the new variants and Safer is no longer optional.
+        // Migration path — handle legacy payload from before the
+        // build-97 schema change. The legacy JSON may carry up to three
+        // optional tones; we deterministically truncate to the first
+        // two in the legacy pick order and re-save under the new
+        // version key so subsequent loads are fast-path.
+        if storedVersion == Self.legacyBuild94Version,
+           let data = defaults.data(forKey: Self.settingsKey),
+           var decoded = try? JSONDecoder().decode(CoachVariantSettings.self, from: data) {
+            decoded.normalize()
+            save(decoded)
+            return decoded
+        }
+
+        // Every pre-build-94 install (no schema key at all) migrates to
+        // the build-97 reviewed defaults. The defaults are already
+        // order-preserving ([.clearer, .funnier]) so this is also the
+        // "fresh install" path.
         let migrated = CoachVariantSettings()
         save(migrated)
         return migrated

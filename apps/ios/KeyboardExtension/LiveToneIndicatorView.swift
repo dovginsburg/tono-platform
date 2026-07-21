@@ -25,13 +25,26 @@ public final class LiveToneIndicatorView: UIView {
     /// the session machine's dismissal.
     public var onDismiss: (() -> Void)?
 
+    /// User tapped the amber opportunity chip's dismiss affordance.
+    /// The integration lane forwards the family to the manager's
+    /// per-family session store. Only invoked for opportunity warnings.
+    public var onOpportunityDismiss: ((LiveToneOpportunityFamily) -> Void)?
+
     // MARK: - Subviews
 
     private let chipLabel = UILabel()
     private let bannerLabel = UILabel()
     private let rewriteButton = UIButton(type: .system)
     private let dismissButton = UIButton(type: .system)
+    /// Small dismiss affordance on the amber opportunity chip — taps
+    /// forward the visible family to `onOpportunityDismiss` so the
+    /// manager can suppress that family for the rest of the session.
+    private let opportunityDismissButton = UIButton(type: .system)
     private let stack = UIStackView()
+
+    /// Currently visible opportunity family, cached so the dismiss
+    /// affordance can forward it to `onOpportunityDismiss`.
+    private var visibleOpportunityFamily: LiveToneOpportunityFamily?
 
     // MARK: - Init
 
@@ -75,10 +88,16 @@ public final class LiveToneIndicatorView: UIView {
         rewriteButton.isHidden = true
 
         dismissButton.setTitle(LiveToneCopy.l2DismissLabel, for: .normal)
-        dismissButton.titleLabel?.font = UIFont.systemFont(ofSize: 14, weight: .regular)
-        dismissButton.accessibilityIdentifier = LiveToneCopy.axDismissButton
-        dismissButton.addTarget(self, action: #selector(dismissTapped), for: .touchUpInside)
-        dismissButton.isHidden = true
+                dismissButton.titleLabel?.font = .systemFont(ofSize: 14, weight: .regular)
+                dismissButton.accessibilityIdentifier = LiveToneCopy.axDismissButton
+                dismissButton.addTarget(self, action: #selector(dismissTapped), for: .touchUpInside)
+                dismissButton.isHidden = true
+
+                opportunityDismissButton.setTitle(LiveToneCopy.opportunityDismissLabel, for: .normal)
+                opportunityDismissButton.titleLabel?.font = .systemFont(ofSize: 12, weight: .regular)
+                opportunityDismissButton.accessibilityIdentifier = LiveToneCopy.axOpportunityDismissButton
+                opportunityDismissButton.addTarget(self, action: #selector(opportunityDismissTapped), for: .touchUpInside)
+                opportunityDismissButton.isHidden = true
 
         stack.axis = .vertical
         stack.alignment = .center
@@ -89,6 +108,13 @@ public final class LiveToneIndicatorView: UIView {
         stack.addArrangedSubview(bannerLabel)
         stack.addArrangedSubview(rewriteButton)
         stack.addArrangedSubview(dismissButton)
+        // Build 97: the opportunity dismiss affordance must live in the
+        // view hierarchy for the per-family session-discipline tests to
+        // observe it (the manager's onOpportunityDismiss closure is
+        // wired from `LiveToneManager.init`). Stack-added so the
+        // indicator's auto-layout drives its visibility alongside the
+        // chip and the red-lane buttons.
+        stack.addArrangedSubview(opportunityDismissButton)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
@@ -110,6 +136,8 @@ public final class LiveToneIndicatorView: UIView {
             renderL1()
         case .l2:
             renderL2()
+        case .opportunity(let family):
+            renderOpportunity(family: family)
         }
     }
 
@@ -121,6 +149,8 @@ public final class LiveToneIndicatorView: UIView {
         bannerLabel.isHidden = true
         rewriteButton.isHidden = true
         dismissButton.isHidden = true
+        opportunityDismissButton.isHidden = true
+        visibleOpportunityFamily = nil
         isHidden = true
     }
 
@@ -133,6 +163,8 @@ public final class LiveToneIndicatorView: UIView {
         bannerLabel.isHidden = true
         rewriteButton.isHidden = true
         dismissButton.isHidden = true
+        opportunityDismissButton.isHidden = true
+        visibleOpportunityFamily = nil
         isHidden = false
     }
 
@@ -144,6 +176,25 @@ public final class LiveToneIndicatorView: UIView {
         bannerLabel.isHidden = false
         rewriteButton.isHidden = false
         dismissButton.isHidden = false
+        opportunityDismissButton.isHidden = true
+        visibleOpportunityFamily = nil
+        isHidden = false
+    }
+
+    /// Render an amber opportunity chip. Lower-pressure than the red
+    /// lane: only a chip with a small dismiss affordance, no banner and
+    /// no rewrite button. The microcopy is the contract-verbatim family
+    /// string from `LiveToneCopy`.
+    private func renderOpportunity(family: LiveToneOpportunityFamily) {
+        visibleOpportunityFamily = family
+        chipLabel.text = Self.opportunityCopy(for: family)
+        chipLabel.isHidden = false
+        chipLabel.backgroundColor = Self.opportunityChipBackgroundColor
+        chipLabel.accessibilityIdentifier = LiveToneCopy.axOpportunityChip
+        bannerLabel.isHidden = true
+        rewriteButton.isHidden = true
+        dismissButton.isHidden = true
+        opportunityDismissButton.isHidden = false
         isHidden = false
     }
 
@@ -151,12 +202,33 @@ public final class LiveToneIndicatorView: UIView {
 
     @objc private func dismissTapped() { onDismiss?() }
 
+    @objc private func opportunityDismissTapped() {
+        guard let family = visibleOpportunityFamily else { return }
+        clearImmediately()
+        onOpportunityDismiss?(family)
+    }
+
     // MARK: - Styling
 
     private static func chipBackgroundColor(forLevel level: LiveToneLevel) -> UIColor {
         switch level {
         case .l1: return UIColor.systemYellow.withAlphaComponent(0.18)
         case .l2: return UIColor.systemOrange.withAlphaComponent(0.22)
+        }
+    }
+
+    /// Amber opportunity chip — never red, never rose. Per the
+    /// build-97 contract, this is the only color an opportunity chip
+    /// ever wears; it must never share the red lane's hue.
+    private static let opportunityChipBackgroundColor =
+        UIColor(red: 1.0, green: 0.76, blue: 0.23, alpha: 1.0).withAlphaComponent(0.18)
+
+    private static func opportunityCopy(for family: LiveToneOpportunityFamily) -> String {
+        switch family {
+        case .hedge: return LiveToneCopy.opportunityHedge
+        case .apology: return LiveToneCopy.opportunityApology
+        case .caps: return LiveToneCopy.opportunityCaps
+        case .briskRequest, .flatRefusal: return ""  // O4/O5 — silent in build 97.
         }
     }
 }

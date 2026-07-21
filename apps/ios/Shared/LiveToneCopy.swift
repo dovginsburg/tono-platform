@@ -40,6 +40,10 @@ public enum LiveToneCopy {
     /// O3 — caps emphasis.
     public static let opportunityCaps = "All caps can read as shouting."
 
+    /// Dismiss affordance on the amber opportunity chip. Light-touch —
+    /// the chip is a nudge, not a warning.
+    public static let opportunityDismissLabel = "Dismiss"
+
     // MARK: - Settings row disclosure — exact wording per the contract.
 
     public static let settingsDisclosure =
@@ -51,4 +55,11 @@ public enum LiveToneCopy {
     public static let axChip = "liveTone.v1.chip"
     public static let axRewriteButton = "liveTone.v1.rewriteButton"
     public static let axDismissButton = "liveTone.v1.dismissButton"
+    /// Stable accessibility id for the opportunity chip's dismiss
+    /// affordance. Used by Build97 visual regression tests to assert
+    /// the dismiss control is present exactly once per opportunity
+    /// warning.
+    public static let axOpportunityDismissButton = "liveTone.v1.opportunity.dismissButton"
+    /// Stable accessibility id for the opportunity chip body.
+    public static let axOpportunityChip = "liveTone.v1.opportunity.chip"
 }

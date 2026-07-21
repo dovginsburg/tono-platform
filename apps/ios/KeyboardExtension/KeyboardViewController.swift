@@ -2194,10 +2194,15 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachVariantSettings = CoachVariantSettingsStore().load()
         // Safer is the fixed first token; exactly two configured optional
         // tokens follow. No hidden generation — the optional tokens come
-        // straight from the persisted device selection, capped at two so the
-        // strip is always "Safer + two".
-        let configuredOptional = coachVariantSettings.enabled.map(\.rawValue).prefix(2)
-        selectedToneAxes = ["safer"] + configuredOptional
+        // straight from the persisted device selection, which the store
+        // guarantees is exactly two (build-97 contract: Safer + two,
+        // legacy 3→2 deterministically migrated). The keyboard chip
+        // strip therefore always renders Safer + exactly two user
+        // tones — never more, never less.
+        let configuredOptional = Array(coachVariantSettings.enabled.prefix(
+            CoachVariantSettings.maximumOptionalCount
+        ))
+        selectedToneAxes = ["safer"] + configuredOptional.map(\.rawValue)
         if !enabled {
             refreshSpellingSuggestions()
             return

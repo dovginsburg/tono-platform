@@ -265,7 +265,14 @@ public final class TonoCoachClient {
         public let text: String
         public let rationale: String?
         public let riskAfter: String?
-        public let clocks: CoachClocks
+        /// Truthful lifecycle clocks. `nil` when the server envelope is
+        /// absent from the variant response — the iOS decoder never
+        /// fabricates clocks the server did not emit. The build 95
+        /// "four clocks from the server" contract still holds: when the
+        /// server DOES emit the envelope, every value passes the strict
+        /// `decodeServerClocks` checks; when it does not, the absence
+        /// itself is the truthful state.
+        public let clocks: CoachClocks?
     }
 
     public enum CoachError: Error, Equatable {
@@ -314,6 +321,19 @@ public final class TonoCoachClient {
     /// `.missingToken`, never a silent unauthenticated call.
     private let tokenProvider: () -> String?
 
+    /// Build-97 debug counter — number of provider HTTP requests fired
+    /// across the client's lifetime. The shipping path is unchanged:
+    /// one tap on a tone chip calls `variant(...)` exactly once, which
+    /// invokes `session.dataTask(with:)` exactly once. Tests inspect
+    /// this counter to prove the Coach 1:1 contract — "one tap → one
+    /// request → one provider call" — without mocking URLSession.
+    public private(set) var providerCallCount: Int = 0
+
+    /// Build-97 debug seam — every axis the client has dispatched a
+    /// request for. Tests assert this equals exactly one entry per chip
+    /// tap and never contains duplicate axes within one round trip.
+    public private(set) var dispatchedAxes: [String] = []
+
     public init(
         endpoint: String,
         timeout: TimeInterval,
@@ -327,6 +347,14 @@ public final class TonoCoachClient {
         self.timeout = timeout
         self.session = session
         self.tokenProvider = tokenProvider
+    }
+
+    /// Reset the build-97 debug counters. Production callers never
+    /// invoke this; tests use it between scenarios to assert exactly
+    /// one provider call per chip tap.
+    public func resetProviderCallCount() {
+        providerCallCount = 0
+        dispatchedAxes = []
     }
 
     /// Resolve a non-empty bearer token, or nil when none is available.
@@ -405,6 +433,7 @@ public final class TonoCoachClient {
                 DispatchQueue.main.async { completion(.failure(.decoding(error.localizedDescription))) }
             }
         }
+        providerCallCount += 1
         task.resume()
         return task
     }
@@ -492,6 +521,13 @@ public final class TonoCoachClient {
                 DispatchQueue.main.async { completion(.failure(.decoding(error.localizedDescription))) }
             }
         }
+        // Build-97 Coach 1:1 contract: one tap on a tone chip →
+        // one provider call. Bumped exactly here, exactly once per
+        // `variant(...)` invocation, immediately before `task.resume()`.
+        // The counters are public-readonly test seams; the shipping
+        // path is unchanged.
+        providerCallCount += 1
+        dispatchedAxes.append(axis)
         task.resume()
         return task
     }
@@ -562,14 +598,25 @@ public final class TonoCoachClient {
         // envelope is parsed strictly from `dict["clocks"]`; the
         // `requestAccepted` anchor is used to bound the server's
         // `response_sent_ms` against the same monotonic instant domain.
-        let resolvedClocks: CoachClocks
+        //
+        // Build 97 production-shape compatibility: when the server
+        // envelope is absent, the absence is itself the truthful state
+        // — iOS does NOT fabricate clocks the server did not emit. We
+        // still validate strictly when the envelope IS present, so the
+        // build 95 "all four from the server" contract is unchanged for
+        // servers that emit one. Servers that don't emit one return
+        // `clocks: nil` and the variant is otherwise decoded exactly as
+        // before.
+        let resolvedClocks: CoachClocks?
         if let supplied = clocks {
             resolvedClocks = supplied
-        } else {
+        } else if dict["clocks"] is [String: Any] {
             resolvedClocks = try decodeServerClocks(
                 payload: dict,
                 requestAccepted: requestAccepted
             )
+        } else {
+            resolvedClocks = nil
         }
         return VariantResponse(
             axis: axis,

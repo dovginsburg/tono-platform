@@ -17,7 +17,7 @@ import XCTest
 /// where build numbers disagree it fails on the version values, never on a
 /// syntax/type error.
 final class BuildNumberGuardTests: XCTestCase {
-    private static let expectedBuild = "96"
+    private static let expectedBuild = "97"
 
     private static let shippedPlists = [
         "App/Info.plist",

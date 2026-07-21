@@ -39,6 +39,7 @@
 		8E0000000000000000000003 /* LiveToneOpportunityCounters.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D0000000000000000000003 /* LiveToneOpportunityCounters.swift */; };
 		8E0000000000000000000004 /* LiveToneOpportunityFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D0000000000000000000004 /* LiveToneOpportunityFixtures.swift */; };
 		8E0000000000000000000005 /* Build97LiveTonePositiveOpportunityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D0000000000000000000005 /* Build97LiveTonePositiveOpportunityTests.swift */; };
+		8E0000000000000000000006 /* Build97ShippingPathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D0000000000000000000006 /* Build97ShippingPathTests.swift */; };
 		1F625673B188289A9DEBCA36 /* ContactsSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E33B6F18B213E414885CCCA /* ContactsSync.swift */; };
 		2006FA0CC979F68A4F917014 /* MockToneAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C69903847843E133412E1E5 /* MockToneAnalyzer.swift */; };
 		20D1B23B844C847F7AB362C3 /* RecipientMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58D322318012F6E3758FBE16 /* RecipientMemory.swift */; };
@@ -232,6 +233,7 @@
 		8D0000000000000000000003 /* LiveToneOpportunityCounters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveToneOpportunityCounters.swift; sourceTree = "<group>"; };
 		8D0000000000000000000004 /* LiveToneOpportunityFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveToneOpportunityFixtures.swift; sourceTree = "<group>"; };
 		8D0000000000000000000005 /* Build97LiveTonePositiveOpportunityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build97LiveTonePositiveOpportunityTests.swift; sourceTree = "<group>"; };
+		8D0000000000000000000006 /* Build97ShippingPathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build97ShippingPathTests.swift; sourceTree = "<group>"; };
 		3BEE71892FA8D9333320C272 /* Tono.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = Tono.storekit; sourceTree = "<group>"; };
 		3C69903847843E133412E1E5 /* MockToneAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockToneAnalyzer.swift; sourceTree = "<group>"; };
 		3C73FA31B4F44D8110957849 /* MemoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryView.swift; sourceTree = "<group>"; };
@@ -367,6 +369,7 @@
 				920000000000000000000030 /* CoachSpellingHostSessionContractTests.swift */,
 				8B0000000000000000000020 /* LiveToneV1AcceptanceTests.swift */,
 				8D0000000000000000000005 /* Build97LiveTonePositiveOpportunityTests.swift */,
+				8D0000000000000000000006 /* Build97ShippingPathTests.swift */,
 				850000000000000000000005 /* SpellingCorrectionTests.swift */,
 				970000000000000000000010 /* Build97KeyboardGeometryTests.swift */,
 				970000000000000000000011 /* Build97BackspaceStateTests.swift */,
@@ -822,6 +825,7 @@
 				970000000000000000000213 /* Build97EmojiTests.swift in Sources */,
 				970000000000000000000220 /* Build97KeyboardRow3VisibleBoundsTests.swift in Sources */,
 				8E0000000000000000000005 /* Build97LiveTonePositiveOpportunityTests.swift in Sources */,
+				8E0000000000000000000006 /* Build97ShippingPathTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -23,6 +23,22 @@ public final class LiveToneManager {
     private let counters: LiveToneCounterStore
     private let preference: LiveTonePreference
 
+    /// The opportunity classifier wired into the shipping engine. When
+    /// present, O1/O2/O3 are surfaced through the same passive
+    /// indicator the red lane uses; O4/O5 stay silent under the
+    /// classifier's `activeFamilies` gate.
+    public let opportunityClassifier: LiveToneOpportunityClassifier
+
+    /// Per-family session store for the opportunity lane's one-fire /
+    /// dismissal discipline. Held on the manager so the integration
+    /// lane can update it on user dismissal of an opportunity chip.
+    /// `var` because `dismissOpportunity(...)` mutates the per-host-
+    /// session dismissal set.
+    private var opportunitySession: LiveToneOpportunitySession
+
+    /// Per-family counter store for the opportunity lane.
+    private let opportunityCounters: LiveToneOpportunityCounterStore
+
     // MARK: - Init
 
     public init(
@@ -38,18 +54,30 @@ public final class LiveToneManager {
         }()
         let toggle = LiveToneMasterToggle(defaults: resolved)
         let counterStore = LiveToneCounterStore(defaults: resolved)
+        let opportunity = LiveToneOpportunityClassifier()
+        let opportunitySession = LiveToneOpportunitySession()
+        let opportunityCounterStore = LiveToneOpportunityCounterStore(defaults: resolved)
         let engine = LiveToneEngine(
             classifier: LiveToneClassifier(),
             masterToggle: toggle,
-            counters: counterStore
+            counters: counterStore,
+            opportunityClassifier: opportunity,
+            opportunitySession: opportunitySession,
+            opportunityCounters: opportunityCounterStore
         )
         self.masterToggle = toggle
         self.counters = counterStore
         self.preference = LiveTonePreference(defaults: resolved)
         self.engine = engine
+        self.opportunityClassifier = opportunity
+        self.opportunitySession = opportunitySession
+        self.opportunityCounters = opportunityCounterStore
         self.indicator = LiveToneIndicatorView()
         self.indicator.onDismiss = { [weak self] in
             self?.engine.userTappedDismiss()
+        }
+        self.indicator.onOpportunityDismiss = { [weak self] family in
+            self?.dismissOpportunity(family: family)
         }
         self.engine.onWarningChange = { [weak self] warning in
             self?.indicator.apply(warning)
@@ -104,6 +132,18 @@ public final class LiveToneManager {
         indicator.onRewrite = handler
     }
 
+    /// Update the opportunity per-family session store when the user
+    /// dismisses an amber chip. The dismissal MUST route through the
+    /// engine (which holds the canonical `opportunitySession` consulted
+    /// by `evaluate(draft:)`); mutating only the manager's copy would
+    /// silently diverge and let the next draft re-fire the same family.
+    /// Pure side effect: clears the visible chip when it matches the
+    /// dismissed family.
+    public func dismissOpportunity(family: LiveToneOpportunityFamily) {
+        opportunitySession.dismiss(family)
+        engine.userDismissedOpportunity(family)
+    }
+
     // MARK: - Test seams
 
     /// The engine driving this manager. Tests may inspect it directly.
@@ -111,4 +151,10 @@ public final class LiveToneManager {
 
     /// The preference facade driving this manager. Tests may inspect it.
     public var debugPreference: LiveTonePreference { preference }
+
+    /// The per-family session store. Tests may inspect or reset it.
+    public var debugOpportunitySession: LiveToneOpportunitySession { opportunitySession }
+
+    /// The per-family counter store. Tests may inspect or reset it.
+    public var debugOpportunityCounters: LiveToneOpportunityCounterStore { opportunityCounters }
 }

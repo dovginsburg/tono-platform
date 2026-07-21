@@ -56,10 +56,14 @@ final class Build95CoachContractTests: XCTestCase {
         XCTAssertEqual(response.text, "Could you help me?")
         // The decoder surfaces the server envelope exactly — every
         // anchor is integer ms and monotonic in the documented order.
-        XCTAssertEqual(response.clocks.requestAcceptedMonotonicMs, 0)
-        XCTAssertEqual(response.clocks.preflightEndMonotonicMs, 12)
-        XCTAssertEqual(response.clocks.providerStartMonotonicMs, 13)
-        XCTAssertEqual(response.clocks.responseSentMonotonicMs, 47)
+        let envelopeClocks = try XCTUnwrap(
+            response.clocks,
+            "a server response with a well-formed clocks envelope must surface its four anchors"
+        )
+        XCTAssertEqual(envelopeClocks.requestAcceptedMonotonicMs, 0)
+        XCTAssertEqual(envelopeClocks.preflightEndMonotonicMs, 12)
+        XCTAssertEqual(envelopeClocks.providerStartMonotonicMs, 13)
+        XCTAssertEqual(envelopeClocks.responseSentMonotonicMs, 47)
 
         let blocked = #"{"status":"blocked","axis":"safer","reason":"preflight"}"#.data(using: .utf8)!
         XCTAssertThrowsError(try TonoCoachClient.decodeVariant(blocked, expectedAxis: "safer"))
@@ -70,12 +74,20 @@ final class Build95CoachContractTests: XCTestCase {
         let blank = #"{"status":"ok","axis":"safer","text":"   "}"#.data(using: .utf8)!
         XCTAssertThrowsError(try TonoCoachClient.decodeVariant(blank, expectedAxis: "safer"))
 
-        // Build 95: a status=ok response without a `clocks` envelope is
-        // malformed — the decoder rejects it rather than fabricating
-        // values. This is the truthful-unavailable-state behavior the
-        // contract guarantees.
+        // Build 97 production-shape compatibility: a status=ok response
+        // without a `clocks` envelope is no longer malformed — the
+        // absence is itself the truthful state and iOS does not
+        // fabricate. The decoder still validates strictly when the
+        // envelope IS present (see the test above), so the build 95
+        // "all four clocks come from the server" contract holds.
         let noClocks = #"{"status":"ok","axis":"safer","text":"Could you help me?","risk_after":"low"}"#.data(using: .utf8)!
-        XCTAssertThrowsError(try TonoCoachClient.decodeVariant(noClocks, expectedAxis: "safer", requestAccepted: Date()))
+        let noClocksResponse = try TonoCoachClient.decodeVariant(noClocks, expectedAxis: "safer", requestAccepted: Date())
+        XCTAssertEqual(noClocksResponse.axis, "safer")
+        XCTAssertEqual(noClocksResponse.text, "Could you help me?")
+        XCTAssertNil(
+            noClocksResponse.clocks,
+            "missing envelope is the truthful state — iOS must not fabricate"
+        )
     }
 
     func testTextChangePreservesUnchangedSameHostRequestAndCancelsMutation() {

@@ -42,6 +42,28 @@ public final class LiveToneEngine {
     public let masterToggle: LiveToneMasterToggle
     private let classifier: LiveToneClassifier
     private let counters: LiveToneCounterStore
+
+    /// Optional opportunity classifier. When present and the red lane is
+    /// silent (no L1/L2 warning), the engine consults this classifier and
+    /// surfaces the verdict through the same warning pipeline. When
+    /// `nil`, the engine behaves exactly as it did before — the
+    /// opportunity lane is wired but inert, never consulted.
+    private let opportunityClassifier: LiveToneOpportunityClassifier?
+
+    /// Optional session store for the opportunity lane's one-fire /
+    /// dismissal discipline. When `nil`, opportunity verdicts still
+    /// surface but per-family dismissal / same-sentence-refire logic
+    /// is bypassed (used only by tests). Marked `var` so the engine's
+    /// serial queue can mutate the canonical session machine when the
+    /// user dismisses an amber chip — a `let` here is the build-97
+    /// "dismiss(_:) compile error" the recovery body calls out.
+    private var opportunitySession: LiveToneOpportunitySession?
+
+    /// Optional counter store for the opportunity lane. Bumps the
+    /// per-family `shown` counter on every visible transition. When
+    /// `nil`, counter bumps are silently dropped.
+    private let opportunityCounters: LiveToneOpportunityCounterStore?
+
     private let queue = DispatchQueue(label: "com.tono.livetone.engine")
     private let runLoopMarker = RunLoopMarker()
 
@@ -73,11 +95,17 @@ public final class LiveToneEngine {
     public init(
         classifier: LiveToneClassifier,
         masterToggle: LiveToneMasterToggle,
-        counters: LiveToneCounterStore
+        counters: LiveToneCounterStore,
+        opportunityClassifier: LiveToneOpportunityClassifier? = nil,
+        opportunitySession: LiveToneOpportunitySession? = nil,
+        opportunityCounters: LiveToneOpportunityCounterStore? = nil
     ) {
         self.classifier = classifier
         self.masterToggle = masterToggle
         self.counters = counters
+        self.opportunityClassifier = opportunityClassifier
+        self.opportunitySession = opportunitySession
+        self.opportunityCounters = opportunityCounters
     }
 
     deinit {
@@ -121,6 +149,28 @@ public final class LiveToneEngine {
                 self.counters.save(counters)
             }
             self.publish(self.session.warning)
+        }
+    }
+
+    /// The user dismissed the currently-shown opportunity nudge.
+    /// Suppresses that family for the remainder of the host-app
+    /// session and clears the visible chip. The dismissal must run on
+    /// the engine's serial queue because `opportunitySession` is
+    /// mutated inside `evaluate(draft:)` — managers that mutate their
+    /// own copy would diverge silently (see the build-97 shipping-path
+    /// session-discipline regression).
+    public func userDismissedOpportunity(_ family: LiveToneOpportunityFamily) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.opportunitySession?.dismiss(family)
+            // Only clear the visible chip if the chip was actually
+            // showing the dismissed family — a stale dismissal
+            // (race against a draft change) must not blank a fresh chip.
+            if case .opportunity(let visible) = self.session.warning,
+               visible == family {
+                self.session.dismissCurrent()
+                self.publish(.none)
+            }
         }
     }
 
@@ -176,6 +226,13 @@ public final class LiveToneEngine {
     /// Run the classifier synchronously on the engine's serial queue.
     /// The contract's <50 ms target is observed by the classifier's
     /// bounded prefix scan and the O(1) token-level pattern matcher.
+    ///
+    /// When the red lane is silent (no L1/L2 warning and not a
+    /// crisis-silence verdict), the engine consults the opportunity
+    /// classifier on the same draft and lets the session machine
+    /// decide whether to surface an amber chip. The opportunity lane
+    /// is a pure observer: never mutates the keystroke path, never
+    /// opens the rewrite flow, never blocks the user.
     private func evaluate(draft: String, boundHash: Int) {
         // Stale-result discard: the user moved on; the in-flight hash no
         // longer matches the bound one. Drop on the floor.
@@ -185,17 +242,64 @@ public final class LiveToneEngine {
         }
         let verdict = classifier.classify(draft)
         let priorWarning = session.warning
-        session.apply(verdict: verdict, draftHash: boundHash)
+
+        // Opportunity verdict: consulted only when the red lane is
+        // silent. The session machine enforces strict precedence
+        // (crisis > red > opportunity > silent), so a passing red
+        // verdict here will discard the opportunity verdict entirely.
+        // The per-host-app-session discipline (one fire per family,
+        // dismissal suppresses, same-sentence re-fire only on a new
+        // distinct signal) is enforced by the session machine, NOT by
+        // the classifier — the engine just forwards the verdict.
+        let opportunityVerdict: LiveToneOpportunityVerdict? = {
+            guard let opportunityClassifier else { return nil }
+            // Skip opportunity under crisis-silence (Mira GO) and
+            // under any visible red warning (red lane wins).
+            if verdict.category == .crisis { return nil }
+            if verdict.isVisible { return nil }
+            return opportunityClassifier.classify(draft)
+        }()
+
+        // Gate the verdict through the per-family session machine so the
+        // opportunity lane's one-fire / dismissal / same-sentence-refire
+        // discipline is observed before any visible surface is published.
+        let gatedOpportunityVerdict: LiveToneOpportunityVerdict? = {
+            guard let opportunityVerdict else { return nil }
+            guard var opportunitySession else { return opportunityVerdict }
+            // The session machine records the fire on accept; a returned
+            // `nil` means "stay silent" (dismissed, already fired, or no
+            // new distinct signal on a same-sentence retry).
+            guard let surfaced = opportunitySession.consider(opportunityVerdict) else {
+                return nil
+            }
+            return LiveToneOpportunityVerdict(
+                family: surfaced,
+                signals: opportunityVerdict.signals,
+                sentenceSignature: opportunityVerdict.sentenceSignature
+            )
+        }()
+
+        session.apply(
+            verdict: verdict,
+            opportunity: gatedOpportunityVerdict,
+            draftHash: boundHash
+        )
         inFlightHash = nil
 
         // Bump the per-category `shown` counter on every visible-warning
         // transition. Crisis silence never bumps a counter (no visible
         // warning) — that's correct per the contract: Live Tone is silent
         // on crisis, no surface to count.
-        if session.warning != priorWarning,
-           let category = Self.category(of: session.warning) {
-            let counters = self.counters.load().incrementShown(category)
-            self.counters.save(counters)
+        if session.warning != priorWarning {
+            if let category = Self.category(of: session.warning) {
+                let counters = self.counters.load().incrementShown(category)
+                self.counters.save(counters)
+            }
+            if case .opportunity(let family) = session.warning,
+               let opportunityCounters {
+                let store = opportunityCounters.load().incrementShown(family: family)
+                opportunityCounters.save(store)
+            }
         }
 
         publish(session.warning)
@@ -204,7 +308,7 @@ public final class LiveToneEngine {
     private static func category(of warning: LiveToneVisibleWarning) -> LiveToneCategory? {
         switch warning {
         case .l1(let category), .l2(let category): return category
-        case .none: return nil
+        case .none, .opportunity: return nil
         }
     }
 

@@ -398,11 +398,12 @@ struct SettingsView: View {
     }
 
     private var axesSection: some View {
-        // Build 94 — Safer is mandatory and rendered separately as
+        // Build 97 — Safer is mandatory and rendered separately as
         // "Safer — Always on"; the optional toggle list lives below and is
-        // bounded to three enabled variants. Tapping a fourth when three are
-        // already enabled shows exactly the spec text "Turn one off first (3 max)"
-        // without silently replacing or auto-disabling any selection.
+        // bounded to exactly two enabled variants. Tapping a third when
+        // two are already enabled shows exactly the spec text "Two
+        // tones max" without silently replacing or auto-disabling any
+        // selection.
         Group {
             Section {
                 Toggle("Safer — Always on", isOn: .constant(true))
@@ -418,11 +419,11 @@ struct SettingsView: View {
 
             Section {
                 HStack {
-                    Text("Choose up to 3")
+                    Text("Choose up to \(CoachVariantSettings.maximumOptionalCount)")
                     Spacer()
-                    Text("\(coachVariants.selectedCount)/3")
+                    Text("\(coachVariants.selectedCount)/\(CoachVariantSettings.maximumOptionalCount)")
                         .foregroundColor(.secondary)
-                        .accessibilityLabel("\(coachVariants.selectedCount) of 3 selected")
+                        .accessibilityLabel("\(coachVariants.selectedCount) of \(CoachVariantSettings.maximumOptionalCount) selected")
                 }
 
                 ForEach(CoachOptionalVariant.allCases, id: \.self) { variant in
@@ -451,7 +452,7 @@ struct SettingsView: View {
                     Text(hint)
                         .font(.caption)
                         .foregroundColor(.secondary)
-                        .accessibilityIdentifier("build94.fourthToggleHint")
+                        .accessibilityIdentifier("build97.fourthToggleHint")
                 } else {
                     Text("Clearer and Funnier are on by default. Affectionate, Professional, Concise, and Custom are off.")
                         .font(.caption)
@@ -461,11 +462,12 @@ struct SettingsView: View {
         }
     }
 
-    /// Spec-exact message shown when the user attempts to enable a fourth
-    /// optional variant while three are already selected. `nil` when no such
-    /// attempt is pending; otherwise the literal text "Turn one off first (3 max)".
+    /// Spec-exact message shown when the user attempts to enable a third
+    /// optional variant while two are already selected. `nil` when no
+    /// such attempt is pending; otherwise the literal text "Two tones
+    /// max" — the build-97 contract.
     private var fourthToggleHint: String? {
-        coachVariants.pendingFourthBlocked ? "Turn one off first (3 max)" : nil
+        coachVariants.pendingFourthBlocked ? "Two tones max" : nil
     }
 
     // MARK: - Live Tone (shipping release — Live Tone v1 contract)
@@ -602,12 +604,12 @@ struct SettingsView: View {
 
     private func coachVariantAccessibilityHint(_ variant: CoachOptionalVariant) -> String {
         if coachVariants.enabled.contains(variant) { return "Double tap to deselect" }
-        // Spec-exact hint when a fourth optional toggle is tapped while three
-        // are already selected. Surfaced both in the section footer (as a
-        // visible Text) and as the per-row accessibility hint so VoiceOver
-        // users hear the same message.
+        // Spec-exact hint when a beyond-cap optional toggle is tapped
+        // while two are already selected. Surfaced both in the section
+        // footer (as a visible Text) and as the per-row accessibility
+        // hint so VoiceOver users hear the same message.
         if coachVariants.selectedCount >= CoachVariantSettings.maximumOptionalCount {
-            return "Turn one off first (3 max)"
+            return "Two tones max"
         }
         if variant == .custom && !coachVariants.isCustomInstructionValid {
             return "Enter a non-empty Custom instruction before enabling"
