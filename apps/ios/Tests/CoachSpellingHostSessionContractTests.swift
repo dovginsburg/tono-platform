@@ -95,7 +95,15 @@ final class CoachSpellingHostSessionContractTests: XCTestCase {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [NeverCompletingCoachURLProtocol.self]
         let session = URLSession(configuration: configuration)
-        let client = TonoCoachClient(endpoint: "https://tono.invalid/v1/analyze", timeout: 15, session: session)
+        // Build 96: a bearer token is required to issue a request at all; a
+        // token-less client makes zero network requests. Supply one here so
+        // this contract still exercises the real, cancellable task.
+        let client = TonoCoachClient(
+            endpoint: "https://tono.invalid/v1/analyze",
+            timeout: 15,
+            session: session,
+            tokenProvider: { "test-token" }
+        )
         let task = try XCTUnwrap(client.coach(draft: "same text") { _ in })
         XCTAssertEqual(task.state, .running)
         task.cancel()

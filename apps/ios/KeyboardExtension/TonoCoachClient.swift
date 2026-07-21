@@ -25,11 +25,15 @@
 //     }
 //
 // Notes:
-//   - No bearer token is sent: /v1/analyze is the unauthenticated
-//     passthrough kept for the iOS Playground and integration tests
-//     (Backend/server.py §/v1/analyze). It is what the keyboard can call
-//     without a /v1/register round-trip, which matters because the
-//     keyboard cannot easily show UI for a sign-in flow mid-message.
+//   - Build 96 authentication: every request carries an
+//     `Authorization: Bearer <token>` header sourced from the app's shared
+//     Keychain access group (`SharedKeychain.get(KeychainKeys.apiToken)`),
+//     injected by the caller via `tokenProvider`. The client itself never
+//     reads the Keychain — it stays a pure, host-agnostic HTTP client — but
+//     it enforces the contract: when the provider yields no token, the
+//     client makes ZERO network requests and reports `.missingToken`, a
+//     visible deterministic recovery state. It never invents a fallback
+//     credential and never weakens the backend's authentication.
 //   - Timeouts are strict (15s) so the keyboard can render an error
 //     instead of looking frozen.
 //   - All decoding is centralised here so it can be exercised by the
@@ -271,11 +275,18 @@ public final class TonoCoachClient {
         case timeout
         case decoding(String)
         case staleDraft
+        /// No bearer token was available in the shared Keychain. The client
+        /// makes zero network requests and surfaces this deterministic,
+        /// visible recovery state instead of silently failing or inventing a
+        /// credential. Recover by opening the Tono app to sign in.
+        case missingToken
 
         public var userFacingMessage: String {
             switch self {
             case .invalidURL:
                 return "Internal error: invalid backend URL."
+            case .missingToken:
+                return "Sign in to Tono to use Coach. Open the Tono app to continue."
             case .transport(let m):
                 return "Network error: \(m)"
             case .timeout:
@@ -296,14 +307,33 @@ public final class TonoCoachClient {
     public let endpoint: URL
     public let timeout: TimeInterval
     private let session: URLSession
+    /// Supplies the bearer token at request time. Injected by the keyboard
+    /// (which reads the shared Keychain access group) so this client stays a
+    /// pure, host-agnostic HTTP client. Defaults to no token — a client built
+    /// without a provider makes zero network requests and reports
+    /// `.missingToken`, never a silent unauthenticated call.
+    private let tokenProvider: () -> String?
 
-    public init(endpoint: String, timeout: TimeInterval, session: URLSession = .shared) {
+    public init(
+        endpoint: String,
+        timeout: TimeInterval,
+        session: URLSession = .shared,
+        tokenProvider: @escaping () -> String? = { nil }
+    ) {
         // The endpoint string is fixed by the build configuration, so we
         // trust the caller — but we still guard so a future regression
         // can't crash on a bad constant.
         self.endpoint = URL(string: endpoint) ?? URL(string: "https://api.tonoit.com/v1/analyze")!
         self.timeout = timeout
         self.session = session
+        self.tokenProvider = tokenProvider
+    }
+
+    /// Resolve a non-empty bearer token, or nil when none is available.
+    private func resolvedBearerToken() -> String? {
+        guard let token = tokenProvider()?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !token.isEmpty else { return nil }
+        return token
     }
 
     // MARK: - Public entry point
@@ -317,10 +347,17 @@ public final class TonoCoachClient {
         settings: CoachVariantSettings = CoachVariantSettings(),
         completion: @escaping (Result<CoachResponse, CoachError>) -> Void
     ) -> URLSessionDataTask? {
+        // Build 96: no bearer token → zero network requests + a visible
+        // deterministic missing-token state. Fail closed locally.
+        guard let token = resolvedBearerToken() else {
+            DispatchQueue.main.async { completion(.failure(.missingToken)) }
+            return nil
+        }
         var req = URLRequest(url: endpoint)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.timeoutInterval = timeout
 
         var body: [String: Any] = [
@@ -389,6 +426,13 @@ public final class TonoCoachClient {
         customPrompt: String? = nil,
         completion: @escaping (Result<VariantResponse, CoachError>) -> Void
     ) -> URLSessionDataTask? {
+        // Build 96: no bearer token → zero network requests + a visible
+        // deterministic missing-token state. Resolve before capturing any
+        // request anchor so an absent token is a pure local recovery.
+        guard let token = resolvedBearerToken() else {
+            DispatchQueue.main.async { completion(.failure(.missingToken)) }
+            return nil
+        }
         // The sole client-side anchor. Captured here (not in the completion)
         // so a callback that arrives after a host/session invalidation can
         // still cross-check the server envelope against the request instant
@@ -398,6 +442,7 @@ public final class TonoCoachClient {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.timeoutInterval = timeout
         var body: [String: Any] = ["text": draft, "axis": axis]
         if axis == "custom", let customPrompt {

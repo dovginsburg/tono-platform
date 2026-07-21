@@ -4,7 +4,7 @@
 // Implementation of the binding `Live Tone v1 Acceptance Contract`.
 // Deterministic, local, versioned, fail-closed, and pattern-precise.
 // Evaluation is purely a function of the isolated current draft string:
-// no I/O, no clock, no randomness, no networking, no pasteboard, no
+// no I/O, no clock, no randomness, no networking, no clipboard, no
 // persistence.
 //
 // Precedence — first matching tier decides:
@@ -30,7 +30,7 @@
 //        to L2.
 //
 // Pure Foundation. Static source guards in `LiveToneV1AcceptanceTests`
-// assert this file contains no networking, pasteboard, timer, or UIKit
+// assert this file contains no networking, clipboard, timer, or UIKit
 // tokens.
 
 import Foundation
@@ -164,7 +164,10 @@ public struct LiveToneClassifier {
 
         // P1 — Containment suppression. If every hostile hit is fully
         // contained inside a quote span or reporting-verb clause, produce
-        // silence. Any uncontained hostile token voids P1.
+        // silence. Any uncontained hostile token voids P1 for the whole
+        // draft segment — token-level containment, no partial credit. The
+        // reporting-verb clause now stops at a quotation boundary, so an
+        // uncontained hostile token after a quoted threat correctly voids P1.
         if !hostileHits.isEmpty,
            hostileHits.allSatisfy({ Containment.isContained($0, tokens: tokens) }) {
             return .silent
@@ -318,6 +321,17 @@ private enum Tokenization {
 
         func flush() {
             guard !current.isEmpty else { return }
+            // Whitespace runs are separators, not tokens. Emitting them as
+            // `.other` tokens injects extra gaps into the space-joined string
+            // every multi-word matcher scans (Class A / Class B / crisis /
+            // idiom / absolutist blame), and it pushes banter markers and
+            // ALL-CAPS words out of the one-token adjacency window. Dropping
+            // them here is what lets "i'll kill you", "kill myself", and the
+            // rest of the closed pattern set match at all.
+            if currentKind == .whitespace {
+                current = ""
+                return
+            }
             let kind: TokenKind
             switch currentKind {
             case .quoteSingle, .quoteDouble:
@@ -403,13 +417,10 @@ fileprivate enum CrisisDetector {
     ]
 
     static func firstMatch(in tokens: [Token]) -> Range<Int>? {
-        let joined = tokens.map(\.normalized).joined(separator: " ")
-        for pattern in patterns where joined.contains(pattern) {
-            // Locate the token range the pattern covers.
+        for pattern in patterns {
             if let range = tokenRange(for: pattern, in: tokens) {
                 return range
             }
-            return 0..<tokens.count
         }
         return nil
     }
@@ -453,14 +464,12 @@ fileprivate enum IdiomAllowlist {
     ]
 
     static func firstMatch(in tokens: [Token]) -> Range<Int>? {
-        let joined = tokens.map(\.normalized).joined(separator: " ")
-        for pattern in patterns where joined.contains(pattern) {
+        for pattern in patterns {
             if let range = CrisisDetector.tokenRange_forSharedHelper(
                 pattern, in: tokens
             ) {
                 return range
             }
-            return 0..<tokens.count
         }
         return nil
     }
@@ -498,6 +507,7 @@ private enum HostileHits {
         hits.append(contentsOf: ClassAPatternSet.match(in: tokens))
         hits.append(contentsOf: ClassBPatternSet.match(in: tokens))
         hits.append(contentsOf: InsultDetector.match(in: tokens))
+        hits.append(contentsOf: AbsolutistBlameDetector.match(in: tokens))
         hits.append(contentsOf: CapsEscalationDetector.match(in: tokens))
         return hits
     }
@@ -511,7 +521,6 @@ private enum ClassAPatternSet {
     /// contract change requiring every fixture (15 base + 7 overlap) to
     /// be rerun. `patternSetVersion` lives on `LiveToneClassifier`.
     static let patterns: [String] = [
-        // Demand plus consequence / "or else"
         "send the money or",
         "pay up or",
         "do it or",
@@ -562,28 +571,22 @@ private enum ClassAPatternSet {
         "i'll tell people",
         "ill tell people",
         "i will tell people",
-        // Guilt-coercion
+        // Guilt-coercion / contempt-coercion
         "if you loved me",
         "after all i've done",
         "after all ive done",
-        "after all i have done"
+        "after all i have done",
+        "why do i bother"
     ]
 
     static func match(in tokens: [Token]) -> [HostileHit] {
         var hits: [HostileHit] = []
-        let joined = tokens.map(\.normalized).joined(separator: " ")
-        for pattern in patterns where joined.contains(pattern) {
+        for pattern in patterns {
             if let range = lookupRange(for: pattern, in: tokens) {
                 hits.append(HostileHit(
                     category: .classAThreatCoercion,
                     level: .l2,
                     tokenRange: range
-                ))
-            } else {
-                hits.append(HostileHit(
-                    category: .classAThreatCoercion,
-                    level: .l2,
-                    tokenRange: 0..<tokens.count
                 ))
             }
         }
@@ -630,19 +633,12 @@ private enum ClassBPatternSet {
 
     static func match(in tokens: [Token]) -> [HostileHit] {
         var hits: [HostileHit] = []
-        let joined = tokens.map(\.normalized).joined(separator: " ")
-        for pattern in patterns where joined.contains(pattern) {
+        for pattern in patterns {
             if let range = lookupRange(for: pattern, in: tokens) {
                 hits.append(HostileHit(
                     category: .classBHyperbolicViolence,
                     level: .l2,
                     tokenRange: range
-                ))
-            } else {
-                hits.append(HostileHit(
-                    category: .classBHyperbolicViolence,
-                    level: .l2,
-                    tokenRange: 0..<tokens.count
                 ))
             }
         }
@@ -709,8 +705,7 @@ private enum AbsolutistBlameDetector {
 
     static func match(in tokens: [Token]) -> [HostileHit] {
         var hits: [HostileHit] = []
-        let joined = tokens.map(\.normalized).joined(separator: " ")
-        for phrase in phrases where joined.contains(phrase) {
+        for phrase in phrases {
             if let range = lookupRange(for: phrase, in: tokens) {
                 hits.append(HostileHit(
                     category: .hostility,
@@ -846,12 +841,20 @@ private enum Containment {
         var spans: [Range<Int>] = []
         for (i, token) in tokens.enumerated() where token.kind == .word {
             if reportingVerbs.contains(token.normalized) {
-                // Span covers the rest of the sentence after the reporting
-                // verb. Sentences terminate on `.!?\n`. For simplicity and
-                // determinism the span runs to the end of the token stream
-                // or to the next sentence terminator (a punctuation token).
+                // The clause governed by a reporting verb runs to the next
+                // sentence terminator OR to a quotation boundary — whichever
+                // comes first. When the verb introduces a quote
+                // (`He said "I'll kill you"`), the quoted span already
+                // provides containment; the reporting-verb clause must NOT
+                // extend past the closing quote onto the speaker's own
+                // words (`… but you never listen`). Without the quote guard
+                // an uncontained hostile token after the quote is wrongly
+                // swallowed and P1 suppresses a warning it must not.
                 var end = i + 1
-                while end < tokens.count, tokens[end].kind != .punctuation {
+                while end < tokens.count,
+                      tokens[end].kind != .punctuation,
+                      tokens[end].kind != .quoteDouble,
+                      tokens[end].kind != .quoteSingle {
                     end += 1
                 }
                 spans.append((i + 1)..<min(end, tokens.count))

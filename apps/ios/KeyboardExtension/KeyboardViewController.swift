@@ -272,7 +272,11 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private var coachTask: URLSessionDataTask?
     private lazy var coachClient = TonoCoachClient(
         endpoint: Const.backendURL.replacingOccurrences(of: "/v1/analyze", with: "/api/analyze/variant"),
-        timeout: Const.coachTimeout
+        timeout: Const.coachTimeout,
+        // Build 96: the bearer token comes from the app's shared Keychain
+        // access group. When it is absent the client makes zero network
+        // requests and surfaces a visible missing-token state.
+        tokenProvider: { SharedKeychain.get(KeychainKeys.apiToken) }
     )
 
     /// Monotonic host/editing-session serial. It advances at every lifecycle
@@ -299,12 +303,12 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     private func advanceHostSession() {
         hostSessionSerial &+= 1
-        #if !TONO_BUILD92_HOSTSESSION
         // Live Tone v1 — field / editing-session boundary. Per-draft
         // suppression must reset here so a new field starts fresh.
-        // Pure observer call; never touches the keystroke path.
+        // Pure observer call; never touches the keystroke path. Wired
+        // unconditionally (build 96) so the test build and the shipping
+        // build run the identical path.
         liveToneManager?.fieldDidReset()
-        #endif
     }
 
     private var keysStack: UIStackView?
@@ -347,15 +351,16 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     // Live Tone v1 — shipping release. Pure observer; never touches the
     // keystroke path. The manager owns the debouncer, the session state
-    // machine, the preference reads, and the indicator view.
-    #if !TONO_BUILD92_HOSTSESSION
+    // machine, the preference reads, and the indicator view. Wired
+    // unconditionally (build 96): it was formerly gated behind
+    // `TONO_BUILD92_HOSTSESSION`, which is defined on the test target and
+    // therefore stripped Live Tone from every test build.
     private var liveToneManager: LiveToneManager?
     /// The most recent character we observed via the proxy. Used to
     /// decide whether a sentence-ending punctuation should flush the
     /// debounce immediately (500 ms typing-idle OR punctuation, whichever
     /// fires first — binding Live Tone v1 contract).
     private var liveToneLastCommittedCharacter: Character?
-    #endif
 
     // MARK: - Lifecycle
 
@@ -378,9 +383,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         updateHostConfiguration(rebuildIfNeeded: false)
         installKeyboardLayout()
         keysInstalled = true
-        #if !TONO_BUILD92_HOSTSESSION
         installLiveTone()
-        #endif
         #if !TONO_BUILD92_HOSTSESSION
         requestSupplementaryLexicon { [weak self] lexicon in
             let words = Set(lexicon.entries.lazy.flatMap { [$0.userInput, $0.documentText] })
@@ -439,10 +442,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         // Live Tone v1 — passive observer. The keystroke path is untouched.
         // We forward the post-mutation context plus the last committed
         // character so the engine can decide whether to flush on
-        // sentence-ending punctuation.
-        #if !TONO_BUILD92_HOSTSESSION
+        // sentence-ending punctuation. Wired unconditionally (build 96).
         liveToneDidMutate(context: effectiveContext)
-        #endif
         DispatchQueue.main.async { [weak self] in
             guard let self, self.documentMutationGeneration == generation else { return }
             self.refreshHostConfigurationIfNeeded()
@@ -586,7 +587,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             button.addTarget(self, action: #selector(candidateTapped(_:)), for: .touchUpInside)
             candidates.addArrangedSubview(button)
         }
-        bar.accessibilityElements = candidates.arrangedSubviews + [coach]
+        // TONO is the leading anchor of the strip; the tone chips read to its
+        // right. Accessibility order matches the visual order.
+        bar.accessibilityElements = [coach] + candidates.arrangedSubviews
         let approvedCoachWidth = ceil(coach.intrinsicContentSize.width)
         coach.setContentHuggingPriority(.required, for: .horizontal)
         coach.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -597,13 +600,15 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             bar.topAnchor.constraint(equalTo: view.topAnchor),
             bar.heightAnchor.constraint(equalToConstant: Const.baselineMetrics.topBarHeight),
 
-            coach.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
+            // TONO remains anchored to the leading edge in every state.
+            coach.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 8),
             coach.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
             coach.heightAnchor.constraint(equalToConstant: Const.baselineMetrics.coachControlHeight),
             coach.widthAnchor.constraint(equalToConstant: approvedCoachWidth),
 
-            candidates.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 3),
-            candidates.trailingAnchor.constraint(equalTo: coach.leadingAnchor, constant: -5),
+            // The color-coded tone chips fill the trailing space after TONO.
+            candidates.leadingAnchor.constraint(equalTo: coach.trailingAnchor, constant: 5),
+            candidates.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -3),
             candidates.topAnchor.constraint(equalTo: bar.topAnchor, constant: 4),
             candidates.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -4),
         ])
@@ -1532,6 +1537,12 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             let value = candidateValues[index]
             let isOriginal = index == 0
             button.isHidden = false
+            // Reset to the neutral candidate style; the tone-chip path repaints
+            // afterward so tone token colors never leak into spelling
+            // candidates.
+            button.backgroundColor = .secondarySystemBackground
+            button.setTitleColor(.label, for: .normal)
+            button.accessibilityValue = nil
             button.setTitle(value, for: .normal)
             button.accessibilityLabel = isOriginal ? "\(value), original" : value
             button.accessibilityHint = isOriginal
@@ -2126,17 +2137,43 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private func setToneChipsEnabled(_ enabled: Bool) {
         toneChipsEnabled = enabled
         coachVariantSettings = CoachVariantSettingsStore().load()
-        selectedToneAxes = ["safer"] + coachVariantSettings.enabled.map(\.rawValue)
+        // Safer is the fixed first token; exactly two configured optional
+        // tokens follow. No hidden generation — the optional tokens come
+        // straight from the persisted device selection, capped at two so the
+        // strip is always "Safer + two".
+        let configuredOptional = coachVariantSettings.enabled.map(\.rawValue).prefix(2)
+        selectedToneAxes = ["safer"] + configuredOptional
         if !enabled {
             refreshSpellingSuggestions()
             return
         }
-        updateCandidateStrip(values: Array(selectedToneAxes.prefix(3)).map { $0.capitalized })
-        for view in candidateStack?.arrangedSubviews ?? [] {
+        updateCandidateStrip(values: selectedToneAxes.map { $0.capitalized })
+        for (index, view) in (candidateStack?.arrangedSubviews ?? []).enumerated() {
             guard let button = view as? UIButton else { continue }
             button.removeTarget(self, action: #selector(candidateTapped(_:)), for: .touchUpInside)
             button.addTarget(self, action: #selector(toneChipTapped(_:)), for: .touchUpInside)
+            if index < selectedToneAxes.count {
+                applyToneTokenStyle(to: button, axis: selectedToneAxes[index])
+            }
         }
+    }
+
+    /// Paint a tone chip with its canonical tonoit.com semantic token — an
+    /// accent-tinted fill plus a contrast-safe label — so the three chips are
+    /// visibly color-coded. Falls back to the neutral candidate style for an
+    /// unknown axis rather than inventing a color.
+    private func applyToneTokenStyle(to button: UIButton, axis: String) {
+        button.accessibilityValue = axis
+        guard let token = TonoCoachPalette.axis(axis) else {
+            button.backgroundColor = .secondarySystemBackground
+            button.setTitleColor(.label, for: .normal)
+            return
+        }
+        button.backgroundColor = token.accent.withAlphaComponent(0.18)
+        button.setTitleColor(token.accessibleLabel, for: .normal)
+        button.accessibilityLabel = "\(token.label) tone"
+        button.accessibilityHint = "Rewrites your message in a \(token.label.lowercased()) tone"
+        button.accessibilityTraits = [.button]
     }
 
     @objc private func toneChipTapped(_ sender: UIButton) {
@@ -2646,8 +2683,14 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     // MARK: - Live Tone v1 integration
+    //
+    // Wired unconditionally (build 96). Formerly gated behind
+    // `TONO_BUILD92_HOSTSESSION`, which the TonoTests target defines to
+    // activate the host/session suite — so the test build compiled a
+    // Live-Tone-stripped keyboard and the shipping integration had zero
+    // coverage. Decoupling the two makes the test build and the shipping
+    // build run the identical Live Tone path.
 
-#if !TONO_BUILD92_HOSTSESSION
     /// Construct + install the Live Tone manager. Called once from
     /// `viewDidLoad` after the keyboard layout is in place. The manager
     /// owns its own indicator view which is added as a passive
@@ -2685,7 +2728,16 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         manager.observe(character: trailing ?? " ", draft: context)
         liveToneLastCommittedCharacter = trailing
     }
-#endif
+
+    /// Test seam: drive the real shipping Live Tone observer path with a
+    /// synthetic post-mutation context and return the installed manager so an
+    /// integration test can read the engine + indicator it publishes to. This
+    /// mirrors exactly what `textDidChange(_:)` forwards; it is never invoked
+    /// in production.
+    func integrationDriveLiveTone(context: String) -> LiveToneManager? {
+        liveToneDidMutate(context: context)
+        return liveToneManager
+    }
 }
 
 /// Shared keycap press treatment. It changes in the same event frame as
