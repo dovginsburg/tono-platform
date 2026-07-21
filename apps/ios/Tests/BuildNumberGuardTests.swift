@@ -1,22 +1,23 @@
 import XCTest
 
-/// Blocker A — build-92 release-number guard.
+/// Block A — released-build-number guard.
 ///
 /// The shipped build number is a reviewed release input, not mutable build
 /// output. Every shipped bundle — App, KeyboardExtension, ShareExtension and
-/// TonoMessagesExtension — must declare exactly `CFBundleVersion` 93, and the
-/// `Scripts/bump-build.sh` archive guard must require the *same* number. The
-/// rejected build-92 candidate moved all four plists to 92 but left the guard
-/// pinned at 91; the Release build/full test run then aborted in the "Verify
+/// TonoMessagesExtension — must declare exactly the same `CFBundleVersion`
+/// that `Scripts/bump-build.sh` pins as `EXPECTED_BUILD`. Past regressions
+/// came from one of two drift patterns: shipping the four plists at the new
+/// build while the archive guard stayed on the previous one, or vice versa.
+/// Either way the Release build/full test run then aborted in the "Verify
 /// Build Number" phase (xcodebuild exit 65, zero executed tests).
 ///
 /// This contract reads the reviewed source of truth (the four `Info.plist`
 /// files and the guard script) exactly as the build phase does. It is
-/// compile-safe — pure Foundation, no keyboard/UIKit symbols — so on the
-/// build-91 base it fails on the version values (91 ≠ 93), never on a
+/// compile-safe — pure Foundation, no keyboard/UIKit symbols — so on a base
+/// where build numbers disagree it fails on the version values, never on a
 /// syntax/type error.
 final class BuildNumberGuardTests: XCTestCase {
-    private static let expectedBuild = "94"
+    private static let expectedBuild = "95"
 
     private static let shippedPlists = [
         "App/Info.plist",
@@ -33,7 +34,7 @@ final class BuildNumberGuardTests: XCTestCase {
             .deletingLastPathComponent()   // <srcroot>
     }
 
-    func testEveryShippedBundleDeclaresBuild92() throws {
+    func testEveryShippedBundleDeclaresBuild95() throws {
         let root = sourceRoot()
         for relative in Self.shippedPlists {
             let url = root.appendingPathComponent(relative)
@@ -44,21 +45,23 @@ final class BuildNumberGuardTests: XCTestCase {
             let actual = plist?["CFBundleVersion"] as? String
             XCTAssertEqual(
                 actual, Self.expectedBuild,
-                "\(relative) declares CFBundleVersion \(actual ?? "nil"); build 94 requires \(Self.expectedBuild) across every shipped bundle"
+                "\(relative) declares CFBundleVersion \(actual ?? "nil"); build 95 requires \(Self.expectedBuild) across every shipped bundle"
             )
         }
     }
 
-    func testArchiveGuardRequiresTheSameBuild92AcrossEveryBundle() throws {
+    func testArchiveGuardRequiresTheSameBuild95AcrossEveryBundle() throws {
         let root = sourceRoot()
         let script = try String(
             contentsOf: root.appendingPathComponent("Scripts/bump-build.sh"),
             encoding: .utf8
         )
 
-        // The guard's own expected number must be 93 so it agrees with the
-        // shipped plists. This is the exact mismatch that failed the rejected
-        // candidate (plists 92, guard 91 → exit 65, zero executed tests).
+        // The guard's own expected number must match `expectedBuild` so it
+        // agrees with the shipped plists. This is the exact invariant that
+        // failed prior regression candidates (plists moved to the new build
+        // but the guard stayed on the previous one → exit 65, zero executed
+        // tests).
         let guardValue = Self.value(ofAssignment: "EXPECTED_BUILD", in: script)
         XCTAssertEqual(
             guardValue, Self.expectedBuild,
@@ -66,7 +69,7 @@ final class BuildNumberGuardTests: XCTestCase {
         )
 
         // …and the guard must still cover all four shipped bundles so none can
-        // silently drift off build 94.
+        // silently drift off build 95.
         for relative in Self.shippedPlists {
             XCTAssertTrue(
                 script.contains(relative),
