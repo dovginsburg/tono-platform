@@ -17,7 +17,7 @@ import XCTest
 /// where build numbers disagree it fails on the version values, never on a
 /// syntax/type error.
 final class BuildNumberGuardTests: XCTestCase {
-    private static let expectedBuild = "97"
+    private static let expectedBuild = "98"
 
     private static let shippedPlists = [
         "App/Info.plist",
@@ -34,7 +34,7 @@ final class BuildNumberGuardTests: XCTestCase {
             .deletingLastPathComponent()   // <srcroot>
     }
 
-    func testEveryShippedBundleDeclaresBuild96() throws {
+    func testEveryShippedBundleDeclaresBuild98() throws {
         let root = sourceRoot()
         for relative in Self.shippedPlists {
             let url = root.appendingPathComponent(relative)
@@ -45,12 +45,12 @@ final class BuildNumberGuardTests: XCTestCase {
             let actual = plist?["CFBundleVersion"] as? String
             XCTAssertEqual(
                 actual, Self.expectedBuild,
-                "\(relative) declares CFBundleVersion \(actual ?? "nil"); build 96 requires \(Self.expectedBuild) across every shipped bundle"
+                "\(relative) declares CFBundleVersion \(actual ?? "nil"); build 98 requires \(Self.expectedBuild) across every shipped bundle"
             )
         }
     }
 
-    func testArchiveGuardRequiresTheSameBuild96AcrossEveryBundle() throws {
+    func testArchiveGuardRequiresTheSameBuild98AcrossEveryBundle() throws {
         let root = sourceRoot()
         let script = try String(
             contentsOf: root.appendingPathComponent("Scripts/bump-build.sh"),

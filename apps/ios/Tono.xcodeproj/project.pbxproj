@@ -157,6 +157,7 @@
 		970000000000000000000212 /* Build97LayerNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 970000000000000000000012 /* Build97LayerNavigationTests.swift */; };
 		970000000000000000000213 /* Build97EmojiTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 970000000000000000000013 /* Build97EmojiTests.swift */; };
 		970000000000000000000220 /* Build97KeyboardRow3VisibleBoundsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 970000000000000000000020 /* Build97KeyboardRow3VisibleBoundsTests.swift */; };
+		970000000000000000000230 /* Build98PunctuationKeyTitleInvarianceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 970000000000000000000021 /* Build98PunctuationKeyTitleInvarianceTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -302,6 +303,7 @@
 		970000000000000000000012 /* Build97LayerNavigationTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build97LayerNavigationTests.swift; sourceTree = "<group>"; };
 		970000000000000000000013 /* Build97EmojiTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build97EmojiTests.swift; sourceTree = "<group>"; };
 		970000000000000000000020 /* Build97KeyboardRow3VisibleBoundsTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build97KeyboardRow3VisibleBoundsTests.swift; sourceTree = "<group>"; };
+		970000000000000000000021 /* Build98PunctuationKeyTitleInvarianceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build98PunctuationKeyTitleInvarianceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -376,6 +378,7 @@
 				970000000000000000000012 /* Build97LayerNavigationTests.swift */,
 				970000000000000000000013 /* Build97EmojiTests.swift */,
 				970000000000000000000020 /* Build97KeyboardRow3VisibleBoundsTests.swift */,
+				970000000000000000000021 /* Build98PunctuationKeyTitleInvarianceTests.swift */,
 			);
 			name = Tests;
 			path = Tests;
@@ -824,6 +827,7 @@
 				970000000000000000000212 /* Build97LayerNavigationTests.swift in Sources */,
 				970000000000000000000213 /* Build97EmojiTests.swift in Sources */,
 				970000000000000000000220 /* Build97KeyboardRow3VisibleBoundsTests.swift in Sources */,
+				970000000000000000000230 /* Build98PunctuationKeyTitleInvarianceTests.swift in Sources */,
 				8E0000000000000000000005 /* Build97LiveTonePositiveOpportunityTests.swift in Sources */,
 				8E0000000000000000000006 /* Build97ShippingPathTests.swift in Sources */,
 			);

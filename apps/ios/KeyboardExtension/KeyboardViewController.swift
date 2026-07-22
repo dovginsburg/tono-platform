@@ -1,21 +1,29 @@
-// KeyboardViewController.swift
-// Tono keyboard extension — build 86.
+// Build 98 — punctuation-key title refresh regression fix.
 //
-// Build 86 preserves build-85 typing/spelling behavior while hardening
-// caret-range candidate replacement and the four-axis Coach result contract.
+// Build 97 root cause: `makeCharButton(_:)` assigned EVERY character
+// the identifier `"TonoKB.letter.\(char)"`. For the period key this
+// produced `"TonoKB.letter."` (trailing dot, empty char component).
+// `applyShiftToKey` later parsed with
+// `id.split(separator: ".").last` — Swift's `String.split` defaults
+// to `omittingEmptySubsequences: true`, so the trailing empty
+// component is dropped and `.last` returned the literal substring
+// `"letter"`. `displayLetter("letter")` is identity (the lowercase
+// branch is a no-op on a non-`[a-zA-Z]` token), so the period
+// key's title got overwritten with the word `"letter"` on the
+// first shift refresh.
 //
-//   * Explicit navigation matrix: letters bottom `123`; numbers/symbols
-//     bottom `ABC`; numbers row-3 `#+=`; symbols row-3 `123`.
-//   * Responsive 10/9/7 Apple-parity geometry with full 44pt typing targets,
-//     an accessible semantic-violet Coach action, and no build-number label.
-//   * One delete in row 3; conventional mode/emoji/space/return bottom row;
-//     the globe is created only when `needsInputModeSwitchKey` requires it.
-//   * Lazy adaptive-column UICollectionView emoji grid with reusable cells, compact
-//     spacing, substantial category datasets, repeated insertion, and recents.
-//   * Monochrome SF Symbols category strip for Recents, Smileys, People,
-//     Animals, Food, Activities, Travel, Objects, Symbols, and Flags.
-//
-// Stable TonoKB.* accessibility identifiers remain available for automation.
+// Fix: split the identifier scheme by char class. Letter keys
+// keep `TonoKB.letter.<ch>` (collision-safe — `<ch>` is always a
+// single ASCII letter, no parser ambiguity). Non-letter keys use
+// `TonoKB.char.U+<XXXX>` (Unicode scalar hex, no `.` ambiguity).
+// `applyShiftToKey` operates ONLY on letter identifiers whose
+// parsed suffix is a single ASCII letter; non-letter keys are
+// skipped entirely, so their titles stay pinned to whatever
+// `displayLetter` produced at construction (already the right
+// glyph for numbers/symbols/punctuation). The raw char is also
+// pinned on the button itself (`KeyboardButton.displayChar`) so
+// any future refresh path reads the original character instead
+// of round-tripping through an identifier.
 
 import UIKit
 
@@ -183,7 +191,47 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             return registry
         }
 
+        /// Identifier scheme for a single-character alphabetic letter
+        /// keycap. The suffix is always exactly one ASCII letter in
+        /// `[a-z]` (lower-case rendered form), so the
+        /// `TonoKB.letter.<suffix>` parse in `applyShiftToKey` is
+        /// collision-safe — there is no ambiguity about where the
+        /// suffix starts.
         static func letterId(_ ch: String) -> String { "TonoKB.letter.\(ch)" }
+
+        /// Identifier scheme for any non-letter keycap
+        /// (punctuation, numbers, symbols, currency, whitespace).
+        /// The suffix is the character's Unicode scalar in `U+XXXX`
+        /// hex form, so the identifier can never end with a `.`
+        /// that would round-trip to the literal `letter` token
+        /// under `String.split(separator: ".").last` with
+        /// `omittingEmptySubsequences: true` (the build-97
+        /// shipping-defect shape — see file header).
+        static func nonLetterId(_ ch: String) -> String {
+            let scalars = ch.unicodeScalars
+            // Single scalar is the common case; multi-scalar chars
+            // (e.g. emoji) join all their hex codes with `_` so the
+            // suffix is unambiguous.
+            let hexes = scalars.map { String(format: "U+%04X", $0.value) }
+            return "TonoKB.char." + hexes.joined(separator: "_")
+        }
+
+        /// Returns the standard `TonoKB.*` identifier for the given
+        /// raw character. Letters use `TonoKB.letter.<ch>`; every
+        /// other char uses `TonoKB.char.U+<XXXX>` (or
+        /// `U+XXXX_U+YYYY` for multi-scalar). This is the single
+        /// source of truth — `makeCharButton`, `applyShiftToKey`,
+        /// and UI-automation consumers all read from here.
+        static func charId(for ch: String) -> String {
+            if ch.count == 1, let scalar = ch.unicodeScalars.first, scalar.isASCII {
+                let isLowercaseLetter = (scalar.value >= 0x61 && scalar.value <= 0x7A)
+                if isLowercaseLetter {
+                    return "TonoKB.letter.\(ch)"
+                }
+            }
+            return nonLetterId(ch)
+        }
+
         static func rewriteId(_ axis: String, _ index: Int) -> String { "TonoKB.rewrite.\(axis).\(index)" }
         static func emojiId(_ emoji: String) -> String {
             "TonoKB.emoji.\(emoji)"
@@ -1066,7 +1114,16 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         b.layer.borderWidth = Const.keyBorderWidth
         b.layer.borderColor = keyboardKeyBorder().cgColor
         b.accessibilityLabel = char.uppercased()
-        b.accessibilityIdentifier = Const.letterId(char)
+        // Build 98 — collision-proof identifier scheme. Single ASCII
+        // lowercase letters stay on `TonoKB.letter.<ch>` (collision-
+        // safe parse). Everything else (numbers, punctuation,
+        // symbols, currency, multi-scalar) goes to `TonoKB.char.U+…`
+        // which has no `.` ambiguity and cannot round-trip through
+        // `id.split(separator: ".").last` to the literal `letter`.
+        b.accessibilityIdentifier = Const.charId(for: char)
+        // Build 98 — pin the raw character on the button itself so
+        // any refresh path reads from a non-parser-dependent store.
+        b.displayChar = char
         b.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight).isActive = true
         b.addTarget(self, action: #selector(characterTouchDown(_:)), for: .touchDown)
         b.addTarget(self, action: #selector(charTapped(_:)), for: .touchUpInside)
@@ -1498,11 +1555,39 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             (b as? KeyboardButton)?.normalBackgroundColor = shiftState == .capsLock
                 ? UIColor.systemBlue.withAlphaComponent(0.22)
                 : keyboardKeyBackground(.tertiary)
-        } else if let id = b.accessibilityIdentifier,
-                  id.hasPrefix("TonoKB.letter."),
-                  let raw = id.split(separator: ".").last {
-            b.setTitle(displayLetter(String(raw)), for: .normal)
+            return
         }
+        // Build 98 — letter-only refresh guard.
+        //
+        // Build 97's shipping defect: this branch matched
+        // `id.hasPrefix("TonoKB.letter.")` for EVERY char, then
+        // parsed with `id.split(separator: ".").last`. For the
+        // period key the identifier was `"TonoKB.letter."` and the
+        // split dropped the trailing empty component, returning
+        // the literal substring `"letter"` — which got rendered as
+        // the keycap title.
+        //
+        // Build 98 contract: the title refresh only fires for
+        // identifiers that parse to exactly one ASCII lowercase
+        // letter. Anything else (numbers, punctuation, symbols,
+        // multi-scalar) is a no-op here — its title is whatever
+        // `displayLetter` produced at construction time, which is
+        // already the correct glyph. We also fall back to the
+        // button's pinned `displayChar` if parsing succeeds, so a
+        // future identifier rename can't silently re-break the
+        // shift path.
+        guard let id = b.accessibilityIdentifier,
+              id.hasPrefix("TonoKB.letter."),
+              let raw = id
+                .split(separator: ".", omittingEmptySubsequences: false)
+                .last,
+              raw.count == 1,
+              let scalar = raw.unicodeScalars.first,
+              (scalar.value >= 0x61 && scalar.value <= 0x7A) else {
+            return
+        }
+        let ch = String(raw)
+        b.setTitle(displayLetter(ch), for: .normal)
     }
 
     private func updateShiftButtonAppearance() {
@@ -2807,6 +2892,14 @@ private final class KeyboardButton: TonoMinimumHitTargetButton {
     var normalBackgroundColor: UIColor? {
         didSet { if !isHighlighted { backgroundColor = normalBackgroundColor } }
     }
+
+    /// Build 98 — pinned raw character. `makeCharButton` writes the
+    /// char here at construction time so any refresh path
+    /// (`applyShiftToKey`, future rebuild loops, UI-automation
+    /// probes) reads the actual character without having to
+    /// round-trip through an identifier parse. See file header for
+    /// the build-97 defect this replaces.
+    var displayChar: String?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
