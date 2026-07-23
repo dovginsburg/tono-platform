@@ -1521,3 +1521,552 @@ def get_user_signup_date(user_id: str) -> datetime.datetime:
     """Get user signup date from database."""
     # TODO: Query database for signup date
     return None
+
+
+# ===========================================================================
+# P0 BUILD-95 SELECTED-VARIANT BACKEND CONTRACT
+# ----------------------------------------------------------------------------
+# Replaces the implicit "fan out all 4 axes in one provider call" pattern
+# with an explicit one-chip / one-request / one-provider-call / one-variant
+# flow. The contract is strict: a single explicit tap from the user yields
+# exactly one matching variant, with a strict ``ok|blocked`` envelope, exact
+# variant allowlist, server-side model routing, deterministic safety
+# preflight (zero provider calls), and no hidden retry / fallback / fan-out.
+#
+# Scope of this section:
+#   * VARIANT_ALLOWLIST   -- the exact, server-side-enforced variant set.
+#   * VariantRequest      -- the wire schema for one explicit tap.
+#   * VariantResponse     -- the strict ``ok|blocked`` envelope.
+#   * VariantBlockedReason -- the closed enum of block reasons.
+#   * preflight_variant   -- deterministic safety preflight (zero LLM calls).
+#   * select_model_for_variant -- server-side model routing (Sonnet vs Haiku).
+#   * anthropic_single_variant -- exactly one Anthropic call, exactly one
+#     returned variant, parse + post-validate ONCE.
+#   * openai_single_variant   -- same contract for OpenAI.
+#   * mock_single_variant     -- the test-mode equivalent (zero provider
+#     calls in test runs; one provider call in mock mode means zero LLM
+#     network calls).
+#   * invoke_single_variant   -- the dispatcher that ties preflight +
+#     model-routing + provider-call + post-validation together.
+#
+# Hard rules (cannot be softened without explicit controller approval):
+#   R1. One chip => one HTTP request => exactly one provider call.
+#   R2. No prefetch / background / hidden "Safer" generation.
+#   R3. No user-visible partial streaming before complete parse + post-validation.
+#   R4. Server picks the model; client NEVER chooses model.
+#   R5. Deterministic safety preflight issues zero provider calls.
+#   R6. Malformed / unsafe model output fails closed (returns
+#       ``status="blocked", reason="validation_failed"``), no retry, no fallback.
+#   R7. No ``no_change`` suppression for an explicit safe tap: even if the
+#       LLM rationale is "context doesn't call for humor", the original
+#       draft is returned as the variant text.
+#   R8. The strict envelope is ``ok | blocked``. There is no third state.
+# ===========================================================================
+
+# Exact variant allowlist -- server-side enforced at the request boundary.
+# Anything outside this set returns ``blocked:preflight:unknown_variant``
+# BEFORE any provider call is issued.
+VARIANT_ALLOWLIST: frozenset[str] = frozenset({
+    "warmer", "clearer", "funnier", "safer", "custom",
+})
+
+# Custom-prompt guardrails (deterministic, zero LLM calls).
+CUSTOM_PROMPT_MAX_CHARS = 240  # short Custom directive only; full rewrite lives in `safer`.
+
+# Deterministic crisis-keyword preflight -- the safest we can do without an
+# LLM call. This is intentionally conservative and stays tiny on purpose:
+# the production safety boundary (Safer, mandatory) is the load-bearing
+# layer, NOT this list. This list exists so an OBVIOUSLY self-harm-shaped
+# draft never leaves the server even when Safer is not explicitly selected.
+# When in doubt, do NOT add to this list -- a false negative here is
+# recoverable (Safer still runs); a false positive hides a real rewrite.
+_CRISIS_KEYWORDS: tuple[tuple[str, ...], ...] = (
+    ("kill myself", "end my life", "suicide", "want to die", "hurt myself"),
+)
+
+
+class VariantBlockedReason:
+    """Closed enum of ``reason`` strings on a ``status="blocked"`` response.
+
+    These are intentionally short, lowercase, and colon-separated so that a
+    hostile-matrix test can match them deterministically. Adding a new
+    reason is a contract change and must be coordinated with the
+    client/UI build.
+    """
+
+    PREFLIGHT_EMPTY_DRAFT = "preflight:empty_draft"
+    PREFLIGHT_UNKNOWN_VARIANT = "preflight:unknown_variant"
+    PREFLIGHT_CUSTOM_PROMPT_REQUIRED = "preflight:custom_prompt_required"
+    PREFLIGHT_CUSTOM_PROMPT_TOO_LONG = "preflight:custom_prompt_too_long"
+    PREFLIGHT_CRISIS_KEYWORDS = "preflight:crisis_keywords"
+    PROVIDER_FAILED = "provider_failed"
+    VALIDATION_FAILED = "validation_failed"
+
+
+# Server-side model routing. Two model tiers are referenced by env-overridable
+# names so the production deploy does not need to change for build-95:
+#   * Safer, Custom, or risk_hint in {medium, high}  -> Sonnet tier.
+#   * Low-risk built-in non-Safer (warmer/clearer/funnier + risk_hint=low)
+#                                                  -> Haiku tier.
+# In the current deploy only ``TONO_MODEL`` (=claude-sonnet-4-5) is set, so
+# the safer-routing branch is a no-op against production and the haiku
+# branch only fires when both ``TONO_MODEL_HAIKU`` is set AND the request
+# is a low-risk built-in non-Safer tap. Build-95 wires the contract; the
+# actual haiku routing becomes hot only when production chooses to enable
+# it (separate deploy decision, OUT OF SCOPE here).
+def select_model_for_variant(axis: str, risk_hint: Optional[str]) -> tuple[str, str]:
+    """Return ``(tier, model)`` for a single variant request.
+
+    ``tier`` is one of ``"sonnet" | "haiku"`` and ``model`` is the resolved
+    model identifier. Server-side only; the client never sees this.
+    """
+    if axis not in VARIANT_ALLOWLIST:
+        # Defensive: the boundary check should have already rejected. We
+        # still surface an explicit decision so the dispatcher doesn't
+        # silently fall back to Sonnet for an unknown axis.
+        return "sonnet", os.environ.get(
+            "TONO_MODEL_SONNET", os.environ.get("TONO_MODEL", "claude-sonnet-4-5")
+        )
+    is_high_risk = risk_hint in {"medium", "high"}
+    if axis == "safer" or axis == "custom" or is_high_risk:
+        return "sonnet", os.environ.get(
+            "TONO_MODEL_SONNET", os.environ.get("TONO_MODEL", "claude-sonnet-4-5")
+        )
+    # Low-risk built-in non-Safer -> Haiku.
+    return "haiku", os.environ.get(
+        "TONO_MODEL_HAIKU", "claude-haiku-4-5"
+    )
+
+
+def preflight_variant(req: "VariantRequest") -> Optional[str]:
+    """Deterministic safety preflight. Returns ``None`` on allow, or the
+    closed ``VariantBlockedReason`` string on block.
+
+    **Zero provider calls.** This function only does in-process regex /
+    length / enum checks. It runs at the very top of the variant handler,
+    before model routing and before any provider call.
+    """
+    text = (req.text or "").strip()
+    if not text:
+        return VariantBlockedReason.PREFLIGHT_EMPTY_DRAFT
+    if req.axis not in VARIANT_ALLOWLIST:
+        return VariantBlockedReason.PREFLIGHT_UNKNOWN_VARIANT
+    if req.axis == "custom":
+        custom = (req.custom_prompt or "").strip()
+        if not custom:
+            return VariantBlockedReason.PREFLIGHT_CUSTOM_PROMPT_REQUIRED
+        if len(custom) > CUSTOM_PROMPT_MAX_CHARS:
+            return VariantBlockedReason.PREFLIGHT_CUSTOM_PROMPT_TOO_LONG
+    lowered = text.lower()
+    for phrase_group in _CRISIS_KEYWORDS:
+        for phrase in phrase_group:
+            if phrase in lowered:
+                return VariantBlockedReason.PREFLIGHT_CRISIS_KEYWORDS
+    return None
+
+
+# Pydantic wire schema for the new endpoint. Lives here (not in server.py)
+# so the same model can be reused by the slack dispatch and by tests.
+class VariantRequest(BaseModel):
+    # The wire schema is strict: an unknown field is REJECTED with 422,
+    # not silently dropped, so a client bug cannot smuggle a model name
+    # or a free-text message through the boundary.
+    model_config = {"extra": "forbid"}
+
+    text: str = Field(..., description="The draft message to rewrite.")
+    axis: str = Field(
+        ...,
+        description=(
+            "Exact variant from the allowlist: warmer | clearer | funnier | "
+            "safer | custom. Server enforces the allowlist; client never "
+            "chooses model."
+        ),
+    )
+    risk_hint: Optional[Literal["low", "medium", "high"]] = Field(
+        default=None,
+        description=(
+            "Optional risk hint from a prior fan-out /api/analyze call. Used "
+            "for server-side model routing only; does NOT affect the "
+            "preflight decision."
+        ),
+    )
+    custom_prompt: Optional[str] = Field(
+        default=None,
+        description=(
+            "Required when axis=custom. Short Custom directive (max "
+            f"{CUSTOM_PROMPT_MAX_CHARS} chars). Ignored for non-custom axes."
+        ),
+    )
+    locale: str = Field(default="en", description="BCP-47 locale code.")
+    preferred_voice: Optional[str] = None
+    recipient_hint: Optional[str] = None
+    thread_context: Optional[str] = None
+
+
+class VariantResponse(BaseModel):
+    """Strict ``ok|blocked`` envelope for the selected-variant endpoint.
+
+    Exactly one of ``status="ok"`` or ``status="blocked"``. No third state.
+    ``text``, ``rationale``, ``risk_after``, ``model`` are populated only
+    on ``status="ok"``. ``reason`` is populated only on ``status="blocked"``.
+    """
+
+    status: Literal["ok", "blocked"]
+    axis: str
+    # ok-only fields (default to None on blocked; pydantic ignores extras).
+    text: Optional[str] = None
+    rationale: Optional[str] = None
+    risk_after: Optional[Literal["low", "medium", "high"]] = None
+    model: Optional[str] = None
+    tier: Optional[Literal["sonnet", "haiku"]] = None
+    # blocked-only field.
+    reason: Optional[str] = None
+
+
+def variant_blocked(axis_value: str, reason_value: str) -> VariantResponse:
+    """Build a strict ``status="blocked"`` envelope.
+
+    Free function (not a method) so pydantic model binding can't shadow
+    the parameter name on the class.
+    """
+    return VariantResponse(status="blocked", axis=axis_value, reason=reason_value)
+
+
+# Single-variant variant of the existing system prompt. The contract here
+# is identical to ``SYSTEM_PROMPT`` (same 12 rules) but the closing
+# instruction asks for exactly ONE rewrite (the requested axis) rather
+# than all canonical axes.
+SINGLE_VARIANT_SYSTEM_PROMPT = """\
+You are Social Tone Coach. You help a person say what they mean in a way
+that actually lands. You are NOT an editor or a grammar checker. You are
+NOT a therapist. You translate intent into impact.
+
+Operate by these rules:
+
+1. ONE-SENTENCE CEILING for any single rewrite. If a rewrite needs two
+   sentences, rewrite it again until it doesn't.
+2. PRESERVE the writer's voice. Do not over-polish into corporate or
+   generic-LLM English.
+3. FLAG passive aggression, ambiguous asks, unstated assumptions, and
+   anything that could plausibly be misread as hostile, cold, or guilt-tripping.
+4. Each rewrite must differ on exactly ONE axis. Do not bundle warmth
+   with humor; the user picks the axis that fits the moment.
+5. NEVER use "based on", "I checked", "looking at", "my read", or any
+   tool-narration filler.
+6. NO score predictions, NO analysis dumps. A perception is one short
+   sentence plus, optionally, up to three emoji.
+7. FUNNIER is risky. Only generate a funnier variant if the message has
+   a clear light register. Otherwise return the same text for that axis
+   with rationale "context doesn't call for humor".
+8. SAFER removes anything that could be misread as guilt, sarcasm,
+   cold-shoulder, or an unstated ask.
+9. For the suggestion include "risk_after": your predicted risk level
+   of that rewrite if sent ("low", "medium", or "high").
+10. RISK_REASON: one short phrase ≤12 words naming the most likely
+    misread or explaining the risk rating. State the rule, not just the
+    verdict. Return in field risk_reason.
+11. Preserve the user's semantic intent. Remove clearly accidental leading
+    gibberish when a coherent trailing message is present, but never invent a
+    new event or scenario (for example a pocket text, wrong recipient, apology,
+    instruction to ignore the message, deadline, date, name, or commitment).
+12. Return exactly ONE rewrite for the requested axis. Do not emit other
+    axes. The user explicitly chose this single chip; do not fan out.
+
+Return JSON ONLY matching the SingleVariant schema. No prose, no markdown
+fences, no commentary.
+
+The JSON schema is:
+{
+  "risk_level": "low" | "medium" | "high",
+  "perception": "one-line how this lands, optionally with up to 3 emoji",
+  "subtext": "what the recipient will likely read between the lines",
+  "risk_reason": "one short phrase ≤12 words explaining the risk rating",
+  "suggestions": [
+    {
+      "axis": "<the requested axis exactly>",
+      "text": "the rewrite (one sentence max)",
+      "rationale": "why this helps, or 'context doesn\\'t call for humor'",
+      "risk_after": "low" | "medium" | "high" | null
+    }
+  ],
+  "flags": ["passive aggression", "ambiguous ask", etc. -- empty array if none]
+}
+"""
+
+
+def build_single_variant_system_prompt(req: VariantRequest) -> str:
+    """Mirror of ``build_system_prompt`` but pinned to the single-variant prompt."""
+    system = SINGLE_VARIANT_SYSTEM_PROMPT
+    # The Custom axis is user-supplied; pin it as an additive directive.
+    # Safer-first ordering is preserved: we ask the model to rephrase
+    # against the safer envelope, then optionally layer the Custom ask.
+    if req.axis == "custom" and req.custom_prompt:
+        system += (
+            "\n\nCUSTOM USER DIRECTIVE (use only as a flavor addendum; the "
+            "Safer rewrite MUST be preserved):\n"
+            f"{req.custom_prompt.strip()[:CUSTOM_PROMPT_MAX_CHARS]}"
+        )
+    return system
+
+
+def build_single_variant_user_prompt(req: VariantRequest) -> str:
+    """User prompt scoped to a single requested axis."""
+    lines: list[str] = []
+    if req.thread_context:
+        lines += ["THREAD (message you're replying to):", req.thread_context, ""]
+    draft = intended_draft(req.text) if req.axis in {"warmer", "clearer", "funnier", "safer"} else req.text.strip()
+    lines += [
+        "DRAFT (rewrite for this single axis only):" if req.thread_context else "DRAFT:",
+        draft,
+    ]
+    if req.recipient_hint:
+        lines += ["", f"RECIPIENT CONTEXT: {req.recipient_hint}"]
+    if req.preferred_voice:
+        lines += ["", f"PREFERRED VOICE: {req.preferred_voice}"]
+    lines += ["", f"REQUESTED AXIS (single chip): {req.axis}"]
+    return "\n".join(lines)
+
+
+def _parse_json_response(raw: str) -> dict[str, Any]:
+    """Strip optional markdown code fences and parse JSON. Raises ValueError
+    on malformed input. Single attempt -- no retry, no fallback.
+    """
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        if "\n" in text:
+            text = text.split("\n", 1)[1]
+        else:
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+    text = text.strip()
+    return json.loads(text)
+
+
+def _extract_single_variant(
+    result: dict[str, Any], axis: str
+) -> dict[str, Any]:
+    """Pick the requested-axis suggestion out of the provider payload,
+    canonicalize axis name, drop everything else. Raises
+    ``CoachContractError`` (existing import is fine here) on any shape
+    that prevents a single safe variant from being returned.
+
+    The build-95 contract deliberately does NOT apply the
+    semantic-intent guard at this layer: the explicit-tap contract
+    mandates returning the variant even when the LLM rationale is
+    "no_change" (rule R7). Semantic safety on the actual risk envelope
+    is the responsibility of the ``safer`` chip and the model's
+    ``risk_after`` signal; failing a variant here would suppress
+    something the user explicitly asked for.
+    """
+    if not isinstance(result, dict):
+        raise CoachContractError("single_variant: payload is not a dict")
+    raw = result.get("suggestions")
+    if not isinstance(raw, list) or not raw:
+        raise CoachContractError("single_variant: missing suggestions")
+    requested = axis.strip().lower()
+    for suggestion in raw:
+        if not isinstance(suggestion, dict):
+            continue
+        sug_axis = str(suggestion.get("axis", "")).strip().lower()
+        if sug_axis != requested:
+            continue
+        text = _clean_rewrite_prefix(
+            str(suggestion.get("text", "")), requested
+        )
+        if not text:
+            raise CoachContractError(f"single_variant: blank {requested}")
+        return {
+            "axis": requested,
+            "text": text,
+            "rationale": suggestion.get("rationale"),
+            "risk_after": suggestion.get("risk_after"),
+        }
+    raise CoachContractError(f"single_variant: missing {requested}")
+
+
+async def anthropic_single_variant(req: VariantRequest, model: str) -> dict[str, Any]:
+    """Exactly one Anthropic call, returns exactly one variant dict.
+
+    Single attempt: no retry, no fallback model, no streaming. Parse +
+    post-validate once; on any failure raises HTTPException or returns the
+    blocked envelope -- caller decides.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(500, "ANTHROPIC_API_KEY not set")
+    body = {
+        "model": model,
+        "max_tokens": 400,
+        "system": build_single_variant_system_prompt(req),
+        "messages": [
+            {"role": "user", "content": build_single_variant_user_prompt(req)}
+        ],
+    }
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+            json=body,
+        )
+        if r.status_code != 200:
+            logger.error(
+                "Anthropic single-variant error axis=%s status=%s",
+                req.axis, r.status_code,
+            )
+            raise HTTPException(502, f"Anthropic API error: {r.status_code}")
+        for block in r.json()["content"]:
+            if block["type"] == "text":
+                try:
+                    parsed = _parse_json_response(block["text"])
+                except (ValueError, json.JSONDecodeError) as e:
+                    logger.error("single_variant: JSON parse failed: %s", e)
+                    raise HTTPException(502, "Coach response incomplete.") from e
+                try:
+                    return _extract_single_variant(parsed, req.axis)
+                except CoachContractError as e:
+                    logger.warning("single_variant: contract violation: %s", e)
+                    raise HTTPException(502, "Coach response incomplete.") from e
+    raise HTTPException(502, "no text block in anthropic response")
+
+
+async def openai_single_variant(req: VariantRequest, model: str) -> dict[str, Any]:
+    """Exactly one OpenAI call, returns exactly one variant dict."""
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(500, "OPENAI_API_KEY not set")
+    body = {
+        "model": model,
+        "temperature": 0.4,
+        "messages": [
+            {
+                "role": "system",
+                "content": build_single_variant_system_prompt(req),
+            },
+            {
+                "role": "user",
+                "content": build_single_variant_user_prompt(req),
+            },
+        ],
+    }
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json=body,
+        )
+        r.raise_for_status()
+        content = r.json()["choices"][0]["message"]["content"]
+        try:
+            parsed = _parse_json_response(content)
+        except (ValueError, json.JSONDecodeError) as e:
+            logger.error("single_variant: OpenAI JSON parse failed: %s", e)
+            raise HTTPException(502, "Coach response incomplete.") from e
+        try:
+            return _extract_single_variant(parsed, req.axis)
+        except CoachContractError as e:
+            logger.warning("single_variant: OpenAI contract violation: %s", e)
+            raise HTTPException(502, "Coach response incomplete.") from e
+
+
+def mock_single_variant(req: VariantRequest) -> dict[str, Any]:
+    """Test-mode provider. Zero LLM network calls. Returns exactly one
+    variant dict for the requested axis.
+
+    NOTE: ``no_change`` rationale is preserved (never suppressed). For
+    explicit safe taps we always return the variant, even when context
+    doesn't call for it (the body mandates this -- "no no_change
+    suppression for safe explicit tap"). The provider-side rationale is
+    surfaced verbatim.
+    """
+    draft = intended_draft(req.text) if req.axis in {"warmer", "clearer", "funnier", "safer"} else req.text.strip()
+    lower = draft.lower()
+    rationale = "Matches the selected axis intent."
+    risk_after: Optional[str] = "low"
+    if req.axis == "warmer":
+        text = (
+            ("Hey — really appreciate it. " if lower.startswith(("thanks", "thank you")) else "Hey! ")
+            + draft
+        )
+        rationale = "Adds a one-line validation before the ask."
+    elif req.axis == "clearer":
+        text = draft.replace("let me know", "please tell me what you think")
+        rationale = "Names the ask and a specific deadline."
+    elif req.axis == "funnier":
+        text = draft
+        rationale = "context doesn't call for humor"
+    elif req.axis == "safer":
+        text = draft
+        for bad, good in [
+            (r"\bas per my last message\b", "following up on my last note"),
+            (r"\bper my last\b", "following up on my last"),
+            (r"\bas previously discussed\b", "to recap where we left off"),
+        ]:
+            text = re.sub(bad, good, text, flags=re.IGNORECASE)
+        rationale = "Removes anything that could be read as guilt or cold."
+    elif req.axis == "custom":
+        # The Custom axis layers a short directive on top of Safer. Mock
+        # returns Safer with the Custom directive appended as a rationale.
+        text = draft
+        rationale = (
+            "Safer envelope preserved. "
+            f"Custom directive: {(req.custom_prompt or '').strip()[:CUSTOM_PROMPT_MAX_CHARS]}"
+        )
+        risk_after = "medium"
+    else:
+        # Should be unreachable because preflight rejects unknown axes,
+        # but be explicit.
+        raise CoachContractError(f"mock_single_variant: unknown axis {req.axis!r}")
+    return {
+        "axis": req.axis,
+        "text": text,
+        "rationale": rationale,
+        "risk_after": risk_after,
+    }
+
+
+async def invoke_single_variant(
+    req: VariantRequest, provider: str
+) -> "VariantResponse":
+    """Top-level dispatcher used by the /api/analyze/variant route.
+
+    Order:
+      1. Deterministic preflight (zero provider calls).
+      2. Server-side model routing (zero provider calls).
+      3. Exactly ONE provider call.
+      4. Parse + post-validate once (no retry).
+      5. Wrap in strict ``ok|blocked`` envelope.
+
+    No fan-out, no prefetch, no hidden Safer generation. The wire shape
+    is always ``VariantResponse`` -- the caller never sees a 5xx for any
+    block reason, only for catastrophic infrastructure failures.
+    """
+    block = preflight_variant(req)
+    if block is not None:
+        return variant_blocked(req.axis or "unknown", block)
+    tier, model = select_model_for_variant(req.axis, req.risk_hint)
+    try:
+        if provider == "mock":
+            variant = mock_single_variant(req)
+        elif provider == "openai":
+            variant = await openai_single_variant(req, model)
+        elif provider == "anthropic":
+            variant = await anthropic_single_variant(req, model)
+        else:
+            return variant_blocked(
+                req.axis, VariantBlockedReason.PROVIDER_FAILED
+            )
+    except HTTPException:
+        # Catastrophic provider/parse failure -> strict blocked envelope.
+        return variant_blocked(
+            req.axis, VariantBlockedReason.PROVIDER_FAILED
+        )
+    return VariantResponse(
+        status="ok",
+        axis=req.axis,
+        text=variant.get("text"),
+        rationale=variant.get("rationale"),
+        risk_after=variant.get("risk_after"),
+        model=model,
+        tier=tier,  # type: ignore[arg-type]
+    )

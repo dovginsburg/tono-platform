@@ -60,6 +60,15 @@ from .analyze import (
     anthropic_analyze,
     build_user_prompt,
     enforce_coach_contract,
+    # P0 BUILD-95 selected-variant contract: imported from the same
+    # module so the slack dispatch and tests can reuse the helpers.
+    VARIANT_ALLOWLIST,
+    VariantBlockedReason,
+    VariantRequest,
+    VariantResponse,
+    invoke_single_variant,
+    preflight_variant,
+    select_model_for_variant,
 )
 from .auth import CurrentUser, StoreDep, current_user
 from .store import AccountConflictError, DeviceRegistrationProofError, Store, User, get_store
@@ -119,6 +128,53 @@ def _check_ip_rate(ip: str) -> bool:
 def _analysis_cache_key(text: str, axes: list[str], voice: str | None, locale: str) -> str:
     raw = f"{text}|{','.join(sorted(axes))}|{voice or ''}|{locale}"
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+
+
+# Privacy-safe phase timings (P0 t_76fd6364 / t_79f14548).
+#
+# Logs ONLY: phase name, request id (random per-request UUID), duration
+# in milliseconds. Never logs: request text, tokens, device id, account
+# id, IP, provider response body, user agent, or anything else that
+# could correlate to a specific user or message. The request id is
+# generated locally and is not shared with the provider.
+# ---------------------------------------------------------------------------
+
+# Phase-name constants — kept short so log lines stay one-liners.
+_PHASE_REQUEST_ACCEPTED = "request_accepted"
+_PHASE_PROVIDER_START = "provider_start"
+_PHASE_PROVIDER_END = "provider_end"
+_PHASE_VALIDATION_END = "validation_end"
+_PHASE_RESPONSE_SENT = "response_sent"
+
+# P0 BUILD-95: additional phase for the selected-variant endpoint. The
+# variant handler emits a ``preflight_end`` phase BEFORE ``provider_start``
+# so we can measure preflight latency (deterministic, zero provider calls)
+# separately from provider latency. Phase ordering for the new endpoint:
+#   request_accepted -> preflight_end -> provider_start -> provider_end -> response_sent
+_PHASE_PREFLIGHT_END = "preflight_end"
+
+
+def _new_request_id() -> str:
+    """Per-request UUID4. Not persisted; only used to correlate the
+    five phase-timing log lines emitted for each analyze request.
+    """
+    return uuid.uuid4().hex
+
+
+def _log_phase(request_id: str, phase: str, t_start: float) -> None:
+    """Emit a privacy-safe phase-timing log line.
+
+    Format: ``tono.phase request_id=<hex> phase=<phase> dt_ms=<int>``
+    No payload data, no identifiers other than the local request id.
+    """
+    dt_ms = int((time.time() - t_start) * 1000)
+    logger.info(
+        "tono.phase request_id=%s phase=%s dt_ms=%d",
+        request_id, phase, dt_ms,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -762,6 +818,129 @@ def log_axis_event(
     (which axes resonate most) and eventually for personalized axis ordering.
     """
     store.log_axis_event(user.device_id, body.axis, body.risk_level)
+
+
+# ---------------------------------------------------------------------------
+# P0 BUILD-95 — Selected-variant endpoint
+# ---------------------------------------------------------------------------
+#
+# One selected chip => one HTTP request => exactly one provider call =>
+# exactly one matching variant.
+#
+# Wire shape:
+#   POST /api/analyze/variant  (authenticated, same as /api/analyze)
+#   request  = {text, axis, risk_hint?, custom_prompt?, locale?}
+#   response = VariantResponse (strict ok|blocked envelope)
+#
+# Hard rules (cannot be softened without explicit controller approval):
+#   R1. Exactly one provider call per request. No prefetch, no fan-out,
+#       no hidden "Safer" generation.
+#   R2. Server picks the model (axis+risk_hint -> Sonnet/Haiku). Client
+#       never chooses model.
+#   R3. Deterministic safety preflight issues zero provider calls. Block
+#       reasons are short, closed-enum strings.
+#   R4. Malformed/unsafe model output fails closed: the strict envelope
+#       returns ``status="blocked", reason="provider_failed"|"validation_failed"``
+#       -- no retry, no fallback model, no streaming before parse.
+#   R5. No ``no_change`` suppression: an explicit safe tap always returns
+#       the variant. ``mock_single_variant`` is wired so this is true in
+#       tests as well as production.
+#   R6. Phase timings use the same privacy-safe shape as /api/analyze
+#       (request_id / phase / dt_ms). No payload, no device id, no token,
+#       no UA, no provider name in the phase line.
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/analyze/variant", response_model=VariantResponse)
+async def api_analyze_variant(
+    body: VariantRequest,
+    request: Request,
+    user: CurrentUser,
+    store: StoreDep,
+) -> VariantResponse:
+    """Selected-variant endpoint. One chip, one variant, one provider call.
+
+    Phase ordering:
+      request_accepted -> preflight_end -> provider_start -> provider_end -> response_sent
+
+    Note: ``response_sent`` fires on both ``ok`` and ``blocked`` paths so the
+    timing signal is consistent regardless of outcome.
+    """
+    request_id = _new_request_id()
+    t_request = time.time()
+    _log_phase(request_id, _PHASE_REQUEST_ACCEPTED, t_request)
+
+    # The selected-variant contract classifies empty drafts in deterministic
+    # preflight, not as a transport-level malformed request. This keeps the
+    # strict ok|blocked envelope intact and guarantees zero provider calls.
+    if len(body.text) > _DRAFT_MAX_CHARS:
+        raise HTTPException(400, f"text too long (max {_DRAFT_MAX_CHARS} chars)")
+
+    # Per-IP sliding-window cap (mirrors /api/analyze).
+    client_ip = _get_client_ip(request)
+    if not _check_ip_rate(client_ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="too many requests from this IP — try again in a minute",
+            headers={"Retry-After": "60"},
+        )
+
+    # R1 + R5: provider is server-picked. The client NEVER picks model
+    # and never picks provider. Server pulls ``TONO_PROVIDER``; the
+    # selected-variant endpoint does NOT honor any client-supplied
+    # provider field (none exists on VariantRequest, by design).
+    provider = os.environ.get("TONO_PROVIDER", "mock").lower()
+
+    # Deterministic safety preflight (zero provider calls).
+    block_reason = preflight_variant(body)
+    _log_phase(request_id, _PHASE_PREFLIGHT_END, t_request)
+    if block_reason is not None:
+        store.log_usage(
+            user.device_id, "/api/analyze/variant", 200,
+            provider=provider, drafts_chars=len(body.text or ""),
+        )
+        _log_phase(request_id, _PHASE_RESPONSE_SENT, t_request)
+        return VariantResponse(status="blocked", axis=body.axis, reason=block_reason)
+
+    # Server-side model routing (zero provider calls). The model name is
+    # passed into the provider function inside ``invoke_single_variant``.
+    _log_phase(request_id, _PHASE_PROVIDER_START, t_request)
+    response = await invoke_single_variant(body, provider)
+    _log_phase(request_id, _PHASE_PROVIDER_END, t_request)
+    _log_phase(request_id, _PHASE_RESPONSE_SENT, t_request)
+
+    # The strict envelope already classified the outcome. We log usage
+    # so the cost + axis + blocked/ok shape can be aggregated without PII.
+    store.log_usage(
+        user.device_id, "/api/analyze/variant", 200,
+        provider=provider, drafts_chars=len(body.text or ""),
+    )
+    return response
+
+
+# ---------------------------------------------------------------------------
+# P0 BUILD-95 — Server-side model routing diagnostics
+# ---------------------------------------------------------------------------
+# Read-only endpoint that surfaces the current routing decisions for the
+# allowlisted axes, used by hostile-matrix tests to lock the routing
+# contract without making a real provider call. NOT a model-selection
+# endpoint for the client; clients never see this route.
+@app.get("/internal/model-routing")
+def model_routing_diagnostics() -> dict[str, Any]:
+    """Return the resolved (tier, model) for each allowlisted axis under
+    each risk_hint value. Read-only; no provider calls; no PII.
+
+    Used by tests in ``test_coach_contract.py`` to assert the routing
+    contract: Safer/Custom/high-risk -> Sonnet; low-risk built-in non-Safer
+    -> Haiku.
+    """
+    out: dict[str, dict[str, dict[str, str]]] = {}
+    for axis in sorted(VARIANT_ALLOWLIST):
+        out[axis] = {}
+        for hint in ("low", "medium", "high", None):
+            tier, model = select_model_for_variant(axis, hint)
+            out[axis][str(hint)] = {"tier": tier, "model": model}
+    return {"routing": out}
 
 
 # ---------------------------------------------------------------------------

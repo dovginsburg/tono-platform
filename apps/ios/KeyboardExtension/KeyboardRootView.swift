@@ -448,43 +448,159 @@ public final class KeyboardModel: ObservableObject {
     }
 
     func insertRewrite(suggestion: RewriteSuggestion, analysis: ToneAnalysis) {
-        guard let proxy = proxyProvider() else { return }
+        // Stale-suppression for the selected-rewrite tap: a chip tap during a
+        // pending on-device rewrite must cancel the in-flight Task so the
+        // fresher tap's result wins. Mirrors the runCoach token pattern.
+        insertRewriteToken &+= 1
+        let myToken = insertRewriteToken
+
+        // Show a loading shimmer on the chips so the user knows the tap was
+        // received. Reverted by the async path on completion.
+        isRefinementLoading = true
+        CrashReporter.setCustomKey("selected_rewrite_pending", forKey: "keyboard_mode")
+
+        currentInsertRewriteTask?.cancel()
+        currentInsertRewriteTask = Task { @MainActor [weak self] in
+            await self?.runInsertRewrite(
+                suggestion: suggestion,
+                analysis: analysis,
+                token: myToken
+            )
+        }
+    }
+
+    /// Monotonically-increasing tap token for the selected-rewrite path. The
+    /// on-device rewrite is a separate round-trip from the coach network
+    /// call, so it needs its own stale-suppression counter (the chip-tap
+    /// race is independent of the analyze-tap race).
+    private var insertRewriteToken: UInt64 = 0
+
+    /// In-flight selected-rewrite Task. Cancelled by the next chip tap so
+    /// a stale on-device result can't clobber a fresher one.
+    private var currentInsertRewriteTask: Task<Void, Never>?
+
+    /// P0 GARY (t_c52c376d — clean recovery of t_c938d56f): the actual selected-rewrite path. Wrapped in
+    /// a cancellable Task so a fresher tap's outcome wins. Tries the on-device
+    /// `SystemLanguageModel` route when the kill switch is on; otherwise
+    /// falls back to the cloud chip text. Every unavailable reason is mapped
+    /// to a typed analytics event and a Crashlytics breadcrumb — no raw draft
+    /// text leaves this function.
+    private func runInsertRewrite(suggestion: RewriteSuggestion, analysis: ToneAnalysis, token: UInt64) async {
+        let originalDraft = self.draft
+        let fallbackText = suggestion.text
+        let axis = suggestion.axis
+
+        // Stale guard before we touch any UI: if the user has tapped another
+        // chip since this task started, drop the work on the floor.
+        if Task.isCancelled || token != insertRewriteToken { return }
+
+        let outcome: AppleRewriteOutcome
+        if FeatureFlags.isEnabled(.appleIntelligenceRewriteEnabled) {
+            outcome = await AppleRewriteBridge.shared.tryRewrite(
+                axis: axis,
+                draft: originalDraft,
+                fallbackText: fallbackText,
+                surface: .keyboardExtension,
+                hasFullAccess: hasFullAccess
+            )
+        } else {
+            outcome = AppleRewriteOutcome(
+                route: .unavailable,
+                rewrite: fallbackText,
+                reason: OnDeviceRewriteUnavailableReason.featureDisabled.rawValue,
+                availabilityReason: nil,
+                bytesIn: nil, bytesOut: nil,
+                firstTokenMs: nil, completionMs: nil
+            )
+        }
+
+        // Final stale guard before any UI mutation: a fresher tap wins.
+        if Task.isCancelled || token != insertRewriteToken { return }
+
+        // Full-Access gate: when the feature flag is on but Full Access is
+        // off, the bridge returns `route == .unavailable` with reason
+        // "fullAccessRequired". The spec mandates this MUST NOT silently fall
+        // back to a network call — render the truthful permission UI instead.
+        // The cloud's chip text is the "fallback" but using it here would
+        // hide the missing permission from the user, so we surface the
+        // existing `.noFullAccess` card. The cloud chip text never reaches
+        // `proxy.insertText` in this branch.
+        if outcome.reason == "fullAccessRequired" {
+            isRefinementLoading = false
+            CrashReporter.setCustomKey("selected_rewrite_full_access_required", forKey: "keyboard_mode")
+            CrashReporter.addBreadcrumb("selected_rewrite fullAccessRequired axis=\(axis.rawValue)")
+            self.mode = .noFullAccess
+            return
+        }
+
+        // Route-decision analytics + breadcrumb. NO draft text, NO rewrite
+        // text, NO recipient identifier.
+        TonoAnalytics.track(.onDeviceRewriteRoute(
+            axis: axis.rawValue,
+            route: outcome.route == .onDevice ? "onDevice" : "cloudFallback",
+            reason: outcome.reason,
+            availabilityReason: outcome.availabilityReason,
+            bytesIn: outcome.bytesIn,
+            bytesOut: outcome.bytesOut,
+            firstTokenMs: outcome.firstTokenMs,
+            completionMs: outcome.completionMs,
+            hasFullAccess: hasFullAccess
+        ))
+        CrashReporter.setCustomKey(
+            outcome.route == .onDevice ? "onDevice" : "cloudFallback",
+            forKey: "ai_rewrite_route"
+        )
+
+        // Atomic single-rewrite insert. The validated text is either the
+        // on-device rewrite (when route == .onDevice) or the cloud chip
+        // text (when route == .unavailable). Same insert path as before,
+        // same analytics, same memory writes — the only difference is
+        // where the rewrite string came from.
+        let finalText = outcome.rewrite
+        guard let proxy = proxyProvider() else {
+            isRefinementLoading = false
+            return
+        }
         if let before = proxy.documentContextBeforeInput {
             for _ in 0..<before.count { proxy.deleteBackward() }
         }
-        proxy.insertText(suggestion.text)
-        SharedStore.defaults.set(suggestion.text, forKey: SharedKeys.lastRewriteVoice)
-        StyleMemory.recordTap(axis: suggestion.axis, recipientId: selectedRecipient?.id)
-        StyleMemory.rememberRewrite(text: suggestion.text)
-        UserMemory.recordSession(flags: analysis.flags, chosenAxis: suggestion.axis.rawValue)
-        TonoBackend.shared.logAxisWin(axis: suggestion.axis.rawValue, riskLevel: analysis.riskLevel.rawValue)
+        proxy.insertText(finalText)
+        SharedStore.defaults.set(finalText, forKey: SharedKeys.lastRewriteVoice)
+        StyleMemory.recordTap(axis: axis, recipientId: selectedRecipient?.id)
+        StyleMemory.rememberRewrite(text: finalText)
+        UserMemory.recordSession(flags: analysis.flags, chosenAxis: axis.rawValue)
+        TonoBackend.shared.logAxisWin(axis: axis.rawValue, riskLevel: analysis.riskLevel.rawValue)
 
         // C4: track inserted text so loadDraft() can detect subsequent edits.
-        lastInsertedRewrite = suggestion.text
+        lastInsertedRewrite = finalText
 
         // A3: analytics — what was inserted, what was shown (for axis_rejected derivation).
         let shownAxes = analysis.suggestions.map(\.axis.rawValue)
-        TonoAnalytics.track(.rewriteInserted(selectedAxis: suggestion.axis.rawValue, shownAxes: shownAxes))
+        TonoAnalytics.track(.rewriteInserted(selectedAxis: axis.rawValue, shownAxes: shownAxes))
         // Log rejections for all non-picked axes shown.
-        let rejectedShown = analysis.suggestions.filter { $0.axis != suggestion.axis }.map(\.axis.rawValue)
+        let rejectedShown = analysis.suggestions.filter { $0.axis != axis }.map(\.axis.rawValue)
         if !rejectedShown.isEmpty {
-            TonoAnalytics.track(.axisRejected(shownAxes: shownAxes, pickedAxis: suggestion.axis.rawValue))
+            TonoAnalytics.track(.axisRejected(shownAxes: shownAxes, pickedAxis: axis.rawValue))
         }
-        CrashReporter.addBreadcrumb("Rewrite inserted: \(suggestion.axis.rawValue)")
+        CrashReporter.addBreadcrumb(
+            "Rewrite inserted: \(axis.rawValue) route=\(outcome.route == .onDevice ? "onDevice" : "cloudFallback")"
+        )
 
         // Collective improvement: fire content-free outcome (rewriteUsed=true).
-        if let outcome = pendingOutcome {
+        if let outcomeCtx = pendingOutcome {
             TonoAnalytics.track(.improvementOutcome(
-                riskLevel: outcome.riskLevel,
-                axisSelected: suggestion.axis.rawValue,
-                mode: outcome.mode,
-                msgLenBucket: outcome.msgLenBucket,
+                riskLevel: outcomeCtx.riskLevel,
+                axisSelected: axis.rawValue,
+                mode: outcomeCtx.mode,
+                msgLenBucket: Self.msgLenBucket(self.draft),
                 rewriteUsed: true,
                 editAfter: false   // edit detection fires later via rewriteEditedAfterInsert
             ))
             pendingOutcome = nil
         }
 
+        isRefinementLoading = false
+        CrashReporter.setCustomKey("keyboard", forKey: "keyboard_mode")
         self.mode = .keyboard
     }
 
