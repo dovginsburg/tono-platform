@@ -17,7 +17,7 @@ import XCTest
 /// where build numbers disagree it fails on the version values, never on a
 /// syntax/type error.
 final class BuildNumberGuardTests: XCTestCase {
-    private static let expectedBuild = "100"
+    private static let expectedBuild = "101"
 
     private static let shippedPlists = [
         "App/Info.plist",
@@ -34,7 +34,7 @@ final class BuildNumberGuardTests: XCTestCase {
             .deletingLastPathComponent()   // <srcroot>
     }
 
-    func testEveryShippedBundleDeclaresBuild98() throws {
+    func testEveryShippedBundleDeclaresBuild101() throws {
         let root = sourceRoot()
         for relative in Self.shippedPlists {
             let url = root.appendingPathComponent(relative)
@@ -45,12 +45,12 @@ final class BuildNumberGuardTests: XCTestCase {
             let actual = plist?["CFBundleVersion"] as? String
             XCTAssertEqual(
                 actual, Self.expectedBuild,
-                "\(relative) declares CFBundleVersion \(actual ?? "nil"); build 100 requires \(Self.expectedBuild) across every shipped bundle"
+                "\(relative) declares CFBundleVersion \(actual ?? "nil"); build 101 requires \(Self.expectedBuild) across every shipped bundle"
             )
         }
     }
 
-    func testArchiveGuardRequiresTheSameBuild98AcrossEveryBundle() throws {
+    func testArchiveGuardRequiresTheSameBuild101AcrossEveryBundle() throws {
         let root = sourceRoot()
         let script = try String(
             contentsOf: root.appendingPathComponent("Scripts/bump-build.sh"),
@@ -73,7 +73,7 @@ final class BuildNumberGuardTests: XCTestCase {
         for relative in Self.shippedPlists {
             XCTAssertTrue(
                 script.contains(relative),
-                "Scripts/bump-build.sh must verify \(relative) so no shipped bundle can drift off build \(Self.expectedBuild)"
+                "Scripts/bump-build.sh must verify \(relative) so no shipped bundle drifts off build \(Self.expectedBuild)"
             )
         }
     }

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# bump-build.sh — Verify the fixed release build number for build 100.
+# bump-build.sh — Verify the fixed release build number for build 101.
 # Build numbers are release inputs, not mutable build output. An Archive must
-# not silently change reviewed build 100 sources.
+# not silently change reviewed build 101 sources.
 
 set -eo pipefail
 
 SRCROOT="${SRCROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
-EXPECTED_BUILD="100"
+EXPECTED_BUILD="101"
 PLISTS=(
   "App/Info.plist"
   "KeyboardExtension/Info.plist"
@@ -28,6 +28,6 @@ for relative_path in "${PLISTS[@]}"; do
   fi
 done
 
-echo "build-number: all shipped bundles are build ${EXPECTED_BUILD}"
+echo "build-number: all shipped bundles are build ${EXPECTED_BUILD} (build 101)"
 
 exit 0

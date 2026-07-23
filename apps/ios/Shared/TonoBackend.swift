@@ -728,6 +728,29 @@ public final class TonoBackend: @unchecked Sendable {
         return try await post(path: "/v1/coupon/redeem", body: Req(code: code), authorize: true)
     }
 
+    // MARK: - Account deletion (build 101)
+
+    /// Permanently deletes the canonical server account bound to the current
+    /// bearer token. Client contract (backend endpoint not yet deployed on this
+    /// branch; URLProtocol tests in Build101RevenueTests validate the shape):
+    ///
+    ///   DELETE /v1/account
+    ///   Authorization: Bearer <api_token>
+    ///   → 200 {} — account deleted; caller must purge local secrets
+    ///   → 401    — token expired/invalid; caller shows re-auth prompt
+    ///   → 404    — account already deleted (idempotent OK for the caller)
+    ///   → 500    — server error; do NOT purge secrets; surface support path
+    ///
+    /// On success the caller is responsible for:
+    ///   1. `SharedKeychain.purgeAccountSecrets()` — remove all server tokens
+    ///   2. `StoreKitManager.shared.resetToAnonymous()` — clear entitlement
+    ///   3. `TonePreferences.recordEntitlement(.notEntitled, isPro: false)`
+    ///   4. Navigate the user to the root/sign-in state
+    public func deleteAccount() async throws {
+        struct EmptyResp: Decodable {}
+        let _: EmptyResp = try await delete(path: "/v1/account")
+    }
+
     public func isRegistered() -> Bool {
         SharedKeychain.get(KeychainKeys.apiToken)?.isEmpty == false
     }
@@ -841,6 +864,11 @@ public final class TonoBackend: @unchecked Sendable {
         path: String, body: In, authorize: Bool
     ) async throws -> Out {
         let req = try buildRequest(path: path, method: "PUT", body: body, authorize: authorize)
+        return try await execute(req)
+    }
+
+    private func delete<Out: Decodable>(path: String) async throws -> Out {
+        let req = try buildRequest(path: path, method: "DELETE", body: Optional<EmptyBody>.none, authorize: true)
         return try await execute(req)
     }
 

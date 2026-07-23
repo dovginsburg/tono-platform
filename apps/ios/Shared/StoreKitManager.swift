@@ -39,6 +39,30 @@ public final class StoreKitManager: ObservableObject {
 
     private init() {}
 
+    // MARK: - Account identity (build 101)
+
+    /// True when this device has a verified email identity AND a server-issued
+    /// canonical accountID. Anonymous devices (device-only registration with no
+    /// email sign-in) have an accountID but no signedInEmail; their UUID is not
+    /// recoverable after a reinstall, so binding a purchase to it risks silent
+    /// entitlement loss. Purchase initiation is blocked until the user signs in.
+    public var isIdentifiedAccount: Bool {
+        guard let email = SharedKeychain.get(KeychainKeys.signedInEmail),
+              !email.isEmpty else { return false }
+        return SharedKeychain.get(KeychainKeys.accountID) != nil
+    }
+
+    /// Resets all in-memory entitlement state to anonymous/non-Pro.
+    /// Called after successful account deletion so extensions and the free-tier
+    /// gate see the cleared state without waiting for a restart.
+    public func resetToAnonymous() {
+        isPro = false
+        isInFreeTrial = false
+        purchaseError = nil
+        eligibleFreeTrialProductIDs = []
+        TonePreferences.recordEntitlement(.notEntitled, isPro: false)
+    }
+
     public var statusLabel: String {
         if isInFreeTrial { return "Pro trial" }
         return isPro ? "Pro" : "Subscription required"
@@ -54,6 +78,14 @@ public final class StoreKitManager: ObservableObject {
     // MARK: - Public API
 
     public func purchase(_ product: Product) async {
+        // build 101: an anonymous (device-only) account cannot safely bind a
+        // purchase token because the UUID is lost on reinstall. The caller
+        // (PaywallView) must gate the buy tap on isIdentifiedAccount and route
+        // to sign-in first; this guard is a belt-and-suspenders fail-loud check.
+        guard isIdentifiedAccount else {
+            purchaseError = StoreError.needsIdentifiedAccount.errorDescription
+            return
+        }
         isLoading = true
         purchaseError = nil
         do {
@@ -170,8 +202,16 @@ public final class StoreKitManager: ObservableObject {
             return
         }
         applyBackendState(backendState, inTrial: inTrial)
-        if sawVerifiedEntitlement, serverSyncFailed, !backendState.isPro {
-            purchaseError = "Apple confirmed the purchase, but server verification failed. Try Restore purchases."
+        // build 101: Apple has a verified transaction for this device but the
+        // backend does not grant Pro. Most likely the transaction's appAccountToken
+        // is bound to a different email account (reinstall/device-switch conflict).
+        // Surface a clear sign-in path so the user can recover without silent loss.
+        if sawVerifiedEntitlement && !backendState.isPro {
+            if serverSyncFailed {
+                purchaseError = "Apple confirmed your subscription, but Tono couldn't verify it right now. Try again when you're back online."
+            } else {
+                purchaseError = "Your subscription is linked to a different account. Sign in with that email to restore access, or contact support@tonoit.com."
+            }
         }
     }
 
@@ -242,12 +282,19 @@ public final class StoreKitManager: ObservableObject {
     public enum StoreError: LocalizedError {
         case failedVerification
         case missingAccountToken
+        /// build 101: purchase blocked because the device has no verified email
+        /// identity. The purchase token (appAccountToken) must bind a canonical
+        /// server account UUID that is recoverable after reinstall, which requires
+        /// a prior email sign-in. Route the user to sign in before retrying.
+        case needsIdentifiedAccount
         public var errorDescription: String? {
             switch self {
             case .failedVerification:
                 return "Purchase verification failed. Contact support if this persists."
             case .missingAccountToken:
                 return "Tono must finish account setup before purchasing. Please reopen the app and try again."
+            case .needsIdentifiedAccount:
+                return "Sign in with your email before subscribing so your account is recoverable if you reinstall or switch devices."
             }
         }
     }

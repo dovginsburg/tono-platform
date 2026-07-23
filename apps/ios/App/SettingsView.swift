@@ -28,6 +28,9 @@ struct SettingsView: View {
     @State private var healthState:       HealthState = .unknown
     @State private var coachVariants = CoachVariantSettings()
     private let coachVariantStore = CoachVariantSettingsStore()
+    // build 101 — account deletion
+    @State private var showDeleteAccountSheet: Bool = false
+    @State private var accountDeleted:         Bool = false
 
     // Live Tone v1 control surface (shipping release). A value type over the
     // shared App Group store — writes are visible to the keyboard on its next
@@ -56,6 +59,7 @@ struct SettingsView: View {
                 liveToneSection
                 planSection
                 privacySection
+                accountManagementSection
             }
             .navigationTitle("Settings")
             .onAppear {
@@ -79,6 +83,22 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showPaywall) {
                 PaywallView(onDismiss: { showPaywall = false })
+            }
+            .sheet(isPresented: $showDeleteAccountSheet) {
+                AccountDeletionView(
+                    onSuccess: {
+                        showDeleteAccountSheet = false
+                        accountDeleted = true
+                    },
+                    onCancel: {
+                        showDeleteAccountSheet = false
+                    }
+                )
+            }
+            .alert("Account deleted", isPresented: $accountDeleted) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Your account has been permanently deleted. You can create a new account at any time.")
             }
         }
     }
@@ -555,6 +575,21 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Account management (build 101)
+
+    @ViewBuilder
+    private var accountManagementSection: some View {
+        if TonoBackend.shared.isRegistered() {
+            Section("Account Management") {
+                Button("Delete account", role: .destructive) {
+                    showDeleteAccountSheet = true
+                }
+                Text("Permanently removes your account and all server-stored data. Any active subscription must be cancelled separately in Apple ID settings. This cannot be undone.")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+        }
+    }
+
     // MARK: - Helpers
 
     private func loadFeatureToggles() {
@@ -669,6 +704,11 @@ struct SettingsView: View {
 struct PaywallView: View {
     let onDismiss: () -> Void
     @ObservedObject private var store = StoreKitManager.shared
+    // build 101: sign-in gate. When the user taps buy on an anonymous account,
+    // the purchase is deferred until email identity is confirmed. After sign-in
+    // the pending product is retried automatically.
+    @State private var showSignInForPurchase: Bool = false
+    @State private var pendingProduct: Product? = nil
 
     var body: some View {
         NavigationStack {
@@ -718,6 +758,32 @@ Payment will be charged to your Apple ID account at confirmation of purchase. Th
         .onChange(of: store.isPro) { isPro in
             if isPro { onDismiss() }
         }
+        .sheet(isPresented: $showSignInForPurchase) {
+            EmailSignInSheet(
+                onSuccess: {
+                    showSignInForPurchase = false
+                    // Retry the purchase now that the account is identified.
+                    if let product = pendingProduct {
+                        Task { await store.purchase(product) }
+                    }
+                    pendingProduct = nil
+                },
+                onCancel: {
+                    showSignInForPurchase = false
+                    pendingProduct = nil
+                }
+            )
+        }
+    }
+
+    // Initiates a purchase or routes to sign-in if the account is anonymous.
+    fileprivate func initiatePurchase(_ product: Product) {
+        guard store.isIdentifiedAccount else {
+            pendingProduct = product
+            showSignInForPurchase = true
+            return
+        }
+        Task { await store.purchase(product) }
     }
 
     private var headerSection: some View {
@@ -747,6 +813,39 @@ Payment will be charged to your Apple ID account at confirmation of purchase. Th
 
     private var productList: some View {
         VStack(spacing: 12) {
+            // build 101: anonymous accounts must sign in before purchasing so the
+            // appAccountToken is a recoverable canonical UUID, not a device-only one.
+            if !store.isIdentifiedAccount {
+                VStack(spacing: 8) {
+                    Image(systemName: "envelope.badge.shield.half.filled")
+                        .font(.system(size: 28))
+                        .foregroundColor(.purple)
+                    Text("Sign in to subscribe")
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundColor(.white)
+                    Text("A verified email keeps your subscription recoverable if you reinstall or switch devices.")
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundColor(.white.opacity(0.6))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 8)
+                    Button {
+                        showSignInForPurchase = true
+                    } label: {
+                        Text("Sign in with email")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 10)
+                            .background(Color.purple)
+                            .foregroundColor(.white)
+                            .clipShape(Capsule())
+                    }
+                    .padding(.top, 4)
+                }
+                .padding(16)
+                .background(Color.white.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .padding(.horizontal, 24)
+            }
             if store.products.isEmpty && !store.isLoading {
                 Text("Products unavailable. Make sure you're signed into the App Store.")
                     .font(.caption)
@@ -758,9 +857,10 @@ Payment will be charged to your Apple ID account at confirmation of purchase. Th
                 ProductRow(
                     product: product,
                     isLoading: store.isLoading,
-                    isEligibleForFreeTrial: store.isEligibleForFreeTrial(product)
+                    isEligibleForFreeTrial: store.isEligibleForFreeTrial(product),
+                    isIdentified: store.isIdentifiedAccount
                 ) {
-                    Task { await store.purchase(product) }
+                    initiatePurchase(product)
                 }
             }
             if let err = store.purchaseError {
@@ -849,6 +949,9 @@ private struct ProductRow: View {
     let product:   Product
     let isLoading: Bool
     let isEligibleForFreeTrial: Bool
+    // build 101: when false, the buy button tap routes to sign-in rather than
+    // initiating a purchase directly. Displayed as a subtle "sign in first" label.
+    let isIdentified: Bool
     let onPurchase: () -> Void
 
     private var isYearly: Bool { product.id.contains("yearly") }
@@ -937,6 +1040,174 @@ private extension Product.SubscriptionPeriod.Unit {
         case .month:  return "month"
         case .year:   return "year"
         @unknown default: return "period"
+        }
+    }
+}
+
+// MARK: - AccountDeletionView (build 101)
+//
+// Two-step confirmation sheet for permanent account deletion.
+//
+// Step 1: Warning screen — explains consequences, requires user to type
+//         "DELETE" to prove intent, then taps "Permanently delete".
+// Step 2: In-progress — calls DELETE /v1/account; shows spinner.
+//
+// Success: purges all local secrets, resets StoreKit, calls `onSuccess`.
+// Failure: shows error message with support email link. Does NOT purge.
+// Re-auth: if the backend returns 401 the user is prompted to re-sign-in
+//          (unusual, but possible if the session expired mid-flow).
+//
+// Backend endpoint definition (client contract — not yet deployed on this
+// branch; URLProtocol tests in Build101RevenueTests validate the shape):
+//   DELETE /v1/account
+//   Authorization: Bearer <api_token>
+//   → 200 {} — deleted; caller must purge local secrets
+//   → 401    — session expired; show re-auth prompt
+//   → 404    — already deleted (treat as success)
+//   → 500    — server error; do NOT purge; surface support path
+struct AccountDeletionView: View {
+    let onSuccess: () -> Void
+    let onCancel:  () -> Void
+
+    @State private var confirmText:   String = ""
+    @State private var isDeleting:    Bool   = false
+    @State private var errorMessage:  String?
+    @State private var showReAuth:    Bool   = false
+
+    private let confirmKeyword = "DELETE"
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 20) {
+                warningHeader
+                confirmField
+                if let err = errorMessage {
+                    errorBanner(err)
+                }
+                Spacer()
+                deleteButton
+            }
+            .padding(24)
+            .navigationTitle("Delete account")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                        .disabled(isDeleting)
+                }
+            }
+        }
+        .sheet(isPresented: $showReAuth) {
+            EmailSignInSheet(
+                onSuccess: { showReAuth = false },
+                onCancel:  { showReAuth = false }
+            )
+        }
+    }
+
+    private var warningHeader: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("This cannot be undone", systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundColor(.red)
+            Text("Deleting your account permanently removes all data from Tono's servers: your style memory, recipient profiles, and usage history. Your subscription is not automatically cancelled — cancel it separately in Apple ID settings before deleting.")
+                .font(.callout)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var confirmField: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Type \(confirmKeyword) to confirm")
+                .font(.subheadline.weight(.medium))
+            TextField(confirmKeyword, text: $confirmText)
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled(true)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(.body, design: .monospaced))
+        }
+    }
+
+    private func errorBanner(_ message: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(message)
+                .font(.callout)
+                .foregroundColor(.red)
+            if message.contains("session") || message.contains("sign in") {
+                Button("Sign in again") { showReAuth = true }
+                    .font(.footnote.weight(.semibold))
+                    .foregroundColor(.purple)
+            } else {
+                Link("Contact support@tonoit.com", destination: URL(string: "mailto:support@tonoit.com")!)
+                    .font(.footnote)
+                    .foregroundColor(.purple)
+            }
+        }
+        .padding(12)
+        .background(Color.red.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var deleteButton: some View {
+        Button(action: confirmDeletion) {
+            HStack {
+                if isDeleting { ProgressView().tint(.white) }
+                Text(isDeleting ? "Deleting…" : "Permanently delete my account")
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(canDelete ? Color.red : Color.gray.opacity(0.3))
+            .foregroundColor(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+        }
+        .disabled(!canDelete || isDeleting)
+    }
+
+    private var canDelete: Bool {
+        confirmText.trimmingCharacters(in: .whitespaces) == confirmKeyword
+    }
+
+    private func confirmDeletion() {
+        guard canDelete else { return }
+        isDeleting = true
+        errorMessage = nil
+        Task {
+            defer { isDeleting = false }
+            do {
+                try await TonoBackend.shared.deleteAccount()
+                // Success: purge all local secrets so the app returns to
+                // an unauthenticated state immediately.
+                SharedKeychain.purgeAccountSecrets()
+                await MainActor.run {
+                    StoreKitManager.shared.resetToAnonymous()
+                    TonePreferences.recordEntitlement(.notEntitled, isPro: false)
+                }
+                onSuccess()
+            } catch let e as TonoBackendError {
+                await MainActor.run {
+                    switch e {
+                    case .http(401, _):
+                        errorMessage = "Your session expired. Sign in again and retry."
+                        showReAuth = true
+                    case .http(404, _):
+                        // Account already deleted — treat as success.
+                        SharedKeychain.purgeAccountSecrets()
+                        StoreKitManager.shared.resetToAnonymous()
+                        TonePreferences.recordEntitlement(.notEntitled, isPro: false)
+                        onSuccess()
+                    case .offline:
+                        errorMessage = "You're offline. Connect to the internet and try again."
+                    default:
+                        errorMessage = "Account deletion failed (\(e.localizedDescription)). Your account was not deleted. Contact support@tonoit.com if this persists."
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = "Deletion failed: \(error.localizedDescription). Your account was not deleted."
+                }
+            }
         }
     }
 }
