@@ -14,6 +14,13 @@ python-multipart>=0.0.9,<1.0
 # home-grown PKI a prior build-91 candidate shipped (contract §3).
 app-store-server-library>=1.2,<2.0
 
+# Google Play Developer API (androidpublisher v3) server-side subscription
+# verification + acknowledgement, and OIDC verification of Real-time Developer
+# Notification (RTDN) Pub/Sub push id-tokens. Server credentials arrive only via
+# environment (TONO_GOOGLE_SERVICE_ACCOUNT_JSON); no secret reaches a client.
+google-api-python-client>=2.100,<3.0
+google-auth>=2.23,<3.0
+
 # Tests
 pytest>=7,<9
 pytest-asyncio>=0.23,<2

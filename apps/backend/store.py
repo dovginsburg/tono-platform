@@ -507,6 +507,38 @@ class AppleEntitlementResult:
         return self.outcome in ("direct_granted", "family_granted", "legacy_granted")
 
 
+# States a Google Play subscription lineage can reach that must NEVER be
+# resurrected by a later apparently-active re-query or a replayed token
+# (contract §3; hostile "stale active after revoke" / "linked replacement").
+# 'expired' is soft-terminal instead: a strictly-newer active re-query on the
+# same token may legitimately supersede it (rare, but deterministic).
+_GOOGLE_HARD_TERMINAL = frozenset({"refunded", "revoked", "replaced"})
+
+
+@dataclass
+class GoogleEntitlementResult:
+    """Outcome of projecting one verified Google Play subscription snapshot.
+
+    `outcome` is one of: 'granted' (an active/grace/canceled-with-future-expiry
+    purchase bound to the account entitles it), 'not_active' (verified but the
+    subscription is on-hold/paused/pending/expired/revoked so no entitlement),
+    'conflict' (the purchase is bound to a different account via
+    obfuscatedExternalAccountId or a prior first-claim), 'stale' (older or
+    hard-terminal-superseded evidence that must not resurrect entitlement),
+    'unbound' (a valid purchase with no resolvable beneficiary yet — recorded so
+    a later authenticated sync can bind it, but nothing is granted)."""
+
+    outcome: str
+    detail: str = ""
+    purchase_id: Optional[str] = None
+    lifecycle_state: Optional[str] = None
+    acknowledge_pending: bool = False
+
+    @property
+    def granted(self) -> bool:
+        return self.outcome == "granted"
+
+
 # ---------------------------------------------------------------------------
 # Store
 # ---------------------------------------------------------------------------
@@ -2457,6 +2489,340 @@ class Store:
                  original_transaction_id, reason, now),
             )
 
+    # ---- Google Play provider projection (provider_purchases + entitlement_grants) ----
+
+    def record_provider_notification(
+        self, provider: str, event_id: str, notification_type: str
+    ) -> bool:
+        """Durable inbox insert for a provider push notification, keyed by the
+        provider's own message id. Returns True if this is the FIRST time we've
+        seen it, False on a duplicate delivery. This is the replay/idempotency
+        primitive for RTDN (contract §4/§9): the caller only does the expensive
+        re-query + projection when it gets a fresh id back."""
+
+        def _do() -> bool:
+            cur = self._conn.cursor()
+            try:
+                cur.execute(
+                    "INSERT INTO provider_transactions (provider, event_id, kind, outcome, received_at) "
+                    "VALUES (?, ?, 'notification', ?, ?)",
+                    (provider, event_id, notification_type, _now_iso()),
+                )
+                return True
+            except sqlite3.IntegrityError:
+                return False
+
+        return self._run(_do).result()
+
+    def apply_google_purchase(
+        self,
+        *,
+        account_id: Optional[str],
+        purchase_token: str,
+        subscription_id: str,
+        obfuscated_account_id: Optional[str],
+        lifecycle_state: str,
+        entitled: bool,
+        hard_terminal: bool,
+        signed_ms: int,
+        expires_ms: Optional[int] = None,
+        environment: str = "production",
+        linked_purchase_token: Optional[str] = None,
+        acknowledged: bool = False,
+        provider: str = "google",
+    ) -> GoogleEntitlementResult:
+        """Project ONE server-verified Google Play subscription snapshot into the
+        same append-only provider_purchases -> entitlement_grants model Apple and
+        Stripe use, keyed by the purchase token as the lineage id (contract §3).
+
+        The snapshot MUST come from a server-side Developer API re-query — never
+        from a client or an RTDN payload. `entitled`/`hard_terminal`/
+        `lifecycle_state` are the normalized decision the verified provider state
+        yields; this method only persists it deterministically and idempotently.
+
+        Beneficiary binding (contract §1/§4):
+          * `obfuscated_account_id` (obfuscatedExternalAccountId, set by the
+            client at purchase) is the authoritative person binding when present.
+            On the authenticated direct-sync path a value that disagrees with the
+            caller's `account_id` is a hard conflict — a token cannot be claimed
+            across accounts.
+          * absent it, the first authenticated account to register the token wins
+            via the shared legacy_claims lineage lock; a later different account
+            conflicts.
+          * `account_id` is None on the unauthenticated RTDN path: an existing
+            lineage's grants are reconciled in place, and a brand-new purchase
+            with a provable obfuscated beneficiary is bound, but a beneficiary we
+            cannot prove is recorded 'unbound' rather than guessed.
+
+        Terminal precedence: a hard-terminal state (refunded/revoked/replaced)
+        can never be resurrected, and an equal-or-older active re-query can never
+        revive an expired lineage (deterministic, replay-safe)."""
+
+        def _do() -> GoogleEntitlementResult:
+            cur = self._conn.cursor()
+            now = _now_iso()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                result = self._apply_google_purchase_locked(
+                    cur, now,
+                    account_id=account_id,
+                    purchase_token=purchase_token,
+                    subscription_id=subscription_id,
+                    obfuscated_account_id=obfuscated_account_id,
+                    lifecycle_state=lifecycle_state,
+                    entitled=entitled,
+                    hard_terminal=hard_terminal,
+                    signed_ms=signed_ms,
+                    expires_ms=expires_ms,
+                    environment=environment,
+                    linked_purchase_token=linked_purchase_token,
+                    acknowledged=acknowledged,
+                    provider=provider,
+                )
+                cur.execute("COMMIT")
+                return result
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
+
+        return self._run(_do).result()
+
+    def _apply_google_purchase_locked(
+        self, cur, now, *, account_id, purchase_token, subscription_id,
+        obfuscated_account_id, lifecycle_state, entitled, hard_terminal,
+        signed_ms, expires_ms, environment, linked_purchase_token,
+        acknowledged, provider,
+    ) -> GoogleEntitlementResult:
+        assert purchase_token and subscription_id, "missing google purchase identifiers"
+
+        # Replacement continuity (contract §3): an upgrade/downgrade/resignup
+        # mints a NEW token whose snapshot carries linkedPurchaseToken=OLD. The
+        # old lineage is terminally replaced and its grants revoked so a replayed
+        # old token can never keep granting after it was superseded.
+        if linked_purchase_token and linked_purchase_token != purchase_token:
+            cur.execute(
+                "SELECT * FROM provider_purchases WHERE provider = ? AND original_transaction_id = ?",
+                (provider, linked_purchase_token),
+            )
+            old = cur.fetchone()
+            if old is not None and old["lifecycle_state"] not in _GOOGLE_HARD_TERMINAL:
+                cur.execute(
+                    "UPDATE provider_purchases SET lifecycle_state = 'replaced', updated_at = ? WHERE id = ?",
+                    (now, old["id"]),
+                )
+                self._revoke_grants_for_purchase(cur, old["id"], now)
+
+        cur.execute(
+            "SELECT * FROM provider_purchases WHERE provider = ? AND original_transaction_id = ?",
+            (provider, purchase_token),
+        )
+        existing = cur.fetchone()
+
+        if existing is not None:
+            stored_state = existing["lifecycle_state"]
+            stored_signed = existing["latest_signed_ms"] or 0
+            # Hard-terminal is permanent. A still-active re-query (a stale client
+            # replay, or a provider lag) must not resurrect it.
+            if stored_state in _GOOGLE_HARD_TERMINAL and not hard_terminal:
+                if entitled:
+                    return GoogleEntitlementResult(
+                        "stale", f"{stored_state} purchase cannot be resurrected",
+                        purchase_id=existing["id"], lifecycle_state=stored_state,
+                    )
+                return GoogleEntitlementResult(
+                    "not_active", f"purchase is {stored_state}",
+                    purchase_id=existing["id"], lifecycle_state=stored_state,
+                )
+            # Soft-terminal 'expired': only strictly-newer active supersedes.
+            if stored_state == "expired" and entitled and signed_ms <= stored_signed:
+                return GoogleEntitlementResult(
+                    "stale", "stale active cannot resurrect an expired purchase",
+                    purchase_id=existing["id"], lifecycle_state="expired",
+                )
+            # Generic out-of-order guard: ignore strictly-older non-terminal
+            # evidence. A hard-terminal event always applies (safety wins).
+            if signed_ms < stored_signed and not hard_terminal:
+                return GoogleEntitlementResult(
+                    "stale", "older provider evidence ignored",
+                    purchase_id=existing["id"], lifecycle_state=stored_state,
+                )
+
+        purchase_id = existing["id"] if existing else str(uuid.uuid4())
+        effective_signed = max(signed_ms, existing["latest_signed_ms"] or 0) if existing else signed_ms
+
+        if existing is None:
+            cur.execute(
+                """INSERT INTO provider_purchases
+                       (id, provider, original_transaction_id, latest_transaction_id, product_id,
+                        environment, ownership_type, app_account_token, lifecycle_state,
+                        latest_signed_ms, expires_ms, trial_consumed, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, 'PURCHASED', ?, ?, ?, ?, 0, ?, ?)""",
+                (purchase_id, provider, purchase_token, purchase_token, subscription_id,
+                 environment, obfuscated_account_id, lifecycle_state,
+                 effective_signed, expires_ms, now, now),
+            )
+        else:
+            cur.execute(
+                """UPDATE provider_purchases
+                      SET product_id = ?, environment = ?,
+                          app_account_token = COALESCE(app_account_token, ?),
+                          lifecycle_state = ?, latest_signed_ms = ?, expires_ms = ?,
+                          updated_at = ?
+                    WHERE id = ?""",
+                (subscription_id, environment, obfuscated_account_id, lifecycle_state,
+                 effective_signed, expires_ms, now, purchase_id),
+            )
+
+        # Not entitled -> ensure no grant survives, record the durable state.
+        if not entitled:
+            self._revoke_grants_for_purchase(cur, purchase_id, now)
+            return GoogleEntitlementResult(
+                "not_active", f"purchase is {lifecycle_state}",
+                purchase_id=purchase_id, lifecycle_state=lifecycle_state,
+            )
+
+        # ---- entitled: resolve the beneficiary account ----
+
+        # obfuscatedExternalAccountId, when present, is the authoritative binding.
+        if obfuscated_account_id is not None:
+            if account_id is not None and obfuscated_account_id != account_id:
+                # Authenticated caller trying to claim a token bound to someone
+                # else -> deterministic conflict (hostile: token replay across
+                # accounts). Never fall through to a first-claim.
+                return GoogleEntitlementResult(
+                    "conflict", "purchase is bound to a different account",
+                    purchase_id=purchase_id, lifecycle_state=lifecycle_state,
+                )
+            beneficiary = obfuscated_account_id
+        elif account_id is not None:
+            # Tokenless (no obfuscated id): first authenticated claimant wins the
+            # lineage via the shared UNIQUE lock; a later different account 409s.
+            cur.execute(
+                "SELECT * FROM legacy_claims WHERE provider = ? AND original_transaction_id = ?",
+                (provider, purchase_token),
+            )
+            claim = cur.fetchone()
+            if claim is None:
+                try:
+                    cur.execute(
+                        """INSERT INTO legacy_claims
+                               (id, provider, original_transaction_id, claimant_account_id,
+                                evidence_key, result, claimed_at)
+                             VALUES (?, ?, ?, ?, ?, 'granted', ?)""",
+                        (str(uuid.uuid4()), provider, purchase_token, account_id, purchase_token, now),
+                    )
+                except sqlite3.IntegrityError:
+                    cur.execute(
+                        "SELECT * FROM legacy_claims WHERE provider = ? AND original_transaction_id = ?",
+                        (provider, purchase_token),
+                    )
+                    claim = cur.fetchone()
+            if claim is not None and claim["claimant_account_id"] != account_id:
+                return GoogleEntitlementResult(
+                    "conflict", "purchase already claimed by another account",
+                    purchase_id=purchase_id, lifecycle_state=lifecycle_state,
+                )
+            beneficiary = account_id
+        else:
+            # RTDN (no caller) with no provable beneficiary. If the lineage
+            # already has a grant, we've already reactivated it below; otherwise
+            # record it 'unbound' and wait for an authenticated sync to bind it —
+            # never guess who to grant.
+            cur.execute(
+                "SELECT account_id FROM entitlement_grants WHERE purchase_id = ? AND state = 'active' LIMIT 1",
+                (purchase_id,),
+            )
+            existing_grant = cur.fetchone()
+            if existing_grant is None:
+                # Reactivate any previously-revoked grant on this lineage (e.g. an
+                # on-hold recovery arriving before the client re-syncs).
+                cur.execute(
+                    "SELECT account_id FROM entitlement_grants WHERE purchase_id = ? LIMIT 1",
+                    (purchase_id,),
+                )
+                prior = cur.fetchone()
+                if prior is None:
+                    return GoogleEntitlementResult(
+                        "unbound", "no resolvable beneficiary for this purchase yet",
+                        purchase_id=purchase_id, lifecycle_state=lifecycle_state,
+                    )
+                beneficiary = prior["account_id"]
+            else:
+                beneficiary = existing_grant["account_id"]
+
+        # Never grant to an account that does not exist. On the RTDN path an
+        # obfuscatedExternalAccountId is attacker/garbage-influenced; binding a
+        # grant to a non-account would both violate the FK and grant nothing
+        # useful. Record it unbound and wait for an authenticated sync instead.
+        if not _account_exists(cur, beneficiary):
+            return GoogleEntitlementResult(
+                "unbound", "beneficiary account does not exist",
+                purchase_id=purchase_id, lifecycle_state=lifecycle_state,
+            )
+
+        self._upsert_grant(cur, purchase_id, beneficiary, "direct", expires_ms, now)
+
+        ack_pending = False
+        if not acknowledged:
+            self._record_ack_op(cur, provider, purchase_token, beneficiary, now)
+            ack_pending = True
+        return GoogleEntitlementResult(
+            "granted", purchase_id=purchase_id, lifecycle_state=lifecycle_state,
+            acknowledge_pending=ack_pending,
+        )
+
+    def _record_ack_op(self, cur, provider, purchase_token, account_id, now) -> None:
+        """Record a durable, retriable 'acknowledge' op. Acknowledgement is only
+        ever recorded AFTER a successful ownership binding + grant (contract §5),
+        and a transient failure to acknowledge never erases the entitlement."""
+        with contextlib.suppress(sqlite3.IntegrityError):
+            cur.execute(
+                """INSERT INTO provider_operations
+                       (id, provider, op_kind, original_transaction_id, account_id,
+                        state, attempts, created_at, updated_at)
+                     VALUES (?, ?, 'acknowledge', ?, ?, 'pending', 0, ?, ?)""",
+                (str(uuid.uuid4()), provider, purchase_token, account_id, now, now),
+            )
+
+    def list_pending_google_acknowledgements(self, provider: str = "google") -> list[dict]:
+        """Pending/failed acknowledge ops joined to their purchase so a drainer
+        has the (subscription_id, purchase_token) the Developer API needs. Only
+        lineages still holding an active grant are acknowledged — a purchase that
+        was revoked before we could acknowledge is dropped, not acknowledged."""
+
+        def _do() -> list[dict]:
+            cur = self._conn.cursor()
+            cur.execute(
+                """SELECT o.id AS op_id,
+                          o.original_transaction_id AS purchase_token,
+                          p.product_id AS subscription_id,
+                          p.lifecycle_state AS lifecycle_state
+                     FROM provider_operations o
+                     JOIN provider_purchases p
+                       ON p.provider = o.provider
+                      AND p.original_transaction_id = o.original_transaction_id
+                    WHERE o.provider = ? AND o.op_kind = 'acknowledge'
+                      AND o.state IN ('pending', 'failed')""",
+                (provider,),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+        return self._run(_do).result()
+
+    def mark_provider_operation(self, op_id: str, *, state: str, error: Optional[str] = None) -> None:
+        """Advance a durable provider op's retry state (shared by Apple's
+        Set-App-Account-Token and Google's acknowledge ops)."""
+
+        def _do() -> None:
+            self._conn.execute(
+                "UPDATE provider_operations SET state = ?, attempts = attempts + 1, "
+                "last_error = ?, updated_at = ? WHERE id = ?",
+                (state, error, _now_iso(), op_id),
+            )
+
+        self._run(_do).result()
+
     def list_unresolved_events(self, provider: str = "apple") -> list[dict]:
         """Durable, non-destructive events awaiting provider reconciliation
         (e.g. tokenless family revokes). Support-visible; never auto-applied."""
@@ -2669,6 +3035,15 @@ def _purchase_has_active_grant(cur: sqlite3.Cursor, purchase_id: str, account_id
         "AND state = 'active' LIMIT 1",
         (purchase_id, account_id),
     )
+    return cur.fetchone() is not None
+
+
+def _account_exists(cur: sqlite3.Cursor, account_id: Optional[str]) -> bool:
+    """True when `account_id` names a real account row. Gates provider grants so
+    a garbage/attacker-supplied obfuscatedExternalAccountId can never bind."""
+    if not account_id:
+        return False
+    cur.execute("SELECT 1 FROM accounts WHERE id = ? LIMIT 1", (account_id,))
     return cur.fetchone() is not None
 
 

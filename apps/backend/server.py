@@ -46,7 +46,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import app_store, passkeys, payments, rate_limit, slack, social_auth, supabase_auth
+from . import app_store, google_play, passkeys, payments, rate_limit, slack, social_auth, supabase_auth
 from .app_store import compute_me_fields
 from .analyze import (
     AnalyzeRequest,
@@ -271,12 +271,27 @@ async def _lifespan(_: "FastAPI"):
     except Exception:
         logger.exception("set-app-account-token reconcile failed on startup; will retry")
 
+    # Best-effort drain of pending Google Play acknowledge ops (contract §5).
+    # Only runs when the Play Developer API is configured; a transient failure
+    # leaves the op retriable and NEVER erases an already-verified entitlement.
+    try:
+        gverifier = google_play.get_reconcile_verifier()
+        if gverifier is not None:
+            gtally = google_play.reconcile_google_acknowledgements(
+                store, gverifier, google_play.get_google_play_config()
+            )
+            if any(gtally.values()):
+                logger.info("google-play acknowledge reconcile: %s", gtally)
+    except Exception:
+        logger.exception("google-play acknowledge reconcile failed on startup; will retry")
+
     logger.info(
-        "tono backend ready: provider=%s stripe=%s slack=%s apple=%s",
+        "tono backend ready: provider=%s stripe=%s slack=%s apple=%s google=%s",
         os.environ.get("TONO_PROVIDER", "mock"),
         "configured" if os.environ.get("STRIPE_SECRET_KEY") else "off",
         "configured" if os.environ.get("SLACK_CLIENT_ID") else "off",
         "configured" if os.environ.get("TONO_APPLE_ROOT_CA_PEM") else "off",
+        "configured" if os.environ.get("TONO_GOOGLE_SERVICE_ACCOUNT_JSON") else "off",
     )
     try:
         yield
@@ -425,6 +440,8 @@ async def health() -> dict[str, Any]:
         ),
         "stripe_configured": bool(os.environ.get("STRIPE_SECRET_KEY")),
         "slack_configured": bool(os.environ.get("SLACK_CLIENT_ID")),
+        "apple_configured": bool(os.environ.get("TONO_APPLE_ROOT_CA_PEM")),
+        "google_play_configured": bool(os.environ.get("TONO_GOOGLE_SERVICE_ACCOUNT_JSON")),
         "free_daily_limit": int(os.environ.get("FREE_DAILY_LIMIT", "10")),
     }
 
@@ -1493,6 +1510,7 @@ app.include_router(payments.router)
 app.include_router(slack.router)
 app.include_router(passkeys.router)
 app.include_router(app_store.router)
+app.include_router(google_play.router)
 
 
 # ---------------------------------------------------------------------------

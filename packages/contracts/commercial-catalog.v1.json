@@ -66,21 +66,24 @@
       "status": "closed-test",
       "package_name": "com.tono.myapp",
       "client_entitlement_note": "apps/android/.../billing/BillingContract.kt EntitlementDecision.isPro returns backendIsPro only — a client-side Play purchase never unlocks Pro.",
-      "server_verification": "not-yet-implemented — Google Play Developer API / Real-time Developer Notifications (RTDN) server verification is a documented remaining gate (see docs/operations/tono-billing-launch-runbook.md). Until it lands, a Play purchase does NOT grant Pro (fail-closed by design).",
+      "server_verification": "implemented — apps/backend/google_play.py verifies subscription purchase tokens through the Google Play Developer API (androidpublisher purchases.subscriptionsv2.get), validates package/product/base-plan/state/acknowledgement/obfuscatedExternalAccountId, projects the canonical 'pro' entitlement via provider_purchases -> entitlement_grants (provider='google'), and ingests RTDN Pub/Sub push (OIDC-verified) re-querying the Developer API as authority. Verification is unavailable (503) until server credentials are configured, so a Play purchase still fails closed until the operator wires the environment below.",
+      "runtime_config_note": "Server credentials and push-auth parameters are supplied ONLY at runtime via the named environment variables; only the VARIABLE NAMES are recorded here, never values. TONO_GOOGLE_SERVICE_ACCOUNT_JSON (Play Developer API service-account key, inline JSON or file path), TONO_GOOGLE_PACKAGE_NAME (defaults to package_name above), TONO_GOOGLE_SUBSCRIPTION_IDS (defaults to the subscription_id list below), TONO_GOOGLE_BASE_PLAN_IDS (see base_plan_env_var), TONO_GOOGLE_PUBSUB_AUDIENCE + TONO_GOOGLE_PUBSUB_SA_EMAIL (RTDN push OIDC verification) or TONO_GOOGLE_PUBSUB_SHARED_TOKEN (documented shared-secret push boundary).",
+      "base_plan_env_var": "TONO_GOOGLE_BASE_PLAN_IDS",
+      "base_plan_note": "Base plans / offers are configured in the Play Console and resolved at runtime via subscriptionOfferDetails; the exact console base-plan ids are NOT invented here. The server requires the allowed base-plan ids through TONO_GOOGLE_BASE_PLAN_IDS (comma-separated) and fails closed — a verified purchase whose base plan is absent from that set never grants Pro. Confirm and configure the ids from the Play Console before Android launch.",
       "products": [
         {
           "interval": "month",
           "entitlement": "pro",
           "subscription_id": "com.tonoit.pro.monthly",
           "base_plan_id": null,
-          "base_plan_note": "Base plan / offer is configured in the Play Console and resolved at runtime via subscriptionOfferDetails; not pinned in client code. Confirm the base-plan id in the Play Console before server verification ships."
+          "base_plan_note": "Base-plan id confirmed in the Play Console and supplied via TONO_GOOGLE_BASE_PLAN_IDS at runtime; not pinned here."
         },
         {
           "interval": "year",
           "entitlement": "pro",
           "subscription_id": "com.tonoit.pro.yearly",
           "base_plan_id": null,
-          "base_plan_note": "Base plan / offer is configured in the Play Console and resolved at runtime via subscriptionOfferDetails; not pinned in client code. Confirm the base-plan id in the Play Console before server verification ships."
+          "base_plan_note": "Base-plan id confirmed in the Play Console and supplied via TONO_GOOGLE_BASE_PLAN_IDS at runtime; not pinned here."
         }
       ]
     }

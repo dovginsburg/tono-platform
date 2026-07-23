@@ -621,6 +621,30 @@
         "title": "EventRequest",
         "type": "object"
       },
+      "GooglePurchaseSyncRequest": {
+        "properties": {
+          "purchase_token": {
+            "title": "Purchase Token",
+            "type": "string"
+          },
+          "subscription_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subscription Id"
+          }
+        },
+        "required": [
+          "purchase_token"
+        ],
+        "title": "GooglePurchaseSyncRequest",
+        "type": "object"
+      },
       "GoogleSignInRequest": {
         "properties": {
           "id_token": {
@@ -1038,6 +1062,23 @@
           "credential_id"
         ],
         "title": "PasskeyRegisterVerifyResponse",
+        "type": "object"
+      },
+      "PortalRequest": {
+        "properties": {
+          "return_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Return Url"
+          }
+        },
+        "title": "PortalRequest",
         "type": "object"
       },
       "PortalResponse": {
@@ -3065,6 +3106,101 @@
         "summary": "Set Feature Preference"
       }
     },
+    "/v1/google-play/notifications": {
+      "post": {
+        "operationId": "google_play_notifications_v1_google_play_notifications_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Google Play Notifications V1 Google Play Notifications Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Google Play Notifications",
+        "tags": [
+          "google-play"
+        ]
+      }
+    },
+    "/v1/google-play/readiness": {
+      "get": {
+        "description": "Non-secret readiness probe. Reveals ONLY booleans + already-public\nidentifiers so an operator/monitor can see which credentials are wired\nwithout exposing any secret value (contract \u00a75).",
+        "operationId": "google_play_readiness_v1_google_play_readiness_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Google Play Readiness V1 Google Play Readiness Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Google Play Readiness",
+        "tags": [
+          "google-play"
+        ]
+      }
+    },
+    "/v1/google-play/subscription": {
+      "post": {
+        "operationId": "sync_subscription_v1_google_play_subscription_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GooglePurchaseSyncRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Sync Subscription V1 Google Play Subscription Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Sync Subscription",
+        "tags": [
+          "google-play"
+        ]
+      }
+    },
     "/v1/locales": {
       "get": {
         "description": "Locales the LLM providers can respond in. Clients use this to build\na language switcher without hardcoding the list.",
@@ -3149,6 +3285,23 @@
     "/v1/portal": {
       "post": {
         "operationId": "create_portal_session_v1_portal_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PortalRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {
@@ -3159,6 +3312,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [

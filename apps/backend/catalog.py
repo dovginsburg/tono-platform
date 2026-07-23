@@ -126,6 +126,22 @@ def google_play_subscription_ids() -> frozenset[str]:
     )
 
 
+def google_play_package_name() -> Optional[str]:
+    """The Android application id / Play package name the server verifies
+    against. The client can never override it; a purchase for any other package
+    is refused."""
+    return _provider("google_play").get("package_name")
+
+
+def google_play_base_plan_env_var() -> Optional[str]:
+    """The environment-variable NAME that supplies the allowed Google Play
+    base-plan ids at runtime. The catalog deliberately records only the NAME:
+    the exact console base-plan ids are confirmed in the Play Console and never
+    invented here, so a checkout with an unconfigured/mismatched base plan fails
+    closed (contract §6)."""
+    return _provider("google_play").get("base_plan_env_var")
+
+
 def stripe_price_env_var(interval: str) -> Optional[str]:
     """The environment-variable NAME holding the Stripe Price id for this
     interval, per the catalog. Never returns a secret value."""

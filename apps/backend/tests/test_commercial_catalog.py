@@ -90,6 +90,40 @@ def test_app_store_default_product_ids_come_from_catalog():
     assert config.product_ids == catalog_ids
 
 
+def test_google_play_defaults_come_from_catalog():
+    """The Google Play server config defaults must equal the catalog, and the
+    literal fallbacks in google_play.py must too — so neither can drift from the
+    single source of truth (mirrors the App Store default test)."""
+    import backend.catalog as catalog
+    from backend import google_play
+
+    catalog_ids = catalog.google_play_subscription_ids()
+    assert set(google_play._default_google_subscription_ids().split(",")) == catalog_ids
+    assert set(google_play._GOOGLE_SUBSCRIPTION_IDS_FALLBACK.split(",")) == catalog_ids
+
+    assert catalog.google_play_package_name() == "com.tono.myapp"
+    assert google_play._default_google_package_name() == "com.tono.myapp"
+    assert google_play._GOOGLE_PACKAGE_FALLBACK == "com.tono.myapp"
+
+    # The assembled runtime config (no env override) uses the catalog values, and
+    # base plans are unconfigured by default -> cannot grant until set (§6).
+    config = google_play.get_google_play_config()
+    assert config.subscription_ids == catalog_ids
+    assert config.package_name == "com.tono.myapp"
+    assert config.base_plan_ids == frozenset()
+
+
+def test_google_play_base_plan_env_var_recorded_not_invented():
+    """The catalog records the base-plan env-var NAME (config surface) but never
+    an invented console base-plan id (§6): both product base_plan_id stay null."""
+    import backend.catalog as catalog
+
+    assert catalog.google_play_base_plan_env_var() == "TONO_GOOGLE_BASE_PLAN_IDS"
+    data = catalog.load_catalog()
+    for product in data["providers"]["google_play"]["products"]:
+        assert product["base_plan_id"] is None
+
+
 def test_payments_price_env_fallback_matches_catalog():
     import backend.catalog as catalog
     from backend import payments

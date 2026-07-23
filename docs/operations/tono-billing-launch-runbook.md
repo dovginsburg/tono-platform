@@ -74,6 +74,18 @@ Apple App Store (iOS entitlement verification):
 - `TONO_APPLE_ISSUER_ID`, `TONO_APPLE_KEY_ID`, `TONO_APPLE_PRIVATE_KEY`
   (App Store Server API — current-provider reconciliation + Set-App-Account-Token)
 
+Google Play (Android entitlement verification + RTDN):
+- `TONO_GOOGLE_SERVICE_ACCOUNT_JSON` (required — Play Developer API
+  service-account key, inline JSON or a file path; verification is 503 until set)
+- `TONO_GOOGLE_PACKAGE_NAME` (optional; defaults to the catalog `com.tono.myapp`)
+- `TONO_GOOGLE_SUBSCRIPTION_IDS` (optional; defaults to the catalog values)
+- `TONO_GOOGLE_BASE_PLAN_IDS` (**required to grant** — comma-separated allowed
+  Play Console base-plan ids; an unconfigured/mismatched base plan fails closed
+  and never grants, so confirm the ids in the Play Console first)
+- RTDN push authentication (one of): `TONO_GOOGLE_PUBSUB_AUDIENCE` +
+  `TONO_GOOGLE_PUBSUB_SA_EMAIL` (OIDC id-token verification, preferred), or
+  `TONO_GOOGLE_PUBSUB_SHARED_TOKEN` (documented shared-secret `?token=` boundary)
+
 Identity / auth:
 - `APPLE_CLIENT_ID`, `GOOGLE_CLIENT_ID`
 - `SUPABASE_URL`, `SUPABASE_JWKS_URL`, `SUPABASE_ISSUER`, `SUPABASE_AUD`,
@@ -181,9 +193,15 @@ Run these against the live deployment **without creating a real charge**:
    `POST /v1/app-store/subscription` grants `pro`; a refund/revoke
    notification revokes it. (Apple is under App Review — no public App Store
    badge is shown on the site.)
-5. **Google Play closed test.** Android is closed-test only and server-side Play
-   verification is **not yet implemented** (see §6) — a Play purchase does not
-   grant Pro. No public Google Play badge is shown on the site.
+5. **Google Play closed test.** Server-side Play verification is **implemented**
+   (`apps/backend/google_play.py`): configure `TONO_GOOGLE_SERVICE_ACCOUNT_JSON`,
+   `TONO_GOOGLE_BASE_PLAN_IDS` (the confirmed Play Console base-plan ids), and the
+   RTDN push auth vars, then verify a closed-test purchase through
+   `POST /v1/google-play/subscription` grants `pro`, an RTDN revoke/expire push to
+   `POST /v1/google-play/notifications` removes it, and `GET /v1/google-play/readiness`
+   reports `ready: true`. Until the base-plan ids are configured, a Play purchase
+   fails closed and does **not** grant Pro. No public Google Play badge is shown
+   on the site while Android is in closed test.
 6. **Persistence.** Run `verify_sqlite_persistence.py` across a restart, and (if
    Docker is available) `scripts/ci/docker_cold_volume_smoke.sh`.
 
@@ -191,10 +209,19 @@ Run these against the live deployment **without creating a real charge**:
 
 ## 6. Remaining independent-QA / deploy / provider gates (not done here)
 
-- **Google Play server verification** — Play Developer API + RTDN ingestion and
-  a `provider='google'` projection are not implemented. Until they land, Android
-  Pro is intentionally fail-closed. Confirm each product's **base-plan id** in the
-  Play Console and record it in the catalog when implementing.
+- **Google Play server verification** — Play Developer API verification, RTDN
+  Pub/Sub push ingestion, and the `provider='google'` entitlement projection are
+  **implemented** (`apps/backend/google_play.py`, tests in
+  `apps/backend/tests/test_google_play_billing.py`). Remaining provider-console
+  gates handled by the operator (not code): (a) confirm each product's
+  **base-plan id** in the Play Console and set `TONO_GOOGLE_BASE_PLAN_IDS` — the
+  server fails closed and cannot grant until this is done; (b) create the Play
+  Developer API service account and set `TONO_GOOGLE_SERVICE_ACCOUNT_JSON`; (c)
+  create the RTDN Pub/Sub topic + push subscription pointing at
+  `/v1/google-play/notifications` with an OIDC service-account token (set
+  `TONO_GOOGLE_PUBSUB_AUDIENCE` + `TONO_GOOGLE_PUBSUB_SA_EMAIL`) or the shared-token
+  boundary; (d) grant the service account the "View financial data / Manage
+  orders and subscriptions" permission in the Play Console.
 - **Apple App Review** — App Store product approval is pending; only Sandbox is
   exercised. Do not show a public "Download on the App Store" badge until live.
 - **Live Stripe cutover** — swapping test → live keys/prices and registering the
