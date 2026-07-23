@@ -69,8 +69,8 @@ def optional_current_user(
 ) -> Optional[User]:
     """Like ``current_user`` but returns ``None`` instead of raising 401
     when the request has no / invalid bearer token. Used by endpoints that
-    serve both the iOS app (authenticated) and the public website
-    (anonymous checkout — see /v1/checkout)."""
+    accept an optional caller — e.g. /v1/auth/web, where a fresh browser
+    carries no bearer and the endpoint mints a new device inline."""
     if not creds or not creds.credentials:
         return None
     return store.get_by_token(creds.credentials)

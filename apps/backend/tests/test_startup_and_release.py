@@ -37,6 +37,73 @@ def _load_gate():
 
 
 # ===========================================================================
+# Blocker A (QA regression) — supabase_sub migration ordering
+# ===========================================================================
+
+
+def test_supabase_sub_migration_ordering_on_legacy_db(_isolate_db):
+    """Regression: Store.__init__ must not crash when the accounts table
+    predates supabase_sub. On a migrated DB, CREATE TABLE IF NOT EXISTS is a
+    no-op, so SCHEMA's CREATE UNIQUE INDEX idx_accounts_supabase_sub would run
+    before the ALTER TABLE adds the column — crashing startup. The index must
+    be created after the ALTER TABLE migration, not inside executescript(SCHEMA).
+    """
+    db_path = os.environ["TONO_DB_PATH"]
+
+    # Reproduce the exact pre-change production shape: only the accounts table
+    # is pre-created (without supabase_sub), simulating a DB from before the
+    # column was added. All other tables/indexes are absent and will be minted
+    # fresh by SCHEMA — the crash only happens because CREATE TABLE IF NOT
+    # EXISTS accounts is a no-op and SCHEMA then tries to index a missing column.
+    pre_change_schema = """
+    CREATE TABLE accounts (
+        id                      TEXT PRIMARY KEY,
+        apple_sub               TEXT UNIQUE,
+        google_sub              TEXT UNIQUE,
+        email                   TEXT,
+        plan                    TEXT NOT NULL DEFAULT 'free',
+        stripe_customer_id      TEXT,
+        stripe_subscription_id  TEXT,
+        subscription_status     TEXT,
+        subscription_renews_at  TEXT,
+        coupon_pro_expires_at   TEXT,
+        daily_count             INTEGER NOT NULL DEFAULT 0,
+        daily_day               TEXT,
+        created_at              TEXT NOT NULL,
+        updated_at              TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_accounts_apple_sub ON accounts(apple_sub);
+    CREATE INDEX IF NOT EXISTS idx_accounts_google_sub ON accounts(google_sub);
+    CREATE INDEX IF NOT EXISTS idx_accounts_stripe_customer ON accounts(stripe_customer_id);
+    """
+    con = sqlite3.connect(db_path)
+    try:
+        con.executescript(pre_change_schema)
+        cols = {r[1] for r in con.execute("PRAGMA table_info(accounts)").fetchall()}
+        assert "supabase_sub" not in cols, "pre-condition: supabase_sub must not exist yet"
+    finally:
+        con.close()
+
+    # Opening the Store against this pre-change DB must not crash.
+    from backend.store import Store
+
+    s = Store(db_path)
+    s.close()
+
+    # After init: column and unique index must both be present.
+    con = sqlite3.connect(db_path)
+    try:
+        cols = {r[1] for r in con.execute("PRAGMA table_info(accounts)").fetchall()}
+        assert "supabase_sub" in cols, "supabase_sub column missing after migration"
+
+        idx_rows = {r[1]: r[2] for r in con.execute("PRAGMA index_list(accounts)").fetchall()}
+        assert "idx_accounts_supabase_sub" in idx_rows, "idx_accounts_supabase_sub index missing"
+        assert idx_rows["idx_accounts_supabase_sub"] == 1, "idx_accounts_supabase_sub must be UNIQUE"
+    finally:
+        con.close()
+
+
+# ===========================================================================
 # Blocker B — startup backfill wiring
 # ===========================================================================
 

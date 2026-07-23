@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     -- across browsers and OAuth providers, so two browsers signing into the
     -- same Supabase user converge onto this one account. UNIQUE so a subject
     -- can never silently belong to two accounts.
-    supabase_sub            TEXT UNIQUE,
+    supabase_sub            TEXT,
     -- Set to the account's own id when the account is deleted: the row is
     -- kept (tombstoned) so append-only billing/provider audit facts that
     -- reference it stay valid, but all identity/private columns are cleared.
@@ -92,10 +92,6 @@ CREATE TABLE IF NOT EXISTS accounts (
 );
 CREATE INDEX IF NOT EXISTS idx_accounts_apple_sub ON accounts(apple_sub);
 CREATE INDEX IF NOT EXISTS idx_accounts_google_sub ON accounts(google_sub);
--- UNIQUE so migrated DBs (where ALTER TABLE can't add a column-level UNIQUE)
--- still get the "one account per Supabase subject" guarantee. SQLite allows
--- many NULLs under a unique index, so unlinked accounts are unaffected.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_supabase_sub ON accounts(supabase_sub);
 CREATE INDEX IF NOT EXISTS idx_accounts_stripe_customer ON accounts(stripe_customer_id);
 
 -- A passkey (WebAuthn credential) is what makes Face ID / Touch ID /
@@ -543,6 +539,13 @@ class Store:
                 self._conn.execute(stmt)
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_users_previous_token ON users(previous_api_token)"
+        )
+        # Must run after ALTER TABLE adds supabase_sub: on migrated DBs the
+        # CREATE TABLE IF NOT EXISTS is a no-op, so the column doesn't exist
+        # when SCHEMA's executescript runs. Placing the index here, after the
+        # column migration, guarantees it works for both fresh and existing DBs.
+        self._conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_supabase_sub ON accounts(supabase_sub)"
         )
         self._seed_feature_flags()
 
