@@ -46,7 +46,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import app_store, passkeys, payments, rate_limit, slack, social_auth
+from . import app_store, passkeys, payments, rate_limit, slack, social_auth, supabase_auth
 from .app_store import compute_me_fields
 from .analyze import (
     AnalyzeRequest,
@@ -70,7 +70,7 @@ from .analyze import (
     preflight_variant,
     select_model_for_variant,
 )
-from .auth import CurrentUser, StoreDep, current_user
+from .auth import CurrentUser, OptionalCurrentUser, StoreDep, current_user
 from .store import AccountConflictError, DeviceRegistrationProofError, Store, User, get_store
 
 # Locales the LLM providers can respond in. Defines the BCP-47 code → display
@@ -682,6 +682,110 @@ async def auth_google(
     claims = await verifier(body.id_token)
     account = _resolve_provider_signin(store, user, "google", claims.sub, claims.email, body.link)
     return SignInResponse(account_id=account.id, plan=account.plan, is_pro=account.is_pro, email=account.email)
+
+
+# ---------------------------------------------------------------------------
+# Web account sign-in (Supabase). The website authenticates a person with
+# Supabase (Apple/Google/magic-link) and forwards the Supabase access token
+# here. We verify it cryptographically, then converge the browser onto the
+# ONE canonical account keyed by the Supabase user id — so the same person on
+# a second browser lands on the identical account_id. Unlike /v1/auth/apple,
+# the caller need not already hold a device bearer: a fresh browser has none,
+# so we register a random per-browser device (durable credential) and return
+# its bearer for the web app to store in an httpOnly cookie.
+# ---------------------------------------------------------------------------
+
+
+class WebSignInRequest(BaseModel):
+    access_token: str
+
+
+class WebSignInResponse(BaseModel):
+    device_id: str
+    api_token: str
+    device_credential: Optional[str] = None
+    account_id: str
+    plan: str
+    is_pro: bool
+    email: Optional[str] = None
+
+
+@app.post("/v1/auth/web", response_model=WebSignInResponse)
+async def auth_web(
+    body: WebSignInRequest,
+    user: OptionalCurrentUser,
+    store: StoreDep,
+    verifier: Annotated[
+        supabase_auth.SupabaseVerifier, Depends(supabase_auth.get_supabase_verifier)
+    ],
+) -> WebSignInResponse:
+    # Fail closed: an invalid/expired/wrong-audience token raises 401 inside
+    # the verifier before we touch any account state.
+    claims = await verifier(body.access_token)
+
+    # NEVER merge on an unverified email: Supabase dedupes identities onto one
+    # user by *verified* email, and account resolution keys on the immutable
+    # ``sub`` — but we still refuse to persist an unverified address as contact
+    # data, so it can't leak into email-based flows later.
+    email = claims.email if claims.email_verified else None
+
+    # A fresh browser carries no device bearer — mint a random per-browser
+    # device with a durable credential. A returning browser that presented a
+    # valid bearer reuses its device (so its anonymous account upgrades in
+    # place rather than orphaning).
+    device_credential: Optional[str] = None
+    if user is None:
+        registration = store.register_device()
+        user = registration.user
+        device_credential = registration.device_credential
+
+    # Reuse the exact provider-linking primitive Apple/Google use: same-subject
+    # convergence, anonymous-account upgrade-in-place, and 409-on-collision all
+    # come for free (link=False = plain sign-in).
+    account = _resolve_provider_signin(store, user, "supabase", claims.sub, email, link=False)
+
+    return WebSignInResponse(
+        device_id=user.device_id,
+        api_token=user.api_token,
+        device_credential=device_credential,
+        account_id=account.id,
+        plan=account.plan,
+        is_pro=account.is_pro,
+        email=account.email,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Account deletion. Authenticated; revokes every session/device and private
+# datum, and tombstones the account so append-only billing/provider audit
+# facts stay valid (see store.delete_account).
+# ---------------------------------------------------------------------------
+
+
+class DeleteAccountResponse(BaseModel):
+    deleted: bool
+    revoked_devices: int
+
+
+@app.delete("/v1/account", response_model=DeleteAccountResponse)
+def delete_account(user: CurrentUser, store: StoreDep) -> DeleteAccountResponse:
+    # ``CurrentUser`` is the revalidation gate: a caller must present a live
+    # bearer for a device linked to the account being deleted. The device's
+    # account_id — not any client-supplied id — is what we delete, so one
+    # account can never delete another.
+    if not user.account_id:
+        # Contract §1: every device has a canonical account. A null here means
+        # a legacy row; backfill so deletion has a principal to act on.
+        reloaded = store.ensure_account(user.device_id)
+        if reloaded is not None:
+            user = reloaded
+    if not user.account_id:
+        raise HTTPException(status.HTTP_409_CONFLICT, "no account to delete")
+    result = store.delete_account(user.account_id)
+    return DeleteAccountResponse(
+        deleted=bool(result.get("deleted")),
+        revoked_devices=int(result.get("revoked_devices", 0)),
+    )
 
 
 @app.post("/api/analyze", response_model=ApiAnalyzeResponse)

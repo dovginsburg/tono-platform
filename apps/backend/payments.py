@@ -130,6 +130,18 @@ def create_checkout_session(
     if body.interval not in ("month", "year"):
         raise HTTPException(400, "interval must be 'month' or 'year'")
 
+    # Money must bind to an account. A checkout with no bearer would create a
+    # Stripe session with no client_reference_id and no account metadata, so
+    # the webhook could never attach the subscription to a person (the P0 that
+    # let anonymous web purchases float free). Refuse it — the web app signs
+    # the browser in first (POST /v1/auth/web) and forwards that bearer.
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="authentication required to start checkout",
+            headers={"WWW-Authenticate": 'Bearer realm="tono"'},
+        )
+
     price_id = _price_for("pro", body.interval)
     if not price_id:
         raise HTTPException(

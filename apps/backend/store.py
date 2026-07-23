@@ -65,6 +65,15 @@ CREATE TABLE IF NOT EXISTS accounts (
     id                      TEXT PRIMARY KEY,
     apple_sub               TEXT UNIQUE,
     google_sub              TEXT UNIQUE,
+    -- Supabase user id (the web sign-in provider subject). Stable per person
+    -- across browsers and OAuth providers, so two browsers signing into the
+    -- same Supabase user converge onto this one account. UNIQUE so a subject
+    -- can never silently belong to two accounts.
+    supabase_sub            TEXT UNIQUE,
+    -- Set to the account's own id when the account is deleted: the row is
+    -- kept (tombstoned) so append-only billing/provider audit facts that
+    -- reference it stay valid, but all identity/private columns are cleared.
+    deleted_at              TEXT,
     email                   TEXT,
     plan                    TEXT NOT NULL DEFAULT 'free',
     stripe_customer_id      TEXT,
@@ -83,6 +92,10 @@ CREATE TABLE IF NOT EXISTS accounts (
 );
 CREATE INDEX IF NOT EXISTS idx_accounts_apple_sub ON accounts(apple_sub);
 CREATE INDEX IF NOT EXISTS idx_accounts_google_sub ON accounts(google_sub);
+-- UNIQUE so migrated DBs (where ALTER TABLE can't add a column-level UNIQUE)
+-- still get the "one account per Supabase subject" guarantee. SQLite allows
+-- many NULLs under a unique index, so unlinked accounts are unaffected.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_supabase_sub ON accounts(supabase_sub);
 CREATE INDEX IF NOT EXISTS idx_accounts_stripe_customer ON accounts(stripe_customer_id);
 
 -- A passkey (WebAuthn credential) is what makes Face ID / Touch ID /
@@ -380,6 +393,8 @@ class Account:
     updated_at: str
     daily_count: int = 0
     daily_day: Optional[str] = None
+    supabase_sub: Optional[str] = None
+    deleted_at: Optional[str] = None
 
     @property
     def is_pro(self) -> bool:
@@ -394,8 +409,9 @@ class Account:
         pools its free-tier quota exactly like the pre-accounts device did —
         the account only becomes the billing/quota source of truth once the
         person actually signs in. Passkey-only accounts always carry an email
-        at registration, so the three columns are a sufficient signal."""
-        return bool(self.apple_sub or self.google_sub or self.email)
+        at registration, so the columns are a sufficient signal. A Supabase web
+        sign-in is an identity too (verified Apple/Google via Supabase)."""
+        return bool(self.apple_sub or self.google_sub or self.supabase_sub or self.email)
 
 
 @dataclass
@@ -520,6 +536,8 @@ class Store:
             "ALTER TABLE users ADD COLUMN device_credential_hash TEXT",
             "ALTER TABLE users ADD COLUMN previous_api_token TEXT",
             "ALTER TABLE users ADD COLUMN previous_api_token_expires_at TEXT",
+            "ALTER TABLE accounts ADD COLUMN supabase_sub TEXT",
+            "ALTER TABLE accounts ADD COLUMN deleted_at TEXT",
         ):
             with contextlib.suppress(sqlite3.OperationalError):
                 self._conn.execute(stmt)
@@ -851,7 +869,7 @@ class Store:
         each have their own history — merging is a decision a person
         should confirm explicitly, not something we do for them.
         """
-        assert provider in ("apple", "google"), f"unknown provider: {provider}"
+        assert provider in ("apple", "google", "supabase"), f"unknown provider: {provider}"
         column = f"{provider}_sub"
 
         def _do() -> Account:
@@ -909,6 +927,80 @@ class Store:
             cur.execute("SELECT * FROM accounts WHERE id = ?", (account_id,))
             row = cur.fetchone()
             return _row_to_account(row) if row else None
+
+        return self._run(_do).result()
+
+    def delete_account(self, account_id: str) -> dict:
+        """Delete a person's account: revoke every session/device, drop private
+        identity data, and TOMBSTONE the account row rather than deleting it.
+
+        Why tombstone instead of DELETE: append-only billing/provider audit
+        facts (entitlement_grants, stripe_events, and the account's own Stripe
+        customer/subscription ids) reference this account id and must remain
+        valid for legal/accounting reasons. So we keep the row (and its Stripe
+        ids) but clear every identity/private column and stamp ``deleted_at``.
+        After this, ``is_identified`` is false, so the account can never again
+        be resolved by a provider subject or drive Pro entitlement by identity.
+
+        Revocation is real: for every linked device we mint a fresh random
+        api_token the caller never learns, void any previous-token grace, and
+        null the device credential hash — so every bearer that existed before
+        deletion (and any recovery proof) stops working immediately.
+
+        Returns a summary dict for the caller/tests. Idempotent-ish: deleting
+        an already-tombstoned account revokes nothing new and reports 0."""
+
+        def _do() -> dict:
+            cur = self._conn.cursor()
+            cur.execute("SELECT * FROM accounts WHERE id = ?", (account_id,))
+            row = cur.fetchone()
+            if row is None:
+                return {"deleted": False, "revoked_devices": 0}
+            now = _now_iso()
+
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                # 1) Revoke every device linked to this account.
+                cur.execute(
+                    "SELECT device_id FROM users WHERE account_id = ?", (account_id,)
+                )
+                device_ids = [r["device_id"] for r in cur.fetchall()]
+                for did in device_ids:
+                    cur.execute(
+                        """UPDATE users
+                              SET api_token = ?,
+                                  previous_api_token = NULL,
+                                  previous_api_token_expires_at = NULL,
+                                  device_credential_hash = NULL,
+                                  updated_at = ?
+                            WHERE device_id = ?""",
+                        (_new_token(), now, did),
+                    )
+
+                # 2) Drop private identity data (passkeys) tied to the account.
+                cur.execute(
+                    "DELETE FROM webauthn_credentials WHERE account_id = ?", (account_id,)
+                )
+
+                # 3) Tombstone: clear identity/contact columns, keep the row and
+                #    its Stripe billing ids (append-only audit), stamp deleted_at.
+                cur.execute(
+                    """UPDATE accounts
+                          SET apple_sub = NULL,
+                              google_sub = NULL,
+                              supabase_sub = NULL,
+                              email = NULL,
+                              deleted_at = ?,
+                              updated_at = ?
+                        WHERE id = ?""",
+                    (now, now, account_id),
+                )
+                cur.execute("COMMIT")
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
+            return {"deleted": True, "revoked_devices": len(device_ids)}
 
         return self._run(_do).result()
 
@@ -1649,7 +1741,7 @@ class Store:
     # ---- accounts: provider-identity lookup / in-place upgrade ----
 
     def get_account_by_provider(self, provider: str, sub: str) -> Optional[Account]:
-        assert provider in ("apple", "google"), f"unknown provider: {provider}"
+        assert provider in ("apple", "google", "supabase"), f"unknown provider: {provider}"
         column = f"{provider}_sub"
 
         def _do() -> Optional[Account]:
@@ -2253,6 +2345,8 @@ def _row_to_account(row: sqlite3.Row | dict) -> Account:
         updated_at=d.get("updated_at") or "",
         daily_count=d.get("daily_count") or 0,
         daily_day=d.get("daily_day"),
+        supabase_sub=d.get("supabase_sub"),
+        deleted_at=d.get("deleted_at"),
     )
 
 
