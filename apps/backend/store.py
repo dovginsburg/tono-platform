@@ -2660,18 +2660,6 @@ class Store:
                         lifecycle_state=lifecycle_state,
                     )
 
-        # Replacement continuity (contract §3): an upgrade/downgrade/resignup
-        # mints a NEW token whose snapshot carries linkedPurchaseToken=OLD. The
-        # old lineage is terminally replaced and its grants revoked so a replayed
-        # old token can never keep granting after it was superseded.
-        if linked_purchase_token and linked_purchase_token != purchase_token:
-            if old is not None and old["lifecycle_state"] not in _GOOGLE_HARD_TERMINAL:
-                cur.execute(
-                    "UPDATE provider_purchases SET lifecycle_state = 'replaced', updated_at = ? WHERE id = ?",
-                    (now, old["id"]),
-                )
-                self._revoke_grants_for_purchase(cur, old["id"], now)
-
         cur.execute(
             "SELECT * FROM provider_purchases WHERE provider = ? AND original_transaction_id = ?",
             (provider, purchase_token),
@@ -2819,6 +2807,23 @@ class Store:
                 "unbound", "beneficiary account does not exist",
                 purchase_id=purchase_id, lifecycle_state=lifecycle_state,
             )
+
+        # Replacement continuity (contract §3): mutate OLD only after every NEW
+        # acceptance guard above has passed (terminal/staleness, ownership,
+        # beneficiary resolution, and account existence). The surrounding
+        # transaction then makes OLD revoke + NEW grant atomic: any grant error
+        # rolls both lineages back.
+        if (
+            linked_purchase_token
+            and linked_purchase_token != purchase_token
+            and old is not None
+            and old["lifecycle_state"] not in _GOOGLE_HARD_TERMINAL
+        ):
+            cur.execute(
+                "UPDATE provider_purchases SET lifecycle_state = 'replaced', updated_at = ? WHERE id = ?",
+                (now, old["id"]),
+            )
+            self._revoke_grants_for_purchase(cur, old["id"], now)
 
         self._upsert_grant(cur, purchase_id, beneficiary, "direct", expires_ms, now)
 

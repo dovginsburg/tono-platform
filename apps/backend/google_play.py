@@ -320,7 +320,7 @@ class OidcPushAuthenticator:
             )
         except Exception as exc:  # noqa: BLE001 — any failure is a rejected push
             raise GooglePushAuthError(f"invalid oidc id-token: {exc}") from exc
-        if not claims.get("email_verified"):
+        if claims.get("email_verified") is not True:
             raise GooglePushAuthError("push id-token email not verified")
         if claims.get("email") != self._sa_email:
             raise GooglePushAuthError("push id-token from unexpected service account")

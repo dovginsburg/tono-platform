@@ -649,6 +649,95 @@ def test_linked_purchase_replacement_terminates_old_lineage(client, gp):
     ) == 1
 
 
+def test_rejected_terminal_new_replacement_does_not_mutate_old(client, gp):
+    reg = _register(client)
+    old = "tok-terminal-new-old"
+    new = "tok-terminal-new"
+    gp.verifier.subs[old] = raw_sub(obfuscated=reg["account_id"])
+    gp.verifier.subs[new] = raw_sub(obfuscated=reg["account_id"])
+    assert _sync(client, reg["api_token"], old).status_code == 200
+    assert _sync(client, reg["api_token"], new).status_code == 200
+
+    # Make NEW durably hard-terminal, then replay provider-active NEW carrying
+    # linkedPurchaseToken=OLD. Rejected NEW evidence must not replace OLD.
+    _notify(
+        client,
+        rtdn_envelope(
+            message_id="terminal-new-revoke",
+            token=new,
+            ntype=NTYPE_REVOKED,
+            event_ms=_now_ms() - 60_000,
+        ),
+    )
+    gp.verifier.subs[new] = raw_sub(obfuscated=reg["account_id"], linked=old)
+    r = _notify(
+        client,
+        rtdn_envelope(
+            message_id="terminal-new-active-replay",
+            token=new,
+            ntype=NTYPE_PURCHASED,
+            event_ms=_now_ms(),
+        ),
+    )
+    assert r.status_code == 200
+    assert r.json()["outcome"] == "stale"
+    assert _me(client, reg["api_token"])["is_pro"] is True
+    assert _db_scalar(
+        "SELECT COUNT(*) FROM provider_purchases "
+        "WHERE original_transaction_id=? AND lifecycle_state='active'",
+        (old,),
+    ) == 1
+    assert _db_scalar(
+        "SELECT COUNT(*) FROM entitlement_grants eg "
+        "JOIN provider_purchases pp ON pp.id=eg.purchase_id "
+        "WHERE pp.original_transaction_id=? AND eg.state='active'",
+        (old,),
+    ) == 1
+    assert _db_scalar(
+        "SELECT COUNT(*) FROM provider_purchases "
+        "WHERE original_transaction_id=? AND lifecycle_state='revoked'",
+        (new,),
+    ) == 1
+
+
+def test_linked_replacement_grant_error_rolls_back_old_and_new(
+    client, gp, monkeypatch
+):
+    from backend.store import get_store
+
+    reg = _register(client)
+    old = "tok-rollback-old"
+    new = "tok-rollback-new"
+    gp.verifier.subs[old] = raw_sub(obfuscated=reg["account_id"])
+    assert _sync(client, reg["api_token"], old).status_code == 200
+    gp.verifier.subs[new] = raw_sub(obfuscated=reg["account_id"], linked=old)
+
+    store = get_store()
+
+    def fail_grant(*_args, **_kwargs):
+        raise RuntimeError("injected grant failure")
+
+    monkeypatch.setattr(store, "_upsert_grant", fail_grant)
+    with pytest.raises(RuntimeError, match="injected grant failure"):
+        _sync(client, reg["api_token"], new)
+
+    assert _db_scalar(
+        "SELECT COUNT(*) FROM provider_purchases "
+        "WHERE original_transaction_id=? AND lifecycle_state='active'",
+        (old,),
+    ) == 1
+    assert _db_scalar(
+        "SELECT COUNT(*) FROM entitlement_grants eg "
+        "JOIN provider_purchases pp ON pp.id=eg.purchase_id "
+        "WHERE pp.original_transaction_id=? AND eg.state='active'",
+        (old,),
+    ) == 1
+    assert _db_scalar(
+        "SELECT COUNT(*) FROM provider_purchases WHERE original_transaction_id=?",
+        (new,),
+    ) == 0
+
+
 def test_cross_account_linked_replacement_conflicts_without_mutating_old(client, gp):
     account_a = _register(client)
     account_b = _register(client)
@@ -898,6 +987,57 @@ def test_oidc_requires_both_fields_and_exact_verified_service_account(
 
     with pytest.raises(google_play.GooglePushAuthError, match="unexpected service account"):
         authenticator.verify(SignedRequest())
+
+
+@pytest.mark.parametrize("email_verified", ["false", 1, 0, None, False, "missing"])
+def test_oidc_rejects_non_exact_true_email_verified(
+    client, gp, monkeypatch, email_verified
+):
+    from backend import google_play
+    from google.oauth2 import id_token
+
+    audience = "https://tono.example/rtdn"
+    email = "expected-pusher@example.iam.gserviceaccount.com"
+    seen = {}
+
+    def verify(_token, _request, *, audience):
+        seen["audience"] = audience
+        claims = {"email": email}
+        if email_verified != "missing":
+            claims["email_verified"] = email_verified
+        return claims
+
+    monkeypatch.setattr(id_token, "verify_oauth2_token", verify)
+    authenticator = google_play.OidcPushAuthenticator(audience, email)
+
+    class SignedRequest:
+        headers = {"authorization": "Bearer signed.mock.token"}
+
+    with pytest.raises(google_play.GooglePushAuthError, match="email not verified"):
+        authenticator.verify(SignedRequest())
+    assert seen["audience"] == audience
+
+
+def test_oidc_accepts_exact_true_email_and_audience(client, gp, monkeypatch):
+    from backend import google_play
+    from google.oauth2 import id_token
+
+    audience = "https://tono.example/rtdn"
+    email = "expected-pusher@example.iam.gserviceaccount.com"
+    seen = {}
+
+    def verify(_token, _request, *, audience):
+        seen["audience"] = audience
+        return {"email_verified": True, "email": email}
+
+    monkeypatch.setattr(id_token, "verify_oauth2_token", verify)
+    authenticator = google_play.OidcPushAuthenticator(audience, email)
+
+    class SignedRequest:
+        headers = {"authorization": "Bearer signed.mock.token"}
+
+    authenticator.verify(SignedRequest())
+    assert seen["audience"] == audience
 
 
 # ===========================================================================
