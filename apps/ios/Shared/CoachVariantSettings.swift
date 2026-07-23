@@ -13,6 +13,28 @@ public enum CoachOptionalVariant: String, Codable, CaseIterable, Hashable {
     public var displayName: String { rawValue.capitalized }
 }
 
+/// Shared source contract for the keyboard and iMessage tone chips. Keeping
+/// labels and semantic accents here prevents the two extension surfaces from
+/// drifting while still allowing the user's two configured optional tones.
+public enum CoachToneChipContract {
+    public static func label(for axis: String) -> String {
+        axis.lowercased().capitalized
+    }
+
+    public static func accentHex(for axis: String) -> String? {
+        switch axis.lowercased() {
+        case "safer": return "34D399"
+        case "clearer": return "38BDF8"
+        case "funnier": return "FBBF24"
+        case "affectionate": return "F472B6"
+        case "professional": return "A78BFA"
+        case "concise": return "22D3EE"
+        case "custom": return "38BDF8"
+        default: return nil
+        }
+    }
+}
+
 /// Device-local build-97 selection. Safer is intentionally absent: it is
 /// a mandatory pipeline stage, not a user preference. The user picks
 /// exactly two optional tones; the keyboard renders them under the

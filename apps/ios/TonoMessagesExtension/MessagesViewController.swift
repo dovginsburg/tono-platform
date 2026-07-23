@@ -3,13 +3,13 @@
 //
 // Contract (build 90):
 //   compact  → a single "Coach a message" affordance in the Messages drawer
-//   expanded → draft field + Coach button
+//   expanded → draft field + Safer and the keyboard's two configured chips
 //   draft    → user types/pastes the message they are about to send
-//   Coach    → deliberate, authenticated backend round-trip (Bearer token from
+//   chip     → one deliberate, authenticated backend round-trip (Bearer token from
 //              the shared Keychain; fails closed with a visible, safe message
 //              if the account has not been set up yet)
-//   select   → user taps one of the four rewrites
-//   insert   → the rewrite is inserted as PLAIN TEXT into the Messages input
+//   result   → one editable rewrite with explicit Insert and Dismiss actions
+//   insert   → the edited rewrite is inserted as PLAIN TEXT into the Messages input
 //              field via MSConversation.insertText(_:), where the user reviews
 //              and sends it themselves. We never fabricate an MSMessage bubble,
 //              never auto-send, and never touch the pasteboard.
@@ -107,10 +107,18 @@ struct MessagesRootView: View {
     let onInsertMessage: (String, @escaping (String?) -> Void) -> Void
 
     @State private var draftText: String = ""
-    @State private var analysis: ToneAnalysis?
+    @State private var selectedAxis: String?
+    @State private var resultText: String = ""
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var didInsert = false
+
+    private var toneAxes: [String] {
+        let settings = CoachVariantSettingsStore().load()
+        return ["safer"] + settings.enabled
+            .prefix(CoachVariantSettings.maximumOptionalCount)
+            .map(\.rawValue)
+    }
 
     var body: some View {
         if presentationStyle == .compact {
@@ -162,22 +170,29 @@ struct MessagesRootView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .lineLimit(3...8)
 
-                    Button(action: runAnalysis) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "sparkles")
-                            Text("Coach")
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Choose one tone")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        HStack(spacing: 8) {
+                            ForEach(toneAxes, id: \.self) { axis in
+                                Button(action: { requestRewrite(axis: axis) }) {
+                                    Text(CoachToneChipContract.label(for: axis))
+                                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 9)
+                                        .foregroundColor(toneColor(axis))
+                                        .background(toneColor(axis).opacity(0.18))
+                                        .clipShape(Capsule())
+                                }
+                                .disabled(!canCoach)
+                                .accessibilityLabel("\(CoachToneChipContract.label(for: axis)) tone")
+                            }
                         }
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(Color.purple)
-                        .foregroundColor(.white)
-                        .clipShape(Capsule())
                     }
-                    .disabled(!canCoach)
 
                     if isLoading {
-                        ProgressView("Analyzing...")
+                        ProgressView("Rewriting...")
                             .frame(maxWidth: .infinity, alignment: .center)
                             .padding()
                     }
@@ -192,8 +207,8 @@ struct MessagesRootView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 10))
                     }
 
-                    if let a = analysis {
-                        resultsSection(a)
+                    if selectedAxis != nil, !resultText.isEmpty {
+                        resultEditor
                     }
                 }
                 .padding()
@@ -223,66 +238,96 @@ struct MessagesRootView: View {
             && !isLoading
     }
 
-    @ViewBuilder
-    private func resultsSection(_ a: ToneAnalysis) -> some View {
+    private var resultEditor: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 6) {
-                Circle().fill(riskColor(a.riskLevel)).frame(width: 8, height: 8)
-                Text(a.riskLevel.displayName)
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(riskColor(a.riskLevel).opacity(0.15))
-            .clipShape(Capsule())
-
-            Text(a.perception)
-                .font(.system(size: 15, weight: .medium, design: .rounded))
-
-            Text("Tap a rewrite to drop it into your message.")
+            Text("Edit before inserting")
                 .font(.caption)
                 .foregroundColor(.secondary)
-
-            ForEach(a.suggestions) { s in
-                Button(action: { insert(s.text) }) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Label(s.axis.displayName, systemImage: s.axis.glyph)
-                            .font(.system(size: 11, weight: .semibold, design: .rounded))
-                            .foregroundColor(.secondary)
-                        Text(s.text)
-                            .font(.system(size: 14, design: .rounded))
-                            .foregroundColor(.primary)
-                            .multilineTextAlignment(.leading)
-                    }
-                    .padding()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(.systemGray6))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                }
-                .buttonStyle(.plain)
+            TextEditor(text: $resultText)
+                .font(.system(size: 14, design: .rounded))
+                .frame(minHeight: 100)
+                .padding(8)
+                .background(Color(.systemGray6))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+            HStack {
+                Button("Dismiss", action: dismissResult)
+                    .buttonStyle(.bordered)
+                Spacer()
+                Button("Insert") { insert(resultText) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(resultText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
     }
 
-    private func riskColor(_ level: RiskLevel) -> Color {
-        switch level {
-        case .low: return .green
-        case .medium: return .yellow
-        case .high: return .red
+    private func toneColor(_ axis: String) -> Color {
+        guard let hex = CoachToneChipContract.accentHex(for: axis),
+              let value = UInt64(hex, radix: 16) else {
+            return .secondary
         }
+        return Color(
+            red: Double((value >> 16) & 0xff) / 255,
+            green: Double((value >> 8) & 0xff) / 255,
+            blue: Double(value & 0xff) / 255
+        )
     }
 
-    private func runAnalysis() {
-        let trimmed = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func normalized(_ text: String) -> String {
+        text.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    private func dismissResult() {
+        selectedAxis = nil
+        resultText = ""
+        errorMessage = nil
+    }
+
+    private func requestRewrite(axis: String) {
+        let source = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard isRegistered else {
             errorMessage = "Open the Tono app once to create your account, then try again."
             return
         }
-        guard !trimmed.isEmpty else { return }
+        guard !source.isEmpty, !isLoading else { return }
+        selectedAxis = axis
+        resultText = ""
         isLoading = true
         errorMessage = nil
-        analysis = nil
-        Task { await performAnalysis() }
+        Task {
+            do {
+                let customPrompt = axis == "custom"
+                    ? CoachVariantSettingsStore().load().customInstruction
+                    : nil
+                let result = try await TonoBackend.shared.analyzeVariant(
+                    text: source,
+                    axis: axis,
+                    customPrompt: customPrompt
+                )
+                let rewrite = result.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                guard result.status == "ok", !rewrite.isEmpty,
+                      normalized(rewrite) != normalized(source) else {
+                    throw TonoBackendError.decoding(
+                        result.reason == "no_distinct_rewrite"
+                            ? "No distinct rewrite yet. Tap the tone again to retry."
+                            : "Tono did not return a distinct rewrite. Try again."
+                    )
+                }
+                await MainActor.run {
+                    resultText = rewrite
+                    isLoading = false
+                }
+            } catch {
+                await MainActor.run {
+                    selectedAxis = nil
+                    resultText = ""
+                    errorMessage = error.localizedDescription
+                    isLoading = false
+                }
+            }
+        }
     }
 
     private func insert(_ text: String) {
@@ -292,45 +337,6 @@ struct MessagesRootView: View {
                 errorMessage = failure
             } else {
                 didInsert = true
-            }
-        }
-    }
-
-    private func performAnalysis() async {
-        do {
-            let req = AnalysisRequest(draft: draftText, axes: RewriteAxis.allCases)
-            var perception = ""
-            var suggestions: [RewriteSuggestion] = []
-            var riskLevel: RiskLevel = .medium
-            var reason: String?
-            var flags: [String] = []
-            var subtext = ""
-
-            for await event in ToneEngine.backend().analyzeStream(req) {
-                switch event {
-                case .perception(let text): perception = text
-                case .suggestion(let a, let text, let rationale, let riskAfter):
-                    if let axis = RewriteAxis(rawValue: a) {
-                        suggestions.append(RewriteSuggestion(
-                            axis: axis, text: text, rationale: rationale,
-                            riskAfter: riskAfter.flatMap { RiskLevel(rawValue: $0) }
-                        ))
-                    }
-                case .complete(let level, let st, let rr, let f):
-                    riskLevel = RiskLevel(rawValue: level) ?? .medium
-                    subtext = st; reason = rr; flags = f
-                case .error(let msg): throw ToneEngineError.backend(msg)
-                }
-            }
-            suggestions = try suggestions.canonicalCoachChoices()
-            await MainActor.run {
-                analysis = ToneAnalysis(riskLevel: riskLevel, perception: perception, subtext: subtext, reason: reason, suggestions: suggestions, flags: flags)
-                isLoading = false
-            }
-        } catch {
-            await MainActor.run {
-                errorMessage = error.localizedDescription
-                isLoading = false
             }
         }
     }

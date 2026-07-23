@@ -152,6 +152,7 @@
 		940000000000000000000001 /* CoachVariantSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 940000000000000000000004 /* CoachVariantSettings.swift */; };
 		940000000000000000000002 /* CoachVariantSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 940000000000000000000004 /* CoachVariantSettings.swift */; };
 		940000000000000000000003 /* CoachVariantSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 940000000000000000000004 /* CoachVariantSettings.swift */; };
+		940000000000000000000005 /* CoachVariantSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 940000000000000000000004 /* CoachVariantSettings.swift */; };
 		FD395AA136FAAF23914CA72A /* TonoCoachClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EE5759E683FD2ECA633D8FC /* TonoCoachClient.swift */; };
 		FE1397E60BD23EA5225588DB /* MetricKitReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 640260545EC970E83D72B3B0 /* MetricKitReporter.swift */; };
 		FED5706B3648E7E30CC10E3E /* FeatureFlags.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8F4E5BEB850F3FDD9485F10 /* FeatureFlags.swift */; };
@@ -877,6 +878,7 @@
 				3CF8925783573B502B4DCB28 /* RecipientMemory.swift in Sources */,
 				71DEA398DF3A4C434E4E57C1 /* SharedKeychain.swift in Sources */,
 				3636B8D05701682C16720B5A /* SharedUserDefaults.swift in Sources */,
+				940000000000000000000005 /* CoachVariantSettings.swift in Sources */,
 				A46646633DFB0CD88599A352 /* StoreKitManager.swift in Sources */,
 				E02AFD0E8D1E9CC00AD34BBC /* StyleMemory.swift in Sources */,
 				9FDCC2E3A74B2E8B15F196B2 /* ToneEngine.swift in Sources */,

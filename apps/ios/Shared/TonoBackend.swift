@@ -12,6 +12,8 @@
 //                        recipient_hint?} ->
 //                       {risk_level, perception, subtext, suggestions,
 //                        flags, plan}
+//   POST /api/analyze/variant {text, axis, custom_prompt?} ->
+//                       {status, axis, text?, rationale?, risk_after?, reason?}
 //   POST /v1/checkout   {interval} -> {url, session_id}
 //   POST /v1/portal                 -> {url}
 //
@@ -46,6 +48,20 @@ public enum TonoBackendError: Error, LocalizedError {
         case .tooManyDevices(let current, let max):
             return "This email is already on \(current) devices (max \(max)). Contact support if you need more."
         }
+    }
+}
+
+public struct TonoVariantResult: Decodable, Equatable {
+    public let status: String
+    public let axis: String
+    public let text: String?
+    public let rationale: String?
+    public let riskAfter: String?
+    public let reason: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case status, axis, text, rationale, reason
+        case riskAfter = "risk_after"
     }
 }
 
@@ -753,6 +769,26 @@ public final class TonoBackend: @unchecked Sendable {
 
     public func isRegistered() -> Bool {
         SharedKeychain.get(KeychainKeys.apiToken)?.isEmpty == false
+    }
+
+    /// One selected tone chip maps to one authenticated backend request.
+    /// Blocked/no-op envelopes remain explicit so extension UIs cannot render
+    /// the source draft as a successful rewrite.
+    public func analyzeVariant(
+        text: String,
+        axis: String,
+        customPrompt: String? = nil
+    ) async throws -> TonoVariantResult {
+        struct Req: Encodable {
+            let text: String
+            let axis: String
+            let custom_prompt: String?
+        }
+        return try await post(
+            path: "/api/analyze/variant",
+            body: Req(text: text, axis: axis, custom_prompt: customPrompt),
+            authorize: true
+        )
     }
 
     /// Fire-and-forget: records which rewrite axis the user tapped.

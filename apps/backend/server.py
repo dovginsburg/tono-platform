@@ -962,10 +962,12 @@ def log_axis_event(
 #       reasons are short, closed-enum strings.
 #   R4. Malformed/unsafe model output fails closed: the strict envelope
 #       returns ``status="blocked", reason="provider_failed"|"validation_failed"``
-#       -- no retry, no fallback model, no streaming before parse.
-#   R5. No ``no_change`` suppression: an explicit safe tap always returns
-#       the variant. ``mock_single_variant`` is wired so this is true in
-#       tests as well as production.
+#       -- no fallback model, no streaming before parse. The only permitted
+#       retry is the single bounded funnier near-identical retry (R5).
+#   R5. An explicit Funnier tap never returns normalized/near-identical source
+#       text as success. The response-boundary guard issues at most one bounded
+#       retry, then returns the neutral ``status="blocked",
+#       reason="no_distinct_rewrite"`` state — never the draft as a rewrite.
 #   R6. Phase timings use the same privacy-safe shape as /api/analyze
 #       (request_id / phase / dt_ms). No payload, no device id, no token,
 #       no UA, no provider name in the phase line.

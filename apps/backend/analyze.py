@@ -7,6 +7,7 @@ both call the provider dispatch without a circular import.
 from __future__ import annotations
 
 import asyncio
+import difflib
 import hashlib
 import json
 import logging
@@ -42,9 +43,12 @@ Operate by these rules:
    tool-narration filler.
 6. NO score predictions, NO analysis dumps. A perception is one short
    sentence plus, optionally, up to three emoji.
-7. FUNNIER is risky. Only generate a funnier variant if the message has
-   a clear light register. Otherwise return the same text for that axis
-   with rationale "context doesn't call for humor".
+7. FUNNIER must introduce genuine, safe lightness — a distinct rewrite the
+   reader would recognize as more playful than the draft. NEVER return the
+   draft unchanged (or a normalized/near-identical copy of it) for the
+   funnier axis, and never fall back to a "context doesn't call for humor"
+   no-op. Add lightness while preserving every fact, name, date, ask, and
+   the writer's voice; do not manufacture hostility or invent content.
 8. SAFER removes anything that could be misread as guilt, sarcasm,
    cold-shoulder, or an unstated ask.
 9. For each suggestion include "risk_after": your predicted risk level
@@ -177,6 +181,12 @@ class ToneAnalysis(BaseModel):
     suggestions: list[RewriteSuggestion]
     flags: list[str]
     clocks: Optional[LifecycleClocks] = None
+    # Neutral retry state: axes the server could not produce a distinct rewrite
+    # for (currently only "funnier"). The axis is intentionally NOT committed
+    # to `suggestions` (the source text is never returned as a successful
+    # rewrite); it is surfaced here so the client can offer a retry affordance
+    # instead of a fake-success no-op. Absent/empty when nothing needs retry.
+    retry_axes: list[str] = Field(default_factory=list)
 
 
 CANONICAL_COACH_AXES = ("warmer", "clearer", "funnier", "safer")
@@ -189,6 +199,13 @@ BUILD94_MAX_CUSTOM_LENGTH = 120
 # under normalized whitespace/case/punctuation; suppression at this threshold
 # matches the canonical Addendum ("empty-pass behavior").
 BUILD94_FUNNIER_SUPPRESS_SIMILARITY = 0.95
+# Response-boundary near-identical threshold for an explicit Funnier tap. Lower
+# than the legacy empty-pass suppressor so a rewrite that only churns
+# punctuation/case or adds/drops a single word (an effective no-op for
+# "funnier") is caught, while a genuinely lighter rewrite (which diverges much
+# further) passes. Tuned so a one-word delta (~0.90 difflib ratio) is treated
+# as near-identical and a real funnier rewrite (typically <0.80) is not.
+NEAR_IDENTICAL_SIMILARITY = 0.85
 
 
 def _now_ms(monotonic_origin_ns: int) -> int:
@@ -336,13 +353,18 @@ BUILD94_VARIANT_DEFINITIONS: dict[str, str] = {
     ),
 }
 
-# Existing Funnier boundary (unchanged from the canonical product model).
+# Funnier boundary. The funnier axis must always produce a distinct, safe,
+# lighter rewrite — it may NOT return the draft unchanged or a
+# normalized/near-identical copy of it. The response-boundary near-identical
+# guard (below) enforces this deterministically after generation.
 BUILD94_FUNNIER_DEFINITION = (
     "AXIS: funnier\n"
-    "Funnier adds lightness only when the draft and context already support "
-    "a playful register; otherwise it returns the unchanged draft with "
-    "rationale \"context doesn't call for humor\".\n"
-    "Short Settings description: Add lightness when the moment fits.\n"
+    "Funnier introduces genuine, safe lightness the reader would recognize as "
+    "more playful than the draft, while preserving every fact, name, date, "
+    "ask, and the writer's voice. It must NEVER return the draft unchanged or "
+    "a normalized/near-identical copy of it, and must never fall back to a "
+    "\"context doesn't call for humor\" no-op.\n"
+    "Short Settings description: Add a genuine, safe touch of lightness.\n"
 )
 
 
@@ -645,22 +667,37 @@ def _custom_followed_literally(req: AnalyzeRequest, rewrite: str) -> bool:
     return False
 
 
+def _normalized_compare_text(s: str) -> str:
+    """Lower-case, strip punctuation, collapse whitespace for a stable compare."""
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", "", s.lower())).strip()
+
+
+def _near_identical(
+    source: str,
+    rewrite: str,
+    threshold: float = NEAR_IDENTICAL_SIMILARITY,
+) -> bool:
+    """Deterministic normalized/near-identical detector (network-free).
+
+    Two texts are treated as "the same rewrite" when, after normalizing case,
+    punctuation, and whitespace, they are byte-identical OR their
+    `difflib.SequenceMatcher` ratio meets `threshold`. difflib gives an
+    order-sensitive token/character similarity that catches the near-identical
+    case (a word added/removed, case/punctuation churn) that a character-set
+    Jaccard would miss. An empty side is treated as near-identical (a blank or
+    all-punctuation "rewrite" is never a distinct result).
+    """
+    a, b = _normalized_compare_text(source), _normalized_compare_text(rewrite)
+    if not a or not b:
+        return True
+    if a == b:
+        return True
+    return difflib.SequenceMatcher(None, a, b).ratio() >= threshold
+
+
 def _funnier_unchanged(source: str, rewrite: str) -> bool:
-    """True if Funnier output matches the raw draft under normalized compare."""
-    def _norm(s: str) -> str:
-        return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", "", s.lower())).strip()
-    a, b = _norm(source), _norm(rewrite)
-    if a == b or not a or not b:
-        return True
-    # Cheap character-set Jaccard — adequate as a 0.95 suppressor for the
-    # empty-pass case the Addendum specifies. Real provider embeddings are
-    # out of scope; the build is intentionally conservative.
-    aset, bset = set(a), set(b)
-    inter = len(aset & bset)
-    union = len(aset | bset)
-    if not union:
-        return True
-    return (inter / union) >= BUILD94_FUNNIER_SUPPRESS_SIMILARITY
+    """True if Funnier output is normalized/near-identical to the raw draft."""
+    return _near_identical(source, rewrite)
 
 
 VariantGenerator = Callable[[str, "Build94Request"], Awaitable[dict[str, Any]]]
@@ -816,7 +853,9 @@ async def run_variant_pipeline(
 
     # --- Step 4: per-optional post-validation with silent suppression. ---
     committed: list[dict[str, Any]] = [safer]
-    for axis, optional_raw in zip(optional, raw_optional_results):
+    retry_axes: list[str] = []
+    source_text = intended_draft(req.draft)
+    for axis, optional_raw, request in zip(optional, raw_optional_results, optional_requests):
         if isinstance(optional_raw, BaseException):
             logger.warning(
                 "build94 optional %s suppressed: provider raised %s",
@@ -827,10 +866,29 @@ async def run_variant_pipeline(
         if validated is None:
             logger.info("build94 optional %s silently suppressed by post-validation", axis)
             continue
-        # --- Step 5: Funnier empty-pass suppression. ---
-        if axis == "funnier" and _funnier_unchanged(intended_draft(req.draft), validated["text"]):
-            logger.info("build94 funnier suppressed: matches raw draft under normalized compare")
-            continue
+        # --- Step 5: Funnier near-identical guard — one bounded retry, then a
+        # neutral retry state. An explicit Funnier request must never return
+        # normalized/near-identical source text as a successful rewrite. If the
+        # first funnier result is near-identical to the draft, retry exactly
+        # once via the provider; if it is still near-identical (or the retry
+        # fails validation), the axis is NOT committed and is surfaced in
+        # `retry_axes` — never the source text as success. ---
+        if axis == "funnier" and _funnier_unchanged(source_text, validated["text"]):
+            logger.info("build94 funnier near-identical to draft; one bounded retry")
+            retried = None
+            try:
+                retried_raw = await optional_generate(request)
+            except BaseException as exc:  # provider raised on retry
+                logger.warning("build94 funnier retry raised %s", exc.__class__.__name__)
+            else:
+                candidate = _enforce_optional_variant(retried_raw, req, axis)
+                if candidate is not None and not _funnier_unchanged(source_text, candidate["text"]):
+                    retried = candidate
+            if retried is None:
+                logger.info("build94 funnier still near-identical after retry; neutral retry state")
+                retry_axes.append(axis)
+                continue
+            validated = retried
         committed.append(validated)
 
     flags = list(dict.fromkeys((safer_raw.get("flags") or [])))
@@ -839,6 +897,7 @@ async def run_variant_pipeline(
         **safer_raw,
         "suggestions": committed,
         "flags": flags,
+        "retry_axes": retry_axes,
         "clocks": recorder.finalize(
             preflight_ms=recorder.preflight_end_ms - recorder.request_accepted_ms,
             provider_ms=recorder.response_sent_ms - recorder.provider_start_ms,
@@ -1556,10 +1615,18 @@ def get_user_signup_date(user_id: str) -> datetime.datetime:
 #   R4. Server picks the model; client NEVER chooses model.
 #   R5. Deterministic safety preflight issues zero provider calls.
 #   R6. Malformed / unsafe model output fails closed (returns
-#       ``status="blocked", reason="validation_failed"``), no retry, no fallback.
-#   R7. No ``no_change`` suppression for an explicit safe tap: even if the
-#       LLM rationale is "context doesn't call for humor", the original
-#       draft is returned as the variant text.
+#       ``status="blocked", reason="validation_failed"``), no fallback model.
+#       Exactly ONE bounded retry is permitted for the funnier near-identical
+#       case defined in R7; every other failure mode is single-attempt.
+#   R7. An explicit Funnier tap must NEVER return normalized/near-identical
+#       source text as a successful (``status="ok"``) variant. After the
+#       provider call, a deterministic near-identical guard runs at the
+#       response boundary; if the funnier rewrite is near-identical to the
+#       draft, exactly one bounded retry is issued. If it is still
+#       near-identical (or the retry fails), the endpoint returns the neutral
+#       ``status="blocked", reason="no_distinct_rewrite"`` state — never the
+#       source text as success. (Non-funnier axes are single-attempt and are
+#       returned as generated.)
 #   R8. The strict envelope is ``ok | blocked``. There is no third state.
 # ===========================================================================
 
@@ -1601,6 +1668,11 @@ class VariantBlockedReason:
     PREFLIGHT_CRISIS_KEYWORDS = "preflight:crisis_keywords"
     PROVIDER_FAILED = "provider_failed"
     VALIDATION_FAILED = "validation_failed"
+    # Neutral retry state for an explicit Funnier tap whose rewrite is
+    # normalized/near-identical to the draft even after one bounded retry.
+    # The source text is never returned as a successful variant; the client
+    # surfaces this as a retry affordance (see R7).
+    NO_DISTINCT_REWRITE = "no_distinct_rewrite"
 
 
 # Server-side model routing. Two model tiers are referenced by env-overridable
@@ -1764,9 +1836,12 @@ Operate by these rules:
    tool-narration filler.
 6. NO score predictions, NO analysis dumps. A perception is one short
    sentence plus, optionally, up to three emoji.
-7. FUNNIER is risky. Only generate a funnier variant if the message has
-   a clear light register. Otherwise return the same text for that axis
-   with rationale "context doesn't call for humor".
+7. FUNNIER must introduce genuine, safe lightness — a distinct rewrite the
+   reader would recognize as more playful than the draft. NEVER return the
+   draft unchanged (or a normalized/near-identical copy of it) for the
+   funnier axis, and never fall back to a "context doesn't call for humor"
+   no-op. Add lightness while preserving every fact, name, date, ask, and
+   the writer's voice; do not manufacture hostility or invent content.
 8. SAFER removes anything that could be misread as guilt, sarcasm,
    cold-shoulder, or an unstated ask.
 9. For the suggestion include "risk_after": your predicted risk level
@@ -1794,7 +1869,7 @@ The JSON schema is:
     {
       "axis": "<the requested axis exactly>",
       "text": "the rewrite (one sentence max)",
-      "rationale": "why this helps, or 'context doesn\\'t call for humor'",
+      "rationale": "why this rewrite helps on the requested axis",
       "risk_after": "low" | "medium" | "high" | null
     }
   ],
@@ -1860,13 +1935,12 @@ def _extract_single_variant(
     ``CoachContractError`` (existing import is fine here) on any shape
     that prevents a single safe variant from being returned.
 
-    The build-95 contract deliberately does NOT apply the
-    semantic-intent guard at this layer: the explicit-tap contract
-    mandates returning the variant even when the LLM rationale is
-    "no_change" (rule R7). Semantic safety on the actual risk envelope
-    is the responsibility of the ``safer`` chip and the model's
-    ``risk_after`` signal; failing a variant here would suppress
-    something the user explicitly asked for.
+    This layer only shapes the provider payload into one canonical variant;
+    it does NOT apply the semantic-intent guard (that lives on the ``safer``
+    chip and the model's ``risk_after`` signal). The funnier near-identical
+    guard is applied one layer up, at the ``invoke_single_variant`` response
+    boundary (rule R7), so it can issue the bounded retry and emit the neutral
+    ``no_distinct_rewrite`` state.
     """
     if not isinstance(result, dict):
         raise CoachContractError("single_variant: payload is not a dict")
@@ -1982,11 +2056,11 @@ def mock_single_variant(req: VariantRequest) -> dict[str, Any]:
     """Test-mode provider. Zero LLM network calls. Returns exactly one
     variant dict for the requested axis.
 
-    NOTE: ``no_change`` rationale is preserved (never suppressed). For
-    explicit safe taps we always return the variant, even when context
-    doesn't call for it (the body mandates this -- "no no_change
-    suppression for safe explicit tap"). The provider-side rationale is
-    surfaced verbatim.
+    NOTE: the funnier axis produces a genuinely distinct, lighter rewrite —
+    it never returns the draft unchanged. This mirrors the production
+    contract that an explicit Funnier tap must not return normalized/
+    near-identical source text (the response-boundary guard in
+    ``invoke_single_variant`` enforces this for real providers).
     """
     draft = intended_draft(req.text) if req.axis in {"warmer", "clearer", "funnier", "safer"} else req.text.strip()
     lower = draft.lower()
@@ -2002,8 +2076,11 @@ def mock_single_variant(req: VariantRequest) -> dict[str, Any]:
         text = draft.replace("let me know", "please tell me what you think")
         rationale = "Names the ask and a specific deadline."
     elif req.axis == "funnier":
-        text = draft
-        rationale = "context doesn't call for humor"
+        # A genuinely distinct, lighter rewrite — never the unchanged draft or
+        # a normalized/near-identical copy. Diverges well past the
+        # near-identical threshold so the boundary guard treats it as distinct.
+        text = f"Plot twist: {draft} …and that is the sparkly, official, final word here."
+        rationale = "Adds a light, in-character frame without changing the ask."
     elif req.axis == "safer":
         text = draft
         for bad, good in [
@@ -2034,6 +2111,35 @@ def mock_single_variant(req: VariantRequest) -> dict[str, Any]:
     }
 
 
+async def _funnier_no_op_guard(
+    source_text: str,
+    variant: dict[str, Any],
+    provider_call: Callable[[], Awaitable[dict[str, Any]]],
+) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    """Response-boundary near-identical guard for an explicit Funnier tap.
+
+    Deterministic (network-free comparison). If ``variant["text"]`` is
+    normalized/near-identical to ``source_text``, permit exactly ONE bounded
+    retry via ``provider_call``; if the retry is still near-identical (or
+    raises), return the neutral ``NO_DISTINCT_REWRITE`` reason instead of the
+    source text. Returns ``(variant_or_None, blocked_reason_or_None)`` — on a
+    distinct result the (possibly retried) variant is returned with
+    ``reason=None``; on a persistent no-op the variant is ``None`` and the
+    neutral reason is set. The source text is never returned as success.
+    """
+    if not _funnier_unchanged(source_text, str(variant.get("text", ""))):
+        return variant, None
+    logger.info("single_variant funnier near-identical to draft; one bounded retry")
+    try:
+        retried = await provider_call()
+    except HTTPException:
+        return None, VariantBlockedReason.NO_DISTINCT_REWRITE
+    if _funnier_unchanged(source_text, str(retried.get("text", ""))):
+        logger.info("single_variant funnier still near-identical after retry; neutral state")
+        return None, VariantBlockedReason.NO_DISTINCT_REWRITE
+    return retried, None
+
+
 async def invoke_single_variant(
     req: VariantRequest, provider: str
 ) -> "VariantResponse":
@@ -2042,9 +2148,11 @@ async def invoke_single_variant(
     Order:
       1. Deterministic preflight (zero provider calls).
       2. Server-side model routing (zero provider calls).
-      3. Exactly ONE provider call.
-      4. Parse + post-validate once (no retry).
-      5. Wrap in strict ``ok|blocked`` envelope.
+      3. Exactly ONE provider call (plus, for the funnier near-identical case
+         in R7, at most one bounded retry).
+      4. Parse + post-validate.
+      5. Funnier response-boundary near-identical guard (R7).
+      6. Wrap in strict ``ok|blocked`` envelope.
 
     No fan-out, no prefetch, no hidden Safer generation. The wire shape
     is always ``VariantResponse`` -- the caller never sees a 5xx for any
@@ -2054,17 +2162,29 @@ async def invoke_single_variant(
     if block is not None:
         return variant_blocked(req.axis or "unknown", block)
     tier, model = select_model_for_variant(req.axis, req.risk_hint)
-    try:
+
+    async def _provider_call() -> dict[str, Any]:
         if provider == "mock":
-            variant = mock_single_variant(req)
-        elif provider == "openai":
-            variant = await openai_single_variant(req, model)
-        elif provider == "anthropic":
-            variant = await anthropic_single_variant(req, model)
-        else:
-            return variant_blocked(
-                req.axis, VariantBlockedReason.PROVIDER_FAILED
+            return mock_single_variant(req)
+        if provider == "openai":
+            return await openai_single_variant(req, model)
+        if provider == "anthropic":
+            return await anthropic_single_variant(req, model)
+        # Unknown provider: fail closed as a provider failure.
+        raise HTTPException(502, f"unknown provider: {provider}")
+
+    try:
+        variant = await _provider_call()
+        # R7: an explicit Funnier tap must never return normalized/near-identical
+        # source text as success. Runs only for the funnier axis; every other
+        # axis is single-attempt and returned as generated.
+        if req.axis == "funnier":
+            source_text = intended_draft(req.text)
+            variant, blocked_reason = await _funnier_no_op_guard(
+                source_text, variant, _provider_call
             )
+            if blocked_reason is not None:
+                return variant_blocked(req.axis, blocked_reason)
     except HTTPException:
         # Catastrophic provider/parse failure -> strict blocked envelope.
         return variant_blocked(

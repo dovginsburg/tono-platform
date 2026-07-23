@@ -32,6 +32,7 @@ import kotlin.coroutines.resumeWithException
 
 @Serializable data class TonoMe(
     @SerialName("device_id")            val deviceId: String,
+    @SerialName("account_id")           val accountId: String,
     val plan: String,
     @SerialName("is_pro")               val isPro: Boolean,
     @SerialName("used_today")           val usedToday: Int,
@@ -193,6 +194,7 @@ object TonoBackend {
 
     private fun cacheAccountState(me: TonoMe) {
         SharedStore.putBoolean(SharedKeys.PRO_UNLOCKED, me.isPro)
+        SharedStore.putString(SharedKeys.ACCOUNT_ID, me.accountId)
         SharedStore.putString(SharedKeys.REGISTERED_AT, System.currentTimeMillis().toString())
     }
 

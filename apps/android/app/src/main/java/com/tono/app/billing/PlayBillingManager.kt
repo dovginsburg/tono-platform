@@ -88,6 +88,16 @@ object PlayBillingManager : PurchasesUpdatedListener {
     }
 
     fun purchase(activity: Activity, productId: String) {
+        val accountId = SharedStore.getString(SharedKeys.ACCOUNT_ID)
+            ?.takeIf { it.isNotBlank() }
+        if (accountId == null) {
+            _state.value = _state.value.copy(
+                isLoading = false,
+                error = "Sign in to Tono before starting a purchase.",
+            )
+            refresh()
+            return
+        }
         val details = productDetails[productId]
         val offer = details?.subscriptionOfferDetails?.firstOrNull()
         if (details == null || offer == null) {
@@ -106,6 +116,9 @@ object PlayBillingManager : PurchasesUpdatedListener {
             activity,
             BillingFlowParams.newBuilder()
                 .setProductDetailsParamsList(listOf(productParams))
+                // Canonical person binding, equivalent to StoreKit's
+                // appAccountToken. Never use the device ID as the principal.
+                .setObfuscatedAccountId(accountId)
                 .build(),
         )
         if (result.responseCode != BillingClient.BillingResponseCode.OK) {

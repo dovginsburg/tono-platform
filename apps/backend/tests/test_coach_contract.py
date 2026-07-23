@@ -11,6 +11,8 @@ from backend.analyze import (
     _build94_safer_request_bytes,
     _build94_safer_system_prompt,
     _build94_safer_user_message,
+    _near_identical,
+    _funnier_no_op_guard,
 
     CUSTOM_PROMPT_MAX_CHARS,
     VARIANT_ALLOWLIST,
@@ -555,14 +557,18 @@ async def test_build94_optional_exception_is_silently_suppressed():
 
 
 @pytest.mark.asyncio
-async def test_build94_funnier_unchanged_from_draft_is_suppressed():
-    """A Funnier output that matches the raw draft under normalized compare is suppressed."""
+async def test_build94_funnier_unchanged_from_draft_yields_neutral_retry_state():
+    """A Funnier output that is near-identical to the draft on every attempt is
+    NOT committed as source text; after one bounded retry it is surfaced in the
+    neutral `retry_axes` state (never a fake-success rewrite)."""
     draft = "Please help with this request."
+    calls = {"funnier": 0}
     async def safer_gen(_rq):
         return _safer_ok()
     async def optional_gen(rq):
         if rq.axis == "funnier":
-            return _result([{"axis": "funnier", "text": draft}])  # exact match
+            calls["funnier"] += 1
+            return _result([{"axis": "funnier", "text": draft}])  # persistently near-identical
         return _ok(rq.axis)
     result = await run_variant_pipeline(
         AnalyzeRequest(draft=draft, optional_variants=["funnier", "clearer"]),
@@ -570,8 +576,40 @@ async def test_build94_funnier_unchanged_from_draft_is_suppressed():
         optional_gen,
     )
     axes = [item["axis"] for item in result["suggestions"]]
-    assert "funnier" not in axes, "Funnier matching the raw draft must be suppressed"
+    assert "funnier" not in axes, "near-identical Funnier must never be committed as source text"
+    assert result["retry_axes"] == ["funnier"], "near-identical Funnier must surface as a neutral retry state"
+    assert calls["funnier"] == 2, "exactly one bounded retry is issued for the near-identical case"
     assert "clearer" in axes
+
+
+@pytest.mark.asyncio
+async def test_build94_funnier_near_identical_first_recovers_on_bounded_retry():
+    """RED→GREEN: the first funnier attempt is near-identical to the draft, the
+    bounded retry returns a genuinely distinct rewrite, and THAT is committed —
+    never the near-identical source text."""
+    draft = "Please help with this request."
+    distinct = "Please help with this request, oh most gracious overlord."
+    calls = {"funnier": 0}
+    async def safer_gen(_rq):
+        return _safer_ok()
+    async def optional_gen(rq):
+        if rq.axis == "funnier":
+            calls["funnier"] += 1
+            if calls["funnier"] == 1:
+                return _result([{"axis": "funnier", "text": draft}])       # near-identical
+            return _result([{"axis": "funnier", "text": distinct}])         # distinct on retry
+        return _ok(rq.axis)
+    result = await run_variant_pipeline(
+        AnalyzeRequest(draft=draft, optional_variants=["funnier", "clearer"]),
+        safer_gen,
+        optional_gen,
+    )
+    funnier = next((s for s in result["suggestions"] if s["axis"] == "funnier"), None)
+    assert funnier is not None, "a distinct retry result must be committed"
+    assert funnier["text"] == distinct
+    assert _near_identical(draft, funnier["text"]) is False
+    assert result["retry_axes"] == [], "a recovered funnier is not a retry state"
+    assert calls["funnier"] == 2
 
 
 @pytest.mark.asyncio
@@ -967,18 +1005,21 @@ def test_mock_single_variant_returns_exactly_one_variant_with_no_fanout():
     assert "risk_after" in result
 
 
-def test_mock_single_variant_never_suppresses_no_change_for_safe_tap():
-    """The contract mandates: an explicit safe tap ALWAYS returns the
-    variant, even when the LLM rationale is "no_change" (e.g. the
-    funnier axis for a non-humorous draft). The variant text is the
-    draft, the rationale preserves the no_change marker.
+def test_mock_single_variant_funnier_produces_distinct_lighter_rewrite():
+    """R7: an explicit Funnier tap must produce a genuinely distinct, lighter
+    rewrite — never the draft unchanged or a normalized/near-identical copy,
+    and never a "context doesn't call for humor" no-op. The mock mirrors the
+    production contract so the no-op path can never be reintroduced silently.
     """
-    req = VariantRequest(text="As per my last message, please confirm.", axis="funnier")
+    draft = "As per my last message, please confirm."
+    req = VariantRequest(text=draft, axis="funnier")
     result = mock_single_variant(req)
     assert result["axis"] == "funnier"
-    # The variant text equals the draft -- never suppressed.
-    assert result["text"] == "As per my last message, please confirm."
-    assert result["rationale"] == "context doesn't call for humor"
+    # Distinct from the draft under the deterministic near-identical detector.
+    assert result["text"] != draft
+    assert _near_identical(draft, result["text"]) is False
+    # The retired no-op rationale must not resurface.
+    assert result["rationale"] != "context doesn't call for humor"
 
 
 @pytest.mark.parametrize("axis", ["warmer", "clearer", "funnier", "safer"])
@@ -1195,6 +1236,126 @@ async def test_invoke_single_variant_blocks_unknown_provider_with_closed_reason(
 
 
 # ---------------------------------------------------------------------------
+# Layer 5b: R7 — explicit Funnier tap can never return near-identical source
+# text as success. Deterministic near-identical detection + one bounded retry
+# + neutral `no_distinct_rewrite` blocked state. (Acceptance red→green.)
+# ---------------------------------------------------------------------------
+
+
+def test_near_identical_detector_catches_normalized_and_near_variants():
+    """The response-boundary detector is deterministic and catches exact,
+    normalized (case/punctuation/whitespace), and near-identical (one-word
+    churn) matches, while treating a genuinely different rewrite as distinct."""
+    src = "Please confirm the meeting time."
+    assert _near_identical(src, src) is True                                      # exact
+    assert _near_identical(src, "  please CONFIRM the meeting time!!! ") is True   # normalized
+    assert _near_identical(src, "Please confirm the meeting time please.") is True  # near (one word)
+    assert _near_identical(src, "") is True                                       # empty rewrite
+    assert _near_identical(
+        src, "Please confirm the meeting time, oh most punctual one 🎩."
+    ) is False                                                                    # genuinely distinct
+
+
+@pytest.mark.asyncio
+async def test_funnier_no_op_guard_recovers_distinct_on_bounded_retry():
+    """RED→GREEN: near-identical first attempt, distinct on the single retry →
+    the distinct variant is returned and the source is never surfaced."""
+    src = "Please confirm the meeting time."
+    first = {"axis": "funnier", "text": src, "rationale": "x", "risk_after": "low"}
+    distinct = {"axis": "funnier",
+                "text": "Please confirm the meeting time, oh most punctual one.",
+                "rationale": "y", "risk_after": "low"}
+    calls = {"n": 0}
+
+    async def provider_call():
+        calls["n"] += 1
+        return distinct
+
+    variant, reason = await _funnier_no_op_guard(src, first, provider_call)
+    assert reason is None
+    assert variant is distinct
+    assert calls["n"] == 1, "exactly one bounded retry"
+
+
+@pytest.mark.asyncio
+async def test_funnier_no_op_guard_persistent_no_op_returns_neutral_reason():
+    """RED→GREEN: near-identical on both attempts → neutral NO_DISTINCT_REWRITE,
+    variant is None (source text is NEVER returned as a successful rewrite)."""
+    src = "Please confirm the meeting time."
+    first = {"axis": "funnier", "text": src, "rationale": "x", "risk_after": "low"}
+    calls = {"n": 0}
+
+    async def provider_call():
+        calls["n"] += 1
+        return {"axis": "funnier", "text": "please confirm the meeting time.",
+                "rationale": "x", "risk_after": "low"}  # still near-identical
+
+    variant, reason = await _funnier_no_op_guard(src, first, provider_call)
+    assert variant is None
+    assert reason == VariantBlockedReason.NO_DISTINCT_REWRITE
+    assert calls["n"] == 1, "at most one bounded retry, then neutral state"
+
+
+@pytest.mark.asyncio
+async def test_invoke_single_variant_funnier_near_identical_blocks_neutral(monkeypatch):
+    """End-to-end via the dispatcher: a provider that keeps returning the draft
+    for funnier yields status=blocked reason=no_distinct_rewrite — never a
+    status=ok with the source text (the pre-fix R7 behavior)."""
+    from backend import analyze as _analyze_mod
+
+    draft = "Could you send the report by Friday?"
+
+    def stub(req):
+        return {"axis": "funnier", "text": draft,
+                "rationale": "context doesn't call for humor", "risk_after": "low"}
+
+    monkeypatch.setattr(_analyze_mod, "mock_single_variant", stub)
+    resp = await _analyze_mod.invoke_single_variant(
+        _analyze_mod.VariantRequest(text=draft, axis="funnier"), "mock"
+    )
+    assert resp.status == "blocked"
+    assert resp.reason == VariantBlockedReason.NO_DISTINCT_REWRITE
+    assert resp.text is None, "the source draft must never be returned as a successful variant"
+
+
+@pytest.mark.asyncio
+async def test_invoke_single_variant_funnier_recovers_on_retry(monkeypatch):
+    """End-to-end via the dispatcher: near-identical first, distinct on retry →
+    status=ok with the distinct rewrite, exactly two provider calls."""
+    from backend import analyze as _analyze_mod
+
+    draft = "Could you send the report by Friday?"
+    distinct = "Could you send the report by Friday, before the coffee runs out?"
+    calls = {"n": 0}
+
+    def stub(req):
+        calls["n"] += 1
+        return {"axis": "funnier",
+                "text": draft if calls["n"] == 1 else distinct,
+                "rationale": "ok", "risk_after": "low"}
+
+    monkeypatch.setattr(_analyze_mod, "mock_single_variant", stub)
+    resp = await _analyze_mod.invoke_single_variant(
+        _analyze_mod.VariantRequest(text=draft, axis="funnier"), "mock"
+    )
+    assert resp.status == "ok"
+    assert resp.text == distinct
+    assert _near_identical(draft, resp.text) is False
+    assert calls["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_invoke_single_variant_mock_funnier_is_distinct_ok():
+    """The default mock provider now yields a distinct funnier rewrite, so the
+    happy path is status=ok with text != draft and no neutral block."""
+    draft = "As per my last message, please confirm."
+    resp = await invoke_single_variant(VariantRequest(text=draft, axis="funnier"), "mock")
+    assert resp.status == "ok"
+    assert resp.text != draft
+    assert _near_identical(draft, resp.text) is False
+
+
+# ---------------------------------------------------------------------------
 # Layer 6: Hostile mocked matrix with provider call counters
 # ---------------------------------------------------------------------------
 #
@@ -1239,6 +1400,15 @@ def provider_counter(monkeypatch):
     """
     counter = _ProviderCallCounter()
 
+    def _spy_text(req):
+        # The funnier axis must yield a genuinely distinct rewrite so the
+        # response-boundary near-identical guard (R7) does not treat the spy
+        # output as a no-op. Every other axis echoes the draft (the matrix
+        # only cares about routing/counting, not rewrite quality).
+        if req.axis == "funnier":
+            return f"Plot twist: {req.text} …and that is the sparkly, official, final word here."
+        return req.text
+
     async def fake_anthropic(req, model):
         counter.anthropic_calls += 1
         counter.calls_by_axis[req.axis] = (
@@ -1246,7 +1416,7 @@ def provider_counter(monkeypatch):
         )
         return {
             "axis": req.axis,
-            "text": req.text,
+            "text": _spy_text(req),
             "rationale": "spy: anthropic single variant",
             "risk_after": "low",
         }
@@ -1258,7 +1428,7 @@ def provider_counter(monkeypatch):
         )
         return {
             "axis": req.axis,
-            "text": req.text,
+            "text": _spy_text(req),
             "rationale": "spy: openai single variant",
             "risk_after": "low",
         }

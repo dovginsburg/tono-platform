@@ -27,4 +27,12 @@ class BillingContractTest {
     fun entitlementRemainsAvailableForCrossPlatformBackendSubscription() {
         assertTrue(EntitlementDecision.isPro(hasActivePlayPurchase = false, backendIsPro = true))
     }
+
+    @Test
+    fun canonicalProductsRemainValidPlaySubscriptionIdentifiers() {
+        BillingProducts.all.forEach { productId ->
+            assertTrue(productId.startsWith("com.tonoit.pro."))
+            assertFalse(productId.contains("base-plan"))
+        }
+    }
 }

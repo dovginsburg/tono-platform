@@ -130,24 +130,11 @@ enum TonoCoachPalette {
     enum Axis: String, CaseIterable {
         case safer, clearer, funnier, affectionate, professional, concise, custom
 
-        var label: String { rawValue.capitalized }
+        var label: String { CoachToneChipContract.label(for: rawValue) }
 
         var accent: UIColor {
-            switch self {
-            case .safer: return UIColor(hexRGB: "34D399")
-            case .clearer: return UIColor(hexRGB: "38BDF8")
-            case .funnier: return UIColor(hexRGB: "FBBF24")
-            case .affectionate: return UIColor(hexRGB: "F472B6")
-            case .professional: return UIColor(hexRGB: "A78BFA")
-            case .concise: return UIColor(hexRGB: "22D3EE")
-            // Build-97 contract: no normal/custom/fallback chip may
-            // ever wear red or rose — the only hue reserved for the
-            // red lane is severe recipient-directed Radar. The
-            // website-blue #38BDF8 (matches .clearer) is the
-            // spec-exact fallback so a Custom-selected chip is
-            // visually consistent with the Safer + two strip.
-            case .custom: return UIColor(hexRGB: "38BDF8")
-            }
+            // Every declared axis is covered by the shared source contract.
+            UIColor(hexRGB: CoachToneChipContract.accentHex(for: rawValue) ?? "38BDF8")
         }
 
         var accessibleLabel: UIColor {
