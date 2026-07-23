@@ -300,7 +300,7 @@ class OidcPushAuthenticator:
     email are both checked, so only our configured Pub/Sub push subscription can
     deliver a notification we will act on."""
 
-    def __init__(self, audience: str, sa_email: Optional[str]):
+    def __init__(self, audience: str, sa_email: str):
         self._audience = audience
         self._sa_email = sa_email
 
@@ -322,7 +322,7 @@ class OidcPushAuthenticator:
             raise GooglePushAuthError(f"invalid oidc id-token: {exc}") from exc
         if not claims.get("email_verified"):
             raise GooglePushAuthError("push id-token email not verified")
-        if self._sa_email and claims.get("email") != self._sa_email:
+        if claims.get("email") != self._sa_email:
             raise GooglePushAuthError("push id-token from unexpected service account")
 
 
@@ -342,10 +342,20 @@ class SharedTokenPushAuthenticator:
 
 def get_google_push_authenticator():
     audience = os.environ.get("TONO_GOOGLE_PUBSUB_AUDIENCE", "").strip()
-    sa_email = os.environ.get("TONO_GOOGLE_PUBSUB_SA_EMAIL", "").strip() or None
-    if audience:
-        return OidcPushAuthenticator(audience, sa_email)
+    sa_email = os.environ.get("TONO_GOOGLE_PUBSUB_SA_EMAIL", "").strip()
     shared = os.environ.get("TONO_GOOGLE_PUBSUB_SHARED_TOKEN", "").strip()
+    if shared and (audience or sa_email):
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Google Play RTDN push authentication modes are mutually exclusive.",
+        )
+    if audience and sa_email:
+        return OidcPushAuthenticator(audience, sa_email)
+    if audience or sa_email:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Google Play RTDN OIDC authentication requires both audience and service-account email.",
+        )
     if shared:
         return SharedTokenPushAuthenticator(shared)
     raise HTTPException(
@@ -444,9 +454,9 @@ def normalize_subscription_v2(
     expiry_future = expires_ms is not None and expires_ms > now_ms
 
     if sub_state == _STATE_ACTIVE:
-        lifecycle, entitled = "active", True
+        lifecycle, entitled = "active", bool(expiry_future)
     elif sub_state == _STATE_IN_GRACE:
-        lifecycle, entitled = "grace", True
+        lifecycle, entitled = "grace", bool(expiry_future)
     elif sub_state == _STATE_CANCELED:
         # Auto-renew off. Access continues until the already-paid period lapses.
         lifecycle, entitled = "canceled", bool(expiry_future)
@@ -463,10 +473,22 @@ def normalize_subscription_v2(
     else:
         raise GooglePlayValidationError(f"unrecognized subscriptionState {sub_state!r}")
 
+    if sub_state in {_STATE_ACTIVE, _STATE_IN_GRACE} and not expiry_future:
+        raise GooglePlayValidationError(
+            "entitled subscription state requires a present, parseable, future expiry"
+        )
+
     ext = raw.get("externalAccountIdentifiers") or {}
     obfuscated = ext.get("obfuscatedExternalAccountId") or None
 
     ack_state = raw.get("acknowledgementState")
+    if ack_state not in {
+        "ACKNOWLEDGEMENT_STATE_PENDING",
+        "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED",
+    }:
+        raise GooglePlayValidationError(
+            f"unrecognized acknowledgementState {ack_state!r}"
+        )
     acknowledged = ack_state == "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED"
 
     environment = "test" if raw.get("testPurchase") is not None else "production"
@@ -681,9 +703,9 @@ async def google_play_notifications(
         notification = decode_developer_notification(message)
     except GooglePlayValidationError as exc:
         raise HTTPException(400, str(exc))
-    if notification.package_name and notification.package_name != config.package_name:
+    if notification.package_name != config.package_name:
         raise HTTPException(400, "notification is for a different package")
-    if notification.version and notification.version != "1.0":
+    if notification.version != "1.0":
         raise HTTPException(400, f"unsupported notification version {notification.version!r}")
 
     ntype = notification.subscription.notification_type if notification.subscription else -1
@@ -696,6 +718,7 @@ async def google_play_notifications(
     if notification.is_test or notification.subscription is None:
         # A test notification (or a non-subscription notification) has nothing to
         # project; acknowledge so Pub/Sub stops retrying.
+        store.complete_provider_notification("google", str(message_id), "ignored")
         return {"received": True, "outcome": "ignored"}
 
     sub = notification.subscription
@@ -708,6 +731,7 @@ async def google_play_notifications(
         raw = verifier.get_subscription_v2(config.package_name, token)
     except GooglePlayNotFound:
         outcome = _apply_terminal_revoke(store, token, event_ms, reason="not_found")
+        store.complete_provider_notification("google", str(message_id), outcome)
         return {"received": True, "outcome": outcome}
     except GooglePlayUnavailable:
         # Fail closed + retryable: a 503 makes Pub/Sub redeliver later.
@@ -733,6 +757,7 @@ async def google_play_notifications(
             expires_ms=None,
             environment="production",
         )
+        store.complete_provider_notification("google", str(message_id), result.outcome)
         return {"received": True, "outcome": result.outcome, "state": "revoked"}
 
     try:
@@ -740,6 +765,7 @@ async def google_play_notifications(
     except GooglePlayValidationError as exc:
         # Deterministic validation failure won't fix on retry; fail closed
         # (grant nothing) and acknowledge so Pub/Sub stops redelivering.
+        store.complete_provider_notification("google", str(message_id), "validation_failed")
         return {"received": True, "outcome": "validation_failed", "detail": str(exc)}
 
     result = store.apply_google_purchase(
@@ -756,6 +782,7 @@ async def google_play_notifications(
         linked_purchase_token=verified.linked_purchase_token,
         acknowledged=verified.acknowledged,
     )
+    store.complete_provider_notification("google", str(message_id), result.outcome)
     return {"received": True, "outcome": result.outcome, "state": verified.lifecycle_state}
 
 
@@ -801,14 +828,18 @@ def google_play_readiness(config: GooglePlayConfigDep) -> dict[str, Any]:
     """Non-secret readiness probe. Reveals ONLY booleans + already-public
     identifiers so an operator/monitor can see which credentials are wired
     without exposing any secret value (contract §5)."""
-    push_configured = bool(
-        os.environ.get("TONO_GOOGLE_PUBSUB_AUDIENCE", "").strip()
-        or os.environ.get("TONO_GOOGLE_PUBSUB_SHARED_TOKEN", "").strip()
+    audience_configured = bool(os.environ.get("TONO_GOOGLE_PUBSUB_AUDIENCE", "").strip())
+    email_configured = bool(os.environ.get("TONO_GOOGLE_PUBSUB_SA_EMAIL", "").strip())
+    shared_configured = bool(os.environ.get("TONO_GOOGLE_PUBSUB_SHARED_TOKEN", "").strip())
+    oidc_configured = audience_configured and email_configured
+    oidc_partial = audience_configured != email_configured
+    push_configured = (oidc_configured and not shared_configured) or (
+        shared_configured and not audience_configured and not email_configured
     )
     push_mode = (
         "oidc"
-        if os.environ.get("TONO_GOOGLE_PUBSUB_AUDIENCE", "").strip()
-        else ("shared_token" if os.environ.get("TONO_GOOGLE_PUBSUB_SHARED_TOKEN", "").strip() else "none")
+        if oidc_configured and not shared_configured
+        else ("shared_token" if shared_configured and not oidc_partial and not oidc_configured else "none")
     )
     ready = bool(
         os.environ.get("TONO_GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()

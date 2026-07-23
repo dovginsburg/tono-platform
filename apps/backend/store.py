@@ -2494,11 +2494,11 @@ class Store:
     def record_provider_notification(
         self, provider: str, event_id: str, notification_type: str
     ) -> bool:
-        """Durable inbox insert for a provider push notification, keyed by the
-        provider's own message id. Returns True if this is the FIRST time we've
-        seen it, False on a duplicate delivery. This is the replay/idempotency
-        primitive for RTDN (contract §4/§9): the caller only does the expensive
-        re-query + projection when it gets a fresh id back."""
+        """Reserve a durable notification for processing.
+
+        Completed messages are duplicates. A pending message is deliberately
+        retryable after a transient failure or process crash.
+        """
 
         def _do() -> bool:
             cur = self._conn.cursor()
@@ -2506,13 +2506,31 @@ class Store:
                 cur.execute(
                     "INSERT INTO provider_transactions (provider, event_id, kind, outcome, received_at) "
                     "VALUES (?, ?, 'notification', ?, ?)",
-                    (provider, event_id, notification_type, _now_iso()),
+                    (provider, event_id, f"pending:{notification_type}", _now_iso()),
                 )
                 return True
             except sqlite3.IntegrityError:
-                return False
+                row = cur.execute(
+                    "SELECT outcome FROM provider_transactions WHERE provider = ? AND event_id = ?",
+                    (provider, event_id),
+                ).fetchone()
+                return bool(row and row["outcome"].startswith("pending:"))
 
         return self._run(_do).result()
+
+    def complete_provider_notification(
+        self, provider: str, event_id: str, outcome: str
+    ) -> None:
+        """Mark a reserved inbox message completed only after projection."""
+
+        def _do() -> None:
+            self._conn.execute(
+                "UPDATE provider_transactions SET outcome = ? "
+                "WHERE provider = ? AND event_id = ? AND outcome LIKE 'pending:%'",
+                (f"completed:{outcome}", provider, event_id),
+            )
+
+        self._run(_do).result()
 
     def apply_google_purchase(
         self,
@@ -2596,16 +2614,57 @@ class Store:
     ) -> GoogleEntitlementResult:
         assert purchase_token and subscription_id, "missing google purchase identifiers"
 
-        # Replacement continuity (contract §3): an upgrade/downgrade/resignup
-        # mints a NEW token whose snapshot carries linkedPurchaseToken=OLD. The
-        # old lineage is terminally replaced and its grants revoked so a replayed
-        # old token can never keep granting after it was superseded.
+        # Resolve both sides of a replacement before touching either lineage.
+        # A linked token is continuity evidence, never authority to transfer a
+        # subscription between canonical accounts.
+        new_beneficiary = obfuscated_account_id or account_id
+        if new_beneficiary is None:
+            cur.execute(
+                """SELECT eg.account_id
+                     FROM provider_purchases pp
+                     JOIN entitlement_grants eg ON eg.purchase_id = pp.id
+                    WHERE pp.provider = ? AND pp.original_transaction_id = ?
+                    ORDER BY CASE eg.state WHEN 'active' THEN 0 ELSE 1 END
+                    LIMIT 1""",
+                (provider, purchase_token),
+            )
+            new_row = cur.fetchone()
+            new_beneficiary = new_row["account_id"] if new_row else None
+
+        old = None
+        old_beneficiary = None
         if linked_purchase_token and linked_purchase_token != purchase_token:
             cur.execute(
                 "SELECT * FROM provider_purchases WHERE provider = ? AND original_transaction_id = ?",
                 (provider, linked_purchase_token),
             )
             old = cur.fetchone()
+            if old is not None:
+                cur.execute(
+                    """SELECT account_id FROM entitlement_grants
+                        WHERE purchase_id = ?
+                        ORDER BY CASE state WHEN 'active' THEN 0 ELSE 1 END
+                        LIMIT 1""",
+                    (old["id"],),
+                )
+                old_grant = cur.fetchone()
+                old_beneficiary = old_grant["account_id"] if old_grant else None
+                if (
+                    old_beneficiary is not None
+                    and new_beneficiary is not None
+                    and old_beneficiary != new_beneficiary
+                ):
+                    return GoogleEntitlementResult(
+                        "conflict",
+                        "linked purchase belongs to a different account",
+                        lifecycle_state=lifecycle_state,
+                    )
+
+        # Replacement continuity (contract §3): an upgrade/downgrade/resignup
+        # mints a NEW token whose snapshot carries linkedPurchaseToken=OLD. The
+        # old lineage is terminally replaced and its grants revoked so a replayed
+        # old token can never keep granting after it was superseded.
+        if linked_purchase_token and linked_purchase_token != purchase_token:
             if old is not None and old["lifecycle_state"] not in _GOOGLE_HARD_TERMINAL:
                 cur.execute(
                     "UPDATE provider_purchases SET lifecycle_state = 'replaced', updated_at = ? WHERE id = ?",

@@ -420,6 +420,37 @@ def test_grace_period_keeps_access(client, gp):
     assert _me(client, reg["api_token"])["is_pro"] is True
 
 
+@pytest.mark.parametrize("state", [STATE_ACTIVE, STATE_GRACE])
+@pytest.mark.parametrize("expiry", ["missing", _past_rfc3339(), "not-a-timestamp"])
+def test_entitled_states_require_parseable_future_expiry(client, gp, state, expiry):
+    reg = _register(client)
+    token = f"tok-expiry-{state}-{expiry}"
+    snapshot = raw_sub(state=state, obfuscated=reg["account_id"], expiry=expiry)
+    if expiry == "missing":
+        snapshot["lineItems"][0].pop("expiryTime")
+    gp.verifier.subs[token] = snapshot
+    r = _sync(client, reg["api_token"], token)
+    assert r.status_code == 422
+    assert _me(client, reg["api_token"])["is_pro"] is False
+    assert _db_scalar(
+        "SELECT COUNT(*) FROM entitlement_grants WHERE state='active' AND expires_at IS NULL"
+    ) == 0
+
+
+@pytest.mark.parametrize("ack_state", [None, "UNKNOWN_ACK_STATE"])
+def test_unknown_or_missing_acknowledgement_state_fails_closed(client, gp, ack_state):
+    reg = _register(client)
+    token = f"tok-ack-state-{ack_state}"
+    snapshot = raw_sub(obfuscated=reg["account_id"])
+    if ack_state is None:
+        snapshot.pop("acknowledgementState")
+    else:
+        snapshot["acknowledgementState"] = ack_state
+    gp.verifier.subs[token] = snapshot
+    assert _sync(client, reg["api_token"], token).status_code == 422
+    assert _me(client, reg["api_token"])["is_pro"] is False
+
+
 def test_canceled_at_period_end_keeps_access_until_expiry(client, gp):
     reg = _register(client)
     token = "tok-cancel"
@@ -618,6 +649,33 @@ def test_linked_purchase_replacement_terminates_old_lineage(client, gp):
     ) == 1
 
 
+def test_cross_account_linked_replacement_conflicts_without_mutating_old(client, gp):
+    account_a = _register(client)
+    account_b = _register(client)
+    old = "tok-cross-old"
+    new = "tok-cross-new"
+    gp.verifier.subs[old] = raw_sub(obfuscated=account_a["account_id"])
+    assert _sync(client, account_a["api_token"], old).status_code == 200
+
+    gp.verifier.subs[new] = raw_sub(
+        product=PRODUCT_YEAR,
+        base_plan=BASE_PLAN_YEAR,
+        obfuscated=account_b["account_id"],
+        linked=old,
+    )
+    r = _sync(client, account_b["api_token"], new, subscription_id=PRODUCT_YEAR)
+    assert r.status_code == 409
+    assert _me(client, account_a["api_token"])["is_pro"] is True
+    assert _me(client, account_b["api_token"])["is_pro"] is False
+    assert _db_scalar(
+        "SELECT COUNT(*) FROM provider_purchases WHERE original_transaction_id=? AND lifecycle_state='active'",
+        (old,),
+    ) == 1
+    assert _db_scalar(
+        "SELECT COUNT(*) FROM provider_purchases WHERE original_transaction_id=?", (new,)
+    ) == 0
+
+
 # ===========================================================================
 # Transient failure / push auth / not-found
 # ===========================================================================
@@ -662,6 +720,29 @@ def test_rtdn_transient_requery_failure_returns_503_for_retry(client, gp):
     assert r.status_code == 503
 
 
+def test_rtdn_transient_failure_same_message_redelivery_projects(client, gp):
+    reg = _register(client)
+    token = "tok-rq-redelivery"
+    gp.verifier.subs[token] = raw_sub(obfuscated=reg["account_id"])
+    gp.verifier.unavailable.add(token)
+    envelope = rtdn_envelope(message_id="rq-redeliver-1", token=token)
+    assert _notify(client, envelope).status_code == 503
+    assert _db_scalar(
+        "SELECT COUNT(*) FROM provider_transactions WHERE event_id=? AND outcome LIKE 'pending:%'",
+        ("rq-redeliver-1",),
+    ) == 1
+
+    gp.verifier.unavailable.remove(token)
+    second = _notify(client, envelope)
+    assert second.status_code == 200
+    assert second.json()["outcome"] == "granted"
+    assert _me(client, reg["api_token"])["is_pro"] is True
+    assert _db_scalar(
+        "SELECT COUNT(*) FROM provider_transactions WHERE event_id=? AND outcome LIKE 'completed:%'",
+        ("rq-redeliver-1",),
+    ) == 1
+
+
 def test_rtdn_wrong_package_is_400(client, gp):
     token = "tok-pkg"
     gp.verifier.subs[token] = raw_sub()
@@ -674,6 +755,19 @@ def test_rtdn_unsupported_version_is_400(client, gp):
     gp.verifier.subs[token] = raw_sub()
     r = _notify(client, rtdn_envelope(message_id="ver-1", token=token, version="2.0"))
     assert r.status_code == 400
+
+
+@pytest.mark.parametrize("field", ["version", "packageName"])
+def test_rtdn_missing_required_identity_field_is_400_before_inbox(client, gp, field):
+    envelope = rtdn_envelope(message_id=f"missing-{field}", token="tok-missing")
+    payload = json.loads(base64.b64decode(envelope["message"]["data"]))
+    payload.pop(field)
+    envelope["message"]["data"] = base64.b64encode(json.dumps(payload).encode()).decode()
+    assert _notify(client, envelope).status_code == 400
+    assert _db_scalar(
+        "SELECT COUNT(*) FROM provider_transactions WHERE event_id=?",
+        (f"missing-{field}",),
+    ) == 0
 
 
 def test_rtdn_test_notification_is_acknowledged_without_projection(client, gp):
@@ -760,6 +854,50 @@ def test_readiness_ready_false_without_credentials(client):
     body = r.json()
     assert body["verification_configured"] is False
     assert body["ready"] is False
+
+
+def test_oidc_requires_both_fields_and_exact_verified_service_account(
+    client, gp, monkeypatch
+):
+    from backend import google_play
+    from google.oauth2 import id_token
+
+    monkeypatch.setenv("TONO_GOOGLE_SERVICE_ACCOUNT_JSON", "configured-not-read")
+    monkeypatch.setenv("TONO_GOOGLE_PUBSUB_AUDIENCE", "https://tono.example/rtdn")
+    monkeypatch.delenv("TONO_GOOGLE_PUBSUB_SA_EMAIL", raising=False)
+    partial = client.get("/v1/google-play/readiness").json()
+    assert partial["push_auth_configured"] is False
+    assert partial["ready"] is False
+    with pytest.raises(Exception) as exc:
+        google_play.get_google_push_authenticator()
+    assert getattr(exc.value, "status_code", None) == 503
+
+    monkeypatch.setenv(
+        "TONO_GOOGLE_PUBSUB_SA_EMAIL", "expected-pusher@example.iam.gserviceaccount.com"
+    )
+    monkeypatch.setenv("TONO_GOOGLE_PUBSUB_SHARED_TOKEN", "configured-not-read")
+    with pytest.raises(Exception) as exclusive_exc:
+        google_play.get_google_push_authenticator()
+    assert getattr(exclusive_exc.value, "status_code", None) == 503
+    monkeypatch.delenv("TONO_GOOGLE_PUBSUB_SHARED_TOKEN")
+
+    monkeypatch.setattr(
+        id_token,
+        "verify_oauth2_token",
+        lambda *_args, **_kwargs: {
+            "email_verified": True,
+            "email": "wrong-pusher@example.iam.gserviceaccount.com",
+        },
+    )
+    authenticator = google_play.OidcPushAuthenticator(
+        "https://tono.example/rtdn", "expected-pusher@example.iam.gserviceaccount.com"
+    )
+
+    class SignedRequest:
+        headers = {"authorization": "Bearer signed.mock.token"}
+
+    with pytest.raises(google_play.GooglePushAuthError, match="unexpected service account"):
+        authenticator.verify(SignedRequest())
 
 
 # ===========================================================================
