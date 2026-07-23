@@ -146,6 +146,132 @@ def test_anonymous_supabase_session_rejected(monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# E-1: HS256 mode must fail closed when no issuer is resolvable.
+# A shared HS256 secret with no bound issuer verifies only the signature and
+# audience, so any token minted with that secret — regardless of the project /
+# issuer that produced it — would be accepted. These tests prove the fix.
+# --------------------------------------------------------------------------
+
+
+def test_hs256_without_any_issuer_fails_closed(monkeypatch):
+    """SUPABASE_JWT_SECRET set but neither SUPABASE_ISSUER nor SUPABASE_URL:
+    verification must fail CLOSED (503), never decode without an issuer check."""
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", _SECRET)
+    monkeypatch.setenv("SUPABASE_AUD", _AUD)
+    monkeypatch.delenv("SUPABASE_ISSUER", raising=False)
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_JWKS_URL", raising=False)
+    import backend.supabase_auth as supabase_auth
+    from fastapi import HTTPException
+
+    # A token that is otherwise perfectly valid (right secret, right audience)
+    # must STILL be refused because no issuer is configured to bind it.
+    tok = _make_token()
+    with pytest.raises(HTTPException) as ei:
+        _run(supabase_auth.verify_supabase_access_token(tok))
+    assert ei.value.status_code == 503
+    assert "issuer" in ei.value.detail.lower()
+    assert supabase_auth.config_is_valid() is False
+
+
+def test_hs256_wrong_issuer_rejected(monkeypatch):
+    """Issuer configured, but the token carries a DIFFERENT issuer -> 401."""
+    _configure_hs256(monkeypatch)
+    import backend.supabase_auth as supabase_auth
+    from fastapi import HTTPException
+
+    tok = _make_token(iss="https://attacker.evil.example/auth/v1")
+    with pytest.raises(HTTPException) as ei:
+        _run(supabase_auth.verify_supabase_access_token(tok))
+    assert ei.value.status_code == 401
+
+
+def test_hs256_missing_issuer_claim_rejected(monkeypatch):
+    """Issuer configured, but the token OMITS the iss claim entirely -> 401.
+    `require: ["iss"]` means an issuer-less token can never pass HS256."""
+    _configure_hs256(monkeypatch)
+    import backend.supabase_auth as supabase_auth
+    from fastapi import HTTPException
+
+    now = dt.datetime.now(dt.timezone.utc)
+    tok = jwt.encode(
+        {
+            "sub": "supabase-user-1",
+            "email": "verified@example.com",
+            "email_verified": True,
+            "aud": _AUD,
+            "iat": now,
+            "exp": now + dt.timedelta(hours=1),
+            # NOTE: no "iss" claim.
+        },
+        _SECRET,
+        algorithm="HS256",
+    )
+    with pytest.raises(HTTPException) as ei:
+        _run(supabase_auth.verify_supabase_access_token(tok))
+    assert ei.value.status_code == 401
+
+
+def test_hs256_issuer_derived_from_supabase_url(monkeypatch):
+    """SUPABASE_URL alone (no SUPABASE_ISSUER) derives the issuer, so a token
+    whose iss matches {SUPABASE_URL}/auth/v1 verifies, and a mismatch fails."""
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", _SECRET)
+    monkeypatch.setenv("SUPABASE_AUD", _AUD)
+    monkeypatch.delenv("SUPABASE_ISSUER", raising=False)
+    monkeypatch.setenv("SUPABASE_URL", "https://proj.supabase.co")
+    monkeypatch.delenv("SUPABASE_JWKS_URL", raising=False)
+    import backend.supabase_auth as supabase_auth
+    from fastapi import HTTPException
+
+    assert supabase_auth.config_is_valid() is True
+
+    good = _make_token(iss="https://proj.supabase.co/auth/v1")
+    claims = _run(supabase_auth.verify_supabase_access_token(good))
+    assert claims.sub == "supabase-user-1"
+
+    bad = _make_token(iss="https://other.supabase.co/auth/v1")
+    with pytest.raises(HTTPException) as ei:
+        _run(supabase_auth.verify_supabase_access_token(bad))
+    assert ei.value.status_code == 401
+
+
+def test_jwks_mode_not_broken_by_hs256_issuer_rule(monkeypatch):
+    """JWKS mode must NOT be affected by the HS256 issuer requirement.
+    With only SUPABASE_JWKS_URL configured (no secret, no issuer), verification
+    routes to the JWKS branch and never hits the HS256 503 fail-closed path."""
+    monkeypatch.delenv("SUPABASE_JWT_SECRET", raising=False)
+    monkeypatch.delenv("SUPABASE_ISSUER", raising=False)
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.setenv("SUPABASE_JWKS_URL", "https://proj.supabase.co/auth/v1/.well-known/jwks.json")
+    import backend.supabase_auth as supabase_auth
+    from fastapi import HTTPException, status
+
+    # JWKS mode with no issuer is a fully valid configuration.
+    assert supabase_auth.config_is_valid() is True
+
+    # Route proof without any network: stub the JWKS cache so get_key raises a
+    # sentinel status. Reaching it proves we took the JWKS branch (not the
+    # HS256 503) — i.e. JWKS mode is untouched by the E-1 fix.
+    class _Sentinel:
+        async def get_key(self, _kid):
+            raise HTTPException(599, "reached-jwks-branch")
+
+    monkeypatch.setattr(supabase_auth, "_jwks_cache_for", lambda _url: _Sentinel())
+
+    now = dt.datetime.now(dt.timezone.utc)
+    tok = jwt.encode(
+        {"sub": "u", "aud": _AUD, "iat": now, "exp": now + dt.timedelta(hours=1)},
+        _SECRET,
+        algorithm="HS256",
+        headers={"kid": "some-kid"},
+    )
+    with pytest.raises(HTTPException) as ei:
+        _run(supabase_auth.verify_supabase_access_token(tok))
+    assert ei.value.status_code == 599
+    assert ei.value.status_code != status.HTTP_503_SERVICE_UNAVAILABLE
+
+
+# --------------------------------------------------------------------------
 # /v1/auth/web endpoint behavior
 # --------------------------------------------------------------------------
 

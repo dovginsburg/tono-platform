@@ -4,6 +4,7 @@ from backend.analyze import (
     AnalyzeRequest,
     Build94Request,
     CoachContractError,
+    LifecycleClocks,
 
     _build94_optional_system_prompt,
     _build94_optional_user_message,
@@ -811,6 +812,9 @@ def test_variant_empty_text_is_strict_blocked_envelope(client):
         "risk_after": None,
         "model": None,
         "tier": None,
+        # F-1: `clocks` is now a declared field; a blocked envelope carries the
+        # truthful `null` (server emitted no clocks). iOS treats null as absent.
+        "clocks": None,
         "reason": VariantBlockedReason.PREFLIGHT_EMPTY_DRAFT,
     }
 
@@ -1008,6 +1012,86 @@ def test_mock_single_variant_rejects_unknown_axis():
     req = VariantRequest(text="hi", axis="shorter")
     with pytest.raises(CoachContractError):
         mock_single_variant(req)
+
+
+# ===========================================================================
+# F-1 — VariantResponse declares `clocks` with the existing LifecycleClocks
+# type. Prove the serialization contract (both absent and present) and that
+# the shape the iOS strict decoder accepts is exactly what the server emits.
+# ===========================================================================
+
+
+def test_variant_response_declares_clocks_with_lifecycle_type():
+    """The `clocks` field is declared on the model with the SAME type the
+    /api/analyze envelope uses — not a new/ad-hoc shape."""
+    field = VariantResponse.model_fields["clocks"]
+    # Optional[LifecycleClocks]: LifecycleClocks must appear in the annotation.
+    assert LifecycleClocks in getattr(field.annotation, "__args__", ())
+    # Defaults to None so declaring it is strictly additive.
+    assert field.default is None
+
+
+def test_variant_response_omits_clocks_when_none_is_the_truthful_state():
+    """When the server emits no clocks, the serialized envelope carries
+    `clocks: null` (declared-but-empty). iOS treats a null/absent `clocks`
+    as the truthful "no server clocks" state, so this cannot regress the
+    strict decoder (a JSON null is not a `[String: Any]` object)."""
+    resp = VariantResponse(status="ok", axis="warmer", text="Hey, could you help?")
+    dumped = resp.model_dump()
+    assert "clocks" in dumped  # field is declared, not silently dropped
+    assert dumped["clocks"] is None
+
+    # Full JSON round-trip: `null`, never a fabricated object.
+    import json
+
+    payload = json.loads(resp.model_dump_json())
+    assert payload["clocks"] is None
+    assert payload["status"] == "ok"
+    assert payload["axis"] == "warmer"
+
+
+def test_variant_response_serializes_clocks_with_ios_expected_keys():
+    """When clocks ARE present, the serialized keys match exactly the four
+    monotonic anchors + two derived durations that the iOS
+    `decodeServerClocks` strict decoder requires."""
+    import json
+
+    clocks = LifecycleClocks(
+        request_accepted_ms=0,
+        preflight_end_ms=5,
+        provider_start_ms=5,
+        response_sent_ms=42,
+        preflight_ms=5,
+        provider_ms=37,
+    )
+    resp = VariantResponse(
+        status="ok", axis="clearer", text="Please confirm by Friday.",
+        rationale="tightened", risk_after="low", model="claude-haiku-4-5",
+        tier="haiku", clocks=clocks,
+    )
+    payload = json.loads(resp.model_dump_json())
+    envelope = payload["clocks"]
+    # The four cross-side anchors the iOS decoder requires by name.
+    for key in ("request_accepted_ms", "preflight_end_ms",
+                "provider_start_ms", "response_sent_ms"):
+        assert key in envelope
+        assert isinstance(envelope[key], int)  # integer-ms; iOS rejects fractional
+    # Monotonic non-decreasing, matching the iOS guard.
+    assert (envelope["request_accepted_ms"] <= envelope["preflight_end_ms"]
+            <= envelope["provider_start_ms"] <= envelope["response_sent_ms"])
+
+
+def test_variant_response_clocks_roundtrip_via_model_validate():
+    """A serialized envelope with clocks re-validates into an equal model —
+    the contract is symmetric (server can emit, and the same shape parses)."""
+    clocks = LifecycleClocks(
+        request_accepted_ms=1, preflight_end_ms=2, provider_start_ms=3,
+        response_sent_ms=4, preflight_ms=1, provider_ms=1,
+    )
+    original = VariantResponse(status="ok", axis="safer", text="ok", clocks=clocks)
+    reparsed = VariantResponse.model_validate(original.model_dump())
+    assert reparsed == original
+    assert reparsed.clocks == clocks
 
 
 # ---------------------------------------------------------------------------

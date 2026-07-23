@@ -132,9 +132,16 @@ def _config() -> dict[str, Optional[str]]:
 def config_is_valid() -> bool:
     """True when at least one verification path is fully configured. Used by
     startup diagnostics — an env with none of these can never verify a web
-    sign-in and /v1/auth/web will 503."""
+    sign-in and /v1/auth/web will 503.
+
+    HS256 additionally requires a resolvable issuer: an HS256 secret with no
+    issuer is treated as NOT configured because ``verify_supabase_access_token``
+    fails closed on it (an issuer-less symmetric decode is a forgery vector).
+    JWKS mode needs only a JWKS URL — its keys are project-bound."""
     cfg = _config()
-    return bool(cfg["hs_secret"] or cfg["jwks_url"])
+    if cfg["jwks_url"]:
+        return True
+    return bool(cfg["hs_secret"] and cfg["issuer"])
 
 
 def _extract_claims(payload: dict) -> SupabaseClaims:
@@ -159,15 +166,28 @@ async def verify_supabase_access_token(access_token: str) -> SupabaseClaims:
     audience = cfg["audience"]
 
     if cfg["hs_secret"]:
-        # Legacy symmetric mode.
+        # Legacy symmetric mode. An HS256 secret with NO issuer would verify
+        # only the signature and audience, accepting any HS256 token minted
+        # with the same shared secret regardless of which Supabase project /
+        # issuer produced it. That is a decode-without-issuer weakness, so we
+        # fail CLOSED here rather than skip the ``iss`` check. Configure
+        # SUPABASE_ISSUER (or SUPABASE_URL, which derives the issuer) to enable
+        # HS256 verification. JWKS mode is unaffected — its keys are bound to a
+        # single project's published key set, so it never reaches this branch.
+        if not cfg["issuer"]:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "Supabase HS256 mode requires an issuer "
+                "(set SUPABASE_ISSUER or SUPABASE_URL)",
+            )
         try:
             payload = jwt.decode(
                 access_token,
                 key=cfg["hs_secret"],
                 algorithms=["HS256"],
                 audience=audience,
-                issuer=cfg["issuer"] if cfg["issuer"] else None,
-                options={"verify_iss": bool(cfg["issuer"])},
+                issuer=cfg["issuer"],
+                options={"verify_iss": True, "require": ["iss"]},
             )
         except jwt.PyJWTError as exc:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"invalid Supabase token: {exc}")

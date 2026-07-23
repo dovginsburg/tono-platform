@@ -2694,13 +2694,69 @@ def _account_has_active_grant(cur: sqlite3.Cursor, account_id: str) -> bool:
 _store: Optional[Store] = None
 _store_lock = threading.Lock()
 
+# Render mounts a persistent disk at /data for srv-d9gg8ngk1i2s738lngd0.
+# A DB written anywhere else on Render (the default "./tono.db" in the
+# container's ephemeral filesystem, or any path outside /data) is silently
+# wiped on every deploy/restart — every device row, account, and Stripe
+# linkage lost. That is a data-loss trap, not a soft config warning.
+_RENDER_PERSISTENT_ROOT = "/data"
+
+
+class EphemeralDatabasePathError(RuntimeError):
+    """Raised on Render when TONO_DB_PATH is unset or points outside the
+    persistent /data disk — where SQLite would be wiped on every deploy."""
+
+
+def _is_render() -> bool:
+    """Render injects RENDER=true into every service's environment. We treat
+    any truthy value as "running on Render" so the fail-closed guard cannot be
+    defeated by a lowercase/quoted value."""
+    return (os.environ.get("RENDER", "") or "").strip().lower() in {"true", "1", "yes"}
+
+
+def resolve_db_path() -> str:
+    """Resolve the SQLite path, failing CLOSED on Render (G-1).
+
+    On Render (``RENDER`` truthy), production MUST write to the persistent
+    ``/data`` disk. We reject a missing ``TONO_DB_PATH`` and any resolved path
+    outside ``/data`` rather than silently opening an ephemeral DB that is
+    wiped on the next deploy. Off Render (local/dev/test), the historical
+    ``./tono.db`` default is preserved unchanged.
+    """
+    raw = os.environ.get("TONO_DB_PATH")
+
+    if not _is_render():
+        # Local/dev/test: preserve the long-standing default exactly.
+        return raw if raw else "./tono.db"
+
+    # --- Render: fail closed ---
+    if not raw or not raw.strip():
+        raise EphemeralDatabasePathError(
+            "TONO_DB_PATH is unset on Render. Production must write SQLite to the "
+            f"persistent disk at {_RENDER_PERSISTENT_ROOT} (e.g. {_RENDER_PERSISTENT_ROOT}/tono.db); "
+            "an unset path would open an ephemeral DB that is wiped on every deploy."
+        )
+    # Normalize to an absolute, symlink-free path and require containment in
+    # /data. ``os.path.realpath`` collapses ``..`` and symlink escapes so a
+    # value like ``/data/../tmp/x`` cannot slip past the containment check.
+    resolved = os.path.realpath(raw)
+    persistent_root = os.path.realpath(_RENDER_PERSISTENT_ROOT)
+    if resolved != persistent_root and not resolved.startswith(persistent_root + os.sep):
+        raise EphemeralDatabasePathError(
+            f"TONO_DB_PATH={raw!r} resolves to {resolved!r}, which is outside the "
+            f"persistent disk at {persistent_root} on Render. SQLite there would be "
+            "wiped on every deploy. Set TONO_DB_PATH to a path under "
+            f"{persistent_root} (e.g. {persistent_root}/tono.db)."
+        )
+    return raw
+
 
 def get_store() -> Store:
     global _store
     if _store is None:
         with _store_lock:
             if _store is None:
-                path = os.environ.get("TONO_DB_PATH", "./tono.db")
+                path = resolve_db_path()
                 _store = Store(path)
     return _store
 

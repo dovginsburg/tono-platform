@@ -104,6 +104,113 @@ def test_supabase_sub_migration_ordering_on_legacy_db(_isolate_db):
 
 
 # ===========================================================================
+# G-1 (QA regression) — Render must fail closed on an ephemeral DB path
+# ===========================================================================
+#
+# Render injects RENDER=true and mounts the persistent disk at /data. A DB
+# written anywhere else (the "./tono.db" default, or any path outside /data)
+# is wiped on every deploy. resolve_db_path() must reject that on Render while
+# preserving the historical local/dev/test default when RENDER is absent.
+
+
+def _fresh_store_module():
+    from backend import store as store_module
+
+    return store_module
+
+
+def test_render_unset_preserves_local_default(monkeypatch):
+    monkeypatch.delenv("RENDER", raising=False)
+    monkeypatch.delenv("TONO_DB_PATH", raising=False)
+    store = _fresh_store_module()
+    assert store.resolve_db_path() == "./tono.db"
+
+
+def test_render_unset_honors_explicit_path(monkeypatch):
+    monkeypatch.delenv("RENDER", raising=False)
+    monkeypatch.setenv("TONO_DB_PATH", "/tmp/tono_local_dev.db")
+    store = _fresh_store_module()
+    assert store.resolve_db_path() == "/tmp/tono_local_dev.db"
+
+
+def test_render_rejects_missing_db_path(monkeypatch):
+    monkeypatch.setenv("RENDER", "true")
+    monkeypatch.delenv("TONO_DB_PATH", raising=False)
+    store = _fresh_store_module()
+    with pytest.raises(store.EphemeralDatabasePathError) as ei:
+        store.resolve_db_path()
+    assert "unset" in str(ei.value).lower()
+
+
+def test_render_rejects_blank_db_path(monkeypatch):
+    monkeypatch.setenv("RENDER", "true")
+    monkeypatch.setenv("TONO_DB_PATH", "   ")
+    store = _fresh_store_module()
+    with pytest.raises(store.EphemeralDatabasePathError):
+        store.resolve_db_path()
+
+
+@pytest.mark.parametrize("bad_path", ["./tono.db", "/tmp/tono.db", "/var/data/tono.db"])
+def test_render_rejects_path_outside_data(monkeypatch, bad_path):
+    monkeypatch.setenv("RENDER", "true")
+    monkeypatch.setenv("TONO_DB_PATH", bad_path)
+    store = _fresh_store_module()
+    with pytest.raises(store.EphemeralDatabasePathError) as ei:
+        store.resolve_db_path()
+    assert "/data" in str(ei.value)
+
+
+def test_render_rejects_dotdot_escape_from_data(monkeypatch):
+    """A path that lexically starts with /data but escapes it via `..` must be
+    rejected — realpath normalization closes the containment bypass."""
+    monkeypatch.setenv("RENDER", "true")
+    monkeypatch.setenv("TONO_DB_PATH", "/data/../tmp/escape.db")
+    store = _fresh_store_module()
+    with pytest.raises(store.EphemeralDatabasePathError):
+        store.resolve_db_path()
+
+
+@pytest.mark.parametrize("good_path", ["/data/tono.db", "/data/sub/tono.db", "/data"])
+def test_render_accepts_path_under_data(monkeypatch, good_path):
+    monkeypatch.setenv("RENDER", "true")
+    monkeypatch.setenv("TONO_DB_PATH", good_path)
+    store = _fresh_store_module()
+    assert store.resolve_db_path() == good_path
+
+
+@pytest.mark.parametrize("truthy", ["true", "TRUE", "1", "yes"])
+def test_render_truthy_values_all_enforce(monkeypatch, truthy):
+    monkeypatch.setenv("RENDER", truthy)
+    monkeypatch.setenv("TONO_DB_PATH", "/tmp/tono.db")
+    store = _fresh_store_module()
+    with pytest.raises(store.EphemeralDatabasePathError):
+        store.resolve_db_path()
+
+
+def test_render_falsey_value_treated_as_local(monkeypatch):
+    """RENDER present but falsey (e.g. an explicitly-disabled override) must
+    NOT enforce the /data guard — only a truthy RENDER means "on Render"."""
+    monkeypatch.setenv("RENDER", "false")
+    monkeypatch.setenv("TONO_DB_PATH", "/tmp/tono.db")
+    store = _fresh_store_module()
+    assert store.resolve_db_path() == "/tmp/tono.db"
+
+
+def test_get_store_fails_closed_on_render_without_persistent_disk(monkeypatch):
+    """The singleton accessor propagates the fail-closed error — startup cannot
+    silently open an ephemeral DB on Render."""
+    monkeypatch.setenv("RENDER", "true")
+    monkeypatch.setenv("TONO_DB_PATH", "/tmp/tono_ephemeral.db")
+    store = _fresh_store_module()
+    store.reset_store()
+    try:
+        with pytest.raises(store.EphemeralDatabasePathError):
+            store.get_store()
+    finally:
+        store.reset_store()
+
+
+# ===========================================================================
 # Blocker B — startup backfill wiring
 # ===========================================================================
 

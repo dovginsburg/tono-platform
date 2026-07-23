@@ -148,6 +148,74 @@ final class Build95LifecycleClockTests: XCTestCase {
         XCTAssertNil(response.clocks)
     }
 
+    // MARK: - F-1: server now DECLARES `clocks` (Optional[LifecycleClocks])
+
+    func testDecodeVariantAcceptsExplicitNullClocksFromDeclaredField() throws {
+        // F-1: `VariantResponse` now declares `clocks: Optional[LifecycleClocks]`.
+        // When the server emits no clocks, the declared field serializes as an
+        // explicit JSON `null` (NSNull), NOT an omitted key. The strict decoder
+        // must treat an explicit `"clocks": null` exactly like an absent
+        // envelope — a truthful `clocks == nil` — with no fabrication and no
+        // decoding error. This is the exact post-F-1 production shape.
+        let payload = #"""
+        {
+          "status": "ok",
+          "axis": "safer",
+          "text": "Could you help me tomorrow?",
+          "rationale": "Softens the ask without changing the request.",
+          "risk_after": "low",
+          "model": "claude-sonnet-4-5",
+          "tier": "sonnet",
+          "clocks": null,
+          "reason": null
+        }
+        """#.data(using: .utf8)!
+        let response = try TonoCoachClient.decodeVariant(
+            payload,
+            expectedAxis: "safer",
+            requestAccepted: Date()
+        )
+        XCTAssertEqual(response.axis, "safer")
+        XCTAssertEqual(response.text, "Could you help me tomorrow?")
+        XCTAssertNil(
+            response.clocks,
+            "explicit `clocks: null` is the truthful no-clocks state — iOS must not fabricate"
+        )
+    }
+
+    func testDecodeVariantAcceptsDeclaredClocksEnvelopeWhenServerEmitsOne() throws {
+        // Forward-compatible: when the declared `clocks` field carries a
+        // well-formed envelope, the strict decoder surfaces all four anchors.
+        // This proves the F-1 declaration and the iOS strict decoder agree on
+        // the wire keys (request_accepted_ms/preflight_end_ms/... integers).
+        let payload = #"""
+        {
+          "status": "ok",
+          "axis": "clearer",
+          "text": "Please confirm by Friday.",
+          "risk_after": "low",
+          "clocks": {
+            "request_accepted_ms": 0,
+            "preflight_end_ms": 5,
+            "provider_start_ms": 5,
+            "response_sent_ms": 42,
+            "preflight_ms": 5,
+            "provider_ms": 37
+          }
+        }
+        """#.data(using: .utf8)!
+        let response = try TonoCoachClient.decodeVariant(
+            payload,
+            expectedAxis: "clearer",
+            requestAccepted: Date()
+        )
+        let clocks = try XCTUnwrap(response.clocks)
+        XCTAssertEqual(clocks.requestAcceptedMonotonicMs, 0)
+        XCTAssertEqual(clocks.preflightEndMonotonicMs, 5)
+        XCTAssertEqual(clocks.providerStartMonotonicMs, 5)
+        XCTAssertEqual(clocks.responseSentMonotonicMs, 42)
+    }
+
     func testDecodeServerClocksRejectsMissingEnvelope() {
         XCTAssertThrowsError(
             try TonoCoachClient.decodeServerClocks(

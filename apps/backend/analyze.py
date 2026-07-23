@@ -1719,6 +1719,15 @@ class VariantResponse(BaseModel):
     risk_after: Optional[Literal["low", "medium", "high"]] = None
     model: Optional[str] = None
     tier: Optional[Literal["sonnet", "haiku"]] = None
+    # Truthful lifecycle clocks (F-1). Explicitly declared with the SAME
+    # `LifecycleClocks` type the /api/analyze envelope uses, so the
+    # selected-variant envelope shares one clock contract instead of an
+    # undeclared/implicit shape. `None` when the server does not emit clocks
+    # for this response — the iOS decoder treats an absent/`null` `clocks` as
+    # the truthful "no server clocks" state and never fabricates one, so
+    # declaring the field is strictly additive and cannot regress iOS strict
+    # decoding (a serialized `"clocks": null` is not a `[String: Any]`).
+    clocks: Optional[LifecycleClocks] = None
     # blocked-only field.
     reason: Optional[str] = None
 
