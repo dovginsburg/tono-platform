@@ -61,6 +61,14 @@ export default function ProCheckoutButton({
         window.location.href = body.url
         return
       }
+      // Money must bind to a canonical account: the backend (and the
+      // /api/checkout proxy) refuse anonymous checkout with 401 auth-required.
+      // Send the visitor to sign in rather than showing a dead error — this is
+      // the "pricing → authenticated account → checkout" step of the journey.
+      if (res.status === 401 || body.error === 'auth-required') {
+        window.location.assign('/app/login')
+        return
+      }
       const msg =
         body.detail ||
         body.error ||

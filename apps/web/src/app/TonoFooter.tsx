@@ -106,6 +106,11 @@ export default function TonoFooter() {
                 </Link>
               </li>
               <li>
+                <Link href="/account" className="inline-flex items-center min-h-[44px] min-w-[44px] text-tono-text-soft hover:text-tono-text transition">
+                  Account
+                </Link>
+              </li>
+              <li>
                 <a
                   href="mailto:hi@tonoit.com?subject=tono%20feedback"
                   className="text-tono-text-soft hover:text-tono-text transition"

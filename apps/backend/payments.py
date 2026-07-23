@@ -40,10 +40,20 @@ import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
+from . import catalog
 from .auth import CurrentUser, OptionalCurrentUser
 from .store import Store, get_store
 
 logger = logging.getLogger(__name__)
+
+# Historical env-var-name mapping, kept as a fail-safe if the committed
+# commercial catalog can't be read. test_commercial_catalog pins these equal to
+# the catalog so the price-env-var names can never drift from the single source
+# of truth.
+_STRIPE_PRICE_ENV_FALLBACK = {
+    "month": "STRIPE_PRICE_PRO_MONTHLY",
+    "year": "STRIPE_PRICE_PRO_YEARLY",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -60,18 +70,56 @@ def _webhook_secret() -> Optional[str]:
 
 
 def _price_for(plan: str, interval: str) -> Optional[str]:
-    """Resolve the Stripe Price ID for a plan + interval from env vars.
-    Returns None if not configured."""
+    """Resolve the Stripe Price ID for a plan + interval from env vars, using the
+    env-var NAME declared in the versioned commercial catalog (single source of
+    truth). Returns None if the plan/interval is unknown."""
 
-    env = {
-        ("pro", "month"): "STRIPE_PRICE_PRO_MONTHLY",
-        ("pro", "year"): "STRIPE_PRICE_PRO_YEARLY",
-    }.get((plan, interval))
+    if plan != "pro" or interval not in ("month", "year"):
+        return None
+    env = None
+    try:
+        env = catalog.stripe_price_env_var(interval)
+    except catalog.CatalogError:
+        env = None
+    if not env:
+        env = _STRIPE_PRICE_ENV_FALLBACK.get(interval)
     return os.environ.get(env, "") if env else None
 
 
 def _public_base_url(request: Request) -> str:
     return os.environ.get("PUBLIC_BASE_URL") or str(request.base_url).rstrip("/")
+
+
+def _portal_return_url(request: Request, requested: Optional[str]) -> str:
+    """Resolve where Stripe returns the user after the billing portal.
+
+    A caller-supplied ``requested`` URL is honoured only when it is https and its
+    host matches the configured public base URL host (or a tonoit.com host) — so
+    an attacker can't turn our portal link into an open redirect. Otherwise we
+    fall back to the on-brand web account page. The previous default
+    (``/v1/checkout/return``) was a 404 with no route behind it.
+    """
+    from urllib.parse import urlparse
+
+    base = _public_base_url(request).rstrip("/")
+    default = f"{base}/app/account"
+
+    if not requested:
+        return default
+    try:
+        parsed = urlparse(requested)
+    except ValueError:
+        return default
+    if parsed.scheme != "https" or not parsed.netloc:
+        return default
+    allowed_hosts = set()
+    base_host = urlparse(base).netloc
+    if base_host:
+        allowed_hosts.add(base_host)
+    host = parsed.netloc
+    if host in allowed_hosts or host == "tonoit.com" or host.endswith(".tonoit.com"):
+        return requested
+    return default
 
 
 def _is_configured() -> bool:
@@ -102,6 +150,13 @@ class CheckoutRequest(BaseModel):
 class CheckoutResponse(BaseModel):
     url: str
     session_id: str
+
+
+class PortalRequest(BaseModel):
+    # Optional caller-supplied return URL (where Stripe sends the user after
+    # they close the billing portal). Validated against an allowlist before use;
+    # anything untrusted falls back to the on-brand account page.
+    return_url: Optional[str] = None
 
 
 class PortalResponse(BaseModel):
@@ -250,6 +305,7 @@ def create_checkout_session(
 def create_portal_session(
     request: Request,
     user: CurrentUser,
+    body: Optional[PortalRequest] = None,
 ) -> PortalResponse:
     if not _is_configured():
         raise HTTPException(503, "Stripe is not configured on this server.")
@@ -263,7 +319,7 @@ def create_portal_session(
     stripe.api_key = _secret()
     session = stripe.billing_portal.Session.create(
         customer=customer_id,
-        return_url=f"{_public_base_url(request)}/v1/checkout/return",
+        return_url=_portal_return_url(request, body.return_url if body else None),
     )
     return PortalResponse(url=session["url"])
 

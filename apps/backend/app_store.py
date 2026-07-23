@@ -79,10 +79,28 @@ from appstoreserverlibrary.signed_data_verifier import (
     VerificationStatus,
 )
 
+from . import catalog
 from .auth import CurrentUser, StoreDep
 from .store import Store, User, _today_utc, get_store
 
 router = APIRouter(tags=["app-store"])
+
+# Historical literal default, kept as a fail-safe if the committed commercial
+# catalog can't be read. test_commercial_catalog pins it equal to the catalog so
+# it can never drift from the single source of truth.
+_APPLE_PRODUCT_IDS_FALLBACK = "com.tonoit.pro.monthly,com.tonoit.pro.yearly"
+
+
+def _default_apple_product_ids() -> str:
+    """Default allowed App Store product ids, sourced from the versioned
+    commercial catalog (single source of truth) with a literal fallback."""
+    try:
+        ids = sorted(catalog.apple_product_ids())
+        if ids:
+            return ",".join(ids)
+    except catalog.CatalogError:
+        pass
+    return _APPLE_PRODUCT_IDS_FALLBACK
 
 
 # ---------------------------------------------------------------------------
@@ -217,9 +235,7 @@ class AppStoreConfig:
 
 
 def get_appstore_config() -> AppStoreConfig:
-    products = os.environ.get(
-        "TONO_APPLE_PRODUCT_IDS", "com.tonoit.pro.monthly,com.tonoit.pro.yearly"
-    )
+    products = os.environ.get("TONO_APPLE_PRODUCT_IDS", _default_apple_product_ids())
     environments = os.environ.get("TONO_APPLE_ENVIRONMENTS", "Production,Sandbox")
     raw_app_id = os.environ.get("TONO_APPLE_APP_APPLE_ID", "").strip()
     app_apple_id: Optional[int] = None

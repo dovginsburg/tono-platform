@@ -16,7 +16,7 @@
 
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { resolvePublicOrigin } from '@/lib/auth-redirects';
+import { BASE_PATH, resolvePublicOrigin } from '@/lib/auth-redirects';
 
 function isSameOriginRequest(request: Request): boolean {
   const origin = request.headers.get('origin');
@@ -64,6 +64,15 @@ export async function POST(request: Request) {
 
   const backendUrl = process.env.TONO_BACKEND_URL || 'https://api.tonoit.com';
 
+  // The web app owns its own return URLs. The backend's default success_url
+  // (`{PUBLIC_BASE_URL}/welcome-pro`) does NOT carry this app's `/app` basePath,
+  // so it would 404. Send explicit, same-origin, basePath-aware URLs pointing at
+  // the real canonical post-checkout page (/app/welcome-pro) and back to pricing
+  // on cancel.
+  const publicOrigin = resolvePublicOrigin(undefined, process.env);
+  const successUrl = `${publicOrigin}${BASE_PATH}/welcome-pro?s=1`;
+  const cancelUrl = `${publicOrigin}${BASE_PATH}/pricing`;
+
   let res: Response;
   try {
     res = await fetch(`${backendUrl}/v1/checkout`, {
@@ -72,7 +81,11 @@ export async function POST(request: Request) {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ interval }),
+      body: JSON.stringify({
+        interval,
+        success_url: successUrl,
+        cancel_url: cancelUrl,
+      }),
       cache: 'no-store',
     });
   } catch (err) {
