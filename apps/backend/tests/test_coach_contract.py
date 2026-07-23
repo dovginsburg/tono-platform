@@ -2,9 +2,12 @@ import pytest
 
 from backend.analyze import (
     AnalyzeRequest,
+    BUILD94_SHARED_INVARIANTS,
+    BUILD94_VARIANT_DEFINITIONS,
     Build94Request,
     CoachContractError,
     LifecycleClocks,
+    build_single_variant_system_prompt,
 
     _build94_optional_system_prompt,
     _build94_optional_user_message,
@@ -794,12 +797,20 @@ def test_build94_normalize_deduplicates_variants():
 # ---------------------------------------------------------------------------
 
 
-def test_variant_allowlist_is_exactly_five_members():
+def test_variant_allowlist_is_exactly_the_locked_set():
     """The exact allowlist is locked. Adding a new variant is a contract
     change and must be coordinated with the client/UI build.
+
+    The set is the legacy Coach ``warmer`` plus the seven keyboard/Shortcut
+    tone chips (Safer + the six fixed optional tones). ``affectionate``,
+    ``professional`` and ``concise`` were promoted from blocked to allowed so a
+    single selected chip on ANY surface (keyboard, iMessage, Apple Shortcut)
+    maps to one authenticated request → one variant. Truly unknown axes still
+    fail closed (see the hostile matrix).
     """
     assert VARIANT_ALLOWLIST == frozenset({
-        "warmer", "clearer", "funnier", "safer", "custom",
+        "warmer", "clearer", "funnier", "safer",
+        "affectionate", "professional", "concise", "custom",
     })
 
 
@@ -973,18 +984,25 @@ def test_model_routing_diagnostics_endpoint_returns_full_routing_table(client):
     body = r.json()
     assert "routing" in body
     routing = body["routing"]
-    assert set(routing.keys()) == {"warmer", "clearer", "funnier", "safer", "custom"}
+    assert set(routing.keys()) == {
+        "warmer", "clearer", "funnier", "safer",
+        "affectionate", "professional", "concise", "custom",
+    }
     # Safer and Custom always Sonnet across every hint value.
     for hint in ("low", "medium", "high", "None"):
         assert routing["safer"][hint]["tier"] == "sonnet"
         assert routing["custom"][hint]["tier"] == "sonnet"
-    # Low-risk built-in non-Safer -> Haiku.
+    # Low-risk built-in non-Safer -> Haiku (including the fixed optional tones).
     assert routing["warmer"]["low"]["tier"] == "haiku"
     assert routing["clearer"]["None"]["tier"] == "haiku"
     assert routing["funnier"]["low"]["tier"] == "haiku"
+    assert routing["affectionate"]["low"]["tier"] == "haiku"
+    assert routing["professional"]["None"]["tier"] == "haiku"
+    assert routing["concise"]["low"]["tier"] == "haiku"
     # Medium/high risk_hint flips to Sonnet.
     assert routing["warmer"]["medium"]["tier"] == "sonnet"
     assert routing["clearer"]["high"]["tier"] == "sonnet"
+    assert routing["professional"]["high"]["tier"] == "sonnet"
 
 
 # ---------------------------------------------------------------------------
@@ -1022,7 +1040,10 @@ def test_mock_single_variant_funnier_produces_distinct_lighter_rewrite():
     assert result["rationale"] != "context doesn't call for humor"
 
 
-@pytest.mark.parametrize("axis", ["warmer", "clearer", "funnier", "safer"])
+@pytest.mark.parametrize(
+    "axis",
+    ["warmer", "clearer", "funnier", "safer", "affectionate", "professional", "concise"],
+)
 def test_mock_single_variant_canonicalizes_each_axis(axis):
     req = VariantRequest(text="hi there", axis=axis)
     result = mock_single_variant(req)
@@ -1053,6 +1074,76 @@ def test_mock_single_variant_rejects_unknown_axis():
     req = VariantRequest(text="hi", axis="shorter")
     with pytest.raises(CoachContractError):
         mock_single_variant(req)
+
+
+@pytest.mark.parametrize("axis", ["affectionate", "professional", "concise"])
+def test_variant_endpoint_serves_fixed_optional_tones(client, axis):
+    """Keyboard/Shortcut parity: the three fixed optional tones the tone-chip
+    strip exposes (Affectionate / Professional / Concise) are served as single,
+    atomic variants on the authenticated selected-variant endpoint — one
+    request → one provider call → one matching variant. They previously
+    returned ``blocked:preflight:unknown_variant``.
+    """
+    import os
+    reg = _register_authed(client)
+    headers = {"Authorization": f"Bearer {reg['api_token']}"}
+    old = os.environ.get("TONO_PROVIDER")
+    os.environ["TONO_PROVIDER"] = "mock"
+    try:
+        r = client.post(
+            "/api/analyze/variant",
+            headers=headers,
+            json={"text": "Hey, could you help me with something?", "axis": axis},
+        )
+    finally:
+        if old is None:
+            os.environ.pop("TONO_PROVIDER", None)
+        else:
+            os.environ["TONO_PROVIDER"] = old
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    # Strict ok envelope, exactly the requested axis, a real (non-empty) rewrite.
+    assert payload["status"] == "ok", payload
+    assert payload["axis"] == axis
+    assert isinstance(payload["text"], str) and payload["text"].strip()
+    # Low-risk built-in non-Safer tones route to the Haiku tier (server-picked).
+    assert payload["tier"] == "haiku"
+    # Single-variant contract: the strict envelope never carries a fan-out batch.
+    assert "suggestions" not in payload
+
+
+def test_variant_endpoint_still_blocks_truly_unknown_axis(client):
+    """The allowlist extension is surgical: axes with no canonical definition
+    (e.g. ``shorter``) still fail closed at preflight with zero provider calls.
+    """
+    reg = _register_authed(client)
+    headers = {"Authorization": f"Bearer {reg['api_token']}"}
+    r = client.post(
+        "/api/analyze/variant",
+        headers=headers,
+        json={"text": "hi there", "axis": "shorter"},
+    )
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    assert payload["status"] == "blocked"
+    assert payload["reason"] == VariantBlockedReason.PREFLIGHT_UNKNOWN_VARIANT
+
+
+def test_single_variant_system_prompt_injects_fixed_optional_definition():
+    """The three promoted tones must carry their canonical single-axis
+    definition + shared invariants into the single-variant system prompt so the
+    single-chip rewrite honors the same semantic + safety boundary the fan-out
+    applies. Clearer/Funnier/Safer stay governed by the base rules.
+    """
+    for axis in ("affectionate", "professional", "concise"):
+        prompt = build_single_variant_system_prompt(
+            VariantRequest(text="Hey there", axis=axis)
+        )
+        assert BUILD94_VARIANT_DEFINITIONS[axis] in prompt, axis
+        assert BUILD94_SHARED_INVARIANTS in prompt, axis
+    # A base axis is unchanged (no fixed-definition injection).
+    base = build_single_variant_system_prompt(VariantRequest(text="Hey there", axis="clearer"))
+    assert BUILD94_SHARED_INVARIANTS not in base
 
 
 # ===========================================================================
@@ -1464,11 +1555,14 @@ def test_deterministic_matrix_two_hundred_hostile_single_variant(client, provide
     headers = {"Authorization": f"Bearer {auth['api_token']}"}
     rows = 0
 
-    # --- Group A: happy-path 5 axes × 4 risk_hint values × 2 providers
-    # = 40 rows. Each must yield status=ok with exactly one suggestion
+    # --- Group A: happy-path 8 axes × 4 risk_hint values × 2 providers
+    # = 64 rows. Each must yield status=ok with exactly one suggestion
     # AND exactly one provider call. We use "mock" and "anthropic"
-    # providers alternately to prove both paths.
-    for axis in ("warmer", "clearer", "funnier", "safer", "custom"):
+    # providers alternately to prove both paths. The axis set is the full
+    # keyboard/Shortcut chip set (Safer + six fixed optional tones) plus the
+    # legacy Coach warmer.
+    for axis in ("warmer", "clearer", "funnier", "safer",
+                 "affectionate", "professional", "concise", "custom"):
         for hint in ("low", "medium", "high", None):
             for provider in ("mock", "anthropic"):
                 provider_counter.reset()
@@ -1539,9 +1633,9 @@ def test_deterministic_matrix_two_hundred_hostile_single_variant(client, provide
         ("funnier", {"text": "this is suicide"}, VariantBlockedReason.PREFLIGHT_CRISIS_KEYWORDS),
         ("warmer", {"text": "hi", "axis": "explicit"}, VariantBlockedReason.PREFLIGHT_UNKNOWN_VARIANT),
         ("warmer", {"text": "hi", "axis": "politer"}, VariantBlockedReason.PREFLIGHT_UNKNOWN_VARIANT),
-        ("warmer", {"text": "hi", "axis": "professional"}, VariantBlockedReason.PREFLIGHT_UNKNOWN_VARIANT),
-        ("warmer", {"text": "hi", "axis": "concise"}, VariantBlockedReason.PREFLIGHT_UNKNOWN_VARIANT),
-        ("warmer", {"text": "hi", "axis": "affectionate"}, VariantBlockedReason.PREFLIGHT_UNKNOWN_VARIANT),
+        # NOTE: professional / concise / affectionate are now ALLOWED (keyboard +
+        # Shortcut parity); they are covered by the happy-path parity test below.
+        # Only genuinely unsupported axes stay blocked here.
         ("warmer", {"text": "hi", "axis": "shorter"}, VariantBlockedReason.PREFLIGHT_UNKNOWN_VARIANT),
     ]
     for axis, mutation, expected_reason in blocked_payloads:

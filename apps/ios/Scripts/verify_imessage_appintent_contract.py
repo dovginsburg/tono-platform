@@ -47,9 +47,10 @@ def check_messages(errors: list[str]) -> None:
     if "isRegistered" not in src:
         errors.append("Messages: Coach is not gated on TonoBackend registration")
 
-    # Deliberate, user-driven Coach — not an automatic call on appear.
-    if "analyzeStream" not in src:
-        errors.append("Messages: Coach does not route through the shared ToneEngine backend")
+    # Deliberate, user-driven Coach — not an automatic call on appear. A single
+    # selected tone chip maps to one authenticated selected-variant request.
+    if "analyzeVariant" not in src:
+        errors.append("Messages: Coach does not route through the selected-variant backend")
 
     # Visible, safe errors rather than silent failure / raw print-only handling.
     if "errorMessage" not in src:
@@ -83,11 +84,35 @@ def check_app_intent(errors: list[str]) -> None:
     if "ProvidesDialog" not in src and "dialog:" not in src:
         errors.append("App Intent: does not return a dialog")
 
-    # Deliberate authenticated Coach: gates on registration, runs in-process.
+    # Selectable Rewrite Style parameter with the SEVEN keyboard-source tone
+    # labels (mandatory Safer + the six fixed optional tones). This is what
+    # makes the style a selectable choice in the Shortcuts editor / metadata.
+    if "AppEnum" not in src:
+        errors.append("App Intent: no AppEnum for the selectable Rewrite Style choices")
+    if "Rewrite Style" not in src:
+        errors.append("App Intent: missing selectable 'Rewrite Style' parameter")
+    for label in ("Safer", "Clearer", "Funnier", "Affectionate", "Professional", "Concise", "Custom"):
+        if label not in src:
+            errors.append(f"App Intent: missing Rewrite Style choice '{label}'")
+
+    # Deliberate authenticated Coach: gates on registration, runs in-process,
+    # and issues ONE selected-variant request per invocation (not a fan-out).
     if "isRegistered" not in src:
         errors.append("App Intent: Coach is not gated on registration (not authenticated)")
-    if "analyzeStream" not in src:
-        errors.append("App Intent: does not route through the shared ToneEngine backend")
+    if "analyzeVariant" not in src:
+        errors.append("App Intent: does not route through the selected-variant backend")
+
+    # No-op guard: the rewritten value must come from the shared resolver, which
+    # never returns the source draft as a success. A `?? draft` (or similar)
+    # fallback that returns the source text as a rewrite is forbidden.
+    if "ShortcutRewrite.resolve" not in src:
+        errors.append("App Intent: does not resolve the variant via the no-op-safe ShortcutRewrite.resolve")
+    if "?? draft" in src or "?? source" in src:
+        errors.append("App Intent: returns the source draft as a fallback 'rewrite' (forbidden no-op success)")
+
+    # Custom is validated + capped at 120 before any request (shared validator).
+    if "validatedCustomText" not in src:
+        errors.append("App Intent: Custom style is not validated/capped via validatedCustomText (120-char cap)")
 
     # Forbidden behaviors: no fake URL, clipboard, or auto-request side effects.
     forbidden = {
