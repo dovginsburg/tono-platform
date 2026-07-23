@@ -490,13 +490,18 @@ def _handle_invoice_event(store: Store, etype: str, obj: dict) -> None:
         if acct:
             account_id = acct.id
 
-    store.apply_stripe_subscription_fact(
+    projection_result = store.apply_stripe_subscription_fact(
         account_id=account_id,
         subscription_id=subscription_id,
         stripe_status=stripe_status,
         period_end_ms=period_end_ms,
         product_id=product_id,
     )
+
+    # Skip mutable update if provider projection determined this event is stale —
+    # a terminal state (refunded/revoked/expired) already guards the purchase.
+    if projection_result == "stale":
+        return
 
     plan = "pro" if stripe_status in ("active", "trialing", "past_due") else "free"
     if account_id:
@@ -611,7 +616,7 @@ def _handle_dispute_funds_reinstated(store: Store, obj: dict) -> None:
     period_end: Optional[int] = sub.get("current_period_end")
     period_end_ms = int(period_end) * 1000 if period_end else None
 
-    if period_end_ms is None or stripe_status not in ("active", "trialing"):
+    if period_end_ms is None or stripe_status not in ("active", "trialing", "past_due"):
         logger.info(
             "Stripe dispute.funds_reinstated: sub=%s status=%s — not reinstating",
             subscription_id, stripe_status,
@@ -666,12 +671,10 @@ def _handle_dispute_closed(store: Store, obj: dict) -> None:
 def _resolve_subscription_from_invoice(invoice_id: Optional[str]) -> Optional[str]:
     if not invoice_id:
         return None
-    try:
-        inv = stripe.Invoice.retrieve(invoice_id)
-        return inv.get("subscription")
-    except Exception as e:
-        logger.warning("Stripe Invoice.retrieve(%s) failed: %s", invoice_id, e)
-        return None
+    # Let Stripe API exceptions propagate — callers must not silently ACK on
+    # retrieval failure.  Only None is returned for genuinely absent subscriptions.
+    inv = stripe.Invoice.retrieve(invoice_id)
+    return inv.get("subscription")
 
 
 def _resolve_customer_and_sub_from_charge_id(
@@ -680,15 +683,14 @@ def _resolve_customer_and_sub_from_charge_id(
     """Return (customer_id, subscription_id) by fetching the charge and its invoice."""
     if not charge_id:
         return None, None
-    try:
-        charge = stripe.Charge.retrieve(charge_id)
-        customer_id = charge.get("customer")
-        invoice_id = charge.get("invoice")
-        subscription_id = _resolve_subscription_from_invoice(invoice_id)
-        return customer_id, subscription_id
-    except Exception as e:
-        logger.warning("Stripe Charge.retrieve(%s) failed: %s", charge_id, e)
-        return None, None
+    # Let Stripe API exceptions propagate so the webhook returns 5xx and Stripe
+    # retries.  Only (None, None) is returned when the objects genuinely lack
+    # a linked subscription — never on a transient retrieval failure.
+    charge = stripe.Charge.retrieve(charge_id)
+    customer_id = charge.get("customer")
+    invoice_id = charge.get("invoice")
+    subscription_id = _resolve_subscription_from_invoice(invoice_id)
+    return customer_id, subscription_id
 
 
 def _downgrade_mutable_columns(

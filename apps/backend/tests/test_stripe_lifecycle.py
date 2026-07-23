@@ -894,3 +894,240 @@ def test_active_event_cannot_resurrect_terminal_subscription(client, monkeypatch
     assert store.get_account(account_id).is_pro is False, \
         "refunded subscription must not be resurrected by a replayed active event"
     assert store.get_stripe_purchase("sub_res_1")["lifecycle_state"] == "refunded"
+
+
+# ---------------------------------------------------------------------------
+# Regression test 17 (QA bug 1):
+# terminal refund + delayed invoice.payment_succeeded cannot regrant mutable Pro
+# ---------------------------------------------------------------------------
+
+
+def test_delayed_invoice_after_full_refund_does_not_regrant_pro(client, monkeypatch):
+    """After a full refund (lifecycle=refunded) a late invoice.payment_succeeded
+    must be treated as stale and must NOT write active plan/status back to the
+    mutable account columns."""
+    from backend.server import app
+    from backend.store import get_store
+
+    _configure_stripe(monkeypatch)
+    device = _register(client)
+    account_id = _sign_in_apple(client, app, device["api_token"], sub="apple-inv-stale-1")
+    store = get_store()
+    store.attach_account_stripe_customer(account_id, "cus_invstale_1")
+
+    import backend.payments as payments_mod
+
+    # Establish active subscription
+    _post_webhook(
+        client, monkeypatch, payments_mod,
+        "evt_invstale_active", "customer.subscription.created",
+        _sub_obj("sub_invstale_1", "cus_invstale_1", "active", account_id=account_id),
+        sub_retrieve=_fake_sub_retrieve("active"),
+    )
+    assert store.get_account(account_id).is_pro is True
+
+    # Full refund → lifecycle=refunded, access revoked
+    monkeypatch.setattr(
+        payments_mod.stripe.Invoice,
+        "retrieve",
+        lambda _id: {"subscription": "sub_invstale_1"},
+    )
+    _post_webhook(
+        client, monkeypatch, payments_mod,
+        "evt_invstale_refund", "charge.refunded",
+        {"customer": "cus_invstale_1", "invoice": "inv_invstale_1",
+         "amount": 399, "amount_refunded": 399},
+    )
+    assert store.get_account(account_id).is_pro is False
+    assert store.get_stripe_purchase("sub_invstale_1")["lifecycle_state"] == "refunded"
+
+    # Delayed invoice.payment_succeeded arrives (Stripe reports sub as active)
+    invoice_obj = {
+        "subscription": "sub_invstale_1",
+        "customer": "cus_invstale_1",
+        "status": "paid",
+    }
+    r = _post_webhook(
+        client, monkeypatch, payments_mod,
+        "evt_invstale_invoice", "invoice.payment_succeeded", invoice_obj,
+        sub_retrieve=_fake_sub_retrieve("active", _FUTURE_PERIOD_END + 30 * 86400),
+    )
+    assert r.status_code == 200
+
+    # Mutable columns must NOT be updated — stale guard holds
+    acct = store.get_account(account_id)
+    assert acct.is_pro is False, \
+        "delayed invoice after full refund must not regrant Pro"
+    assert acct.subscription_status != "active", \
+        "subscription_status must not be set to active after refund"
+    assert store.get_stripe_purchase("sub_invstale_1")["lifecycle_state"] == "refunded"
+
+
+# ---------------------------------------------------------------------------
+# Regression test 18 (QA bug 2):
+# past_due dispute win reinstates access
+# ---------------------------------------------------------------------------
+
+
+def test_past_due_dispute_funds_reinstated_restores_access(client, monkeypatch):
+    """When a dispute is won while the subscription is in past_due grace period,
+    charge.dispute.funds_reinstated must reinstate Pro access."""
+    from backend.server import app
+    from backend.store import get_store
+
+    _configure_stripe(monkeypatch)
+    device = _register(client)
+    account_id = _sign_in_apple(client, app, device["api_token"], sub="apple-pastdue-disp-1")
+    store = get_store()
+    store.attach_account_stripe_customer(account_id, "cus_pddisp_1")
+
+    import backend.payments as payments_mod
+
+    # Establish active subscription, then move to past_due via failed payment
+    _post_webhook(
+        client, monkeypatch, payments_mod,
+        "evt_pddisp_active", "customer.subscription.created",
+        _sub_obj("sub_pddisp_1", "cus_pddisp_1", "active", account_id=account_id),
+        sub_retrieve=_fake_sub_retrieve("active"),
+    )
+    assert store.get_account(account_id).is_pro is True
+
+    _post_webhook(
+        client, monkeypatch, payments_mod,
+        "evt_pddisp_failpay", "invoice.payment_failed",
+        {"subscription": "sub_pddisp_1", "customer": "cus_pddisp_1"},
+        sub_retrieve=_fake_sub_retrieve("past_due"),
+    )
+    # past_due = grace period, still Pro
+    assert store.get_account(account_id).is_pro is True
+
+    # Dispute: funds withdrawn → revoke even though sub is past_due
+    def fake_charge_retrieve(_id):
+        return {"customer": "cus_pddisp_1", "invoice": "inv_pddisp_1"}
+
+    def fake_invoice_retrieve(_id):
+        return {"subscription": "sub_pddisp_1"}
+
+    monkeypatch.setattr(payments_mod.stripe.Charge, "retrieve", fake_charge_retrieve)
+    monkeypatch.setattr(payments_mod.stripe.Invoice, "retrieve", fake_invoice_retrieve)
+
+    dispute_obj = {"id": "dp_pd_1", "charge": "ch_pddisp_1", "status": "needs_response"}
+    _post_webhook(
+        client, monkeypatch, payments_mod,
+        "evt_pddisp_withdraw", "charge.dispute.funds_withdrawn", dispute_obj,
+    )
+    assert store.get_account(account_id).is_pro is False
+    assert store.get_stripe_purchase("sub_pddisp_1")["lifecycle_state"] == "revoked"
+
+    # Dispute won → funds_reinstated with past_due subscription must reinstate
+    r = _post_webhook(
+        client, monkeypatch, payments_mod,
+        "evt_pddisp_reinstate", "charge.dispute.funds_reinstated", dispute_obj,
+        sub_retrieve=_fake_sub_retrieve("past_due", _FUTURE_PERIOD_END + 90 * 86400),
+    )
+    assert r.status_code == 200
+
+    acct = store.get_account(account_id)
+    assert acct.is_pro is True, \
+        "past_due dispute win must reinstate Pro access"
+    assert store.get_stripe_purchase("sub_pddisp_1")["lifecycle_state"] == "active"
+
+
+# ---------------------------------------------------------------------------
+# Regression test 19 (QA bug 3):
+# Stripe API retrieval exception → 500/unprocessed → retry succeeds exactly once
+# ---------------------------------------------------------------------------
+
+
+def test_stripe_retrieval_exception_propagates_5xx_then_retry_succeeds(
+    client, monkeypatch
+):
+    """A transient Stripe API error in Invoice.retrieve during charge.refunded must:
+    - cause a 500 (not a silent 200 ACK)
+    - leave the stripe_events row with processed_at=NULL (inbox stays pending)
+    - allow a successful retry on the next delivery of the same event_id"""
+    import sqlite3
+
+    import stripe as stripe_lib
+
+    from backend.server import app
+    from backend.store import get_store
+
+    _configure_stripe(monkeypatch)
+    device = _register(client)
+    account_id = _sign_in_apple(client, app, device["api_token"], sub="apple-apiexc-1")
+    store = get_store()
+    store.attach_account_stripe_customer(account_id, "cus_apiexc_1")
+
+    import backend.payments as payments_mod
+
+    # Establish active subscription
+    _post_webhook(
+        client, monkeypatch, payments_mod,
+        "evt_apiexc_active", "customer.subscription.created",
+        _sub_obj("sub_apiexc_1", "cus_apiexc_1", "active", account_id=account_id),
+        sub_retrieve=_fake_sub_retrieve("active"),
+    )
+    assert store.get_account(account_id).is_pro is True
+
+    charge_obj = {
+        "id": "ch_apiexc_1",
+        "customer": "cus_apiexc_1",
+        "invoice": "inv_apiexc_1",
+        "amount": 399,
+        "amount_refunded": 399,
+    }
+    event_id = "evt_charge_apiexc_1"
+    event = {
+        "id": event_id,
+        "type": "charge.refunded",
+        "data": {"object": charge_obj},
+    }
+
+    call_count = [0]
+
+    def flaky_invoice_retrieve(_id):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise stripe_lib.error.APIConnectionError("simulated network blip")
+        return {"subscription": "sub_apiexc_1"}
+
+    monkeypatch.setattr(
+        payments_mod.stripe.Webhook, "construct_event", lambda *a, **k: event
+    )
+    monkeypatch.setattr(payments_mod.stripe.Invoice, "retrieve", flaky_invoice_retrieve)
+
+    # First POST: Invoice.retrieve raises → handler throws → 500
+    r1 = client.post(
+        "/v1/stripe/webhook", content=b"{}",
+        headers={"stripe-signature": "sig", "Content-Type": "application/json"},
+    )
+    assert r1.status_code == 500, "transient Stripe error must yield 500 so Stripe retries"
+
+    # Event row must exist with processed_at=NULL (inbox stays pending)
+    conn = sqlite3.connect(store.path)
+    row = conn.execute(
+        "SELECT processed_at FROM stripe_events WHERE event_id=?", (event_id,)
+    ).fetchone()
+    conn.close()
+    assert row is not None, "stripe_events row must be created on first delivery"
+    assert row[0] is None, "processed_at must be NULL after handler failure"
+
+    # Access must not have changed (refund was not processed)
+    assert store.get_account(account_id).is_pro is True
+
+    # Second POST (duplicate_pending path): Invoice.retrieve succeeds → 200
+    r2 = client.post(
+        "/v1/stripe/webhook", content=b"{}",
+        headers={"stripe-signature": "sig", "Content-Type": "application/json"},
+    )
+    assert r2.status_code == 200
+    assert r2.json().get("duplicate") is not True
+
+    # Access must now be revoked and purchase terminal
+    assert store.get_account(account_id).is_pro is False, \
+        "refund must revoke access on successful retry"
+    purchase = store.get_stripe_purchase("sub_apiexc_1")
+    assert purchase["lifecycle_state"] == "refunded"
+
+    assert call_count[0] == 2, "Invoice.retrieve must be called exactly twice (fail then succeed)"
