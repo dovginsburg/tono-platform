@@ -392,6 +392,16 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private var coachErrorContainer: UIView?
     private var coachErrorLabel: UILabel?
     private var coachBusy: Bool = false
+    /// Identifies the request whose loading surface is currently installed in
+    /// the body container. A completion may replace only *its own* loading
+    /// surface, so a superseded request, an invalidated session, or a
+    /// duplicate delivery can never reattach to a surface it does not own.
+    private var coachLoadingRequestID: UUID?
+    /// Coach requests this controller has started. One tap starts exactly
+    /// one; a tap the busy gate refuses starts none. Debug seam for the 1:1
+    /// contract, mirroring `TonoCoachClient.providerCallCount` on the client
+    /// side. Production never reads it.
+    private(set) var coachRequestsStarted = 0
 
     // Build 93 — explicit Shift state plus monotonic document-mutation tracking.
     private var layoutMode: KeyboardLayoutMode = .letters
@@ -620,6 +630,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachTask?.cancel()
         coachTask = nil
         coachRequestID = nil
+        coachLoadingRequestID = nil
         if clearTarget {
             coachRewriteTarget = nil
             coachRequestGuard = nil
@@ -627,11 +638,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachBusy = false
         coachButton?.isEnabled = true
         guard restoreKeyboard, coachContainer != nil, keysInstalled, !isRebuildingLayout else { return }
-        coachContainer?.removeFromSuperview()
-        coachContainer = nil
-        coachResultsStack = nil
-        coachErrorContainer = nil
-        coachErrorLabel = nil
+        removeAllCoachSurfaces()
         installKeyboardLayout()
     }
 
@@ -854,11 +861,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         isEmojiPanelVisible = false
 
         keysStack?.removeFromSuperview()
-        coachContainer?.removeFromSuperview()
-        coachContainer = nil
-        coachResultsStack = nil
-        coachErrorContainer = nil
-        coachErrorLabel = nil
+        removeAllCoachSurfaces()
         shiftButton = nil
         returnButton = nil
 
@@ -1995,11 +1998,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
         keysStack?.removeFromSuperview()
         keysStack = nil
-        coachContainer?.removeFromSuperview()
-        coachContainer = nil
-        coachResultsStack = nil
-        coachErrorContainer = nil
-        coachErrorLabel = nil
+        removeAllCoachSurfaces()
 
         let panel = UIView()
         panel.translatesAutoresizingMaskIntoConstraints = false
@@ -2326,21 +2325,39 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         cancelTransientInteractions()
         spellingService.cancel()
         let proxy = textDocumentProxy
-        guard let target = CoachRewriteTarget.capture(
+        beginCoachRewrite(
             before: proxy.documentContextBeforeInput ?? "",
             after: proxy.documentContextAfterInput ?? "",
+            axis: selectedToneAxes[sender.tag]
+        )
+    }
+
+    /// Bind the rewrite target and the lifecycle guard to `before`/`after`,
+    /// then issue exactly one request for `axis`. Returns the id of the
+    /// request that was started, or nil when there was nothing to rewrite.
+    ///
+    /// Internal, and taking the document context as parameters, so the XCTest
+    /// target can drive the real request lifecycle: a unit-test controller
+    /// has no connected host document, so a chip tap can never reach this
+    /// path. Every production caller passes the live proxy values.
+    @discardableResult
+    func beginCoachRewrite(before: String, after: String, axis: String) -> UUID? {
+        guard let target = CoachRewriteTarget.capture(
+            before: before,
+            after: after,
             host: currentHostSession
         ) else {
             presentCoachEmptyState()
-            return
+            return nil
         }
         coachRewriteTarget = target
         coachRequestGuard = CoachRequestLifecycleGuard(
-            before: proxy.documentContextBeforeInput ?? "",
-            after: proxy.documentContextAfterInput ?? "",
+            before: before,
+            after: after,
             host: currentHostSession
         )
-        runCoach(draft: target.draft, axis: selectedToneAxes[sender.tag])
+        runCoach(draft: target.draft, axis: axis)
+        return coachRequestID
     }
 
     private func presentCoachEmptyState() {
@@ -2375,69 +2392,47 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         }
     }
 
-    private func runCoach(draft: String, axis: String) {
-        invalidateCoachWork(restoreKeyboard: false, clearTarget: false)
-        cancelTransientInteractions()
-        coachBusy = true
-        coachButton?.isEnabled = false
-        presentCoachLoading()
-        let requestID = UUID()
-        coachRequestID = requestID
-        NSLog("TONO_KB BUILD95 coach: begin selected variant axis=\(axis) len=\(draft.count)")
-        let customPrompt = axis == "custom" ? coachVariantSettings.customInstruction : nil
-        coachTask = coachClient.variant(draft: draft, axis: axis, customPrompt: customPrompt) { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self = self,
-                      self.coachRequestID == requestID,
-                      let target = self.coachRewriteTarget,
-                      target.isCurrent(
-                        liveBefore: self.textDocumentProxy.documentContextBeforeInput ?? "",
-                        liveAfter: self.textDocumentProxy.documentContextAfterInput ?? "",
-                        host: self.currentHostSession
-                      ) else { return }
-                self.coachTask = nil
-                self.coachRequestID = nil
-                self.coachBusy = false
-                self.coachButton?.isEnabled = true
-                switch result {
-                case .success(let response):
-                    let rewrite = TonoCoachClient.CoachRewrite(
-                        axis: response.axis,
-                        text: response.text,
-                        rationale: response.rationale,
-                        riskAfter: response.riskAfter
-                    )
-                    let atomic = TonoCoachClient.CoachResponse(
-                        riskLevel: response.riskAfter ?? "medium",
-                        perception: "",
-                        subtext: "",
-                        reason: nil,
-                        suggestions: [rewrite],
-                        flags: []
-                    )
-                    self.presentCoachResults(atomic)
-                case .failure(let error):
-                    self.presentCoachError(error)
-                }
-            }
+    // MARK: - Coach surface ownership
+    //
+    // Loading, results, and error are three presentations of one logical
+    // surface: at most one of them may be parented in the body container at
+    // any instant. Build 98 removed only the panel the `coachContainer`
+    // reference happened to point at, so a rewrite issued from the results
+    // state left the stale results panel parented *underneath* the new
+    // loading panel — on device the previous rewrite stayed on screen behind
+    // the spinner, and every further rewrite added another orphan.
+
+    /// Accessibility identifiers of every coach presentation surface.
+    private static let coachSurfaceIdentifiers: Set<String> = [
+        Const.idCoachLoading,
+        Const.idCoachResults,
+        Const.idCoachError,
+    ]
+
+    /// Remove every coach surface currently parented in the body container —
+    /// not merely the one the tracked reference points at — and drop all
+    /// tracked coach view state. Idempotent.
+    private func removeAllCoachSurfaces() {
+        for surface in bodyContainer?.subviews ?? []
+        where Self.coachSurfaceIdentifiers.contains(surface.accessibilityIdentifier ?? "") {
+            surface.removeFromSuperview()
         }
+        coachContainer?.removeFromSuperview()
+        coachErrorContainer?.removeFromSuperview()
+        coachContainer = nil
+        coachStatusLabel = nil
+        coachResultsStack = nil
+        coachErrorContainer = nil
+        coachErrorLabel = nil
+        coachLoadingRequestID = nil
     }
 
-    private func presentCoachLoading() {
-        guard let container = bodyContainer else { return }
-        cancelTransientInteractions()
-        preferredHeightConstraint?.constant = currentVisualMetrics.preferredContentHeight
-        keysStack?.removeFromSuperview()
-        keysStack = nil
-        coachErrorContainer?.removeFromSuperview()
-        coachErrorContainer = nil
-        emojiPanelView?.removeFromSuperview()
-        emojiPanelView = nil
-        isEmojiPanelVisible = false
-
-        let panel = UIView()
-        panel.translatesAutoresizingMaskIntoConstraints = false
-        panel.accessibilityIdentifier = Const.idCoachLoading
+    /// Atomically install `panel` as the one and only coach surface: every
+    /// prior surface is torn down first, then the new panel is parented and
+    /// pinned. `requestID` is non-nil only for a loading surface, recording
+    /// which in-flight request owns it.
+    private func installCoachSurface(_ panel: UIView, in container: UIView, requestID: UUID? = nil) {
+        removeAllCoachSurfaces()
         container.addSubview(panel)
         NSLayoutConstraint.activate([
             panel.leadingAnchor.constraint(equalTo: container.leadingAnchor),
@@ -2445,6 +2440,130 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             panel.topAnchor.constraint(equalTo: container.topAnchor),
             panel.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
+        coachContainer = panel
+        coachLoadingRequestID = requestID
+    }
+
+    /// Decides whether a coach completion may take over the UI. Fail-closed:
+    /// honored only when the completion's request is still the active one
+    /// *and* the loading surface installed in the container is the one that
+    /// request installed. A superseded request, an invalidated session, or a
+    /// second delivery after the surface was already replaced is rejected.
+    enum CoachCompletionGate {
+        static func accepts(
+            completion requestID: UUID,
+            activeRequestID: UUID?,
+            loadingSurfaceRequestID: UUID?
+        ) -> Bool {
+            guard let activeRequestID, activeRequestID == requestID else { return false }
+            return loadingSurfaceRequestID == requestID
+        }
+    }
+
+    // Internal so the XCTest target can drive the real request path — the
+    // busy gate, the loading surface, and the 1:1 request contract — through
+    // the same entry point the tap handlers use. Not API surface outside the
+    // keyboard module.
+    func runCoach(draft: String, axis: String) {
+        invalidateCoachWork(restoreKeyboard: false, clearTarget: false)
+        cancelTransientInteractions()
+        coachBusy = true
+        coachRequestsStarted += 1
+        coachButton?.isEnabled = false
+        let requestID = UUID()
+        coachRequestID = requestID
+        presentCoachLoading(requestID: requestID)
+        NSLog("TONO_KB BUILD95 coach: begin selected variant axis=\(axis) len=\(draft.count)")
+        let customPrompt = axis == "custom" ? coachVariantSettings.customInstruction : nil
+        coachTask = coachClient.variant(draft: draft, axis: axis, customPrompt: customPrompt) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.completeCoach(
+                    requestID: requestID,
+                    liveBefore: self.textDocumentProxy.documentContextBeforeInput ?? "",
+                    liveAfter: self.textDocumentProxy.documentContextAfterInput ?? "",
+                    result: result
+                )
+            }
+        }
+    }
+
+    /// Hand one finished round trip to the UI, replacing the loading surface
+    /// that this request installed — and nothing else.
+    ///
+    /// Fail-closed in every ambiguous case: a superseded or cancelled
+    /// request, a completion whose loading surface has already been replaced
+    /// or torn down, and a draft that moved under the request are all
+    /// dropped without touching the surface.
+    ///
+    /// Internal, and taking the live document context as parameters, so the
+    /// XCTest target can drive the real delivery path: a unit-test controller
+    /// has no connected host document, so the guard could otherwise never be
+    /// exercised. Production passes the live proxy values, read at delivery.
+    func completeCoach(
+        requestID: UUID,
+        liveBefore: String,
+        liveAfter: String,
+        result: Result<TonoCoachClient.VariantResponse, TonoCoachClient.CoachError>
+    ) {
+        guard CoachCompletionGate.accepts(
+                completion: requestID,
+                activeRequestID: coachRequestID,
+                loadingSurfaceRequestID: coachLoadingRequestID
+              ),
+              let target = coachRewriteTarget,
+              target.isCurrent(
+                liveBefore: liveBefore,
+                liveAfter: liveAfter,
+                host: currentHostSession
+              ) else { return }
+        coachTask = nil
+        coachRequestID = nil
+        coachBusy = false
+        coachButton?.isEnabled = true
+        switch result {
+        case .success(let response):
+            let rewrite = TonoCoachClient.CoachRewrite(
+                axis: response.axis,
+                text: response.text,
+                rationale: response.rationale,
+                riskAfter: response.riskAfter
+            )
+            let atomic = TonoCoachClient.CoachResponse(
+                riskLevel: response.riskAfter ?? "medium",
+                perception: "",
+                subtext: "",
+                reason: nil,
+                suggestions: [rewrite],
+                flags: []
+            )
+            presentCoachResults(atomic, replacingLoadingFor: requestID)
+        case .failure(let error):
+            presentCoachError(error, replacingLoadingFor: requestID)
+        }
+    }
+
+    // Internal so the XCTest target can drive the real UIKit loading state
+    // through the same entry point the request path uses.
+    // This is not API surface outside the keyboard module.
+    func presentCoachLoading(requestID: UUID) {
+        // Record ownership before the container check so a controller without
+        // a body container still completes its request — and clears its busy
+        // state — exactly as it did before surfaces became request-owned.
+        coachLoadingRequestID = requestID
+        guard let container = bodyContainer else { return }
+        cancelTransientInteractions()
+        preferredHeightConstraint?.constant = currentVisualMetrics.preferredContentHeight
+        keysStack?.removeFromSuperview()
+        keysStack = nil
+        emojiPanelView?.removeFromSuperview()
+        emojiPanelView = nil
+        isEmojiPanelVisible = false
+
+        let panel = UIView()
+        panel.translatesAutoresizingMaskIntoConstraints = false
+        panel.accessibilityIdentifier = Const.idCoachLoading
+        installCoachSurface(panel, in: container, requestID: requestID)
 
         let label = UILabel()
         label.text = "Coaching…"
@@ -2466,8 +2585,32 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             spinner.topAnchor.constraint(equalTo: label.bottomAnchor, constant: 8),
         ])
 
-        coachContainer = panel
         coachStatusLabel = label
+    }
+
+    /// Completion entry point: install the results surface only when
+    /// `requestID` still owns the loading surface that is installed. Returns
+    /// whether the surface was replaced, so a refused delivery — superseded,
+    /// duplicate, or invalidated — is observable rather than silent.
+    @discardableResult
+    func presentCoachResults(
+        _ response: TonoCoachClient.CoachResponse,
+        replacingLoadingFor requestID: UUID
+    ) -> Bool {
+        guard coachLoadingRequestID == requestID else { return false }
+        presentCoachResults(response)
+        return true
+    }
+
+    /// Failure counterpart of `presentCoachResults(_:replacingLoadingFor:)`.
+    @discardableResult
+    func presentCoachError(
+        _ err: TonoCoachClient.CoachError,
+        replacingLoadingFor requestID: UUID
+    ) -> Bool {
+        guard coachLoadingRequestID == requestID else { return false }
+        presentCoachError(err)
+        return true
     }
 
     // Internal so the XCTest target can exercise the real UIKit results state.
@@ -2476,21 +2619,11 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         guard let container = bodyContainer else { return }
         cancelTransientInteractions()
         preferredHeightConstraint?.constant = currentVisualMetrics.coachResultsContentHeight
-        coachContainer?.removeFromSuperview()
-        coachContainer = nil
-        coachStatusLabel = nil
-        coachResultsStack = nil
 
         let panel = UIView()
         panel.translatesAutoresizingMaskIntoConstraints = false
         panel.accessibilityIdentifier = Const.idCoachResults
-        container.addSubview(panel)
-        NSLayoutConstraint.activate([
-            panel.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            panel.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            panel.topAnchor.constraint(equalTo: container.topAnchor),
-            panel.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
+        installCoachSurface(panel, in: container)
 
         let title = UILabel()
         title.text = "Tono · \(response.riskDisplayName)"
@@ -2577,7 +2710,6 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             stack.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor),
         ])
 
-        coachContainer = panel
         coachResultsStack = stack
     }
 
@@ -2672,11 +2804,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     @objc private func backToKeysTapped() {
         cancelTransientInteractions()
-        coachContainer?.removeFromSuperview()
-        coachContainer = nil
-        coachResultsStack = nil
-        coachErrorContainer = nil
-        coachErrorLabel = nil
+        removeAllCoachSurfaces()
         installKeyboardLayout()
     }
 
@@ -2727,25 +2855,17 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     // MARK: - Coach error
 
-    private func presentCoachError(_ err: TonoCoachClient.CoachError) {
+    // Internal so the XCTest target can exercise the real UIKit error state.
+    // This is not API surface outside the keyboard module.
+    func presentCoachError(_ err: TonoCoachClient.CoachError) {
         guard let container = bodyContainer else { return }
         cancelTransientInteractions()
         preferredHeightConstraint?.constant = currentVisualMetrics.preferredContentHeight
-        coachContainer?.removeFromSuperview()
-        coachContainer = nil
-        coachStatusLabel = nil
-        coachResultsStack = nil
 
         let panel = UIView()
         panel.translatesAutoresizingMaskIntoConstraints = false
         panel.accessibilityIdentifier = Const.idCoachError
-        container.addSubview(panel)
-        NSLayoutConstraint.activate([
-            panel.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            panel.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            panel.topAnchor.constraint(equalTo: container.topAnchor),
-            panel.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
+        installCoachSurface(panel, in: container)
 
         let title = UILabel()
         title.text = "Tono couldn’t reply"
@@ -2800,31 +2920,20 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             back.widthAnchor.constraint(greaterThanOrEqualToConstant: TonoKeyboardMetrics.ControlGeometry.coachBackControlWidth),
         ])
 
-        coachContainer = panel
         coachErrorContainer = panel
         coachErrorLabel = detail
     }
 
     @objc private func retryTapped() {
-        coachErrorContainer?.removeFromSuperview()
-        coachErrorContainer = nil
-        coachErrorLabel = nil
-        guard let target = CoachRewriteTarget.capture(
-            before: textDocumentProxy.documentContextBeforeInput ?? "",
-            after: textDocumentProxy.documentContextAfterInput ?? "",
-            host: currentHostSession
-        ) else {
-            presentCoachEmptyState()
-            return
-        }
-        coachRewriteTarget = target
-        let axis = selectedToneAxes.first ?? "safer"
-        coachRequestGuard = CoachRequestLifecycleGuard(
-            before: textDocumentProxy.documentContextBeforeInput ?? "",
-            after: textDocumentProxy.documentContextAfterInput ?? "",
-            host: currentHostSession
+        // Tear the error surface down before anything else: a retry that
+        // lands on the empty state must not leave the failed attempt behind.
+        removeAllCoachSurfaces()
+        let proxy = textDocumentProxy
+        beginCoachRewrite(
+            before: proxy.documentContextBeforeInput ?? "",
+            after: proxy.documentContextAfterInput ?? "",
+            axis: selectedToneAxes.first ?? "safer"
         )
-        runCoach(draft: target.draft, axis: axis)
     }
 
     // MARK: - Live Tone v1 integration
