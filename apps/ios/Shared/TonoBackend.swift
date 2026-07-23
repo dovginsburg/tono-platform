@@ -6,12 +6,14 @@
 // Wire shape (Backend/server.py):
 //   POST /v1/register   {device_id?, app_version?, platform?} ->
 //                       {device_id, api_token, plan, is_pro}
-//   GET  /v1/me         -> {device_id, plan, is_pro, used_today,
-//                            daily_limit, subscription_status, ...}
+//   GET  /v1/me         -> {device_id, plan, is_pro,
+//                            subscription_status, ...}
 //   POST /api/analyze   {text, provider?, preferred_voice?, axes?,
 //                        recipient_hint?} ->
 //                       {risk_level, perception, subtext, suggestions,
-//                        flags, used_today, daily_limit, plan}
+//                        flags, plan}
+//   POST /api/analyze/variant {text, axis, custom_prompt?} ->
+//                       {status, axis, text?, rationale?, risk_after?, reason?}
 //   POST /v1/checkout   {interval} -> {url, session_id}
 //   POST /v1/portal                 -> {url}
 //
@@ -36,10 +38,7 @@ public enum TonoBackendError: Error, LocalizedError {
         case .notRegistered:
             return "Account not set up yet. Open the Tono app once to sign in."
         case .http(let code, let msg):
-            // 429 carries a usage payload; we surface its message but the
-            // caller already has used_today/daily_limit on the response
-            // model so the UI can render "N/10 today" without parsing.
-            if code == 429 { return "Daily free limit reached. Open Tono to upgrade." }
+            if code == 429 { return "Active trial or subscription required. Open Tono to continue." }
             if code == 401 { return "Sign-in expired. Open the Tono app to refresh." }
             if code == 503 { return "Service temporarily unavailable." }
             return msg.isEmpty ? "Server error (\(code))." : msg
@@ -52,14 +51,32 @@ public enum TonoBackendError: Error, LocalizedError {
     }
 }
 
+public struct TonoVariantResult: Decodable, Equatable {
+    public let status: String
+    public let axis: String
+    public let text: String?
+    public let rationale: String?
+    public let riskAfter: String?
+    public let reason: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case status, axis, text, rationale, reason
+        case riskAfter = "risk_after"
+    }
+}
+
 public struct TonoMe: Codable, Equatable {
     public let deviceId: String
     public let plan: String
     public let isPro: Bool
-    public let usedToday: Int
-    public let dailyLimit: Int
     public let subscriptionStatus: String?
     public let subscriptionRenewsAt: String?
+    // Canonical server-issued account UUID — the only entitlement principal and
+    // what a new StoreKit purchase binds as `appAccountToken` (build 91 §1).
+    // Decoded as optional purely for robustness against a pre-migration server;
+    // the current backend returns it required non-null. `TonoBackend` validates
+    // its UUID shape and persists it to `KeychainKeys.accountID`.
+    public let accountId: String?
     // Email identity (added 2026-07-03). nil = anonymous user.
     public let email: String?
     public let emailVerifiedAt: String?
@@ -72,10 +89,9 @@ public struct TonoMe: Codable, Equatable {
         case deviceId = "device_id"
         case plan
         case isPro = "is_pro"
-        case usedToday = "used_today"
-        case dailyLimit = "daily_limit"
         case subscriptionStatus = "subscription_status"
         case subscriptionRenewsAt = "subscription_renews_at"
+        case accountId = "account_id"
         case email
         case emailVerifiedAt = "email_verified_at"
         case deviceCountForEmail = "device_count_for_email"
@@ -90,16 +106,12 @@ public struct TonoAnalysisResponse: Codable {
     public let reason: String?
     public let suggestions: [TonoSuggestion]
     public let flags: [String]
-    public let usedToday: Int
-    public let dailyLimit: Int
     public let plan: String
 
     enum CodingKeys: String, CodingKey {
         case riskLevel = "risk_level"
         case reason = "risk_reason"
         case perception, subtext, suggestions, flags, plan
-        case usedToday = "used_today"
-        case dailyLimit = "daily_limit"
     }
 
     public func toAnalysis() -> ToneAnalysis {
@@ -170,14 +182,10 @@ public struct CouponRedemption: Decodable {
 }
 
 public struct TonoUsage: Codable {
-    public let usedToday: Int
-    public let dailyLimit: Int
     public let plan: String
     public let isPro: Bool
 
-    public init(usedToday: Int, dailyLimit: Int, plan: String, isPro: Bool) {
-        self.usedToday = usedToday
-        self.dailyLimit = dailyLimit
+    public init(plan: String, isPro: Bool) {
         self.plan = plan
         self.isPro = isPro
     }
@@ -185,8 +193,6 @@ public struct TonoUsage: Codable {
     enum CodingKeys: String, CodingKey {
         case plan
         case isPro = "is_pro"
-        case usedToday = "used_today"
-        case dailyLimit = "daily_limit"
     }
 }
 
@@ -225,7 +231,9 @@ public final class TonoBackend: @unchecked Sendable {
         SharedKeychain.migrateFromDefaults(key: KeychainKeys.deviceID, defaultsKey: SharedKeys.deviceID)
         SharedKeychain.migrateFromDefaults(key: KeychainKeys.apiKey,   defaultsKey: SharedKeys.apiKey)
 
-        if SharedKeychain.get(KeychainKeys.apiToken) != nil,
+        let existingToken = SharedKeychain.get(KeychainKeys.apiToken)
+        let existingCredential = SharedKeychain.get(KeychainKeys.deviceCredential)
+        if existingToken != nil, existingCredential != nil,
            let me = try? await me() {
             return me
         }
@@ -238,20 +246,37 @@ public final class TonoBackend: @unchecked Sendable {
             return fresh
         }()
 
-        struct Req: Encodable { let device_id: String; let platform: String; let app_version: String }
+        struct Req: Encodable {
+            let device_id: String
+            let device_credential: String?
+            let platform: String
+            let app_version: String
+        }
         struct Resp: Decodable {
             let device_id: String
             let api_token: String
+            let device_credential: String?
             let plan: String
             let is_pro: Bool
+            // Required non-null from the account-first backend (build 91 §1).
+            let account_id: String?
         }
         let resp: Resp = try await post(
             path: "/v1/register",
-            body: Req(device_id: did, platform: platform, app_version: appVersion),
-            authorize: false
+            body: Req(
+                device_id: did,
+                device_credential: existingCredential,
+                platform: platform,
+                app_version: appVersion
+            ),
+            authorize: existingToken != nil
         )
         SharedKeychain.set(resp.device_id, forKey: KeychainKeys.deviceID)
         SharedKeychain.set(resp.api_token, forKey: KeychainKeys.apiToken)
+        persistAccountID(resp.account_id)
+        if let credential = resp.device_credential, !credential.isEmpty {
+            SharedKeychain.set(credential, forKey: KeychainKeys.deviceCredential)
+        }
         // Wipe any residual plain-text credentials from UserDefaults.
         SharedStore.defaults.removeObject(forKey: SharedKeys.apiKey)
         SharedStore.defaults.removeObject(forKey: SharedKeys.provider)
@@ -261,7 +286,36 @@ public final class TonoBackend: @unchecked Sendable {
     }
 
     public func me() async throws -> TonoMe {
-        try await get(path: "/v1/me")
+        let me: TonoMe = try await get(path: "/v1/me")
+        persistAccountID(me.accountId)
+        return me
+    }
+
+    /// Sends StoreKit's Apple-signed JWS to the backend. The backend verifies
+    /// it against Apple's signing chain and remains the sole Pro authority; it
+    /// returns authoritative `/v1/me`-equivalent state only after a durable
+    /// grant/denial commit (build 91 §3/§8).
+    public func syncAppStoreSubscription(signedTransactionInfo: String) async throws -> TonoMe {
+        struct Req: Encodable {
+            let signed_transaction_info: String
+        }
+        let me: TonoMe = try await post(
+            path: "/v1/app-store/subscription",
+            body: Req(signed_transaction_info: signedTransactionInfo),
+            authorize: true
+        )
+        persistAccountID(me.accountId)
+        return me
+    }
+
+    /// Persist the canonical account UUID (build 91 §1) as its own secure
+    /// Keychain item — never a `deviceID` alias. Validates the UUID shape and
+    /// ignores a malformed/absent value so a degraded response can't clobber a
+    /// good stored principal. This is the value `StoreKitManager` binds as the
+    /// purchase `appAccountToken`; without it, a new purchase is disabled.
+    private func persistAccountID(_ raw: String?) {
+        guard let raw, let uuid = UUID(uuidString: raw) else { return }
+        SharedKeychain.set(uuid.uuidString, forKey: KeychainKeys.accountID)
     }
 
     // ── Email identity (added 2026-07-03) ──────────────────────────────────
@@ -393,13 +447,9 @@ public final class TonoBackend: @unchecked Sendable {
     /// the rest of the backend client).
     public struct CoachResponse: Codable, Equatable {
         public let rewrites: [CoachRewrite]
-        public let usedToday: Int?
-        public let dailyLimit: Int?
         public let plan: String?
-        public init(rewrites: [CoachRewrite], usedToday: Int? = nil, dailyLimit: Int? = nil, plan: String? = nil) {
+        public init(rewrites: [CoachRewrite], plan: String? = nil) {
             self.rewrites = rewrites
-            self.usedToday = usedToday
-            self.dailyLimit = dailyLimit
             self.plan = plan
         }
     }
@@ -455,7 +505,7 @@ public final class TonoBackend: @unchecked Sendable {
         if !(200...299).contains(http.statusCode) {
             let body = String(data: data, encoding: .utf8) ?? ""
             if http.statusCode == 429 {
-                throw TonoBackendError.http(http.statusCode, "Daily free limit reached.")
+                throw TonoBackendError.http(http.statusCode, "Active trial or subscription required.")
             }
             if http.statusCode == 401 {
                 throw TonoBackendError.notRegistered
@@ -471,8 +521,6 @@ public final class TonoBackend: @unchecked Sendable {
             }
             let canonical = CoachResponse(
                 rewrites: rewrites,
-                usedToday: parsed.usedToday,
-                dailyLimit: parsed.dailyLimit,
                 plan: parsed.plan
             )
             return String(data: try JSONEncoder().encode(canonical), encoding: .utf8) ?? ""
@@ -483,8 +531,6 @@ public final class TonoBackend: @unchecked Sendable {
             }
             let canonical = CoachResponse(
                 rewrites: rewrites,
-                usedToday: loose.analysis?.usedToday,
-                dailyLimit: loose.analysis?.dailyLimit,
                 plan: loose.analysis?.plan
             )
             return String(data: try JSONEncoder().encode(canonical), encoding: .utf8) ?? ""
@@ -698,8 +744,51 @@ public final class TonoBackend: @unchecked Sendable {
         return try await post(path: "/v1/coupon/redeem", body: Req(code: code), authorize: true)
     }
 
+    // MARK: - Account deletion (build 101)
+
+    /// Permanently deletes the canonical server account bound to the current
+    /// bearer token. Client contract (backend endpoint not yet deployed on this
+    /// branch; URLProtocol tests in Build101RevenueTests validate the shape):
+    ///
+    ///   DELETE /v1/account
+    ///   Authorization: Bearer <api_token>
+    ///   → 200 {} — account deleted; caller must purge local secrets
+    ///   → 401    — token expired/invalid; caller shows re-auth prompt
+    ///   → 404    — account already deleted (idempotent OK for the caller)
+    ///   → 500    — server error; do NOT purge secrets; surface support path
+    ///
+    /// On success the caller is responsible for:
+    ///   1. `SharedKeychain.purgeAccountSecrets()` — remove all server tokens
+    ///   2. `StoreKitManager.shared.resetToAnonymous()` — clear entitlement
+    ///   3. `TonePreferences.recordEntitlement(.notEntitled, isPro: false)`
+    ///   4. Navigate the user to the root/sign-in state
+    public func deleteAccount() async throws {
+        struct EmptyResp: Decodable {}
+        let _: EmptyResp = try await delete(path: "/v1/account")
+    }
+
     public func isRegistered() -> Bool {
         SharedKeychain.get(KeychainKeys.apiToken)?.isEmpty == false
+    }
+
+    /// One selected tone chip maps to one authenticated backend request.
+    /// Blocked/no-op envelopes remain explicit so extension UIs cannot render
+    /// the source draft as a successful rewrite.
+    public func analyzeVariant(
+        text: String,
+        axis: String,
+        customPrompt: String? = nil
+    ) async throws -> TonoVariantResult {
+        struct Req: Encodable {
+            let text: String
+            let axis: String
+            let custom_prompt: String?
+        }
+        return try await post(
+            path: "/api/analyze/variant",
+            body: Req(text: text, axis: axis, custom_prompt: customPrompt),
+            authorize: true
+        )
     }
 
     /// Fire-and-forget: records which rewrite axis the user tapped.
@@ -814,6 +903,11 @@ public final class TonoBackend: @unchecked Sendable {
         return try await execute(req)
     }
 
+    private func delete<Out: Decodable>(path: String) async throws -> Out {
+        let req = try buildRequest(path: path, method: "DELETE", body: Optional<EmptyBody>.none, authorize: true)
+        return try await execute(req)
+    }
+
     private func buildRequest<In: Encodable>(
         path: String, method: String, body: In?, authorize: Bool
     ) throws -> URLRequest {
@@ -850,9 +944,6 @@ public final class TonoBackend: @unchecked Sendable {
             throw TonoBackendError.network("no http response")
         }
         if http.statusCode == 429 {
-            // The body has `{error: {message, used_today, daily_limit}}`
-            // — surface the message but the UI uses Me().usedToday for
-            // the live counter.
             let msg = (try? JSONDecoder().decode(ErrorBody.self, from: data))?.error.message ?? ""
             throw TonoBackendError.http(429, msg)
         }
@@ -868,7 +959,7 @@ public final class TonoBackend: @unchecked Sendable {
     }
 
     private struct ErrorBody: Decodable {
-        struct Inner: Decodable { let message: String; let used_today: Int?; let daily_limit: Int? }
+        struct Inner: Decodable { let message: String }
         let error: Inner
     }
 }

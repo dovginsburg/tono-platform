@@ -260,6 +260,13 @@
             "title": "Plan",
             "type": "string"
           },
+          "retry_axes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Retry Axes",
+            "type": "array"
+          },
           "risk_level": {
             "title": "Risk Level",
             "type": "string"
@@ -1151,6 +1158,13 @@
           "perception": {
             "title": "Perception",
             "type": "string"
+          },
+          "retry_axes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Retry Axes",
+            "type": "array"
           },
           "risk_level": {
             "title": "Risk Level",

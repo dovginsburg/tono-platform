@@ -17,6 +17,7 @@ object SharedKeys {
     const val LAST_REWRITE_VOICE = "tc.lastRewriteVoice"
     const val BACKEND_URL       = "tc.backendURL"
     const val REGISTERED_AT     = "tc.registeredAt"
+    const val ACCOUNT_ID        = "tc.accountId"
     const val KEYBOARD_LOADED   = "tc.keyboardLoaded"
     const val COACH_USE_COUNT   = "tc.coachUseCount"
     const val DRAFT_HISTORY     = "tc.draftHistory"
