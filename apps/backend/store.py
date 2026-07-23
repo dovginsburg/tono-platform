@@ -343,6 +343,19 @@ _TERMINAL_STATES = frozenset({"refunded", "revoked", "expired"})
 # is refused before any DB mutation (contract §4/§6; P0 fail-closed ownership).
 _GRANTABLE_OWNERSHIP = frozenset({"PURCHASED", "FAMILY_SHARED"})
 
+# Stripe subscription status → our append-only lifecycle_state.
+# past_due keeps access during the dunning grace period; unpaid/canceled revoke it.
+_STRIPE_STATUS_TO_LIFECYCLE: dict = {
+    "active":             "active",
+    "trialing":           "active",
+    "past_due":           "active",   # grace period — keep access
+    "incomplete":         "active",   # first invoice still pending
+    "canceled":           "expired",
+    "unpaid":             "expired",  # dunning failed
+    "incomplete_expired": "expired",
+    "paused":             "expired",
+}
+
 
 class AccountConflictError(Exception):
     """Raised when linking a provider identity or passkey would silently
@@ -356,7 +369,7 @@ class DeviceRegistrationProofError(Exception):
 
 
 def _plan_grants_pro(plan: str, subscription_status: Optional[str], coupon_pro_expires_at: Optional[str]) -> bool:
-    if plan == "pro" and subscription_status in ("active", "trialing"):
+    if plan == "pro" and subscription_status in ("active", "trialing", "past_due"):
         return True
     if coupon_pro_expires_at:
         try:
@@ -540,6 +553,11 @@ class Store:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_users_previous_token ON users(previous_api_token)"
         )
+        for stmt in (
+            "ALTER TABLE stripe_events ADD COLUMN processed_at TEXT",
+        ):
+            with contextlib.suppress(sqlite3.OperationalError):
+                self._conn.execute(stmt)
         # Must run after ALTER TABLE adds supabase_sub: on migrated DBs the
         # CREATE TABLE IF NOT EXISTS is a no-op, so the column doesn't exist
         # when SCHEMA's executescript runs. Placing the index here, after the
@@ -833,7 +851,7 @@ class Store:
             cur = self._conn.cursor()
             where = "device_id = ?" if device_id else "stripe_customer_id = ?"
             arg = device_id or customer_id
-            plan = "pro" if status in ("active", "trialing") else "free"
+            plan = "pro" if status in ("active", "trialing", "past_due") else "free"
             cur.execute(
                 f"""
                 UPDATE users
@@ -1043,7 +1061,7 @@ class Store:
             cur = self._conn.cursor()
             where = "id = ?" if account_id else "stripe_customer_id = ?"
             arg = account_id or customer_id
-            plan = "pro" if status in ("active", "trialing") else "free"
+            plan = "pro" if status in ("active", "trialing", "past_due") else "free"
             cur.execute(
                 f"""
                 UPDATE accounts
@@ -1727,18 +1745,248 @@ class Store:
 
     # ---- stripe events ----
 
-    def record_stripe_event(self, event_id: str, type_: str, payload: str) -> bool:
-        def _do() -> bool:
+    def record_stripe_event(self, event_id: str, type_: str, payload: str) -> str:
+        """Insert a new stripe_events row.
+
+        Returns:
+          'new'              – never seen; caller must process then call mark_stripe_event_processed.
+          'duplicate_ok'     – already successfully processed; safe to ACK 2xx immediately.
+          'duplicate_pending' – seen but handler failed last time; caller should retry.
+        """
+        def _do() -> str:
             cur = self._conn.cursor()
             try:
                 cur.execute(
                     "INSERT INTO stripe_events (event_id, received_at, type, payload) VALUES (?, ?, ?, ?)",
                     (event_id, _now_iso(), type_, payload),
                 )
-                return True
+                return "new"
             except sqlite3.IntegrityError:
-                return False
+                cur.execute("SELECT processed_at FROM stripe_events WHERE event_id = ?", (event_id,))
+                row = cur.fetchone()
+                if row and row["processed_at"] is not None:
+                    return "duplicate_ok"
+                return "duplicate_pending"
 
+        return self._run(_do).result()
+
+    def mark_stripe_event_processed(self, event_id: str) -> None:
+        """Stamp a stripe_events row as successfully processed so subsequent
+        deliveries of the same event_id are immediately ACK'd 2xx."""
+        def _do() -> None:
+            self._conn.execute(
+                "UPDATE stripe_events SET processed_at = ? WHERE event_id = ?",
+                (_now_iso(), event_id),
+            )
+        self._run(_do).result()
+
+    # ---- Stripe provider projection (provider_purchases + entitlement_grants) ----
+
+    def apply_stripe_subscription_fact(
+        self,
+        *,
+        account_id: Optional[str],
+        subscription_id: str,
+        stripe_status: str,
+        period_end_ms: int,
+        product_id: str = "stripe_pro",
+        force: bool = False,
+    ) -> str:
+        """Project one verified Stripe subscription event into provider_purchases and
+        entitlement_grants using the same append-only, version-guarded model as Apple IAP.
+
+        period_end_ms (current_period_end × 1000) is the monotonic version oracle:
+        older events with a smaller period_end_ms cannot override a newer fact.
+        Terminal states (expired/refunded/revoked) cannot be resurrected by active events
+        unless force=True (use only for explicit dispute reinstatements).
+
+        Returns the lifecycle_state applied ('active', 'expired', 'stale', …).
+        Does NOT touch the mutable accounts.plan columns — callers keep calling
+        update_account_subscription for backward compat during the transition.
+        """
+        lifecycle_state = _STRIPE_STATUS_TO_LIFECYCLE.get(stripe_status, "expired")
+
+        def _do() -> str:
+            cur = self._conn.cursor()
+            now = _now_iso()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                result = self._apply_stripe_fact_locked(
+                    cur, now,
+                    account_id=account_id,
+                    subscription_id=subscription_id,
+                    stripe_status=stripe_status,
+                    lifecycle_state=lifecycle_state,
+                    period_end_ms=period_end_ms,
+                    product_id=product_id,
+                    force=force,
+                )
+                cur.execute("COMMIT")
+                return result
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
+
+        return self._run(_do).result()
+
+    def _apply_stripe_fact_locked(
+        self, cur, now, *,
+        account_id, subscription_id, stripe_status,
+        lifecycle_state, period_end_ms, product_id,
+        force=False,
+    ) -> str:
+        cur.execute(
+            "SELECT * FROM provider_purchases WHERE provider = 'stripe' AND original_transaction_id = ?",
+            (subscription_id,),
+        )
+        existing = cur.fetchone()
+
+        if existing is not None:
+            stored_ms = existing["latest_signed_ms"] or 0
+            stored_state = existing["lifecycle_state"]
+
+            if not force:
+                # Terminal states cannot be resurrected by active events
+                if stored_state in _TERMINAL_STATES and lifecycle_state == "active":
+                    return "stale"
+                # Equal-timestamp: terminal beats active
+                if period_end_ms == stored_ms and lifecycle_state == "active" and stored_state in _TERMINAL_STATES:
+                    return "stale"
+                # Genuinely stale active event — newer fact already stored
+                if period_end_ms < stored_ms and lifecycle_state == "active":
+                    return "stale"
+
+            cur.execute(
+                """UPDATE provider_purchases
+                      SET lifecycle_state = ?, latest_signed_ms = ?,
+                          latest_transaction_id = ?, product_id = ?,
+                          app_account_token = COALESCE(?, app_account_token),
+                          expires_ms = ?, updated_at = ?
+                    WHERE id = ?""",
+                (lifecycle_state, period_end_ms, subscription_id, product_id,
+                 account_id, period_end_ms, now, existing["id"]),
+            )
+            purchase_id = existing["id"]
+        else:
+            purchase_id = str(uuid.uuid4())
+            cur.execute(
+                """INSERT INTO provider_purchases
+                       (id, provider, original_transaction_id, latest_transaction_id, product_id,
+                        environment, ownership_type, app_account_token, lifecycle_state,
+                        latest_signed_ms, expires_ms, trial_consumed, created_at, updated_at)
+                     VALUES (?, 'stripe', ?, ?, ?, 'production', 'PURCHASED', ?, ?, ?, ?, 0, ?, ?)""",
+                (purchase_id, subscription_id, subscription_id, product_id,
+                 account_id, lifecycle_state, period_end_ms, period_end_ms, now, now),
+            )
+
+        # Grant or revoke entitlement for the account
+        if account_id:
+            # Guard against orphan grants into non-existent accounts (FK safety)
+            cur.execute("SELECT id FROM accounts WHERE id = ?", (account_id,))
+            if cur.fetchone() is None:
+                import logging as _log
+                _log.getLogger(__name__).warning(
+                    "apply_stripe_fact: account_id=%s not found; purchase recorded, grant skipped",
+                    account_id,
+                )
+                return lifecycle_state
+            if lifecycle_state == "active":
+                self._upsert_grant(cur, purchase_id, account_id, "direct", period_end_ms, now)
+            else:
+                self._revoke_grants_for_purchase(cur, purchase_id, now)
+
+        return lifecycle_state
+
+    def apply_stripe_terminal_fact(
+        self,
+        *,
+        subscription_id: str,
+        account_id: Optional[str],
+        lifecycle_state: str,
+    ) -> str:
+        """Apply a terminal fact (refund/dispute reversal) that wins regardless of
+        stored version. Uses max(now_ms, stored+1) so no subsequent active event
+        can resurrect the terminated purchase.
+
+        Does NOT touch mutable account columns — callers do that separately.
+        """
+        def _do() -> str:
+            cur = self._conn.cursor()
+            now = _now_iso()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                cur.execute(
+                    "SELECT id, latest_signed_ms FROM provider_purchases "
+                    "WHERE provider = 'stripe' AND original_transaction_id = ?",
+                    (subscription_id,),
+                )
+                row = cur.fetchone()
+                terminal_ms = _now_ms()
+
+                if row:
+                    terminal_ms = max(terminal_ms, (row["latest_signed_ms"] or 0) + 1)
+                    cur.execute(
+                        """UPDATE provider_purchases
+                              SET lifecycle_state = ?, latest_signed_ms = ?,
+                                  expires_ms = NULL, updated_at = ?
+                            WHERE id = ?""",
+                        (lifecycle_state, terminal_ms, now, row["id"]),
+                    )
+                    self._revoke_grants_for_purchase(cur, row["id"], now)
+                else:
+                    purchase_id = str(uuid.uuid4())
+                    cur.execute(
+                        """INSERT INTO provider_purchases
+                               (id, provider, original_transaction_id, latest_transaction_id,
+                                product_id, environment, ownership_type, app_account_token,
+                                lifecycle_state, latest_signed_ms, expires_ms, trial_consumed,
+                                created_at, updated_at)
+                             VALUES (?, 'stripe', ?, ?, 'stripe_pro', 'production', 'PURCHASED', ?,
+                                     ?, ?, NULL, 0, ?, ?)""",
+                        (purchase_id, subscription_id, subscription_id, account_id,
+                         lifecycle_state, terminal_ms, now, now),
+                    )
+
+                cur.execute("COMMIT")
+                return lifecycle_state
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
+
+        return self._run(_do).result()
+
+    def get_account_by_stripe_customer(self, customer_id: str) -> Optional["Account"]:
+        """Look up the account that owns a Stripe customer ID."""
+        def _do() -> Optional[Account]:
+            cur = self._conn.cursor()
+            cur.execute("SELECT * FROM accounts WHERE stripe_customer_id = ?", (customer_id,))
+            row = cur.fetchone()
+            return _row_to_account(row) if row else None
+        return self._run(_do).result()
+
+    def list_accounts_with_stripe_subscriptions(self) -> list:
+        """Return accounts that have a stripe_subscription_id — used by reconciliation."""
+        def _do() -> list:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT id, stripe_customer_id, stripe_subscription_id, subscription_status "
+                "FROM accounts WHERE stripe_subscription_id IS NOT NULL"
+            )
+            return [dict(r) for r in cur.fetchall()]
+        return self._run(_do).result()
+
+    def get_stripe_purchase(self, subscription_id: str) -> Optional[dict]:
+        """Return the provider_purchases row for a Stripe subscription, or None."""
+        def _do() -> Optional[dict]:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT * FROM provider_purchases WHERE provider = 'stripe' AND original_transaction_id = ?",
+                (subscription_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
         return self._run(_do).result()
 
     # ---- accounts: provider-identity lookup / in-place upgrade ----

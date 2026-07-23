@@ -16,6 +16,13 @@ Webhook signature verification is mandatory. We reject any event whose
 ``record_stripe_event`` for idempotency so re-deliveries don't double-
 update the same user.
 
+Error handling contract:
+  - Bad signature        -> 400 (Stripe stops retrying)
+  - Duplicate processed  -> 200 {duplicate: true} (idempotent ACK)
+  - Duplicate pending    -> process again (previous attempt failed)
+  - Handler failure      -> 500 (Stripe retries every hour for up to 3 days)
+  - Unhandled event type -> 200 (explicit ACK so Stripe stops retrying)
+
 If ``STRIPE_SECRET_KEY`` is unset (local dev), ``/v1/checkout`` returns
 a 503 with a clear "Stripe not configured" message. ``/v1/stripe/webhook``
 returns 503 in the same case — there's nothing meaningful to verify
@@ -279,125 +286,125 @@ async def stripe_webhook(
         logger.warning("Stripe webhook signature failed: %s", e)
         raise HTTPException(400, "invalid signature")
 
-    # Idempotency: bail if we've already processed this event id.
-    if not store.record_stripe_event(event["id"], event["type"], json.dumps(event)):
+    # Idempotency: durable inbox with three outcomes:
+    #   'duplicate_ok'     -> already processed; ACK immediately
+    #   'duplicate_pending' -> previous attempt failed; retry
+    #   'new'              -> first delivery; process then mark done
+    event_status = store.record_stripe_event(event["id"], event["type"], json.dumps(event))
+    if event_status == "duplicate_ok":
         return {"received": True, "duplicate": True}
 
-    etype = event["type"]
-    obj = event["data"]["object"]
-
-    # The whole post-idempotency path is best-effort. ANY internal
-    # failure (missing metadata, an exception in _handle_subscription_event,
-    # an unreachable Stripe API call, a missing user row) must still return
-    # 2xx to Stripe — otherwise Stripe retries every hour for 3 days and
-    # then disables the endpoint. We log the error so it's still visible
-    # in the deploy logs.
+    # 'new' or 'duplicate_pending' — run the handler.
+    # On success: stamp processed_at and return 200.
+    # On failure: re-raise as 500 so Stripe retries (up to 3 days).
+    stripe.api_key = _secret()
     try:
-        if etype in (
-            "checkout.session.completed",
-            "customer.subscription.created",
-            "customer.subscription.updated",
-            "customer.subscription.deleted",
-        ):
-            _handle_subscription_event(store, etype, obj)
-        else:
-            # We intentionally ACK every event type we don't handle
-            # (invoice.*, customer.created, etc.) so Stripe stops
-            # retrying them. They were being returned 2xx by accident
-            # before — keep that contract.
-            logger.info("Stripe webhook: ignoring type=%s", etype)
-    except Exception as e:
-        logger.exception("Stripe webhook handler error for type=%s event=%s: %s", etype, event.get("id"), e)
+        _handle_all_stripe_events(store, event)
+        store.mark_stripe_event_processed(event["id"])
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(
+            "Stripe webhook handler error: type=%s event=%s",
+            event.get("type"), event.get("id"),
+        )
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "webhook handler error — Stripe will retry",
+        ) from exc
 
     return {"received": True}
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Event dispatcher
+# ---------------------------------------------------------------------------
+
+
+def _handle_all_stripe_events(store: Store, event: dict) -> None:
+    """Route a verified Stripe event to the appropriate handler."""
+    etype = event["type"]
+    obj = event["data"]["object"]
+
+    if etype in (
+        "checkout.session.completed",
+        "customer.subscription.created",
+        "customer.subscription.updated",
+        "customer.subscription.deleted",
+    ):
+        _handle_subscription_event(store, etype, obj)
+    elif etype in ("invoice.payment_succeeded", "invoice.payment_failed"):
+        _handle_invoice_event(store, etype, obj)
+    elif etype == "charge.refunded":
+        _handle_charge_refunded(store, obj)
+    elif etype == "charge.dispute.funds_withdrawn":
+        _handle_dispute_funds_withdrawn(store, obj)
+    elif etype == "charge.dispute.funds_reinstated":
+        _handle_dispute_funds_reinstated(store, obj)
+    elif etype == "charge.dispute.closed":
+        _handle_dispute_closed(store, obj)
+    else:
+        # Explicit ACK for unhandled types; Stripe will not retry.
+        logger.info("Stripe webhook: ignoring type=%s id=%s", etype, event.get("id"))
+
+
+# ---------------------------------------------------------------------------
+# Subscription lifecycle handlers
 # ---------------------------------------------------------------------------
 
 
 def _handle_subscription_event(store: Store, etype: str, obj: dict) -> None:
-    """Translate a Stripe subscription event into a user row update.
+    """Handle checkout.session.completed and customer.subscription.* events.
 
-    Two lookup paths:
-      - checkout.session.completed: device_id is in ``client_reference_id``
-        (set when we created the session).
-      - customer.subscription.*: device_id is in
-        ``obj.metadata.tono_device_id`` OR we fall back to looking up by
-        ``obj.customer``.
+    Writes to BOTH:
+      1. provider_purchases + entitlement_grants (append-only, version-guarded)
+      2. accounts.plan / subscription_status (mutable; backward compat)
     """
-
     device_id: Optional[str] = None
     account_id: Optional[str] = _meta(obj, "tono_account_id")
     customer_id: Optional[str] = None
     subscription_id: Optional[str] = None
     status_str: Optional[str] = None
-    renews_at: Optional[str] = None
+    period_end: Optional[int] = None
+    product_id: str = "stripe_pro"
 
     if etype == "checkout.session.completed":
         device_id = obj.get("client_reference_id") or _meta(obj, "tono_device_id")
         customer_id = obj.get("customer")
         subscription_id = obj.get("subscription")
-        # Pull the subscription to get the real status + renewal date.
-        # This is the call most likely to fail in production (network
-        # glitch, Stripe API outage, expired test/live key after a
-        # dashboard config change). Fall back to the checkout session's
-        # own status so we still record the event instead of 500-ing.
         if subscription_id:
-            try:
-                sub = stripe.Subscription.retrieve(subscription_id)
-                status_str = sub.get("status")
-                renews_at = _iso(sub.get("current_period_end"))
-            except Exception as e:
-                logger.warning(
-                    "Stripe Subscription.retrieve(%s) failed during "
-                    "checkout.session.completed; falling back to session "
-                    "status. err=%s",
-                    subscription_id,
-                    e,
-                )
-                status_str = obj.get("status") or "active"
-                renews_at = _iso(obj.get("current_period_end"))
+            # Let exceptions propagate — the outer handler returns 500 so
+            # Stripe retries; the duplicate_pending path re-runs on retry.
+            sub = stripe.Subscription.retrieve(subscription_id)
+            status_str = sub.get("status")
+            period_end = sub.get("current_period_end")
+            product_id = _product_id_from_sub(sub)
         else:
             status_str = "active"
+            period_end = obj.get("current_period_end")
     else:
         customer_id = obj.get("customer")
         subscription_id = obj.get("id")
         status_str = obj.get("status")
-        renews_at = _iso(obj.get("current_period_end"))
+        period_end = obj.get("current_period_end")
         device_id = _meta(obj, "tono_device_id")
+        product_id = _product_id_from_sub(obj)
 
-    if status_str == "canceled" or etype == "customer.subscription.deleted":
-        # Treat deletions as immediate downgrade.
-        # Skip cleanly if we have nothing to look the row up by — Stripe
-        # sends deletion events for subscriptions we never wrote to (e.g.
-        # from a previous deployment, or a different app sharing the
-        # account). 500-ing on those makes Stripe disable the endpoint.
-        if not account_id and not device_id and not customer_id:
-            logger.info(
-                "Stripe webhook: subscription event has no tono_device_id "
-                "and no customer id; skipping (event type=%s).",
-                etype,
+    # Resolve account_id from customer if not already in metadata
+    if not account_id and customer_id:
+        acct = store.get_account_by_stripe_customer(customer_id)
+        if acct:
+            account_id = acct.id
+
+    # Guard: event references an account that doesn't exist in our DB
+    if account_id:
+        if store.get_account(account_id) is None:
+            logger.warning(
+                "Stripe webhook: account_id=%s from metadata not found in DB; "
+                "skipping provider projection (type=%s)",
+                account_id, etype,
             )
-            return
-        if account_id:
-            store.update_account_subscription(
-                account_id=account_id,
-                customer_id=customer_id,
-                subscription_id=None,
-                status="canceled",
-                renews_at=None,
-            )
-        else:
-            store.update_subscription(
-                device_id=device_id,
-                customer_id=customer_id,
-                subscription_id=None,
-                status="canceled",
-                renews_at=None,
-            )
-        return
+            account_id = None  # fall through to mutable-column update only
 
     if not account_id and not device_id and not customer_id:
         logger.info(
@@ -407,24 +414,315 @@ def _handle_subscription_event(store: Store, etype: str, obj: dict) -> None:
         )
         return
 
+    period_end_ms = int(period_end) * 1000 if period_end else None
+    is_deleted = status_str == "canceled" or etype == "customer.subscription.deleted"
+    effective_status = "canceled" if is_deleted else status_str
+    renews_at = _iso(period_end)
+
+    # ── 1. Provider projection ──────────────────────────────────────────────
+    projection_result = None
+    if subscription_id and period_end_ms is not None and status_str is not None:
+        projection_result = store.apply_stripe_subscription_fact(
+            account_id=account_id,
+            subscription_id=subscription_id,
+            stripe_status=effective_status if is_deleted else status_str,
+            period_end_ms=period_end_ms,
+            product_id=product_id,
+        )
+
+    # ── 2. Mutable column update (backward compat) ──────────────────────────
+    # Skip if the provider projection determined this is a stale event — a
+    # terminal state (refunded/revoked/expired) already guards the purchase.
+    if projection_result == "stale":
+        return
+
     if account_id:
         if customer_id:
             store.attach_account_stripe_customer(account_id, customer_id)
         store.update_account_subscription(
             account_id=account_id,
             customer_id=customer_id,
-            subscription_id=subscription_id,
-            status=status_str,
-            renews_at=renews_at,
+            subscription_id=None if is_deleted else subscription_id,
+            status=effective_status,
+            renews_at=None if is_deleted else renews_at,
         )
     else:
         store.update_subscription(
             device_id=device_id,
             customer_id=customer_id,
-            subscription_id=subscription_id,
-            status=status_str,
-            renews_at=renews_at,
+            subscription_id=None if is_deleted else subscription_id,
+            status=effective_status,
+            renews_at=None if is_deleted else renews_at,
         )
+
+
+def _handle_invoice_event(store: Store, etype: str, obj: dict) -> None:
+    """Handle invoice.payment_succeeded and invoice.payment_failed.
+
+    Fetches the current subscription state from Stripe and projects it
+    into the provider model + mutable columns.
+    """
+    subscription_id: Optional[str] = obj.get("subscription")
+    customer_id: Optional[str] = obj.get("customer")
+
+    if not subscription_id:
+        logger.info("Stripe webhook: invoice event without subscription_id, ignoring")
+        return
+
+    # Fetch authoritative subscription state — raises on network failure
+    # (Stripe will retry the webhook).
+    sub = stripe.Subscription.retrieve(subscription_id)
+    stripe_status: str = sub.get("status") or "unknown"
+    period_end: Optional[int] = sub.get("current_period_end")
+    period_end_ms = int(period_end) * 1000 if period_end else None
+    product_id = _product_id_from_sub(sub)
+
+    if period_end_ms is None:
+        logger.warning(
+            "Stripe invoice event: no current_period_end for sub=%s; skipping",
+            subscription_id,
+        )
+        return
+
+    account_id: Optional[str] = None
+    if customer_id:
+        acct = store.get_account_by_stripe_customer(customer_id)
+        if acct:
+            account_id = acct.id
+
+    store.apply_stripe_subscription_fact(
+        account_id=account_id,
+        subscription_id=subscription_id,
+        stripe_status=stripe_status,
+        period_end_ms=period_end_ms,
+        product_id=product_id,
+    )
+
+    plan = "pro" if stripe_status in ("active", "trialing", "past_due") else "free"
+    if account_id:
+        store.update_account_subscription(
+            account_id=account_id,
+            customer_id=customer_id,
+            subscription_id=subscription_id if plan == "pro" else None,
+            status=stripe_status,
+            renews_at=_iso(period_end) if plan == "pro" else None,
+        )
+    elif customer_id:
+        store.update_subscription(
+            device_id=None,
+            customer_id=customer_id,
+            subscription_id=subscription_id if plan == "pro" else None,
+            status=stripe_status,
+            renews_at=_iso(period_end) if plan == "pro" else None,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Charge / refund / dispute handlers
+# ---------------------------------------------------------------------------
+
+
+def _handle_charge_refunded(store: Store, obj: dict) -> None:
+    """Full refund → revoke access immediately. Partial refund → log only."""
+    customer_id: Optional[str] = obj.get("customer")
+    invoice_id: Optional[str] = obj.get("invoice")
+    amount: int = obj.get("amount", 0)
+    amount_refunded: int = obj.get("amount_refunded", 0)
+
+    if amount > 0 and amount_refunded < amount:
+        logger.info(
+            "Stripe charge.refunded: partial refund %s/%s customer=%s — no access change",
+            amount_refunded, amount, customer_id,
+        )
+        return
+
+    subscription_id = _resolve_subscription_from_invoice(invoice_id)
+    if not subscription_id:
+        logger.warning(
+            "Stripe charge.refunded: cannot resolve subscription from invoice=%s; "
+            "access state unchanged",
+            invoice_id,
+        )
+        return
+
+    account_id: Optional[str] = None
+    if customer_id:
+        acct = store.get_account_by_stripe_customer(customer_id)
+        if acct:
+            account_id = acct.id
+
+    store.apply_stripe_terminal_fact(
+        subscription_id=subscription_id,
+        account_id=account_id,
+        lifecycle_state="refunded",
+    )
+    _downgrade_mutable_columns(store, account_id, customer_id, subscription_id)
+
+
+def _handle_dispute_funds_withdrawn(store: Store, obj: dict) -> None:
+    """Bank reversed our funds on a dispute — revoke access immediately."""
+    charge_id: Optional[str] = obj.get("charge")
+    customer_id, subscription_id = _resolve_customer_and_sub_from_charge_id(charge_id)
+
+    if not subscription_id:
+        logger.warning(
+            "Stripe charge.dispute.funds_withdrawn: cannot resolve subscription "
+            "from charge=%s dispute=%s",
+            charge_id, obj.get("id"),
+        )
+        return
+
+    account_id: Optional[str] = None
+    if customer_id:
+        acct = store.get_account_by_stripe_customer(customer_id)
+        if acct:
+            account_id = acct.id
+
+    store.apply_stripe_terminal_fact(
+        subscription_id=subscription_id,
+        account_id=account_id,
+        lifecycle_state="revoked",
+    )
+    _downgrade_mutable_columns(store, account_id, customer_id, subscription_id)
+
+
+def _handle_dispute_funds_reinstated(store: Store, obj: dict) -> None:
+    """We won the dispute — funds returned. Reinstate if subscription is still active."""
+    charge_id: Optional[str] = obj.get("charge")
+    customer_id, subscription_id = _resolve_customer_and_sub_from_charge_id(charge_id)
+
+    if not subscription_id:
+        logger.info(
+            "Stripe charge.dispute.funds_reinstated: no subscription to reinstate "
+            "(charge=%s)", charge_id,
+        )
+        return
+
+    try:
+        sub = stripe.Subscription.retrieve(subscription_id)
+    except Exception as e:
+        logger.warning(
+            "Stripe Subscription.retrieve(%s) failed during funds_reinstated: %s",
+            subscription_id, e,
+        )
+        raise
+
+    stripe_status: str = sub.get("status") or "unknown"
+    period_end: Optional[int] = sub.get("current_period_end")
+    period_end_ms = int(period_end) * 1000 if period_end else None
+
+    if period_end_ms is None or stripe_status not in ("active", "trialing"):
+        logger.info(
+            "Stripe dispute.funds_reinstated: sub=%s status=%s — not reinstating",
+            subscription_id, stripe_status,
+        )
+        return
+
+    account_id: Optional[str] = None
+    if customer_id:
+        acct = store.get_account_by_stripe_customer(customer_id)
+        if acct:
+            account_id = acct.id
+
+    # force=True: dispute won → explicit reinstatement beats any terminal guard.
+    store.apply_stripe_subscription_fact(
+        account_id=account_id,
+        subscription_id=subscription_id,
+        stripe_status=stripe_status,
+        period_end_ms=period_end_ms,
+        product_id=_product_id_from_sub(sub),
+        force=True,
+    )
+    if account_id:
+        store.update_account_subscription(
+            account_id=account_id,
+            customer_id=customer_id,
+            subscription_id=subscription_id,
+            status=stripe_status,
+            renews_at=_iso(period_end),
+        )
+    elif customer_id:
+        store.update_subscription(
+            device_id=None,
+            customer_id=customer_id,
+            subscription_id=subscription_id,
+            status=stripe_status,
+            renews_at=_iso(period_end),
+        )
+
+
+def _handle_dispute_closed(store: Store, obj: dict) -> None:
+    """Handle charge.dispute.closed. Won → reinstate; lost is handled by funds_withdrawn."""
+    if obj.get("status") == "won":
+        _handle_dispute_funds_reinstated(store, obj)
+    # 'lost' / 'needs_response': funds_withdrawn event already fired the revocation.
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _resolve_subscription_from_invoice(invoice_id: Optional[str]) -> Optional[str]:
+    if not invoice_id:
+        return None
+    try:
+        inv = stripe.Invoice.retrieve(invoice_id)
+        return inv.get("subscription")
+    except Exception as e:
+        logger.warning("Stripe Invoice.retrieve(%s) failed: %s", invoice_id, e)
+        return None
+
+
+def _resolve_customer_and_sub_from_charge_id(
+    charge_id: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """Return (customer_id, subscription_id) by fetching the charge and its invoice."""
+    if not charge_id:
+        return None, None
+    try:
+        charge = stripe.Charge.retrieve(charge_id)
+        customer_id = charge.get("customer")
+        invoice_id = charge.get("invoice")
+        subscription_id = _resolve_subscription_from_invoice(invoice_id)
+        return customer_id, subscription_id
+    except Exception as e:
+        logger.warning("Stripe Charge.retrieve(%s) failed: %s", charge_id, e)
+        return None, None
+
+
+def _downgrade_mutable_columns(
+    store: Store,
+    account_id: Optional[str],
+    customer_id: Optional[str],
+    subscription_id: str,
+) -> None:
+    """Set plan=free on the mutable account/user columns after a refund/dispute."""
+    if account_id:
+        store.update_account_subscription(
+            account_id=account_id,
+            customer_id=customer_id,
+            subscription_id=None,
+            status="canceled",
+            renews_at=None,
+        )
+    elif customer_id:
+        store.update_subscription(
+            device_id=None,
+            customer_id=customer_id,
+            subscription_id=None,
+            status="canceled",
+            renews_at=None,
+        )
+
+
+def _product_id_from_sub(sub: dict) -> str:
+    """Extract the Stripe product ID from a subscription object's items list."""
+    items = (sub.get("items") or {}).get("data") or []
+    if items:
+        price = items[0].get("price") or {}
+        return price.get("product") or "stripe_pro"
+    return "stripe_pro"
 
 
 def _meta(obj: dict, key: str) -> Optional[str]:
