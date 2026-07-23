@@ -31,4 +31,11 @@ USER tono
 
 EXPOSE 8765
 
-CMD uvicorn backend.server:app --host 0.0.0.0 --port ${PORT:-8765} --workers 2
+# Single application worker on purpose: production (Render srv-d9gg8ngk1i2s738lngd0)
+# runs on a persistent disk at /data backed by one SQLite file in WAL mode.
+# Multiple workers would each run Store._init_schema() concurrently at startup,
+# racing on `PRAGMA journal_mode=WAL` against the same file, and would share a
+# single-writer SQLite database across processes with no shared-file safety
+# guarantee. One worker serializes schema init and writes. Do not raise this
+# without a genuinely concurrency-safe backing store.
+CMD uvicorn backend.server:app --host 0.0.0.0 --port ${PORT:-8765} --workers 1

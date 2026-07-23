@@ -82,6 +82,17 @@
             ],
             "title": "Context Hints"
           },
+          "custom_instruction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Instruction"
+          },
           "draft": {
             "title": "Draft",
             "type": "string"
@@ -94,6 +105,20 @@
             ],
             "title": "Mode",
             "type": "string"
+          },
+          "optional_variants": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Optional Variants"
           },
           "preferred_voice": {
             "anyOf": [
@@ -241,6 +266,16 @@
       },
       "ApiAnalyzeResponse": {
         "properties": {
+          "clocks": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LifecycleClocks"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "daily_limit": {
             "title": "Daily Limit",
             "type": "integer"
@@ -430,6 +465,24 @@
         "title": "CreateCouponRequest",
         "type": "object"
       },
+      "DeleteAccountResponse": {
+        "properties": {
+          "deleted": {
+            "title": "Deleted",
+            "type": "boolean"
+          },
+          "revoked_devices": {
+            "title": "Revoked Devices",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "deleted",
+          "revoked_devices"
+        ],
+        "title": "DeleteAccountResponse",
+        "type": "object"
+      },
       "EventRequest": {
         "additionalProperties": false,
         "properties": {
@@ -599,18 +652,50 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "LifecycleClocks": {
+        "description": "Privacy-safe lifecycle phase/duration envelope.\n\nAll values are monotonic milliseconds from `time.monotonic_ns()` and are\nstrictly integer to keep the wire format predictable across iOS keyboard\nextension builds. The envelope is intentionally domain-bound to one server\ncall (no request id, no token, no IP, no draft, no device) so it can be\nsurfaced to clients without crossing the existing privacy boundary.\n\nSemantics:\n  request_accepted_ms: server-clock instant the request entered\n    `mock_variant_analyze` / `anthropic_analyze`. iOS uses this to verify\n    the server clock is in the same instant domain as its captured\n    `requestAccepted` (it is \u2014 both come from a monotonic source on\n    each side; iOS converts its `Date` to monotonic ms before comparing).\n  preflight_end_ms: server-clock instant after Safer dispatch completed\n    and the build-94 post-validation gate had a verdict. Always >=\n    request_accepted_ms.\n  provider_start_ms: server-clock instant the parallel optional\n    dispatch began. Always >= preflight_end_ms (Safer is gated first).\n  response_sent_ms: server-clock instant the JSON envelope was\n    serialized and returned. Always >= provider_start_ms.\n  preflight_ms: integer ms spent in Safer dispatch + validation.\n    Must be >= 0 and <= response_sent_ms - request_accepted_ms.\n  provider_ms: integer ms spent in the parallel optional dispatch.\n    Must be >= 0 and <= response_sent_ms - provider_start_ms.\n\nThe two derived fields (`preflight_ms`, `provider_ms`) let the iOS\ndecoder cross-check the four anchors against each other. A malformed\nenvelope (any anchor < its predecessor, any derived < 0) is rejected\non the client and surfaced as a decoding error \u2014 never silently\ncoerced into a fabricated value.",
+        "properties": {
+          "preflight_end_ms": {
+            "title": "Preflight End Ms",
+            "type": "integer"
+          },
+          "preflight_ms": {
+            "title": "Preflight Ms",
+            "type": "integer"
+          },
+          "provider_ms": {
+            "title": "Provider Ms",
+            "type": "integer"
+          },
+          "provider_start_ms": {
+            "title": "Provider Start Ms",
+            "type": "integer"
+          },
+          "request_accepted_ms": {
+            "title": "Request Accepted Ms",
+            "type": "integer"
+          },
+          "response_sent_ms": {
+            "title": "Response Sent Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "request_accepted_ms",
+          "preflight_end_ms",
+          "provider_start_ms",
+          "response_sent_ms",
+          "preflight_ms",
+          "provider_ms"
+        ],
+        "title": "LifecycleClocks",
+        "type": "object"
+      },
       "MeResponse": {
         "properties": {
           "account_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Account Id"
+            "title": "Account Id",
+            "type": "string"
           },
           "daily_limit": {
             "title": "Daily Limit",
@@ -662,7 +747,8 @@
           "used_today",
           "daily_limit",
           "subscription_status",
-          "subscription_renews_at"
+          "subscription_renews_at",
+          "account_id"
         ],
         "title": "MeResponse",
         "type": "object"
@@ -800,6 +886,19 @@
           "type"
         ],
         "title": "MetricsRequest",
+        "type": "object"
+      },
+      "NotificationRequest": {
+        "properties": {
+          "signedPayload": {
+            "title": "Signedpayload",
+            "type": "string"
+          }
+        },
+        "required": [
+          "signedPayload"
+        ],
+        "title": "NotificationRequest",
         "type": "object"
       },
       "PasskeyListItem": {
@@ -990,6 +1089,7 @@
           "app_version": {
             "anyOf": [
               {
+                "maxLength": 64,
                 "type": "string"
               },
               {
@@ -998,9 +1098,23 @@
             ],
             "title": "App Version"
           },
+          "device_credential": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 43,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Credential"
+          },
           "device_id": {
             "anyOf": [
               {
+                "format": "uuid",
                 "type": "string"
               },
               {
@@ -1012,6 +1126,14 @@
           "platform": {
             "anyOf": [
               {
+                "enum": [
+                  "ios",
+                  "android",
+                  "macos",
+                  "windows",
+                  "web",
+                  "slack"
+                ],
                 "type": "string"
               },
               {
@@ -1026,9 +1148,24 @@
       },
       "RegisterResponse": {
         "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
           "api_token": {
             "title": "Api Token",
             "type": "string"
+          },
+          "device_credential": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Credential"
           },
           "device_id": {
             "title": "Device Id",
@@ -1047,7 +1184,8 @@
           "device_id",
           "api_token",
           "plan",
-          "is_pro"
+          "is_pro",
+          "account_id"
         ],
         "title": "RegisterResponse",
         "type": "object"
@@ -1139,8 +1277,31 @@
         "title": "SignInResponse",
         "type": "object"
       },
+      "SubscriptionSyncRequest": {
+        "properties": {
+          "signed_transaction_info": {
+            "title": "Signed Transaction Info",
+            "type": "string"
+          }
+        },
+        "required": [
+          "signed_transaction_info"
+        ],
+        "title": "SubscriptionSyncRequest",
+        "type": "object"
+      },
       "ToneAnalysis": {
         "properties": {
+          "clocks": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LifecycleClocks"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "flags": {
             "items": {
               "type": "string"
@@ -1221,6 +1382,261 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "VariantRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "axis": {
+            "description": "Exact variant from the allowlist: warmer | clearer | funnier | safer | custom. Server enforces the allowlist; client never chooses model.",
+            "title": "Axis",
+            "type": "string"
+          },
+          "custom_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Required when axis=custom. Short Custom directive (max 240 chars). Ignored for non-custom axes.",
+            "title": "Custom Prompt"
+          },
+          "locale": {
+            "default": "en",
+            "description": "BCP-47 locale code.",
+            "title": "Locale",
+            "type": "string"
+          },
+          "preferred_voice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferred Voice"
+          },
+          "recipient_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recipient Hint"
+          },
+          "risk_hint": {
+            "anyOf": [
+              {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional risk hint from a prior fan-out /api/analyze call. Used for server-side model routing only; does NOT affect the preflight decision.",
+            "title": "Risk Hint"
+          },
+          "text": {
+            "description": "The draft message to rewrite.",
+            "title": "Text",
+            "type": "string"
+          },
+          "thread_context": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Context"
+          }
+        },
+        "required": [
+          "text",
+          "axis"
+        ],
+        "title": "VariantRequest",
+        "type": "object"
+      },
+      "VariantResponse": {
+        "description": "Strict ``ok|blocked`` envelope for the selected-variant endpoint.\n\nExactly one of ``status=\"ok\"`` or ``status=\"blocked\"``. No third state.\n``text``, ``rationale``, ``risk_after``, ``model`` are populated only\non ``status=\"ok\"``. ``reason`` is populated only on ``status=\"blocked\"``.",
+        "properties": {
+          "axis": {
+            "title": "Axis",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "risk_after": {
+            "anyOf": [
+              {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk After"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "blocked"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "tier": {
+            "anyOf": [
+              {
+                "enum": [
+                  "sonnet",
+                  "haiku"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier"
+          }
+        },
+        "required": [
+          "status",
+          "axis"
+        ],
+        "title": "VariantResponse",
+        "type": "object"
+      },
+      "WebSignInRequest": {
+        "properties": {
+          "access_token": {
+            "title": "Access Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "access_token"
+        ],
+        "title": "WebSignInRequest",
+        "type": "object"
+      },
+      "WebSignInResponse": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "api_token": {
+            "title": "Api Token",
+            "type": "string"
+          },
+          "device_credential": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Credential"
+          },
+          "device_id": {
+            "title": "Device Id",
+            "type": "string"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "is_pro": {
+            "title": "Is Pro",
+            "type": "boolean"
+          },
+          "plan": {
+            "title": "Plan",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_id",
+          "api_token",
+          "account_id",
+          "plan",
+          "is_pro"
+        ],
+        "title": "WebSignInResponse",
         "type": "object"
       }
     },
@@ -1662,6 +2078,50 @@
         "summary": "Api Analyze"
       }
     },
+    "/api/analyze/variant": {
+      "post": {
+        "description": "Selected-variant endpoint. One chip, one variant, one provider call.\n\nPhase ordering:\n  request_accepted -> preflight_end -> provider_start -> provider_end -> response_sent\n\nNote: ``response_sent`` fires on both ``ok`` and ``blocked`` paths so the\ntiming signal is consistent regardless of outcome.",
+        "operationId": "api_analyze_variant_api_analyze_variant_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VariantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VariantResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Api Analyze Variant"
+      }
+    },
     "/health": {
       "get": {
         "operationId": "health_health_get",
@@ -1680,6 +2140,27 @@
           }
         },
         "summary": "Health"
+      }
+    },
+    "/internal/model-routing": {
+      "get": {
+        "description": "Return the resolved (tier, model) for each allowlisted axis under\neach risk_hint value. Read-only; no provider calls; no PII.\n\nUsed by tests in ``test_coach_contract.py`` to assert the routing\ncontract: Safer/Custom/high-risk -> Sonnet; low-risk built-in non-Safer\n-> Haiku.",
+        "operationId": "model_routing_diagnostics_internal_model_routing_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Model Routing Diagnostics Internal Model Routing Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Model Routing Diagnostics"
       }
     },
     "/slack/command": {
@@ -1811,6 +2292,29 @@
         ]
       }
     },
+    "/v1/account": {
+      "delete": {
+        "operationId": "delete_account_v1_account_delete",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteAccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Account"
+      }
+    },
     "/v1/analyze": {
       "post": {
         "description": "Unauthenticated passthrough kept for backward compatibility with\nthe iOS Playground tab and integration tests. No billing is applied,\nbut a per-IP cap protects the shared provider credentials from abuse.",
@@ -1848,6 +2352,97 @@
           }
         },
         "summary": "V1 Analyze"
+      }
+    },
+    "/v1/app-store/notifications": {
+      "post": {
+        "operationId": "app_store_notifications_v1_app_store_notifications_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response App Store Notifications V1 App Store Notifications Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "App Store Notifications",
+        "tags": [
+          "app-store"
+        ]
+      }
+    },
+    "/v1/app-store/subscription": {
+      "post": {
+        "operationId": "sync_subscription_v1_app_store_subscription_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubscriptionSyncRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Sync Subscription V1 App Store Subscription Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Sync Subscription",
+        "tags": [
+          "app-store"
+        ]
       }
     },
     "/v1/auth/apple": {
@@ -2140,6 +2735,49 @@
         "tags": [
           "passkeys"
         ]
+      }
+    },
+    "/v1/auth/web": {
+      "post": {
+        "operationId": "auth_web_v1_auth_web_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebSignInRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebSignInResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Auth Web"
       }
     },
     "/v1/checkout": {
