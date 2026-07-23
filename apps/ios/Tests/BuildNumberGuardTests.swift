@@ -17,7 +17,7 @@ import XCTest
 /// where build numbers disagree it fails on the version values, never on a
 /// syntax/type error.
 final class BuildNumberGuardTests: XCTestCase {
-    private static let expectedBuild = "98"
+    private static let expectedBuild = "99"
 
     private static let shippedPlists = [
         "App/Info.plist",
@@ -45,7 +45,7 @@ final class BuildNumberGuardTests: XCTestCase {
             let actual = plist?["CFBundleVersion"] as? String
             XCTAssertEqual(
                 actual, Self.expectedBuild,
-                "\(relative) declares CFBundleVersion \(actual ?? "nil"); build 98 requires \(Self.expectedBuild) across every shipped bundle"
+                "\(relative) declares CFBundleVersion \(actual ?? "nil"); build 99 requires \(Self.expectedBuild) across every shipped bundle"
             )
         }
     }
