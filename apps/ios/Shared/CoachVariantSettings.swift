@@ -224,3 +224,148 @@ public struct CoachVariantSettingsStore {
         defaults.set(Self.currentVersion, forKey: Self.versionKey)
     }
 }
+
+// MARK: - Apple Shortcut / App Intent rewrite-style contract
+//
+// The Apple Shortcut ("Rewrite with Tono") exposes the SAME tone chips the
+// keyboard and iMessage surfaces render: the mandatory Safer chip plus the six
+// fixed optional tones (Clearer, Funnier, Affectionate, Professional, Concise,
+// Custom). Keeping the label→axis map, the 120-char Custom cap, and the no-op
+// guard *here* — beside the shared tone-chip contract and reusing
+// `CoachOptionalVariant` / `CoachVariantSettings.maximumCustomLength` — means
+// the Shortcut cannot drift from the keyboard chips or the backend variant
+// axis allowlist. Pure (Foundation only): no AppIntents, no UIKit, no network,
+// so it is directly unit-testable.
+
+/// One selectable Rewrite Style for the Apple Shortcut. Raw value == the exact
+/// axis string sent to `POST /api/analyze/variant` and == the keyboard chip
+/// axis (`CoachToneChipContract`), so the three stay in lock-step.
+public enum ShortcutRewriteStyle: String, CaseIterable, Hashable {
+    case safer
+    case clearer
+    case funnier
+    case affectionate
+    case professional
+    case concise
+    case custom
+
+    /// Backend selected-variant axis (a member of the server VARIANT_ALLOWLIST).
+    public var axis: String { rawValue }
+
+    /// Keyboard-source display label (identical to `CoachToneChipContract.label`).
+    public var label: String { CoachToneChipContract.label(for: rawValue) }
+
+    /// Only the Custom tone consumes a free-text directive.
+    public var requiresCustomText: Bool { self == .custom }
+
+    /// Canonical selectable order: the mandatory Safer chip first, then the six
+    /// optional tones in their persisted `CoachOptionalVariant` declaration
+    /// order. This is the exact chip order the keyboard/iMessage strips render.
+    public static var selectableOrder: [ShortcutRewriteStyle] {
+        [.safer] + CoachOptionalVariant.allCases.map(Self.init(optional:))
+    }
+
+    private init(optional: CoachOptionalVariant) {
+        switch optional {
+        case .clearer: self = .clearer
+        case .funnier: self = .funnier
+        case .affectionate: self = .affectionate
+        case .professional: self = .professional
+        case .concise: self = .concise
+        case .custom: self = .custom
+        }
+    }
+}
+
+/// Pure resolver + validator for the Shortcut rewrite lane. Encapsulates the
+/// Custom 120-char rule and the "never return the source draft as a successful
+/// rewrite" no-op guard so the App Intent stays a thin wrapper and the behavior
+/// is unit-testable without AppIntents/URLSession.
+public enum ShortcutRewrite {
+    /// Matches `CoachVariantSettings.maximumCustomLength` and the backend
+    /// `BUILD94_MAX_CUSTOM_LENGTH` (both 120).
+    public static let maxCustomLength = CoachVariantSettings.maximumCustomLength
+
+    /// Honest, user-facing failure reasons. Every path that is NOT a genuine,
+    /// distinct rewrite lands here — the resolver never falls back to the
+    /// source draft.
+    public enum Failure: Error, Equatable {
+        case notRegistered
+        case emptyDraft
+        case customRequired
+        case customTooLong(max: Int)
+        case noDistinctRewrite
+        case entitlementRequired
+        case blocked(reason: String?)
+        case emptyResult
+
+        public var message: String {
+            switch self {
+            case .notRegistered:
+                return "Open Tono once to create your account, then try again."
+            case .emptyDraft:
+                return "Type a message to rewrite first."
+            case .customRequired:
+                return "Enter a Custom style instruction (1–\(ShortcutRewrite.maxCustomLength) characters)."
+            case .customTooLong(let max):
+                return "Custom style must be \(max) characters or fewer."
+            case .noDistinctRewrite:
+                return "Tono couldn't produce a distinct rewrite. Try again or pick another style."
+            case .entitlementRequired:
+                return "An active trial or subscription is required. Open Tono to continue."
+            case .blocked(let reason):
+                if let reason, !reason.isEmpty {
+                    return "Tono couldn't rewrite that (\(reason))."
+                }
+                return "Tono couldn't rewrite that. Try again or pick another style."
+            case .emptyResult:
+                return "Tono returned an empty rewrite. Try again."
+            }
+        }
+    }
+
+    /// Validate + bound the Custom directive. Trims; rejects empty; rejects any
+    /// directive longer than 120 characters (never silently truncates a
+    /// too-long instruction into a "success", which could change its meaning).
+    public static func validatedCustomText(_ raw: String?) -> Result<String, Failure> {
+        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return .failure(.customRequired) }
+        if trimmed.count > maxCustomLength { return .failure(.customTooLong(max: maxCustomLength)) }
+        return .success(trimmed)
+    }
+
+    /// Case/whitespace/punctuation-insensitive normalization used for the no-op
+    /// comparison — a byte-for-byte mirror of the iMessage extension's
+    /// `normalized(_:)` so a rewrite that only churns casing or punctuation is
+    /// still caught as a no-op.
+    public static func normalizedForNoOp(_ text: String) -> String {
+        text.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    /// Resolve a `/api/analyze/variant` envelope into either the rewritten
+    /// String or an honest failure. This is the load-bearing guard: it returns
+    /// `.success` ONLY for a non-empty rewrite that is distinct from the source
+    /// draft. A blocked envelope, an empty rewrite, or a near-identical no-op
+    /// all fail — the source draft is NEVER returned as a success.
+    ///
+    /// `status`/`axis`/`text`/`reason` come straight from `TonoVariantResult`.
+    public static func resolve(
+        status: String,
+        text: String?,
+        reason: String?,
+        source: String
+    ) -> Result<String, Failure> {
+        let rewrite = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard status == "ok" else {
+            return .failure(reason == "no_distinct_rewrite" ? .noDistinctRewrite : .blocked(reason: reason))
+        }
+        guard !rewrite.isEmpty else { return .failure(.emptyResult) }
+        guard normalizedForNoOp(rewrite) != normalizedForNoOp(source) else {
+            return .failure(.noDistinctRewrite)
+        }
+        return .success(rewrite)
+    }
+}

@@ -1633,8 +1633,18 @@ def get_user_signup_date(user_id: str) -> datetime.datetime:
 # Exact variant allowlist -- server-side enforced at the request boundary.
 # Anything outside this set returns ``blocked:preflight:unknown_variant``
 # BEFORE any provider call is issued.
+#
+# Parity note: the keyboard/iMessage tone-chip strip and the Apple Shortcut
+# both expose Safer + the six fixed optional tones (Clearer, Funnier,
+# Affectionate, Professional, Concise, Custom). ``affectionate``,
+# ``professional`` and ``concise`` carry canonical single-axis definitions in
+# ``BUILD94_VARIANT_DEFINITIONS`` and are served here as single, atomic
+# rewrites so a single selected chip on ANY surface maps to one request →
+# one provider call → one matching variant. ``warmer`` remains for the legacy
+# Coach lane. Truly unknown axes (``shorter``, ``politer`` …) still fail closed.
 VARIANT_ALLOWLIST: frozenset[str] = frozenset({
-    "warmer", "clearer", "funnier", "safer", "custom",
+    "warmer", "clearer", "funnier", "safer",
+    "affectionate", "professional", "concise", "custom",
 })
 
 # Custom-prompt guardrails (deterministic, zero LLM calls).
@@ -1750,8 +1760,8 @@ class VariantRequest(BaseModel):
         ...,
         description=(
             "Exact variant from the allowlist: warmer | clearer | funnier | "
-            "safer | custom. Server enforces the allowlist; client never "
-            "chooses model."
+            "safer | affectionate | professional | concise | custom. Server "
+            "enforces the allowlist; client never chooses model."
         ),
     )
     risk_hint: Optional[Literal["low", "medium", "high"]] = Field(
@@ -1881,6 +1891,15 @@ The JSON schema is:
 def build_single_variant_system_prompt(req: VariantRequest) -> str:
     """Mirror of ``build_system_prompt`` but pinned to the single-variant prompt."""
     system = SINGLE_VARIANT_SYSTEM_PROMPT
+    # Fixed optional axes (affectionate / professional / concise) are not
+    # described by the base twelve rules. Inject Ezra's canonical single-axis
+    # definition plus the shared invariants so a single-chip rewrite honors the
+    # SAME semantic boundary and safety floor the keyboard's fan-out pipeline
+    # applies to these tones. Clearer/Funnier/Safer/Warmer stay governed by the
+    # base rules (7, 8, 11) exactly as before.
+    definition = BUILD94_VARIANT_DEFINITIONS.get(req.axis)
+    if req.axis in {"affectionate", "professional", "concise"} and definition:
+        system += "\n\n" + definition + "\n" + BUILD94_SHARED_INVARIANTS
     # The Custom axis is user-supplied; pin it as an additive directive.
     # Safer-first ordering is preserved: we ask the model to rephrase
     # against the safer envelope, then optionally layer the Custom ask.
@@ -1898,7 +1917,7 @@ def build_single_variant_user_prompt(req: VariantRequest) -> str:
     lines: list[str] = []
     if req.thread_context:
         lines += ["THREAD (message you're replying to):", req.thread_context, ""]
-    draft = intended_draft(req.text) if req.axis in {"warmer", "clearer", "funnier", "safer"} else req.text.strip()
+    draft = intended_draft(req.text) if req.axis in {"warmer", "clearer", "funnier", "safer", "affectionate", "professional", "concise"} else req.text.strip()
     lines += [
         "DRAFT (rewrite for this single axis only):" if req.thread_context else "DRAFT:",
         draft,
@@ -2062,7 +2081,7 @@ def mock_single_variant(req: VariantRequest) -> dict[str, Any]:
     near-identical source text (the response-boundary guard in
     ``invoke_single_variant`` enforces this for real providers).
     """
-    draft = intended_draft(req.text) if req.axis in {"warmer", "clearer", "funnier", "safer"} else req.text.strip()
+    draft = intended_draft(req.text) if req.axis in {"warmer", "clearer", "funnier", "safer", "affectionate", "professional", "concise"} else req.text.strip()
     lower = draft.lower()
     rationale = "Matches the selected axis intent."
     risk_after: Optional[str] = "low"
@@ -2090,6 +2109,22 @@ def mock_single_variant(req: VariantRequest) -> dict[str, Any]:
         ]:
             text = re.sub(bad, good, text, flags=re.IGNORECASE)
         rationale = "Removes anything that could be read as guilt or cold."
+    elif req.axis == "affectionate":
+        # Mirrors the fan-out optional_generate: make existing warmth explicit
+        # without inventing intimacy. Deterministic and always distinct.
+        text = f"With care, {draft}"
+        rationale = "Makes existing warmth explicit without inventing intimacy."
+    elif req.axis == "professional":
+        # Mirrors the fan-out optional_generate: light register lift, no jargon.
+        text = draft.replace("Hey", "Hello", 1)
+        rationale = "Makes it polished and respectful without adding jargon."
+    elif req.axis == "concise":
+        # Mirrors the fan-out optional_generate: strip filler/whitespace while
+        # preserving every fact and ask. May be near-identical for an already
+        # tight draft; non-funnier axes are single-attempt and returned as
+        # generated (the response-boundary no-op guard is funnier-only).
+        text = " ".join(draft.split())
+        rationale = "Removes filler while preserving every fact and ask."
     elif req.axis == "custom":
         # The Custom axis layers a short directive on top of Safer. Mock
         # returns Safer with the Custom directive appended as a rationale.
