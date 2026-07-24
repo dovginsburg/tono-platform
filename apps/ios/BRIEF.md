@@ -65,7 +65,7 @@ nuance — highest pain-per-dollar, strong organic community, low sales friction
 - Feature toggles (thread context, weekly digest, risk delta, memory inference)
 - Recipient management (add manually or import from Contacts)
 - Axis toggles
-- Plan section: Free vs Pro, upgrade button, promo code redemption, manage subscription
+- Plan section: entitlement status, trial/upgrade button, promo code redemption, manage subscription
 - **PaywallView** (StoreKit 2, annual-first):
   - Header: "Your personal coach / Tono gets better the more you use it."
   - Feature lines: remembers how you write to each person · ranks rewrites by your style

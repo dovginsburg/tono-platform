@@ -10,7 +10,7 @@ Draft text — transient only
 When you tap Coach, the draft you're working on is sent to our server for analysis. It is processed, used to generate the rewrite suggestions, and then immediately discarded. We do not store your draft text. We do not log message content to disk. We do not retain copies for training, debugging, or any other purpose.
 
 Subscription status
-We store your plan (Free / Pro) and renewal date so the app can show you what you have access to. Payments are handled by Google Play Billing; we receive a tokenized subscription identifier, not your card details.
+We store your entitlement status and renewal date so the app can show you what you have access to. Payments are handled by Google Play Billing; we receive a tokenized subscription identifier, not your card details.
 
 Aggregate, content-free usage signals (only if you opt in)
 If you turn on "Help improve Tono" in Settings (on by default for new users, off by default for existing users until they re-confirm), we record only:

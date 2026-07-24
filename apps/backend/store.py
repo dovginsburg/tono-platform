@@ -95,6 +95,47 @@ CREATE INDEX IF NOT EXISTS idx_accounts_apple_sub ON accounts(apple_sub);
 CREATE INDEX IF NOT EXISTS idx_accounts_google_sub ON accounts(google_sub);
 CREATE INDEX IF NOT EXISTS idx_accounts_stripe_customer ON accounts(stripe_customer_id);
 
+-- Monotonic one-lifetime-trial authority.  The primary key is the concurrency
+-- arbiter on SQLite and maps directly to PostgreSQL ON CONFLICT semantics.
+CREATE TABLE IF NOT EXISTS stripe_trial_ledger (
+    scope             TEXT NOT NULL CHECK(scope IN ('account','customer','fingerprint')),
+    scope_id          TEXT NOT NULL,
+    state             TEXT NOT NULL CHECK(state IN ('reserved','consumed','released')),
+    session_id        TEXT,
+    subscription_id   TEXT,
+    account_id        TEXT,
+    customer_id       TEXT,
+    reserved_at       TEXT NOT NULL,
+    consumed_at       TEXT,
+    updated_at        TEXT NOT NULL,
+    PRIMARY KEY (scope, scope_id)
+);
+CREATE INDEX IF NOT EXISTS idx_trial_ledger_session ON stripe_trial_ledger(session_id);
+CREATE INDEX IF NOT EXISTS idx_trial_ledger_subscription ON stripe_trial_ledger(subscription_id);
+
+-- Canonical Stripe customer ownership. Both columns are unique, preventing a
+-- customer from moving between accounts and an account from acquiring two
+-- reachable customers under concurrent checkout.
+CREATE TABLE IF NOT EXISTS stripe_customer_bindings (
+    customer_id TEXT PRIMARY KEY,
+    account_id  TEXT NOT NULL UNIQUE REFERENCES accounts(id),
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS stripe_trial_conflicts (
+    id              TEXT PRIMARY KEY,
+    conflict_kind   TEXT NOT NULL,
+    scope           TEXT NOT NULL,
+    scope_id        TEXT NOT NULL,
+    account_id      TEXT,
+    customer_id     TEXT,
+    subscription_id TEXT,
+    detail          TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    UNIQUE(conflict_kind, scope, scope_id, account_id, customer_id, subscription_id)
+);
+
 -- A passkey (WebAuthn credential) is what makes Face ID / Touch ID /
 -- Windows Hello / Android biometric unlock work as a *login* method on
 -- web and desktop: the browser/OS handles the biometric prompt and only
@@ -424,9 +465,9 @@ class Account:
         """True once this account carries a real sign-in identity (Apple/
         Google/email). An anonymous auto-account created at registration is
         NOT identified: build 91 gives every device a canonical account UUID
-        (the entitlement principal), but an anonymous account still bills and
-        pools its free-tier quota exactly like the pre-accounts device did —
-        the account only becomes the billing/quota source of truth once the
+        (the entitlement principal), but an anonymous account remains
+        non-entitled and fails closed — the account only becomes the billing
+        and entitlement source of truth once the
         person actually signs in. Passkey-only accounts always carry an email
         at registration, so the columns are a sufficient signal. A Supabase web
         sign-in is an identity too (verified Apple/Google via Supabase)."""
@@ -607,7 +648,55 @@ class Store:
         self._conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_supabase_sub ON accounts(supabase_sub)"
         )
+        self._backfill_stripe_trial_ledger()
         self._seed_feature_flags()
+
+    def _backfill_stripe_trial_ledger(self) -> None:
+        """Conservatively consume every legacy Stripe-touching principal.
+
+        Tombstones are intentionally included. Conflicting legacy customer
+        ownership is audited and the first binding is retained; no row is
+        silently reassigned. The whole migration is replay-safe.
+        """
+        cur = self._conn.cursor()
+        now = _now_iso()
+        cur.execute("BEGIN IMMEDIATE")
+        try:
+            cur.execute(
+                """SELECT a.id account_id, a.stripe_customer_id customer_id
+                     FROM accounts a
+                    WHERE a.stripe_customer_id IS NOT NULL
+                       OR a.stripe_subscription_id IS NOT NULL
+                       OR a.subscription_status IS NOT NULL
+                   UNION
+                   SELECT u.account_id, u.stripe_customer_id
+                     FROM users u
+                    WHERE u.account_id IS NOT NULL
+                      AND (u.stripe_customer_id IS NOT NULL
+                       OR u.stripe_subscription_id IS NOT NULL
+                       OR u.subscription_status IS NOT NULL)
+                   UNION
+                   SELECT p.app_account_token, NULL
+                     FROM provider_purchases p
+                    WHERE p.provider='stripe' AND p.app_account_token IS NOT NULL"""
+            )
+            for row in cur.fetchall():
+                account_id, customer_id = row["account_id"], row["customer_id"]
+                if account_id:
+                    self._insert_consumed_scope(
+                        cur, "account", account_id, now, account_id, customer_id, None
+                    )
+                if customer_id:
+                    self._insert_consumed_scope(
+                        cur, "customer", customer_id, now, account_id, customer_id, None
+                    )
+                    if account_id:
+                        self._bind_customer_tx(cur, account_id, customer_id, now)
+            cur.execute("COMMIT")
+        except Exception:
+            with contextlib.suppress(sqlite3.Error):
+                cur.execute("ROLLBACK")
+            raise
 
     def _seed_feature_flags(self) -> None:
         cur = self._conn.cursor()
@@ -860,23 +949,258 @@ class Store:
 
         return self._run(_do).result()
 
-    def attach_stripe_customer(self, device_id: str, customer_id: str) -> None:
-        def _do() -> None:
-            self._conn.execute(
-                "UPDATE users SET stripe_customer_id=?, updated_at=? WHERE device_id=?",
-                (customer_id, _now_iso(), device_id),
-            )
+    def _record_trial_conflict(
+        self, cur, kind, scope, scope_id, account_id, customer_id, subscription_id, detail
+    ) -> None:
+        cur.execute(
+            """INSERT OR IGNORE INTO stripe_trial_conflicts
+               (id, conflict_kind, scope, scope_id, account_id, customer_id,
+                subscription_id, detail, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (str(uuid.uuid4()), kind, scope, scope_id, account_id, customer_id,
+             subscription_id, detail, _now_iso()),
+        )
 
+    def _bind_customer_tx(self, cur, account_id: str, customer_id: str, now: str) -> bool:
+        cur.execute(
+            """INSERT OR IGNORE INTO stripe_customer_bindings
+               (customer_id, account_id, created_at, updated_at) VALUES (?, ?, ?, ?)""",
+            (customer_id, account_id, now, now),
+        )
+        cur.execute(
+            "SELECT customer_id, account_id FROM stripe_customer_bindings "
+            "WHERE customer_id=? OR account_id=?",
+            (customer_id, account_id),
+        )
+        bindings = cur.fetchall()
+        winner = next(
+            (r for r in bindings
+             if r["customer_id"] == customer_id and r["account_id"] == account_id), None
+        )
+        if winner is None:
+            self._record_trial_conflict(
+                cur, "customer_binding", "customer", customer_id, account_id,
+                customer_id, None, "customer or account is already bound"
+            )
+            return False
+        cur.execute(
+            """UPDATE accounts SET stripe_customer_id=COALESCE(stripe_customer_id, ?),
+                   updated_at=? WHERE id=? AND
+                   (stripe_customer_id IS NULL OR stripe_customer_id=?)""",
+            (customer_id, now, account_id, customer_id),
+        )
+        return True
+
+    def attach_account_stripe_customer(self, account_id: str, customer_id: str) -> bool:
+        def _do() -> bool:
+            cur = self._conn.cursor()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                result = self._bind_customer_tx(cur, account_id, customer_id, _now_iso())
+                cur.execute("COMMIT")
+                return result
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
+        return self._run(_do).result()
+
+    def attach_stripe_customer(self, device_id: str, customer_id: str) -> bool:
+        user = self.get_by_device(device_id)
+        return bool(
+            user and user.account_id
+            and self.attach_account_stripe_customer(user.account_id, customer_id)
+        )
+
+    def get_stripe_customer_binding(self, account_id: str) -> Optional[str]:
+        def _do():
+            row = self._conn.execute(
+                "SELECT customer_id FROM stripe_customer_bindings WHERE account_id=?",
+                (account_id,),
+            ).fetchone()
+            return row["customer_id"] if row else None
+        return self._run(_do).result()
+
+    def reserve_stripe_trial(self, *, account_id: str, customer_id: Optional[str]) -> bool:
+        """Atomically reserve account and existing-customer scopes."""
+        def _do() -> bool:
+            cur = self._conn.cursor()
+            now = _now_iso()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                scopes = [("account", account_id)]
+                if customer_id:
+                    scopes.append(("customer", customer_id))
+                for scope, scope_id in scopes:
+                    row = cur.execute(
+                        "SELECT state FROM stripe_trial_ledger WHERE scope=? AND scope_id=?",
+                        (scope, scope_id),
+                    ).fetchone()
+                    if row and row["state"] != "released":
+                        cur.execute("COMMIT")
+                        return False
+                for scope, scope_id in scopes:
+                    cur.execute(
+                        """INSERT INTO stripe_trial_ledger
+                           (scope, scope_id, state, account_id, customer_id,
+                            reserved_at, updated_at)
+                           VALUES (?, ?, 'reserved', ?, ?, ?, ?)
+                           ON CONFLICT(scope, scope_id) DO UPDATE SET
+                             state='reserved', session_id=NULL, subscription_id=NULL,
+                             account_id=excluded.account_id,
+                             customer_id=excluded.customer_id,
+                             reserved_at=excluded.reserved_at,
+                             updated_at=excluded.updated_at
+                           WHERE stripe_trial_ledger.state='released'""",
+                        (scope, scope_id, account_id, customer_id, now, now),
+                    )
+                    if cur.rowcount != 1:
+                        raise RuntimeError("trial reservation conflict")
+                cur.execute("COMMIT")
+                return True
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
+        return self._run(_do).result()
+
+    def attach_trial_session(self, account_id: str, session_id: str) -> None:
+        def _do():
+            self._conn.execute(
+                """UPDATE stripe_trial_ledger SET session_id=?, updated_at=?
+                   WHERE account_id=? AND state='reserved' AND session_id IS NULL""",
+                (session_id, _now_iso(), account_id),
+            )
         self._run(_do).result()
 
-    def attach_account_stripe_customer(self, account_id: str, customer_id: str) -> None:
-        def _do() -> None:
-            self._conn.execute(
-                "UPDATE accounts SET stripe_customer_id=?, updated_at=? WHERE id=?",
-                (customer_id, _now_iso(), account_id),
-            )
+    def reserve_customer_scope_for_account(self, account_id: str, customer_id: str) -> bool:
+        """Add a newly-created/bound customer to an existing account reservation."""
+        def _do():
+            cur = self._conn.cursor()
+            now = _now_iso()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                account = cur.execute(
+                    """SELECT state FROM stripe_trial_ledger
+                       WHERE scope='account' AND scope_id=?""", (account_id,)
+                ).fetchone()
+                if not account or account["state"] != "reserved":
+                    cur.execute("COMMIT")
+                    return False
+                cur.execute(
+                    """INSERT INTO stripe_trial_ledger
+                       (scope, scope_id, state, account_id, customer_id,
+                        reserved_at, updated_at)
+                       VALUES ('customer', ?, 'reserved', ?, ?, ?, ?)
+                       ON CONFLICT(scope, scope_id) DO UPDATE SET
+                         state='reserved', account_id=excluded.account_id,
+                         customer_id=excluded.customer_id,
+                         reserved_at=excluded.reserved_at, updated_at=excluded.updated_at
+                       WHERE stripe_trial_ledger.state='released'""",
+                    (customer_id, account_id, customer_id, now, now),
+                )
+                ok = cur.rowcount == 1
+                cur.execute("COMMIT")
+                return ok
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
+        return self._run(_do).result()
 
-        self._run(_do).result()
+    def release_trial_session(self, session_id: str) -> int:
+        """Release only an exact, definitive Checkout expiry; consumed is terminal."""
+        def _do():
+            cur = self._conn.execute(
+                """UPDATE stripe_trial_ledger SET state='released', updated_at=?
+                   WHERE session_id=? AND state='reserved'""",
+                (_now_iso(), session_id),
+            )
+            return cur.rowcount
+        return self._run(_do).result()
+
+    def _insert_consumed_scope(
+        self, cur, scope, scope_id, now, account_id, customer_id, subscription_id
+    ) -> bool:
+        row = cur.execute(
+            "SELECT state, account_id, customer_id, subscription_id "
+            "FROM stripe_trial_ledger "
+            "WHERE scope=? AND scope_id=?",
+            (scope, scope_id),
+        ).fetchone()
+        conflict = bool(
+            row and row["state"] == "consumed"
+            and ((row["subscription_id"] and
+                  row["subscription_id"] != subscription_id)
+                 or (row["account_id"] and row["account_id"] != account_id)
+                 or (row["customer_id"] and row["customer_id"] != customer_id))
+        )
+        cur.execute(
+            """INSERT INTO stripe_trial_ledger
+               (scope, scope_id, state, subscription_id, account_id, customer_id,
+                reserved_at, consumed_at, updated_at)
+               VALUES (?, ?, 'consumed', ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(scope, scope_id) DO UPDATE SET
+                 state='consumed',
+                 subscription_id=COALESCE(stripe_trial_ledger.subscription_id,
+                                          excluded.subscription_id),
+                 consumed_at=COALESCE(stripe_trial_ledger.consumed_at,
+                                      excluded.consumed_at),
+                 updated_at=excluded.updated_at
+               WHERE stripe_trial_ledger.state != 'consumed'""",
+            (scope, scope_id, subscription_id, account_id, customer_id, now, now, now),
+        )
+        return conflict
+
+    def consume_stripe_trial(
+        self, *, account_id: str, customer_id: str, subscription_id: str,
+        fingerprint: Optional[str],
+    ) -> bool:
+        """Consume all observed scopes; return True on cross-principal reuse."""
+        def _do():
+            cur = self._conn.cursor()
+            now = _now_iso()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                conflict = False
+                for scope, scope_id in (
+                    ("account", account_id), ("customer", customer_id),
+                    ("fingerprint", fingerprint),
+                ):
+                    if not scope_id:
+                        continue
+                    hit = self._insert_consumed_scope(
+                        cur, scope, scope_id, now, account_id, customer_id, subscription_id
+                    )
+                    if hit:
+                        conflict = True
+                        self._record_trial_conflict(
+                            cur, "trial_scope_reuse", scope, scope_id, account_id,
+                            customer_id, subscription_id,
+                            "trialing subscription reused a consumed scope"
+                        )
+                cur.execute("COMMIT")
+                return conflict
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
+        return self._run(_do).result()
+
+    def stripe_trial_invariants(self) -> list[dict]:
+        def _do():
+            rows = self._conn.execute(
+                """SELECT 'customer_conflict' kind, stripe_customer_id scope_id, COUNT(*) count
+                     FROM accounts WHERE stripe_customer_id IS NOT NULL
+                 GROUP BY stripe_customer_id HAVING COUNT(*) > 1
+                 UNION ALL
+                   SELECT 'duplicate_trial_history', subscription_id, COUNT(*)
+                     FROM stripe_trial_ledger
+                    WHERE state='consumed' AND subscription_id IS NOT NULL
+                 GROUP BY subscription_id HAVING COUNT(DISTINCT account_id) > 1"""
+            ).fetchall()
+            return [dict(r) for r in rows]
+        return self._run(_do).result()
 
     def update_subscription(
         self,
@@ -1074,10 +1398,19 @@ class Store:
         device shares the account's Pro status from then on."""
 
         def _do() -> None:
-            self._conn.execute(
-                "UPDATE users SET account_id = ?, updated_at = ? WHERE device_id = ?",
-                (account_id, _now_iso(), device_id),
-            )
+            cur = self._conn.cursor()
+            now = _now_iso()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                cur.execute(
+                    "UPDATE users SET account_id = ?, updated_at = ? WHERE device_id = ?",
+                    (account_id, now, device_id),
+                )
+                cur.execute("COMMIT")
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
 
         self._run(_do).result()
 
@@ -1990,7 +2323,11 @@ class Store:
         """Look up the account that owns a Stripe customer ID."""
         def _do() -> Optional[Account]:
             cur = self._conn.cursor()
-            cur.execute("SELECT * FROM accounts WHERE stripe_customer_id = ?", (customer_id,))
+            cur.execute(
+                """SELECT a.* FROM stripe_customer_bindings b
+                   JOIN accounts a ON a.id=b.account_id WHERE b.customer_id=?""",
+                (customer_id,),
+            )
             row = cur.fetchone()
             return _row_to_account(row) if row else None
         return self._run(_do).result()
@@ -2082,6 +2419,10 @@ class Store:
             return {"backfilled": created, "remaining_null": remaining}
 
         return self._run(_do).result()
+
+    def backfill_stripe_trial_ledger(self) -> None:
+        """Replay the conflict-safe Stripe history backfill after account minting."""
+        self._run(self._backfill_stripe_trial_ledger).result()
 
     # ---- Apple entitlement (build-91) ----
 

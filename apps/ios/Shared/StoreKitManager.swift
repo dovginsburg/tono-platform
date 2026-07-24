@@ -53,7 +53,7 @@ public final class StoreKitManager: ObservableObject {
     }
 
     /// Resets all in-memory entitlement state to anonymous/non-Pro.
-    /// Called after successful account deletion so extensions and the free-tier
+    /// Called after successful account deletion so extensions and the entitlement
     /// gate see the cleared state without waiting for a restart.
     public func resetToAnonymous() {
         isPro = false
@@ -192,7 +192,7 @@ public final class StoreKitManager: ObservableObject {
             // not leave a stale cached Pro Bool standing as authority — there is
             // no 72-hour offline allowance. `recordEntitlement(.unknown)` keeps
             // the last-known mirror but flips `isProAuthoritative` false so the
-            // keyboard/extensions and free-tier gate stop presenting Pro.
+            // keyboard/extensions and the entitlement gate stop presenting Pro.
             isPro = false
             isInFreeTrial = false
             TonePreferences.recordEntitlement(.unknown, isPro: false)
@@ -219,7 +219,7 @@ public final class StoreKitManager: ObservableObject {
         isPro = me.isPro
         isInFreeTrial = me.isPro && inTrial
         // A successful backend response is authoritative (build 91 §7): record
-        // the verdict as tri-state so extensions and the free-tier gate read a
+        // the verdict as tri-state so extensions and the entitlement gate read a
         // freshness-aware value rather than a stale Bool. `.notEntitled` clears
         // the shared Pro mirror immediately; `.entitled` sets it. This replaces
         // the bare `proUnlocked` write below.
@@ -299,4 +299,3 @@ public final class StoreKitManager: ObservableObject {
         }
     }
 }
-

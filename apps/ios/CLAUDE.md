@@ -58,4 +58,4 @@ An iOS keyboard extension that helps people say what they mean. User types a mes
 - Swift 5.0 / SwiftUI, iOS 16+ minimum
 - FastAPI + SQLite + Stripe (backend)
 - OpenAI gpt-4o-mini / Anthropic claude-haiku-4-5 (LLM providers)
-- Mock analyzer for offline/free tier
+- Mock analyzer for offline development and tests only

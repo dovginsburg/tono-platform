@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import plistlib
+import re
 import struct
 import sys
 import zipfile
@@ -14,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PROJECT = ROOT / "Tono.xcodeproj/project.pbxproj"
 ICONSET = ROOT / "TonoMessagesExtension/Assets.xcassets/iMessage App Icon.stickersiconset"
 EXPECTED_MARKETING_VERSION = "1.1"
-EXPECTED_BUILD_VERSION = "91"
+EXPECTED_BUILD_VERSION = "101"
 EXPECTED_BUNDLE_ID = "com.tonoit.app.messages"
 EXPECTED_TEAM = "4938S9TTBM"
 EXPECTED_APP_GROUP = "group.com.tonoit.shared"
@@ -152,7 +153,11 @@ def check_source(errors: list[str]) -> None:
             errors.append(f"icon {slot} is {actual[slot]}, expected {expected_size}")
 
     bump = (ROOT / "Scripts/bump-build.sh").read_text()
-    if f"EXPECTED_BUILD={EXPECTED_BUILD_VERSION}" not in bump:
+    if not re.search(
+        rf'^EXPECTED_BUILD=["\']?{re.escape(EXPECTED_BUILD_VERSION)}["\']?$',
+        bump,
+        re.MULTILINE,
+    ):
         errors.append("build-number gate is not pinned to the corrective build")
     if "PlistBuddy -c \"Set" in bump or "PlistBuddy -c \"Add" in bump:
         errors.append("build-number gate mutates bundle metadata")

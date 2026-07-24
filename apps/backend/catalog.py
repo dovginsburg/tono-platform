@@ -196,6 +196,24 @@ def google_play_base_plan_env_var() -> Optional[str]:
     return _provider("google_play").get("base_plan_env_var")
 
 
+def google_play_base_plan_ids() -> frozenset[str]:
+    """Approved non-secret Play base-plan identifiers."""
+    return frozenset(
+        p["base_plan_id"]
+        for p in _provider("google_play")["products"]
+        if p.get("base_plan_id")
+    )
+
+
+def google_play_offer_ids() -> frozenset[str]:
+    """Approved non-secret Play offer identifiers."""
+    return frozenset(
+        p["offer_id"]
+        for p in _provider("google_play")["products"]
+        if p.get("offer_id")
+    )
+
+
 def stripe_price_env_var(interval: str) -> Optional[str]:
     """The environment-variable NAME holding the Stripe Price id for this
     interval, per the catalog. Never returns a secret value."""
