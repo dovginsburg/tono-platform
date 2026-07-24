@@ -1,16 +1,28 @@
-// Authenticated /v1/analyze proxy.
+// Authenticated /api/analyze proxy.
 //
-// Browser sends the request with the tono_api_token httpOnly cookie.
-// We forward to the backend with that token as a bearer, so the
-// server-side entitlement gate applies per user (fail closed with HTTP 402
-// unless the user has an active trial/subscription — there is no free tier).
+// The browser sends the request with the tono_api_token httpOnly cookie.
+// We forward it to the backend's gated /api/analyze with that token as a
+// bearer, so the server-side entitlement gate applies per user (fail closed
+// with HTTP 402 unless the user has an active trial/subscription).
 //
-// If the user is not logged in (no cookie), we fall back to the public
-// /v1/analyze (no rate limit, no LLM key) — keeps the page usable
-// before OAuth round-trips in some flows.
+// There is NO free tier and NO anonymous rewrite path: a caller with no token
+// is NEVER proxied to a public rewrite route. We fail closed locally with the
+// same distinct 402 the backend gate would return, so the honest disclosure
+// (/api/me -> daily_limit: 0 for anonymous) and the actual behavior agree.
 
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
+
+// Mirrors the backend's shaped entitlement error
+// ({ error: { code, reason, message } }) so clients can branch on either the
+// 402 status or the stable `reason` key.
+const ENTITLEMENT_REQUIRED = {
+  error: {
+    code: 402,
+    reason: 'entitlement_required',
+    message: 'An active Tono trial or subscription is required to rewrite.',
+  },
+};
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null);
@@ -23,22 +35,13 @@ export async function POST(request: Request) {
   const backendUrl = process.env.TONO_BACKEND_URL || 'https://api.tonoit.com';
 
   if (!token) {
-    // Anonymous fallback — public endpoint, no rate limit, uses
-    // TONO_PROVIDER on the backend (mock by default — cheap).
-    const res = await fetch(`${backendUrl}/v1/analyze`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        draft: body.text,
-        axes: ['warmer', 'clearer', 'funnier', 'safer'],
-      }),
-      cache: 'no-store',
-    });
-    const data = await res.json();
-    return NextResponse.json(data, { status: res.status });
+    // No principal -> fail closed. Never fall back to a public rewrite route.
+    return NextResponse.json(ENTITLEMENT_REQUIRED, { status: 402 });
   }
 
-  // Authenticated — hit /api/analyze with bearer token.
+  // Authenticated -> hit the gated /api/analyze with the bearer token. The
+  // backend's shared entitlement gate returns a distinct 402 for a non-entitled
+  // principal, and a 429 only for genuine per-IP rate limiting.
   const res = await fetch(`${backendUrl}/api/analyze`, {
     method: 'POST',
     headers: {
@@ -53,11 +56,12 @@ export async function POST(request: Request) {
   });
 
   if (res.status === 429) {
-    // Forward the rate-limit body verbatim so the UI can show "N/10 today".
-    const data = await res.json();
+    // Forward the honest per-IP rate-limit response (no daily-quota framing;
+    // there is no daily quota under the contract).
+    const data = await res.json().catch(() => ({}));
     return NextResponse.json(data, {
       status: 429,
-      headers: { 'Retry-After': res.headers.get('Retry-After') || '86400' },
+      headers: { 'Retry-After': res.headers.get('Retry-After') || '60' },
     });
   }
 

@@ -1,10 +1,11 @@
 // TonoDemo — the working paste → rewrite demo on the landing page.
 //
 // Replaces the static phone-frame screenshot with a real, client-side
-// rewrite tool. Hits POST /api/analyze (which proxies through the
-// Supabase edge to api.tonoit.com → FastAPI). Anonymous calls are
-// permitted; the API returns 4 tones (warmer/clearer/funnier/safer)
-// and a risk assessment.
+// rewrite tool. Hits POST /api/analyze (the gated proxy to the FastAPI
+// backend). There is NO anonymous/free rewrite path under the contract: a
+// visitor with no tono_api_token fails closed with a distinct 402 and the
+// demo invites them to start a trial. An entitled caller gets 4 tones
+// (warmer/clearer/funnier/safer) and a risk assessment.
 //
 // Brand voice (lowercase, dry, no exclamation):
 //   - empty:  "paste a draft — pick a tone — copy when it lands."
@@ -70,6 +71,12 @@ export default function TonoDemo() {
         body: JSON.stringify({ text }),
       })
       if (myId !== reqIdRef.current) return // a newer request superseded this one
+      if (res.status === 402) {
+        // No anonymous/free rewrite path under the contract — fail closed
+        // honestly and invite the visitor to start a trial.
+        setError('start a free trial to rewrite — tono needs an active trial or subscription.')
+        return
+      }
       if (!res.ok) {
         const j = await res.json().catch(() => ({}))
         throw new Error(j.error || `request failed (${res.status})`)
@@ -130,7 +137,7 @@ export default function TonoDemo() {
             </span>
           </div>
           <span className="text-[10px] font-mono lowercase text-tono-muted">
-            demo · no signup
+            sign up to rewrite
           </span>
         </div>
 

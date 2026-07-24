@@ -55,18 +55,38 @@ def rate_limit_setup(monkeypatch, tmp_path):
     yield srv, TestClient
 
 
+def _register_entitled(client):
+    """Register a device and grant it an active subscription. The per-IP cap on
+    /v1/analyze runs AFTER the shared entitlement gate, so an entitled principal
+    is required to reach (and therefore test) the limiter at all."""
+    reg = client.post("/v1/register", json={"platform": "ios"})
+    assert reg.status_code == 200, reg.text
+    reg = reg.json()
+    from backend.store import get_store
+
+    get_store().update_subscription(
+        device_id=reg["device_id"],
+        customer_id=None,
+        subscription_id=f"sub_{reg['device_id']}",
+        status="active",
+        renews_at=None,
+    )
+    return reg
+
+
 def test_v1_analyze_is_ip_rate_limited(rate_limit_setup):
-    """The LLM passthrough was completely unlimited before; Path A's source
-    limiter caps it per-IP. Verify the cap fires at the configured limit."""
+    """The LLM passthrough is entitlement-gated first, then capped per-IP. An
+    entitled principal passes the gate; verify the IP cap fires at the limit."""
     srv, TestClient = rate_limit_setup
     with TestClient(srv.app) as client:
+        auth = {"Authorization": f"Bearer {_register_entitled(client)['api_token']}"}
         body = {"draft": "Hello there"}
         # 3 calls = at limit (IP_RATE_LIMIT_PER_MIN=3 in fixture)
         for i in range(3):
-            r = client.post("/v1/analyze", json=body)
+            r = client.post("/v1/analyze", json=body, headers=auth)
             assert r.status_code == 200, f"call {i+1} got {r.status_code}: {r.text}"
         # 4th = 429
-        r = client.post("/v1/analyze", json=body)
+        r = client.post("/v1/analyze", json=body, headers=auth)
         assert r.status_code == 429, r.text
         # Source limiter shape: detail string + Retry-After header (lowercase OK)
         assert "retry-after" in {k.lower() for k in r.headers.keys()}
@@ -79,23 +99,24 @@ def test_ip_rate_limit_is_per_ip(rate_limit_setup):
     """
     srv, TestClient = rate_limit_setup
     with TestClient(srv.app) as client:
+        auth = {"Authorization": f"Bearer {_register_entitled(client)['api_token']}"}
         body = {"draft": "Hello there"}
-        # Saturate IP-A via XFF header
+        # Saturate IP-A via XFF header (same entitled principal, distinct IPs)
         for _ in range(3):
             r = client.post(
                 "/v1/analyze", json=body,
-                headers={"X-Forwarded-For": "10.0.0.1"},
+                headers={**auth, "X-Forwarded-For": "10.0.0.1"},
             )
             assert r.status_code == 200, f"IP-A call got {r.status_code}"
         r = client.post(
             "/v1/analyze", json=body,
-            headers={"X-Forwarded-For": "10.0.0.1"},
+            headers={**auth, "X-Forwarded-For": "10.0.0.1"},
         )
         assert r.status_code == 429, "IP-A should be rate-limited"
         # IP-B is fresh (different XFF) — must NOT be rate-limited
         r = client.post(
             "/v1/analyze", json=body,
-            headers={"X-Forwarded-For": "10.0.0.2"},
+            headers={**auth, "X-Forwarded-For": "10.0.0.2"},
         )
         assert r.status_code == 200, f"IP-B should not be blocked: {r.status_code}"
 

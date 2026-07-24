@@ -9,7 +9,7 @@ Covers:
   - /api/analyze rejects missing/empty text
   - /api/analyze rejects missing/invalid bearer token
   - token rotation
-  - /v1/analyze still works unauthenticated (back-compat)
+  - /v1/analyze fails closed for anonymous callers; entitled principal works
   - /admin/coupon/create + /v1/coupon/redeem (happy path + error cases)
   - /admin/stats (auth guard)
 """
@@ -77,11 +77,40 @@ def test_health(client):
     assert j["stripe_configured"] is False
 
 
-def test_v1_analyze_unauthenticated_still_works(client):
-    """The original passthrough is preserved for the iOS Playground tab."""
+def test_v1_analyze_unauthenticated_fails_closed(client):
+    """The back-compat passthrough is NO LONGER an anonymous rewrite path.
+    A caller with no bearer token is rejected at the auth layer (401) and
+    never reaches a provider — closing the V1_ANALYZE_UNAUTH_REWRITE_BYPASS."""
 
     r = client.post(
         "/v1/analyze",
+        json={"draft": "Sounds good. Let me know when you can."},
+    )
+    assert r.status_code == 401, r.text
+    # No rewrite text is served to an anonymous caller.
+    assert "suggestions" not in r.json()
+
+
+def test_v1_analyze_non_entitled_principal_gets_distinct_402(client):
+    """A real (registered) principal WITHOUT an active entitlement fails closed
+    with the distinct 402 — the same shared gate as /api/analyze."""
+    reg = _register(client)
+    r = client.post(
+        "/v1/analyze",
+        headers=_auth(reg["api_token"]),
+        json={"draft": "Sounds good. Let me know when you can."},
+    )
+    assert r.status_code == 402, r.text
+    assert r.json()["error"]["reason"] == "entitlement_required"
+
+
+def test_v1_analyze_entitled_principal_returns_default_axes(client):
+    """An entitled principal still gets the original passthrough behavior."""
+    reg = _register(client)
+    _grant_pro(reg["device_id"])
+    r = client.post(
+        "/v1/analyze",
+        headers=_auth(reg["api_token"]),
         json={"draft": "Sounds good. Let me know when you can."},
     )
     assert r.status_code == 200, r.text
@@ -102,8 +131,11 @@ def test_v1_analyze_unauthenticated_still_works(client):
 
 
 def test_v1_analyze_build94_returns_one_atomic_safer_first_batch(client):
+    reg = _register(client)
+    _grant_pro(reg["device_id"])
     r = client.post(
         "/v1/analyze",
+        headers=_auth(reg["api_token"]),
         json={
             "draft": "Hey, please help with this request.",
             "optional_variants": ["concise", "clearer", "affectionate"],
@@ -117,8 +149,11 @@ def test_v1_analyze_build94_returns_one_atomic_safer_first_batch(client):
 
 
 def test_v1_analyze_build94_crisis_suppresses_non_safer_variants(client):
+    reg = _register(client)
+    _grant_pro(reg["device_id"])
     r = client.post(
         "/v1/analyze",
+        headers=_auth(reg["api_token"]),
         json={
             "draft": "I want to kill myself",
             "optional_variants": ["funnier", "custom"],
@@ -132,8 +167,11 @@ def test_v1_analyze_build94_crisis_suppresses_non_safer_variants(client):
 
 def test_v1_analyze_read_mode(client):
     """Read mode returns interpretation with no suggestions."""
+    reg = _register(client)
+    _grant_pro(reg["device_id"])
     r = client.post(
         "/v1/analyze",
+        headers=_auth(reg["api_token"]),
         json={"draft": "as per my last message", "mode": "read"},
     )
     assert r.status_code == 200, r.text
