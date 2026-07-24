@@ -27,19 +27,19 @@ Two API surfaces share one FastAPI app:
 The system prompt + JSON schema mirror Shared/ToneEngine.swift on the
 iOS side. Keep them in sync if you edit one, edit the other.
 
-Run with ``uvicorn server:app --port 8765`` for local experimentation.
-In production, ``Dockerfile`` + ``railway.toml`` / ``fly.toml``.
+Run with ``uvicorn backend.server:app --port 8765`` from ``apps/`` for local
+experimentation — the module uses package-relative imports, so it cannot be run
+as a bare script. In production, ``Dockerfile`` (whose CMD is exactly
+``uvicorn backend.server:app``) + ``railway.toml`` / ``fly.toml``.
 """
 
 from __future__ import annotations
 
-import collections
 import hashlib
 import hmac
 import json
 import logging
 import os
-import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -134,8 +134,11 @@ def _build_provenance() -> dict[str, str]:
 
 _DRAFT_MAX_CHARS = int(os.environ.get("DRAFT_MAX_CHARS", "2000"))
 _IP_RATE_LIMIT = int(os.environ.get("IP_RATE_LIMIT_PER_MIN", "20"))
-_ip_windows: dict[str, collections.deque] = {}
-_ip_lock = threading.Lock()
+
+# Scope name for the rewrite routes' per-IP budget inside the shared limiter.
+# Distinct from "register"/"auth"/"coupon" so a flood on one endpoint family
+# cannot eat another's budget.
+_IP_RATE_SCOPE = "analyze"
 
 
 def _get_client_ip(request: Request) -> str:
@@ -146,21 +149,60 @@ def _get_client_ip(request: Request) -> str:
 
 
 def _check_ip_rate(ip: str) -> bool:
-    """Sliding-window rate limiter. Returns False if the IP is over limit."""
-    now = time.time()
-    with _ip_lock:
-        dq = _ip_windows.setdefault(ip, collections.deque())
-        while dq and now - dq[0] > 60:
-            dq.popleft()
-        if len(dq) >= _IP_RATE_LIMIT:
-            return False
-        dq.append(now)
-        return True
+    """Per-IP sliding-window cap for the rewrite routes. False = over limit.
+
+    Delegates to ``rate_limit.check_ip_rate`` — the SAME limiter ``/v1/register``
+    already uses — rather than keeping a second, parallel implementation here.
+    The local copy this replaced held its windows in a module-level dict that was
+    never evicted, so every distinct key it ever saw was retained for the life of
+    the process. ``_get_client_ip`` derives that key from the client-supplied
+    ``X-Forwarded-For`` header, so a caller rotating that header grew the dict
+    without bound (and, separately, side-stepped the cap — see the deployment
+    note in docs/verification about terminating-proxy trust).
+
+    Limit and window are unchanged: ``IP_RATE_LIMIT_PER_MIN`` (default 20) over
+    60 seconds. ``_IP_RATE_LIMIT`` is read at call time so tests can monkeypatch
+    it. One deliberate semantic delta: the shared limiter records the attempt
+    even when it is rejected, so sustained flooding keeps the window extended
+    instead of letting an attacker pace exactly at the cap — this is already how
+    ``/v1/register`` behaves.
+    """
+    allowed, _ = rate_limit.check_ip_rate(_IP_RATE_SCOPE, ip, _IP_RATE_LIMIT, 60.0)
+    return allowed
 
 
-def _analysis_cache_key(text: str, axes: list[str], voice: str | None, locale: str) -> str:
-    raw = f"{text}|{','.join(sorted(axes))}|{voice or ''}|{locale}"
-    return hashlib.sha256(raw.encode()).hexdigest()
+def _analysis_cache_key(internal: AnalyzeRequest, *, locale: str, provider: str) -> str:
+    """Cache identity for one ``/api/analyze`` response.
+
+    ``response_cache`` is a GLOBAL, account-agnostic table keyed ONLY by this
+    digest (see ``store.get_cached_response``), so the key must cover every
+    input that can shape the provider's output. Any prompt-shaping field left
+    out of the key lets one caller's cached response be served verbatim to a
+    DIFFERENT account.
+
+    That is not hypothetical: ``thread_context`` (the other party's message),
+    ``recipient_hint``, and ``context_hints`` (facts inferred from the caller's
+    private history) all reach the provider through ``build_system_prompt`` /
+    ``build_user_prompt``. A key built from only (text, axes, voice, locale)
+    therefore let account B receive a rewrite shaped by account A's private
+    thread and inferred personal patterns.
+
+    The key is derived from the canonical ``AnalyzeRequest`` that is actually
+    handed to the provider, so a field added to that model is covered
+    automatically instead of silently widening the leak again. ``locale`` and
+    ``provider`` are wire-level inputs that are not carried on the internal
+    model, so they are mixed in explicitly under reserved keys.
+
+    Two requests share an entry only when their ENTIRE provider input is
+    byte-identical — so the requester already possesses every input the cached
+    answer was derived from, and no private data can cross accounts.
+    """
+    payload: dict[str, Any] = internal.model_dump(mode="json")
+    # Reserved keys — the leading NULs cannot collide with a pydantic field name.
+    payload["\x00locale"] = locale
+    payload["\x00provider"] = provider
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -942,9 +984,11 @@ async def api_analyze(
         locale=body.locale,
     )
 
-    # Cache lookup — hits don't consume the daily allowance.
+    # Cache lookup — hits don't consume the daily allowance. The key is derived
+    # from the canonical ``internal`` request (every prompt-shaping input), NOT
+    # from a hand-picked subset: the cache table is global across accounts.
     cache_key = (
-        _analysis_cache_key(body.text, axes, body.preferred_voice, body.locale)
+        _analysis_cache_key(internal, locale=body.locale, provider=provider)
         if provider != "mock"
         else None
     )
@@ -1628,5 +1672,9 @@ def _today_utc() -> str:
 
 
 if __name__ == "__main__":
+    # Only reachable via ``python -m backend.server`` from ``apps/``; a bare
+    # ``python server.py`` fails earlier on this module's relative imports.
+    # The import string must match the Dockerfile CMD exactly — the previous
+    # ``Backend.server:app`` resolved only on a case-insensitive filesystem.
     import uvicorn
-    uvicorn.run("Backend.server:app", host="127.0.0.1", port=8765, reload=True)
+    uvicorn.run("backend.server:app", host="127.0.0.1", port=8765, reload=True)

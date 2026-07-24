@@ -6,6 +6,7 @@
 // shows an inline message and keeps the user on the page.
 
 import { useState } from 'react'
+import { apiPath } from '@/lib/auth-redirects'
 
 type PortalResponse = {
   url?: string
@@ -29,7 +30,7 @@ export default function ManageBillingButton({
     setError(null)
     setBusy(true)
     try {
-      const res = await fetch('/api/portal', {
+      const res = await fetch(apiPath('/api/portal'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: '{}',

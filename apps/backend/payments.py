@@ -134,6 +134,40 @@ def _portal_return_url(request: Request, requested: Optional[str]) -> str:
     return _safe_return_url(request, requested, "/app/account")
 
 
+def _resolve_stripe_customer(store: Store, user) -> Optional[str]:
+    """The ONE Stripe-customer resolution order for a caller's account.
+
+    Shared by /v1/checkout and /v1/portal so the two can never disagree about
+    which customer a person owns. Order, most to least authoritative:
+
+      1. ``stripe_customer_bindings`` — the authoritative table. ``_bind_customer_tx``
+         inserts here first and only then COALESCEs onto ``accounts``, so the
+         binding is correct even when the mutable column is stale or was cleared.
+      2. ``accounts.stripe_customer_id`` — the mutable projection, kept for
+         backward compatibility and for rows written before the binding table.
+      3. ``users.stripe_customer_id`` — legacy only. No current code path writes
+         this column (``update_subscription`` sets plan/status/renews_at; the
+         customer arrives via ``attach_stripe_customer`` -> the account), so it
+         is a last-resort read for pre-migration rows, never the primary source.
+
+    The account is the entitlement principal for ANONYMOUS auto-accounts too
+    (contract §1), so resolution deliberately does NOT gate on
+    ``account.is_identified``: gating there made the portal read the always-NULL
+    legacy column and 400 for an anonymous account holding a live subscription.
+    ``user.account`` is the calling device's own account, so no cross-account
+    customer is ever reachable through this helper.
+    """
+    account = getattr(user, "account", None)
+    account_id = account.id if account is not None else getattr(user, "account_id", None)
+    if account_id:
+        bound = store.get_stripe_customer_binding(account_id)
+        if bound:
+            return bound
+    if account is not None and account.stripe_customer_id:
+        return account.stripe_customer_id
+    return getattr(user, "stripe_customer_id", None)
+
+
 def _is_configured() -> bool:
     return bool(_secret())
 
@@ -232,11 +266,7 @@ def create_checkout_session(
     if user.account is None:
         raise HTTPException(409, "canonical account missing")
     account_id = user.account.id
-    customer_id = (
-        store.get_stripe_customer_binding(account_id)
-        or user.account.stripe_customer_id
-        or user.stripe_customer_id
-    )
+    customer_id = _resolve_stripe_customer(store, user)
     include_trial = store.reserve_stripe_trial(
         account_id=account_id,
         customer_id=customer_id,
@@ -317,14 +347,14 @@ def create_checkout_session(
 def create_portal_session(
     request: Request,
     user: CurrentUser,
+    store: Annotated[Store, Depends(_store_dep)],
     body: Optional[PortalRequest] = None,
 ) -> PortalResponse:
     if not _is_configured():
         raise HTTPException(503, "Stripe is not configured on this server.")
-    identified = user.account is not None and user.account.is_identified
-    customer_id = (
-        user.account.stripe_customer_id if identified else user.stripe_customer_id
-    )
+    # Same resolution order as /v1/checkout — see _resolve_stripe_customer.
+    # Cancelling must never be harder to reach than paying.
+    customer_id = _resolve_stripe_customer(store, user)
     if not customer_id:
         raise HTTPException(400, "No Stripe customer on file. Start checkout first.")
 

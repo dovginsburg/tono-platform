@@ -346,11 +346,19 @@ def test_api_analyze_treats_invalid_cached_coach_payload_as_miss(client, monkeyp
     from backend import server
     from backend.store import get_store
 
+    from backend.analyze import AnalyzeRequest
+
     reg = _register(client)
     _grant_pro(reg["device_id"])  # entitlement is required to rewrite
     text = "Please help with this request."
     axes = list(server.CANONICAL_COACH_AXES)
-    cache_key = server._analysis_cache_key(text, axes, None, "en")
+    # The cache key is derived from the canonical request handed to the
+    # provider, so build the same one /api/analyze would for this body.
+    cache_key = server._analysis_cache_key(
+        AnalyzeRequest(draft=text, axes=axes, mode="coach"),
+        locale="en",
+        provider="openai",
+    )
     get_store().set_cached_response(cache_key, {
         "risk_level": "low",
         "perception": "Looks okay.",

@@ -15,6 +15,7 @@
 'use client'
 
 import { useState } from 'react'
+import { apiPath } from '@/lib/auth-redirects'
 
 type Interval = 'month' | 'year'
 
@@ -47,7 +48,7 @@ export default function ProCheckoutButton({
     setError(null)
     setBusy(true)
     try {
-      const res = await fetch('/api/checkout', {
+      const res = await fetch(apiPath('/api/checkout'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ interval }),

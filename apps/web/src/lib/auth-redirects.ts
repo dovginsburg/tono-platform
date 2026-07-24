@@ -5,6 +5,29 @@ export const AUTH_CALLBACK_PATH = `${BASE_PATH}/auth/callback`;
 
 const CANONICAL_ORIGIN = 'https://tonoit.com';
 
+/**
+ * Absolute, basePath-qualified path for one of this app's route handlers.
+ *
+ * next.config.js sets `basePath: '/app'`, so every handler under
+ * `src/app/api/**\/route.ts` is served at `/app/api/...`. Next rewrites
+ * `<Link href>` for basePath, but it does NOT rewrite `fetch()`, raw
+ * `<form action>`, or `window.location` — those resolve against the document
+ * ORIGIN, so a bare `fetch('/api/portal')` requests `https://tonoit.com/api/portal`.
+ *
+ * Apex `/api/*` only resolves for the handful of paths hand-listed in
+ * vercel.json's rewrite table, so bare paths silently 404 for anything not on
+ * that list. Route this through here instead of depending on that list: the
+ * argument mirrors the handler's folder path, so `apiPath('/api/portal')`
+ * (= `src/app/api/portal/route.ts`) always hits the real handler.
+ *
+ * Guarded by `src/lib/api-path.test.ts`, which fails the build if a client
+ * component reintroduces a bare `/api/...` fetch.
+ */
+export function apiPath(route: string): string {
+  const normalized = route.startsWith('/') ? route : `/${route}`;
+  return `${BASE_PATH}${normalized}`;
+}
+
 type RedirectEnvironment = {
   NODE_ENV?: string;
   NEXT_PUBLIC_SITE_URL?: string;
