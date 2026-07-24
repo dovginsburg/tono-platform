@@ -395,7 +395,7 @@ _PRIVACY_HTML = """<!DOCTYPE html>
 </ul>
 
 <h2>How your data is used</h2>
-<p>Device IDs are used solely to enforce the daily free-tier limit and track subscription status. Aggregate usage counts (how many rewrites per day) may be used to improve the product. No data is sold to or shared with third parties for advertising.</p>
+<p>Device IDs are used solely to associate your subscription entitlement with your device. Aggregate usage counts may be used to improve the product. No data is sold to or shared with third parties for advertising.</p>
 
 <h2>How Tono learns and improves</h2>
 <p>With your permission ("Help improve Tono" toggle in Settings, on by default), Tono records content-free outcome signals: which rewrite style you chose, whether you used the suggestion, and a rough message-length bucket (short / medium / long — never the actual length or any words). <strong>Your messages, your rewrites, and who you're messaging are never collected.</strong> These anonymous outcome signals accumulate across users and help us improve axis ordering and rewrite quality for everyone. You can opt out at any time in Settings → Preferences → Help improve Tono; opting out immediately stops any signal from leaving your device and does not affect your personal style memory.</p>
@@ -442,7 +442,6 @@ async def health() -> dict[str, Any]:
         "slack_configured": bool(os.environ.get("SLACK_CLIENT_ID")),
         "apple_configured": bool(os.environ.get("TONO_APPLE_ROOT_CA_PEM")),
         "google_play_configured": bool(os.environ.get("TONO_GOOGLE_SERVICE_ACCOUNT_JSON")),
-        "free_daily_limit": int(os.environ.get("FREE_DAILY_LIMIT", "10")),
     }
 
 
@@ -805,6 +804,42 @@ def delete_account(user: CurrentUser, store: StoreDep) -> DeleteAccountResponse:
     )
 
 
+# ---------------------------------------------------------------------------
+# Shared server-authoritative rewrite entitlement gate
+# ---------------------------------------------------------------------------
+# The ONE chokepoint every rewrite endpoint calls before invoking a provider.
+# There is NO free daily tier: a registered device is an entitlement PRINCIPAL,
+# not a grant. Only the server-side ``User.is_pro`` projection passes — an
+# active paid or trialing subscription, an active provider entitlement grant,
+# past_due auto-renew grace, or a valid durable founder coupon/grant. Everyone
+# else (fresh-registered, never-subscribed, canceled, expired) fails closed
+# here with a DISTINCT, honest HTTP 402 that is never overloaded onto the
+# IP-rate-limit 429 or the 401 auth failure, so clients can surface a truthful
+# "subscription required" message.
+
+# Shaped by ``http_exc_handler`` into
+# ``{"error": {"code": 402, "reason": "entitlement_required", "message": ...}}``.
+# ``reason`` is the stable machine key clients switch on (alongside the 402
+# status); we deliberately avoid a ``code`` key here so it can't collide with
+# the handler's HTTP-status ``code``.
+_ENTITLEMENT_REQUIRED_DETAIL: dict[str, str] = {
+    "reason": "entitlement_required",
+    "message": "An active Tono trial or subscription is required to rewrite.",
+}
+
+
+def _require_rewrite_entitlement(user: User) -> None:
+    """Fail closed unless ``user`` holds a server-authoritative rewrite
+    entitlement. Called before ANY provider invocation on every rewrite route
+    (grep-enforced by ``test_every_rewrite_route_calls_entitlement_gate``)."""
+    if user.is_pro:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+        detail=dict(_ENTITLEMENT_REQUIRED_DETAIL),
+    )
+
+
 @app.post("/api/analyze", response_model=ApiAnalyzeResponse)
 async def api_analyze(
     body: ApiAnalyzeRequest,
@@ -819,6 +854,11 @@ async def api_analyze(
         raise HTTPException(400, "text is required")
     if len(body.text) > _DRAFT_MAX_CHARS:
         raise HTTPException(400, f"text too long (max {_DRAFT_MAX_CHARS} chars)")
+
+    # Server-authoritative entitlement gate — fail closed BEFORE the per-IP
+    # window (and before any provider call) so a non-entitled caller always
+    # gets the honest 402 and never the misleading 429.
+    _require_rewrite_entitlement(user)
 
     # Per-IP sliding-window cap to block scripted abuse before it touches
     # any per-user counters or makes LLM calls.
@@ -862,11 +902,13 @@ async def api_analyze(
         if cached:
             today = _today_utc()
             # Pooled on the account once signed in (identified) — see
-            # consume_rewrite; anonymous auto-accounts still count per-device.
+            # record_rewrite; anonymous auto-accounts still count per-device.
             identified = user.account is not None and user.account.is_identified
             quota_source = user.account if identified else user
             snap_used = quota_source.daily_count if quota_source.daily_day == today else 0
-            snap_limit = -1 if user.is_pro else int(os.environ.get("FREE_DAILY_LIMIT", "10"))
+            # Past the entitlement gate every caller is unlimited (-1); there is
+            # no free daily tier to disclose.
+            snap_limit = -1
             store.log_usage(
                 user.device_id, "/api/analyze", 200, provider="cache",
                 drafts_chars=len(body.text),
@@ -875,20 +917,11 @@ async def api_analyze(
                 **cached, used_today=snap_used, daily_limit=snap_limit, plan=user.plan_resolved
             )
 
-    # Rate limit BEFORE we call the LLM so a bad actor can't burn $.
-    allowed, used, limit = store.consume_rewrite(user.device_id)
-    if not allowed:
-        store.log_usage(user.device_id, "/api/analyze", 429, drafts_chars=len(body.text))
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail={
-                "message": "daily free limit reached",
-                "used_today": used,
-                "daily_limit": limit,
-                "plan": user.plan,
-            },
-            headers={"Retry-After": "86400"},
-        )
+    # Entitlement was already enforced above (fail-closed 402). This is a
+    # NON-authorizing telemetry counter only: no free-tier denial, no 429
+    # overload. Every caller here is unlimited (daily_limit = -1).
+    used = store.record_rewrite(user.device_id)
+    limit = -1
 
     try:
         if provider == "mock":
@@ -998,6 +1031,13 @@ async def api_analyze_variant(
     # strict ok|blocked envelope intact and guarantees zero provider calls.
     if len(body.text) > _DRAFT_MAX_CHARS:
         raise HTTPException(400, f"text too long (max {_DRAFT_MAX_CHARS} chars)")
+
+    # Server-authoritative entitlement gate — the SAME shared chokepoint as
+    # /api/analyze. Fail closed with an honest 402 BEFORE the per-IP window,
+    # the deterministic preflight, and any provider call. This is the endpoint
+    # every primary iOS surface (keyboard/iMessage/Shortcut) uses; registration
+    # alone grants nothing, so a fresh/canceled/expired device rewrites nothing.
+    _require_rewrite_entitlement(user)
 
     # Per-IP sliding-window cap (mirrors /api/analyze).
     client_ip = _get_client_ip(request)

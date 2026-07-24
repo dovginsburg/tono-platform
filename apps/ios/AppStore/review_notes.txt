@@ -35,7 +35,7 @@ Two auto-renewable subscription products:
   • com.tonoit.pro.monthly ($3.99/month)
   • com.tonoit.pro.yearly ($39.99/year)
 
-Eligible users receive a real 7-day free trial. Both products are configured
+Eligible users receive a real 14-day free trial. Both products are configured
 in App Store Connect and use StoreKit 2 natively. No
 web payment flow or Stripe redirect is present on iOS. Subscribers can
 manage or cancel via Settings → Apple ID → Subscriptions.

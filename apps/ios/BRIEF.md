@@ -70,8 +70,8 @@ nuance — highest pain-per-dollar, strong organic community, low sales friction
   - Header: "Your personal coach / Tono gets better the more you use it."
   - Feature lines: remembers how you write to each person · ranks rewrites by your style
     · per-recipient coaching hints · weekly tone report · unlimited rewrites
-  - Annual: $39.99/yr · eligible 7-day free trial
-  - Monthly: $3.99/mo · eligible 7-day free trial
+  - Annual: $39.99/yr · eligible 14-day free trial
+  - Monthly: $3.99/mo · eligible 14-day free trial
   - Restore purchases link
 
 ### Memory (MemoryView) — Pro only
@@ -152,7 +152,7 @@ to Keychain on first run.
 **Annual-first design:** yearly plan listed first and highlighted in purple.
 StoreKit controls localized prices and account-specific trial eligibility.
 
-**Approved release contract:** eligible users receive a real 7-day trial, then
+**Approved release contract:** eligible users receive a real 14-day trial, then
 $3.99/month or $39.99/year. Active UI prices come from StoreKit.
 
 ---
@@ -178,7 +178,7 @@ $3.99/month or $39.99/year. Active UI prices come from StoreKit.
 5. **Missing features?** What's obviously absent for a v1 that would matter to the
    target user (ND adult, 25–45, heavy texter)?
 
-6. **Pricing contract.** $3.99/mo or $39.99/yr with an eligibility-gated 7-day trial.
+6. **Pricing contract.** $3.99/mo or $39.99/yr with an eligibility-gated 14-day trial.
 
 7. **App Store risk.** Apple is known to scrutinize keyboards that send data off-device.
    The Full Access requirement is disclosed; the privacy policy covers this. Any other

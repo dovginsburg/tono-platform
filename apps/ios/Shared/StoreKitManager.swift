@@ -31,7 +31,7 @@ public final class StoreKitManager: ObservableObject {
     @Published public var isLoading:    Bool      = false
     @Published public var purchaseError: String?
     /// True when the user is in an active introductory free trial period
-    /// (Apple's "real" 7-day trial configured in App Store Connect).
+    /// (Apple's "real" 14-day trial configured in App Store Connect).
     @Published public private(set) var isInFreeTrial: Bool = false
     @Published public private(set) var eligibleFreeTrialProductIDs: Set<String> = []
 

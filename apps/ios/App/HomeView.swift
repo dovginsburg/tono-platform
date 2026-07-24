@@ -124,7 +124,7 @@ struct HomeView: View {
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .foregroundColor(.white.opacity(0.7))
                     .padding(.top, 4)
-                Text("Eligible subscriptions include a 7-day free trial, then auto-renew unless canceled. Cancel anytime in Apple ID subscriptions.")
+                Text("Eligible subscriptions include a 14-day free trial, then auto-renew unless canceled. Cancel anytime in Apple ID subscriptions.")
                     .font(.system(size: 13, design: .rounded))
                     .foregroundColor(.white.opacity(0.5))
             }

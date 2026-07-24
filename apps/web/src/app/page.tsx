@@ -44,7 +44,7 @@ export default function LandingPage() {
                 aria-label="trust and privacy"
                 className="mt-3 text-[11px] md:text-[12px] tracking-[0.06em] uppercase font-semibold text-tono-text-softer leading-relaxed"
               >
-                $3.99/mo · $39.99/yr · 7-day free trial · cancel anytime · drafts are sent only when you rewrite · not used for training
+                $3.99/mo · $39.99/yr · 14-day free trial · cancel anytime · drafts are sent only when you rewrite · not used for training
               </p>
               <h1 className="text-[36px] sm:text-[44px] md:text-[60px] leading-[1.05] md:leading-[1.02] font-bold tracking-[-0.025em] text-tono-text mt-2 sm:mt-3">
                 paste a draft.{' '}
@@ -61,10 +61,10 @@ export default function LandingPage() {
               <div className="mt-8 flex flex-col sm:flex-row gap-3">
                 <ProCheckoutButton
                   interval="month"
-                  label="start 7-day free trial"
+                  label="start 14-day free trial"
                   className="inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-[12px] bg-tono-accent hover:bg-tono-accent-hover disabled:opacity-60 disabled:pointer-events-none text-white font-semibold transition shadow-[0_8px_32px_rgba(168,85,247,0.30)] min-h-[48px]"
                 >
-                  start 7-day free trial
+                  start 14-day free trial
                   <ArrowIcon />
                 </ProCheckoutButton>
                 <a
@@ -81,7 +81,7 @@ export default function LandingPage() {
                 </a>
               </div>
               <p className="text-xs text-tono-muted mt-4">
-                7-day free trial. then $3.99/mo or $39.99/yr. cancel anytime.
+                14-day free trial. then $3.99/mo or $39.99/yr. cancel anytime.
               </p>
             </div>
 
@@ -181,32 +181,32 @@ export default function LandingPage() {
           <div className="mb-10 max-w-2xl">
             <span className="text-[11px] uppercase tracking-wider font-semibold text-tono-accent-light">pricing</span>
             <h2 className="text-[32px] md:text-[40px] font-bold tracking-[-0.02em] text-tono-text mt-3">
-              free for 7 days. pro when you rewrite all day.
+              free for 14 days. pro when you rewrite all day.
             </h2>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            {/* Trial — the first seven days of a paid subscription */}
+            {/* Trial — the first fourteen days of a paid subscription */}
             <article className="bg-tono-bg-card border border-tono-border rounded-[18px] p-7 flex flex-col">
-              <p className="text-[11px] uppercase tracking-wider font-semibold text-tono-text-softer">free for 7 days</p>
+              <p className="text-[11px] uppercase tracking-wider font-semibold text-tono-text-softer">free for 14 days</p>
               <p className="text-[36px] md:text-[40px] font-bold tracking-[-0.02em] text-tono-text mt-2">
                 $0
-                <span className="text-[15px] font-normal text-tono-text-softer ml-2">first 7 days</span>
+                <span className="text-[15px] font-normal text-tono-text-softer ml-2">first 14 days</span>
               </p>
               <p className="text-[14px] text-tono-text-soft leading-[1.55] mt-3">
-                start a real trial. we'll never charge until day 8.
+                start a real trial. we'll never charge until day 15.
               </p>
               <ul className="mt-6 space-y-2.5 text-[14px] text-tono-text-soft">
-                <li className="flex gap-2"><span className="text-tono-tone-safer font-semibold">✓</span><span>no charge until day 8</span></li>
+                <li className="flex gap-2"><span className="text-tono-tone-safer font-semibold">✓</span><span>no charge until day 15</span></li>
                 <li className="flex gap-2"><span className="text-tono-tone-safer font-semibold">✓</span><span>drafts are sent only when you choose rewrite</span></li>
                 <li className="flex gap-2"><span className="text-tono-tone-safer font-semibold">✓</span><span>nothing about your writing trains anything</span></li>
                 <li className="flex gap-2"><span className="text-tono-tone-safer font-semibold">✓</span><span>cancel anytime during the trial</span></li>
               </ul>
               <ProCheckoutButton
                 interval="month"
-                label="start 7-day free trial"
+                label="start 14-day free trial"
                 className="mt-8 inline-flex items-center justify-center gap-2 px-5 py-3 rounded-[12px] bg-transparent border border-tono-border-strong text-tono-text hover:border-tono-accent disabled:opacity-60 disabled:pointer-events-none font-semibold transition min-h-[44px] text-[14px]"
               >
-                start 7-day free trial
+                start 14-day free trial
               </ProCheckoutButton>
             </article>
 
@@ -252,7 +252,7 @@ export default function LandingPage() {
             </article>
           </div>
           <p className="text-center text-[13px] text-tono-text-softer mt-8">
-            subscriptions auto-renew at $3.99/mo or $39.99/yr after the 7-day trial unless cancelled. billed monthly or yearly. cancel from your inbox.
+            subscriptions auto-renew at $3.99/mo or $39.99/yr after the 14-day trial unless cancelled. billed monthly or yearly. cancel from your inbox.
           </p>
         </div>
       </section>
@@ -290,15 +290,15 @@ export default function LandingPage() {
             ready to start your trial?
           </h2>
           <p className="text-[16px] text-tono-text-soft leading-[1.6] mt-4 max-w-xl mx-auto">
-            7-day free trial. then $3.99/mo or $39.99/yr. cancel anytime.
+            14-day free trial. then $3.99/mo or $39.99/yr. cancel anytime.
           </p>
           <div className="mt-8 flex flex-col sm:flex-row gap-3 items-center justify-center">
             <ProCheckoutButton
               interval="month"
-              label="start 7-day free trial"
+              label="start 14-day free trial"
               className="inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-[12px] bg-tono-accent hover:bg-tono-accent-hover disabled:opacity-60 disabled:pointer-events-none text-white font-semibold transition shadow-[0_8px_32px_rgba(168,85,247,0.30)] min-h-[48px]"
             >
-              start 7-day free trial
+              start 14-day free trial
               <ArrowIcon />
             </ProCheckoutButton>
             <a

@@ -2,7 +2,8 @@
 //
 // Browser sends the request with the tono_api_token httpOnly cookie.
 // We forward to the backend with that token as a bearer, so the
-// server-side rate limiter (FREE_DAILY_LIMIT) applies per user.
+// server-side entitlement gate applies per user (fail closed with HTTP 402
+// unless the user has an active trial/subscription — there is no free tier).
 //
 // If the user is not logged in (no cookie), we fall back to the public
 // /v1/analyze (no rate limit, no LLM key) — keeps the page usable

@@ -81,10 +81,11 @@ CREATE TABLE IF NOT EXISTS accounts (
     subscription_status     TEXT,
     subscription_renews_at  TEXT,
     coupon_pro_expires_at   TEXT,
-    -- Free-tier daily allowance, pooled across every device linked to this
-    -- account — see consume_rewrite. Same shape as users.daily_count/
-    -- daily_day, deliberately: a device with no account_id still counts
-    -- against ITS OWN columns of the same name on `users`.
+    -- Non-authorizing daily rewrite telemetry counter, pooled across every
+    -- device linked to this account — see record_rewrite (there is NO free
+    -- daily tier; this counter never grants access). Same shape as
+    -- users.daily_count/daily_day, deliberately: a device with no account_id
+    -- still counts against ITS OWN columns of the same name on `users`.
     daily_count             INTEGER NOT NULL DEFAULT 0,
     daily_day               TEXT,
     created_at              TEXT NOT NULL,
@@ -369,6 +370,15 @@ class DeviceRegistrationProofError(Exception):
 
 
 def _plan_grants_pro(plan: str, subscription_status: Optional[str], coupon_pro_expires_at: Optional[str]) -> bool:
+    # Single source of truth for plan/status/coupon entitlement. Every rewrite
+    # gate resolves through this (via ``User.is_pro`` / ``Account.is_pro``);
+    # there is no second, disagreeing inline check anywhere (the free-tier
+    # counter was retired — see ``record_rewrite``). ``past_due`` is the
+    # deliberate auto-renew GRACE window: a renewal charge is retrying and the
+    # subscription is not yet canceled, so access continues. Once the provider
+    # transitions the row to ``canceled``/expired (or a coupon lapses), no
+    # branch here matches and every surface fails closed — contract "expired/
+    # canceled/non-entitled fail closed; trial auto-renews unless canceled".
     if plan == "pro" and subscription_status in ("active", "trialing", "past_due"):
         return True
     if coupon_pro_expires_at:
@@ -1198,39 +1208,36 @@ class Store:
 
         return self._run(_do).result()
 
-    # ---- rate limit ----
+    # ---- rewrite telemetry (NON-authorizing) ----
 
-    def consume_rewrite(self, device_id: str) -> tuple[bool, int, int]:
-        """Check + increment the daily free-tier counter.
+    def record_rewrite(self, device_id: str) -> int:
+        """Advance the per-day rewrite telemetry counter and return the running
+        count for today (post-increment).
 
-        Anonymous devices count against their own `users.daily_count` row,
-        exactly as before accounts existed. A device linked to an account
-        counts against `accounts.daily_count` instead — pooled across every
-        device linked to that account, so a free user's 10/day is one
-        shared allowance across their phone, laptop, etc., not 10 per
-        device. `table`/`key_col` below are fixed internal literals (never
-        user input), picking which row anchors the quota.
+        This method is **non-authorizing**. Under the commercial contract there
+        is NO free daily tier: the sole rewrite gate is the shared
+        server-authoritative entitlement projection (``User.is_pro``, enforced by
+        ``server._require_rewrite_entitlement`` before any provider call). Every
+        caller that reaches here has already passed that gate, so this counter
+        never grants, never denies, and never reads ``FREE_DAILY_LIMIT`` — it
+        exists only for the ``used_today`` disclosure and abuse metering.
+
+        The counter pools on the account once the device is IDENTIFIED (signed
+        in) and otherwise counts per-device, matching the historical quota
+        anchoring. `table`/`key_col` are fixed internal literals (never user
+        input), picking which row the counter lives on.
         """
 
-        def _do() -> tuple[bool, int, int]:
+        def _do() -> int:
             cur = self._conn.cursor()
             cur.execute(
-                "SELECT plan, subscription_status, coupon_pro_expires_at, daily_count, daily_day, account_id "
-                "FROM users WHERE device_id = ?",
+                "SELECT daily_count, daily_day, account_id FROM users WHERE device_id = ?",
                 (device_id,),
             )
             row = cur.fetchone()
             if not row:
-                return (False, 0, 0)
+                return 0
 
-            # An active Apple entitlement grant attaches to the canonical
-            # account (anonymous or identified) and means unlimited.
-            if row["account_id"] and _account_has_active_grant(cur, row["account_id"]):
-                return (True, row["daily_count"] or 0, -1)
-
-            # Pool the free-tier counter on the account only once it is
-            # IDENTIFIED (signed in). An anonymous auto-account still counts
-            # per-device, exactly as before accounts spanned every install.
             account_row = None
             if row["account_id"]:
                 cur.execute("SELECT * FROM accounts WHERE id = ?", (row["account_id"],))
@@ -1246,17 +1253,7 @@ class Store:
                 quota_row = row
                 table, key_col, key_val = "users", "device_id", device_id
 
-            if quota_row["plan"] == "pro" and quota_row["subscription_status"] in ("active", "trialing"):
-                return (True, quota_row["daily_count"], -1)
-            if quota_row["coupon_pro_expires_at"] and quota_row["coupon_pro_expires_at"] > _now_iso():
-                return (True, quota_row["daily_count"], -1)
-
             today = _today_utc()
-            used = quota_row["daily_count"] if quota_row["daily_day"] == today else 0
-            limit = int(os.environ.get("FREE_DAILY_LIMIT", "10"))
-            if used >= limit:
-                return (False, used, limit)
-
             cur.execute("BEGIN IMMEDIATE")
             try:
                 if quota_row["daily_day"] != today:
@@ -1270,12 +1267,12 @@ class Store:
                         f"UPDATE {table} SET daily_count=daily_count+1, updated_at=? WHERE {key_col}=?",
                         (_now_iso(), key_val),
                     )
-                    used += 1
+                    used = (quota_row["daily_count"] or 0) + 1
                 cur.execute("COMMIT")
             except Exception:
                 cur.execute("ROLLBACK")
                 raise
-            return (True, used, limit)
+            return used
 
         return self._run(_do).result()
 

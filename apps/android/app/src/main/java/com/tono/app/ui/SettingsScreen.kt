@@ -221,7 +221,7 @@ fun SettingsScreen(
                 }
             } else {
                 Text(
-                    "Free: 10 coaching sessions/day. Play displays the current local price before purchase.",
+                    "14-day free trial, then Pro. Play displays the current local price before purchase.",
                     color = Color.Gray,
                     fontSize = 12.sp,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),

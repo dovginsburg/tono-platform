@@ -114,7 +114,7 @@ export default async function AccountPage() {
               ) : (
                 <>
                   <p className="text-[14px] text-tono-text-soft leading-[1.6]">
-                    you're on the free plan. upgrade to pro for unlimited rewrites.
+                    you're not subscribed. start your 14-day free trial for unlimited rewrites.
                   </p>
                   <Link
                     href="/pricing"

@@ -95,6 +95,44 @@ def test_checkout_uses_account_customer_when_signed_in(client, monkeypatch):
     assert device_row.stripe_customer_id is None
 
 
+def test_checkout_requests_exactly_the_catalog_trial(client, monkeypatch):
+    """Stripe Checkout requests EXACTLY the canonical 14-day trial via
+    subscription_data.trial_period_days — the single, code-backed trial source.
+    No double-trial ambiguity: trial_end is never also set, and the value comes
+    from the commercial catalog (the one source of truth)."""
+    import backend.catalog as catalog
+    from backend.server import app  # noqa: F401 — ensures payments router is loaded
+
+    _configure_stripe(monkeypatch)
+    device = _register(client)
+
+    import backend.payments as payments_mod
+
+    captured = {}
+
+    def fake_customer_create(metadata=None, **kwargs):
+        return _FakeCustomer(id="cus_fake_trial")
+
+    def fake_session_create(**kwargs):
+        captured.update(kwargs)
+        return {"url": "https://checkout.stripe.test/session", "id": "cs_fake_trial"}
+
+    monkeypatch.setattr(payments_mod.stripe.Customer, "create", fake_customer_create)
+    monkeypatch.setattr(payments_mod.stripe.checkout.Session, "create", fake_session_create)
+
+    r = client.post(
+        "/v1/checkout", json={"interval": "month"}, headers=_auth(device["api_token"])
+    )
+    assert r.status_code == 200, r.text
+
+    sub_data = captured["subscription_data"]
+    assert sub_data["trial_period_days"] == 14
+    assert sub_data["trial_period_days"] == catalog.trial_days()
+    # Single trial source — no stacked/ambiguous second trial on the request.
+    assert "trial_end" not in sub_data
+    assert "trial_end" not in captured
+
+
 def test_checkout_bills_device_when_anonymous(client, monkeypatch):
     """Unchanged pre-accounts behavior: no sign-in, no account metadata."""
     from backend.server import app  # noqa: F401 — ensures app module (and backend.payments) is loaded

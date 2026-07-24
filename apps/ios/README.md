@@ -21,8 +21,8 @@ described in `SCOPE.md` (§6.1).
 - Mock analyzer works offline. OpenAI (gpt-4o-mini) and Anthropic
   (claude-haiku-4-5) providers wired up with structured JSON output
   (response_format=json_schema on OpenAI, tool-use on Anthropic).
-- Tests: `ToneEngineTests.swift` covers the mock analyzer, JSON decoder,
-  and free-tier gate. Open Xcode and ⌘U to run.
+- Tests: `ToneEngineTests.swift` covers the mock analyzer and JSON decoder.
+  Open Xcode and ⌘U to run.
 
 ## Repo layout
 
@@ -89,7 +89,6 @@ social-tone-coach/
 ┌─────────────────────────────────────────┐
 │ Host app (Tono)                         │   ← onboarding, settings, paywall
 │ - TonePreferences (read/write)          │      playground
-│ - FreeTierGate                          │
 └──────────────┬──────────────────────────┘
                │ App Group: group.com.tonocoach.shared
                ▼
@@ -132,7 +131,7 @@ own group outputs.
 
 ## Pricing model
 
-See `SCOPE.md` §5. Pro is $3.99/month or $39.99/year after an eligible 7-day
+See `SCOPE.md` §5. Pro is $3.99/month or $39.99/year after an eligible 14-day
 trial — unlimited rewrites, style memory, and all surfaces. B2B: $25/seat.
 The in-app paywall is a stub — wire RevenueCat or StoreKit 2 before launch.
 

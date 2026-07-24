@@ -217,7 +217,7 @@ export function RewriteEditor({
             <Link href="/app/app/history" style={ghostBtn} title="history">
               history
             </Link>
-            <span style={quotaStyle} title={limit ? `${limit.used} of ${limit.max} free today` : ''}>
+            <span style={quotaStyle} title={limit ? `${limit.used} of ${limit.max} today` : ''}>
               <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)' }} />
               <span>
                 <strong>{limit ? limit.used : '–'}</strong> / {limit ? (limit.max === Infinity ? '∞' : limit.max) : '–'} today

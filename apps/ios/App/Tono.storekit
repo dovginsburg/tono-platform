@@ -47,7 +47,7 @@
             "offerID" : "tono-yearly-trial",
             "paymentMode" : "FREE_TRIAL",
             "periodCount" : 1,
-            "subscriptionPeriod" : "P1W"
+            "subscriptionPeriod" : "P2W"
           },
           "localizations" : [
             {
@@ -75,7 +75,7 @@
             "offerID" : "tono-monthly-trial",
             "paymentMode" : "FREE_TRIAL",
             "periodCount" : 1,
-            "subscriptionPeriod" : "P1W"
+            "subscriptionPeriod" : "P2W"
           },
           "localizations" : [
             {

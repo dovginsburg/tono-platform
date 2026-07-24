@@ -31,7 +31,7 @@ export default function PrivacyPage() {
           <ul className="list-disc pl-6 space-y-2">
             <li>your email address, for subscription receipts</li>
             <li>your subscription tier, to gate the pro features</li>
-            <li>the count of rewrites you make per day, to prevent abuse and enforce subscription limits</li>
+            <li>the count of rewrites you make, to prevent abuse and confirm your subscription entitlement</li>
           </ul>
 
           <h2 className="text-2xl font-semibold pt-6">third parties</h2>
@@ -62,7 +62,7 @@ export default function PrivacyPage() {
 
           <h2 className="text-2xl font-semibold pt-6">subscription</h2>
           <p>
-            Tono Pro is a paid subscription. Every new user starts with a real 7-day free trial. After the trial, the subscription auto-renews at $3.99/month or $39.99/year unless cancelled. Cancel anytime from your account page (which opens the Stripe billing portal) — no retention, no dark patterns. Checkout is handled by Stripe (web) or App Store / Google Play (mobile); your card details never touch Tono.
+            Tono Pro is a paid subscription. Every new user starts with a real 14-day free trial. After the trial, the subscription auto-renews at $3.99/month or $39.99/year unless cancelled. Cancel anytime from your account page (which opens the Stripe billing portal) — no retention, no dark patterns. Checkout is handled by Stripe (web) or App Store / Google Play (mobile); your card details never touch Tono.
           </p>
         </section>
       </div>

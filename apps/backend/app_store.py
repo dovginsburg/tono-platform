@@ -433,7 +433,10 @@ def compute_me_fields(user: User, store: Store) -> dict[str, Any]:
     quota_source = user.account if identified else user
     used = quota_source.daily_count if quota_source.daily_day == today else 0
     is_pro = user.is_pro
-    limit = -1 if is_pro else int(os.environ.get("FREE_DAILY_LIMIT", "10"))
+    # No free daily tier: an entitled caller is unlimited (-1); everyone else
+    # has a zero allowance (fail closed). ``daily_limit`` is never a positive
+    # free-tier number and ``used_today`` is non-authorizing telemetry only.
+    limit = -1 if is_pro else 0
     subscription_status = user.account.subscription_status if identified else user.subscription_status
     subscription_renews_at = (
         user.account.subscription_renews_at if identified else user.subscription_renews_at

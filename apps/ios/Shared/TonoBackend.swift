@@ -38,7 +38,12 @@ public enum TonoBackendError: Error, LocalizedError {
         case .notRegistered:
             return "Account not set up yet. Open the Tono app once to sign in."
         case .http(let code, let msg):
-            if code == 429 { return "Active trial or subscription required. Open Tono to continue." }
+            // 402 = the server-authoritative entitlement gate (there is no free
+            // tier): an active trial or subscription is required. 429 is the
+            // per-IP rate limit — a DIFFERENT, honest signal that must never be
+            // overloaded to mean "subscription required."
+            if code == 402 { return "An active trial or subscription is required. Open Tono to continue." }
+            if code == 429 { return "Too many requests right now. Please wait a minute and try again." }
             if code == 401 { return "Sign-in expired. Open the Tono app to refresh." }
             if code == 503 { return "Service temporarily unavailable." }
             return msg.isEmpty ? "Server error (\(code))." : msg
@@ -504,8 +509,13 @@ public final class TonoBackend: @unchecked Sendable {
         }
         if !(200...299).contains(http.statusCode) {
             let body = String(data: data, encoding: .utf8) ?? ""
+            // 402 = entitlement required (server gate); 429 = per-IP rate limit.
+            // Keep them distinct — 429 is NOT "subscription required".
+            if http.statusCode == 402 {
+                throw TonoBackendError.http(402, "Active trial or subscription required.")
+            }
             if http.statusCode == 429 {
-                throw TonoBackendError.http(http.statusCode, "Active trial or subscription required.")
+                throw TonoBackendError.http(429, "Too many requests. Please wait a minute and try again.")
             }
             if http.statusCode == 401 {
                 throw TonoBackendError.notRegistered

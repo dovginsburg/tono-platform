@@ -39,7 +39,7 @@ Most writing tools help you *edit*. Tono helps you *translate*. The pre-send mom
 
 Tono is built on top of a tone-discipline system originally developed for AI agents that write in group chats. The rewrite-axis library is the same one that keeps those agents honest.
 
-**Pro — eligible 7-day free trial, then $3.99/month or $39.99/year**
+**Pro — eligible 14-day free trial, then $3.99/month or $39.99/year**
 
 - Unlimited rewrites
 - All four axes always on
@@ -62,7 +62,7 @@ Tono requests Full Access only because Apple's Custom Keyboard API requires it t
 
 - Tono Pro Monthly: $3.99 / month, auto-renewable
 - Tono Pro Annual: $39.99 / year, auto-renewable
-- Eligible subscriptions include a real 7-day free trial.
+- Eligible subscriptions include a real 14-day free trial.
 - Both cancel anytime in Settings → Apple ID → Subscriptions.
 
 **Made by**

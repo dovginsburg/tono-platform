@@ -228,7 +228,7 @@ export default function TonoFooter() {
         <NewsletterStrip />
 
         <p className="mt-8 text-[12px] text-tono-text-softer leading-relaxed">
-          Subscriptions auto-renew at $3.99/mo or $39.99/yr after the 7-day free trial unless cancelled. Cancel anytime.
+          Subscriptions auto-renew at $3.99/mo or $39.99/yr after the 14-day free trial unless cancelled. Cancel anytime.
         </p>
 
         {/* Bottom rail */}

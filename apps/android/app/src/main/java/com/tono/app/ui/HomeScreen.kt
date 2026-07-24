@@ -93,9 +93,9 @@ fun HomeScreen(onOpenKeyboardSettings: () -> Unit) {
             }
         }
 
-        // Footer — free / pro tiers
+        // Footer — trial / pro
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Free · 10 rewrites/day", color = Color.White.copy(alpha = 0.7f),
+            Text("14-day free trial", color = Color.White.copy(alpha = 0.7f),
                 fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             Text("All four rewrite axes on the Tono keyboard.",
                 color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp)

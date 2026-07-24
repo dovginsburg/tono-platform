@@ -19,9 +19,26 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
+
+# Supported free-trial ISO-8601 durations: whole weeks and/or whole days only
+# (e.g. ``P2W`` == 14 days, ``P14D`` == 14 days). Months/years are deliberately
+# unsupported for a trial length so the days<->iso invariant stays unambiguous.
+_TRIAL_ISO_RE = re.compile(r"^P(?:(\d+)W)?(?:(\d+)D)?$")
+
+
+def _iso8601_trial_days(iso: str) -> Optional[int]:
+    """Number of days an ISO-8601 ``P#W``/``P#D`` trial duration resolves to,
+    or ``None`` if the string is not a supported week/day duration."""
+    match = _TRIAL_ISO_RE.fullmatch((iso or "").strip())
+    if not match or (match.group(1) is None and match.group(2) is None):
+        return None
+    weeks = int(match.group(1) or 0)
+    days = int(match.group(2) or 0)
+    return weeks * 7 + days
 
 # ``apps/backend/catalog.py`` -> parents[2] is the repository root.
 _DEFAULT_CATALOG_PATH = (
@@ -70,6 +87,31 @@ def _validate(data: dict[str, Any], path: Path) -> None:
             f"found {sorted(entitlements)}"
         )
 
+    # Launch invariant: exactly ONE free-trial length, internally consistent.
+    # (Enforced at load so a malformed/contradictory trial can never quietly
+    # ship a 7-vs-14 mismatch between the catalog and the providers/tests.)
+    trial = data.get("trial")
+    if not isinstance(trial, dict):
+        raise CatalogError(f"catalog {path} has no 'trial' block")
+    days = trial.get("days")
+    if not isinstance(days, int) or isinstance(days, bool) or days <= 0:
+        raise CatalogError(
+            f"catalog {path} trial.days must be a positive int; found {days!r}"
+        )
+    iso = trial.get("period_iso8601")
+    if not isinstance(iso, str) or not iso.strip():
+        raise CatalogError(f"catalog {path} trial.period_iso8601 must be a non-empty string")
+    iso_days = _iso8601_trial_days(iso)
+    if iso_days is None:
+        raise CatalogError(
+            f"catalog {path} trial.period_iso8601 {iso!r} is not a supported P#W / P#D duration"
+        )
+    if iso_days != days:
+        raise CatalogError(
+            f"catalog {path} trial is internally inconsistent: days={days} but "
+            f"period_iso8601={iso!r} resolves to {iso_days} day(s)"
+        )
+
     providers = data.get("providers")
     if not isinstance(providers, dict) or not providers:
         raise CatalogError(f"catalog {path} has no providers")
@@ -102,6 +144,18 @@ def catalog_version() -> str:
 
 def canonical_entitlement_ids() -> frozenset[str]:
     return frozenset(load_catalog()["canonical_entitlements"].keys())
+
+
+def trial_days() -> int:
+    """The canonical free-trial length in days (the single source of truth every
+    provider and every surface is pinned to). Validated internally consistent
+    with ``trial.period_iso8601`` at catalog load."""
+    return int(load_catalog()["trial"]["days"])
+
+
+def trial_period_iso8601() -> str:
+    """The canonical free-trial length as an ISO-8601 duration (e.g. ``P2W``)."""
+    return str(load_catalog()["trial"]["period_iso8601"])
 
 
 def _provider(name: str) -> dict[str, Any]:

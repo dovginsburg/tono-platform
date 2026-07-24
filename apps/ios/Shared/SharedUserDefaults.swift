@@ -11,13 +11,12 @@ public enum SharedKeys {
     public static let apiKey = "tc.apiKey"
     public static let preferredVoice = "tc.preferredVoice"
     public static let axes = "tc.axes"
-    public static let freeTierUsed = "tc.freeTierUsed"
-    public static let freeTierDay = "tc.freeTierDay"
-    public static let freeTierLimit = "tc.freeTierLimit"
     public static let proUnlocked = "tc.proUnlocked"
     public static let lastRewriteVoice = "tc.lastRewriteVoice"
-    // Apple-managed 7-day free trial state (set by StoreKit 2 from
-    // currentEntitlements; read by both host app and keyboard extension).
+    // Apple-managed free-trial state — the introductory 14-day free trial
+    // configured in App Store Connect, mirrored by StoreKit 2 from
+    // currentEntitlements; read by both host app and keyboard extension. There
+    // is no client-side free tier; entitlement is server-authoritative.
     public static let inFreeTrial = "tc.inFreeTrial"
     // Tri-state entitlement (build 91): the last backend verdict —
     // "entitled" | "notEntitled" | "unknown". `proUnlocked` above is a mirror;
@@ -138,7 +137,7 @@ public struct TonePreferences {
     public var preferredVoice: String?
     public var axes: [RewriteAxis]
     public var proUnlocked: Bool
-    /// True when the user is currently in Apple's introductory 7-day free
+    /// True when the user is currently in Apple's introductory 14-day free
     /// trial (configured in App Store Connect). Mirrored from StoreKit
     /// transactions so the keyboard extension can show "X days left".
     public var inFreeTrial: Bool
@@ -216,40 +215,8 @@ public struct TonePreferences {
     }
 }
 
-public struct FreeTierGate {
-    public let dailyLimit: Int
-
-    public init(dailyLimit: Int = 10) {
-        self.dailyLimit = dailyLimit
-    }
-
-    public var usedToday: Int {
-        SharedStore.defaults.integer(forKey: SharedKeys.freeTierUsed)
-    }
-
-    public var dayStamp: String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = .current
-        return f.string(from: Date())
-    }
-
-    /// Returns true if the user can perform another rewrite today.
-    public func canAnalyze() -> Bool {
-        // Freshness-aware: an unknown/notEntitled backend state fails closed to
-        // the free tier instead of trusting a stale cached Bool (build 91 §7).
-        if TonePreferences().isProAuthoritative { return true }
-        let stored = SharedStore.defaults.string(forKey: SharedKeys.freeTierDay)
-        if stored != dayStamp {
-            SharedStore.defaults.set(0, forKey: SharedKeys.freeTierUsed)
-            SharedStore.defaults.set(dayStamp, forKey: SharedKeys.freeTierDay)
-            return true
-        }
-        return usedToday < dailyLimit
-    }
-
-    public func recordUse() {
-        if TonePreferences().isProAuthoritative { return }
-        SharedStore.defaults.set(usedToday + 1, forKey: SharedKeys.freeTierUsed)
-    }
-}
+// NOTE: the former client-side `FreeTierGate` (a device-local "N free rewrites
+// per day" counter) has been removed. There is no free daily tier: rewrite
+// authorization is server-authoritative (the backend fails closed with HTTP 402
+// unless an active trial/paid subscription or durable grant exists). No client
+// self-grants a free allowance.

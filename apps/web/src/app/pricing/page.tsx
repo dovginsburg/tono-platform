@@ -33,7 +33,7 @@ export default function PricingPage() {
             pricing
           </span>
           <h1 className="text-[36px] md:text-[48px] font-bold tracking-[-0.02em] text-tono-text mt-3 leading-[1.05]">
-            free for 7 days. pro when you rewrite all day.
+            free for 14 days. pro when you rewrite all day.
           </h1>
           <p className="text-[16px] md:text-[17px] text-tono-text-soft leading-[1.6] mt-5">
             cancel anytime. web access starts after checkout; ios is coming soon.
@@ -49,21 +49,21 @@ export default function PricingPage() {
             className="bg-tono-bg-card border border-tono-border rounded-[18px] p-7 flex flex-col"
           >
             <p className="text-[11px] uppercase tracking-wider font-semibold text-tono-text-softer">
-              free for 7 days
+              free for 14 days
             </p>
             <p className="text-[40px] md:text-[44px] font-bold tracking-[-0.02em] text-tono-text mt-2">
               $0
               <span className="text-[15px] font-normal text-tono-text-softer ml-2">
-                first 7 days
+                first 14 days
               </span>
             </p>
             <p className="text-[14px] text-tono-text-soft leading-[1.55] mt-3">
-              start a real trial. we'll never charge until day 8.
+              start a real trial. we'll never charge until day 15.
             </p>
             <ul className="mt-6 space-y-2.5 text-[14px] text-tono-text-soft flex-1">
               <li className="flex gap-2">
                 <CheckIcon />
-                <span>no charge until day 8</span>
+                <span>no charge until day 15</span>
               </li>
               <li className="flex gap-2">
                 <CheckIcon />
@@ -80,10 +80,10 @@ export default function PricingPage() {
             </ul>
             <ProCheckoutButton
               interval="month"
-              label="start 7-day free trial"
+              label="start 14-day free trial"
               className="mt-8 inline-flex items-center justify-center gap-2 px-5 py-3 rounded-[12px] bg-transparent border border-tono-border-strong text-tono-text hover:border-tono-accent disabled:opacity-60 disabled:pointer-events-none font-semibold transition min-h-[44px] text-[14px]"
             >
-              start 7-day free trial
+              start 14-day free trial
             </ProCheckoutButton>
           </article>
 
@@ -164,7 +164,7 @@ export default function PricingPage() {
         </p>
 
         <p className="text-center text-[13px] text-tono-text-softer mt-12">
-          subscriptions auto-renew at $3.99/mo or $39.99/yr after the 7-day free trial unless cancelled. cancel anytime.
+          subscriptions auto-renew at $3.99/mo or $39.99/yr after the 14-day free trial unless cancelled. cancel anytime.
         </p>
 
         {/* Footnote */}

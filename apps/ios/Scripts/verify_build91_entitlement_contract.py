@@ -100,7 +100,7 @@ def main() -> int:
         require(product["displayPrice"] == expected_price, f"{product_id} price is not {expected_price}")
         offer = product.get("introductoryOffer") or {}
         require(offer.get("paymentMode") == "FREE_TRIAL", f"{product_id} lacks a real free trial")
-        require(offer.get("subscriptionPeriod") == "P1W", f"{product_id} trial is not 7 days")
+        require(offer.get("subscriptionPeriod") == "P2W", f"{product_id} trial is not 14 days")
 
     canonical_claims = {
         "CLAUDE.md": read("CLAUDE.md"),

@@ -48,7 +48,7 @@ export default function AboutPage() {
             <p className="text-tono-text-soft">
               a tool you paste a draft into. it returns four rewrites —
               warmer, clearer, funnier, safer — each one labeled, each one
-              yours to edit, copy, or ignore. Tono starts with a real 7-day free
+              yours to edit, copy, or ignore. Tono starts with a real 14-day free
               trial. After the trial, Pro is $3.99/month or $39.99/year unless cancelled.
             </p>
           </div>

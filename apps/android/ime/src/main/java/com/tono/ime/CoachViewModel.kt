@@ -137,7 +137,9 @@ class CoachViewModel : ViewModel() {
                         is ToneEngineError.Offline ->
                             _mode.value = KeyboardMode.Error("No connection. Tap Back and try again when you have signal.")
                         is ToneEngineError.RateLimit ->
-                            _mode.value = KeyboardMode.Error("Daily free limit reached (${err.usedToday}/${err.dailyLimit}). Open Tono to upgrade.")
+                            // 429 is the per-IP rate limit, NOT a free-tier daily
+                            // cap (there is no free tier). Keep it honest.
+                            _mode.value = KeyboardMode.Error("Too many requests right now. Please wait a minute and try again.")
                         else ->
                             _mode.value = KeyboardMode.Error(err.message ?: "Something went wrong. Tap Back and try again.")
                     }

@@ -806,7 +806,10 @@ def test_17_backend_false_overrides_any_client_cache(client, apple):
     assert _notify(client, apple.sign_notification("REFUND", tx=apple.transaction(originalTransactionId=orig, signedDate=base_ms + DAY_MS))).json()["outcome"] == "refunded"
     me = _me(client, dev["api_token"])
     assert me["is_pro"] is False
-    assert me["daily_limit"] == 3  # FREE_DAILY_LIMIT from conftest — back to free
+    # No free tier to fall back to: a refunded/non-entitled account discloses a
+    # zero allowance and fails closed on rewrite.
+    assert me["daily_limit"] == 0
+    assert client.post("/api/analyze", json={"text": "hi there"}, headers=_auth(dev["api_token"])).status_code == 402
 
 
 # ===========================================================================
@@ -824,10 +827,12 @@ def test_18_unknown_fails_closed_no_entitlement(client, apple):
 
     # Unknown fails closed: no grant exists and the server never presents Pro.
     assert _me(client, dev["api_token"])["is_pro"] is False
-    # Paid backend usage is denied by the server regardless of any client cache.
+    # Rewrite is denied by the server regardless of any client cache — no free
+    # tier, so it fails closed with a distinct 402 on the very first request.
     for _ in range(3):
-        assert client.post("/api/analyze", json={"text": "hello"}, headers=_auth(dev["api_token"])).status_code == 200
-    assert client.post("/api/analyze", json={"text": "hello"}, headers=_auth(dev["api_token"])).status_code == 429
+        r = client.post("/api/analyze", json={"text": "hello"}, headers=_auth(dev["api_token"]))
+        assert r.status_code == 402, r.text
+        assert r.json()["error"]["reason"] == "entitlement_required"
 
 
 # ===========================================================================

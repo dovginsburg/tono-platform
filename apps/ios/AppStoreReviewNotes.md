@@ -49,7 +49,7 @@ The Info.plist `NSPrivacyAccessedAPITypes` key is populated for
 
 The iOS subscription is handled entirely through **StoreKit 2**:
 - Product IDs: `com.tonoit.pro.monthly` ($3.99/mo) and `com.tonoit.pro.yearly` ($39.99/yr)
-- Eligible monthly and annual subscriptions include a 7-day free trial
+- Eligible monthly and annual subscriptions include a 14-day free trial
 - No web checkout, no Stripe redirect, no external links for the iOS
   subscription purchase path
 
@@ -98,12 +98,12 @@ This must be enabled in both targets in Xcode → Signing & Capabilities → App
 
 To test the paywall and Pro features without a real purchase, use a
 Sandbox test account in App Store Connect. Tono offers **Pro** at $3.99/mo or
-$39.99/yr. Eligible subscriptions include a 7-day free trial (real Apple
+$39.99/yr. Eligible subscriptions include a 14-day free trial (real Apple
   introductory offer configured in App Store Connect), then auto-renews
   unless cancelled. Unlimited + thread context + style memory + weekly digest.
 
 The trial disclosure copy reads (from `Product.subscription?.introductoryOffer`,
-dynamically rendered): "Free for 7 days, then auto-renews at the StoreKit
+dynamically rendered): "Free for 14 days, then auto-renews at the StoreKit
 price unless cancelled." The paywall also shows
 the standard App Store boilerplate required by guideline 3.1.2 (payment
 timing, renewal window, free-trial forfeiture) below the buy buttons.

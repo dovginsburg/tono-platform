@@ -262,6 +262,13 @@ object TonoBackend {
                     response.use { resp ->
                         val bodyStr = resp.body?.string() ?: ""
                         when {
+                            // 402 = the server-authoritative entitlement gate
+                            // (there is no free tier): an active trial or paid
+                            // subscription is required. Distinct from the 429
+                            // per-IP rate limit below.
+                            resp.code == 402 -> cont.resumeWithException(
+                                ToneEngineError.Backend("An active trial or subscription is required. Open Tono to continue.")
+                            )
                             resp.code == 429 -> {
                                 val used = runCatching {
                                     json.decodeFromString<ErrorBody>(bodyStr).error.usedToday ?: 0

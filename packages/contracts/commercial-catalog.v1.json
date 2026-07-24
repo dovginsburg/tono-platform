@@ -6,7 +6,9 @@
     "There is exactly ONE canonical paid entitlement ('pro'). Every provider product maps to it; there is no duplicate or per-provider plan.",
     "A store/client purchase never directly grants access. Access is the server's deterministic projection over provider_purchases -> entitlement_grants (Apple/Stripe) or accounts.plan+status (Stripe/coupon). See apps/backend/store.py User.is_pro and _account_has_active_grant.",
     "Approved prices are display/reference only. Do not change without commercial approval; changing them here does not change any charge (the provider price objects are authoritative).",
-    "Product identifiers are shared across Apple and Google Play by design (com.tonoit.pro.monthly / com.tonoit.pro.yearly); the canonical entitlement is provider-agnostic."
+    "Product identifiers are shared across Apple and Google Play by design (com.tonoit.pro.monthly / com.tonoit.pro.yearly); the canonical entitlement is provider-agnostic.",
+    "There is exactly ONE free-trial length ('trial.days'), and it is internally consistent (trial.period_iso8601 resolves to the same number of days). Apple StoreKit intro offers, Stripe Checkout trial_period_days, and Google Play free-trial offers must all equal it; source + tests pin them to this value. The provider consoles are the billing authority — this value is what they are synchronized to, not a substitute for the console configuration.",
+    "There is NO free daily tier. Access is unlimited only during an active trial or paid subscription (or a durable founder grant); expired/canceled/non-entitled callers fail closed. 'daily_limit = -1' means unlimited for an entitled caller; a non-entitled caller has no allowance."
   ],
   "canonical_entitlements": {
     "pro": {
@@ -23,6 +25,11 @@
       "month": "3.99",
       "year": "39.99"
     }
+  },
+  "trial": {
+    "days": 14,
+    "period_iso8601": "P2W",
+    "note": "Canonical free-trial length for EVERY provider and every surface. The single source of truth: Apple StoreKit intro offers (apps/ios/App/Tono.storekit + App Store Connect), Stripe Checkout trial_period_days (apps/backend/payments.py), and Google Play base-plan free-trial offers must all equal this. 'days' and 'period_iso8601' must agree (P2W == 14 days); the catalog validator enforces that invariant at load. The provider consoles remain the billing authority — changing this value requires commercial approval AND a synchronized console update (App Store Connect intro offer, Stripe Price trial, Play Console offer); editing it here does not itself change any live trial."
   },
   "providers": {
     "stripe": {

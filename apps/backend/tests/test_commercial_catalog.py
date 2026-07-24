@@ -191,6 +191,53 @@ def test_catalog_package_name_matches_android_application_id():
     assert play["package_name"] == "com.tono.myapp"
 
 
+def test_catalog_trial_is_fourteen_days_and_consistent():
+    """Contract: exactly one free-trial length, 14 days, internally consistent
+    (period_iso8601 == P2W resolves to trial.days)."""
+    import backend.catalog as catalog
+
+    assert catalog.trial_days() == 14
+    assert catalog.trial_period_iso8601() == "P2W"
+
+
+def test_ios_storekit_trial_matches_catalog():
+    """Every StoreKit intro FREE_TRIAL offer period equals the catalog trial
+    (P2W / 14 days) and there is no lingering 7-day (P1W) trial — so iOS local
+    StoreKit testing can never drift from the contract trial length."""
+    import backend.catalog as catalog
+
+    storekit = _REPO_ROOT / "apps" / "ios" / "App" / "Tono.storekit"
+    if not storekit.is_file():
+        pytest.skip("iOS StoreKit config not present in this checkout")
+    text = storekit.read_text(encoding="utf-8")
+    data = json.loads(text)
+    offers = []
+    for group in data.get("subscriptionGroups", []):
+        for sub in group.get("subscriptions", []):
+            intro = sub.get("introductoryOffer")
+            if intro and intro.get("paymentMode") == "FREE_TRIAL":
+                offers.append(intro.get("subscriptionPeriod"))
+    assert offers, "no FREE_TRIAL intro offers found in StoreKit config"
+    assert set(offers) == {catalog.trial_period_iso8601()}, offers
+    assert "P1W" not in text, "a 7-day (P1W) trial still ships in the StoreKit config"
+
+
+def test_catalog_trial_invariant_rejects_inconsistent_trial(tmp_path, monkeypatch):
+    """A trial whose days and ISO period disagree fails closed at load — the
+    catalog trial-days invariant."""
+    import backend.catalog as catalog
+
+    data = json.loads(_CATALOG_PATH.read_text(encoding="utf-8"))
+    data["trial"] = {"days": 14, "period_iso8601": "P1W"}  # 14 != 7 -> inconsistent
+    bad = tmp_path / "bad-trial-catalog.json"
+    bad.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setenv("TONO_COMMERCIAL_CATALOG_PATH", str(bad))
+    catalog.load_catalog.cache_clear()
+    with pytest.raises(catalog.CatalogError):
+        catalog.load_catalog()
+    catalog.load_catalog.cache_clear()
+
+
 def test_malformed_catalog_fails_closed(tmp_path, monkeypatch):
     """A duplicated/extra canonical entitlement must raise, never silently pass."""
     import backend.catalog as catalog

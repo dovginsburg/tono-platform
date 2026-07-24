@@ -57,7 +57,7 @@ equivalent). At least 3, up to 10. Captions and visual briefs below.
 - **Screenshot 7 — Playground tab.** In-app playground showing the same
   draft analyzed live, useful for users who haven't enabled the keyboard
   yet.
-- **Screenshot 8 — Pricing.** StoreKit-backed card: eligible 7-day trial, then
+- **Screenshot 8 — Pricing.** StoreKit-backed card: eligible 14-day trial, then
   $3.99/month or $39.99/year.
 - **Screenshot 9 — Onboarding step 2 ("Allow Full Access").** Shows the
   iOS Settings path; defuses Full Access fear.
