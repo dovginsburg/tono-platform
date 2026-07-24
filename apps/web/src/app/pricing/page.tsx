@@ -1,185 +1,72 @@
-// ──────────────────────────────────────────────────────────────────────
-// /app/pricing — Tono public pricing page.
-//
-// Two tier cards (Trial / Pro) plus a one-line Family waitlist callout
-// (the Family backend is not wired in v1 — showing it as a full card
-// with a disabled "coming soon" button was misleading visitors).
-// Source files referenced: ProCheckoutButton.tsx (existing),
-// src/app/page.tsx#pricing (markup we mirror), tailwind.config.ts
-// (tokens).
-//
-// Why server-side render: this page is mostly static copy + 2 cards,
-// no per-user state needed. Per-button state (busy / error) is owned
-// by ProCheckoutButton which is already a client component.
-
 import Link from 'next/link'
 import ProCheckoutButton from '../ProCheckoutButton'
+import TonoBrand from '../TonoBrand'
 
 function CheckIcon() {
-  return (
-    <span className="text-tono-tone-safer font-semibold" aria-hidden="true">
-      ✓
-    </span>
-  )
+  return <span className="text-tono-tone-safer font-semibold" aria-hidden="true">✓</span>
 }
 
 export default function PricingPage() {
   return (
     <main className="min-h-screen bg-tono-bg text-tono-text font-sans antialiased">
-      <div className="max-w-[1180px] mx-auto px-6 md:px-10 py-16 md:py-24">
-        {/* Header — same eyebrow + heading pattern as landing #pricing */}
-        <header className="mb-12 md:mb-16 max-w-2xl">
-          <span className="text-[11px] uppercase tracking-wider font-semibold text-tono-accent-light">
-            pricing
-          </span>
-          <h1 className="text-[36px] md:text-[48px] font-bold tracking-[-0.02em] text-tono-text mt-3 leading-[1.05]">
-            free for 14 days. pro when you rewrite all day.
+      <div className="max-w-[920px] mx-auto px-5 sm:px-6 md:px-10 py-12 md:py-20">
+        <TonoBrand lockup />
+        <header className="mt-14 max-w-3xl">
+          <p className="text-[11px] uppercase tracking-[0.16em] font-bold text-tono-accent-light">pricing</p>
+          <h1 className="mt-4 text-[42px] sm:text-[56px] leading-[0.98] font-extrabold tracking-[-0.05em]">
+            one plan. two ways to pay.
           </h1>
-          <p className="text-[16px] md:text-[17px] text-tono-text-soft leading-[1.6] mt-5">
-            cancel anytime. web access starts after checkout; ios is coming soon.
+          <p className="mt-6 text-[17px] leading-relaxed text-tono-text-soft">
+            One lifetime 14-day trial per customer. Then choose $3.99/month or $39.99/year. Both paid options include unlimited rewrites. There is no free tier.
           </p>
         </header>
 
-        {/* Two-tier grid — Trial | Pro. md+: 2 cols. <md: stacks.
-            Family is a one-line waitlist callout below the grid. */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          {/* ── Trial ────────────────────────────────────────────── */}
-          <article
-            data-tier="trial"
-            className="bg-tono-bg-card border border-tono-border rounded-[18px] p-7 flex flex-col"
-          >
-            <p className="text-[11px] uppercase tracking-wider font-semibold text-tono-text-softer">
-              free for 14 days
-            </p>
-            <p className="text-[40px] md:text-[44px] font-bold tracking-[-0.02em] text-tono-text mt-2">
-              $0
-              <span className="text-[15px] font-normal text-tono-text-softer ml-2">
-                first 14 days
-              </span>
-            </p>
-            <p className="text-[14px] text-tono-text-soft leading-[1.55] mt-3">
-              start a real trial. we'll never charge until day 15.
-            </p>
-            <ul className="mt-6 space-y-2.5 text-[14px] text-tono-text-soft flex-1">
-              <li className="flex gap-2">
-                <CheckIcon />
-                <span>no charge until day 15</span>
-              </li>
-              <li className="flex gap-2">
-                <CheckIcon />
-                <span>drafts are sent only when you choose rewrite</span>
-              </li>
-              <li className="flex gap-2">
-                <CheckIcon />
-                <span>nothing about your writing trains anything</span>
-              </li>
-              <li className="flex gap-2">
-                <CheckIcon />
-                <span>cancel anytime during the trial</span>
-              </li>
-            </ul>
-            <ProCheckoutButton
-              interval="month"
-              label="start 14-day free trial"
-              className="mt-8 inline-flex items-center justify-center gap-2 px-5 py-3 rounded-[12px] bg-transparent border border-tono-border-strong text-tono-text hover:border-tono-accent disabled:opacity-60 disabled:pointer-events-none font-semibold transition min-h-[44px] text-[14px]"
-            >
-              start 14-day free trial
-            </ProCheckoutButton>
-          </article>
-
-          {/* ── Pro (featured) ───────────────────────────────────── */}
-          <article
-            data-tier="pro"
-            className="bg-tono-bg-card border border-tono-accent/40 rounded-[18px] p-7 flex flex-col relative shadow-[0_8px_32px_rgba(168,85,247,0.18)]"
-          >
-            <span className="absolute -top-3 right-5 inline-flex items-center gap-1 px-3 py-1 rounded-full bg-tono-accent text-white text-[10px] font-semibold uppercase tracking-wider">
-              tono pro
-            </span>
-            <p className="text-[11px] uppercase tracking-wider font-semibold text-tono-accent-light">
-              pro
-            </p>
-            <p className="text-[40px] md:text-[44px] font-bold tracking-[-0.02em] text-tono-text mt-2">
-              $3.99
-              <span className="text-[15px] font-normal text-tono-text-softer ml-2">
-                / month
-              </span>
-            </p>
-            <p className="text-[14px] text-tono-text-soft leading-[1.55] mt-3">
-              for the people who write to be read all day.
-            </p>
-            <ul className="mt-6 space-y-2.5 text-[14px] text-tono-text-soft flex-1">
-              <li className="flex gap-2">
-                <CheckIcon />
-                <span>
-                  <strong className="text-tono-text font-semibold">
-                    unlimited rewrites
-                  </strong>{' '}
-                  on the web composer
-                </span>
-              </li>
-              <li className="flex gap-2">
-                <CheckIcon />
-                <span>local history of your last 50 rewrites</span>
-              </li>
-              <li className="flex gap-2">
-                <CheckIcon />
-                <span>priority on the rewrite queue — no cold-start</span>
-              </li>
-              <li className="flex gap-2">
-                <CheckIcon />
-                <span>cancel anytime — no retention, no dark patterns</span>
-              </li>
-            </ul>
-            <div className="mt-8 flex flex-col gap-3">
-              <ProCheckoutButton interval="month" label="go pro — $3.99/mo">
-                go pro — $3.99/mo
-              </ProCheckoutButton>
-              <ProCheckoutButton
-                interval="year"
-                label="go pro — $39.99/yr · save $7.89"
-                className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-[12px] bg-transparent border border-tono-border-strong text-tono-text hover:border-tono-accent disabled:opacity-60 disabled:pointer-events-none font-semibold transition min-h-[44px] text-[14px] min-w-0 max-w-full text-center whitespace-normal leading-snug"
-              >
-                go pro — $39.99/yr · save $7.89
-              </ProCheckoutButton>
+        <section aria-label="Tono subscription options" className="mt-12 rounded-[22px] border border-tono-accent/40 bg-tono-bg-card p-6 sm:p-9 shadow-[0_8px_36px_rgba(168,85,247,0.16)]">
+          <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-6">
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.15em] font-bold text-tono-accent-light">tono pro</p>
+              <h2 className="mt-3 text-[34px] font-extrabold tracking-[-0.04em]">paid unlimited</h2>
+              <p className="mt-3 max-w-xl text-[14px] leading-relaxed text-tono-text-soft">
+                Start with the same one-time trial on either billing schedule. Your subscription renews automatically unless cancelled.
+              </p>
             </div>
-            <p className="text-[12px] text-tono-text-softer mt-3">
-              billed monthly or yearly. cancel from your inbox.
-            </p>
-          </article>
-
+            <div className="shrink-0 rounded-[14px] border border-tono-border bg-tono-bg-elev px-5 py-4">
+              <p className="text-[11px] uppercase tracking-[0.12em] text-tono-text-softer">trial</p>
+              <p className="mt-1 text-[20px] font-bold">14 days</p>
+              <p className="text-[12px] text-tono-text-softer">once per customer</p>
+            </div>
           </div>
 
-        {/* ── Family waitlist — one-line callout, no full pricing card.
-                Backend is not wired in v1. Re-add as a full card when
-                Family ships to production. ─────────────────────────── */}
-        <p className="text-center text-[14px] text-tono-text-softer mt-8">
-          <span className="font-semibold text-tono-text">Family — waitlist only.</span>{' '}
-          <a
-            href="mailto:hello@tonoit.com?subject=family%20plan%20waitlist"
-            className="text-tono-accent-light hover:text-tono-text underline-offset-2 hover:underline"
-          >
-            get notified
-          </a>{' '}
-          when it ships.
-        </p>
+          <ul className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-3 text-[14px] text-tono-text-soft">
+            <li className="flex gap-2"><CheckIcon /><span>unlimited rewrites while paid</span></li>
+            <li className="flex gap-2"><CheckIcon /><span>warmer, clearer, funnier, and safer options</span></li>
+            <li className="flex gap-2"><CheckIcon /><span>you choose what to copy and send</span></li>
+            <li className="flex gap-2"><CheckIcon /><span>cancel anytime</span></li>
+          </ul>
 
-        <p className="text-center text-[13px] text-tono-text-softer mt-12">
-          subscriptions auto-renew at $3.99/mo or $39.99/yr after the 14-day free trial unless cancelled. cancel anytime.
-        </p>
+          <div className="mt-9 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="rounded-[16px] border border-tono-border bg-tono-bg-elev p-5">
+              <p className="text-[12px] uppercase tracking-[0.12em] font-bold text-tono-text-softer">monthly</p>
+              <p className="mt-2 text-[36px] font-extrabold tracking-[-0.04em]">$3.99<span className="text-[14px] font-normal text-tono-text-softer">/month</span></p>
+              <ProCheckoutButton interval="month" label="start trial — then $3.99/month" className="mt-5 w-full inline-flex items-center justify-center min-h-[46px] px-5 py-3 rounded-[12px] bg-tono-accent hover:bg-tono-accent-hover disabled:opacity-60 disabled:pointer-events-none text-white font-bold transition">
+                start 14-day trial
+              </ProCheckoutButton>
+            </div>
+            <div className="rounded-[16px] border border-tono-border bg-tono-bg-elev p-5">
+              <p className="text-[12px] uppercase tracking-[0.12em] font-bold text-tono-text-softer">yearly</p>
+              <p className="mt-2 text-[36px] font-extrabold tracking-[-0.04em]">$39.99<span className="text-[14px] font-normal text-tono-text-softer">/year</span></p>
+              <ProCheckoutButton interval="year" label="start trial — then $39.99/year" className="mt-5 w-full inline-flex items-center justify-center min-h-[46px] px-5 py-3 rounded-[12px] border border-tono-border-strong bg-tono-bg-card hover:border-tono-accent disabled:opacity-60 disabled:pointer-events-none text-tono-text font-bold transition">
+                start 14-day trial
+              </ProCheckoutButton>
+            </div>
+          </div>
+          <p className="mt-6 text-[12px] leading-relaxed text-tono-text-softer">
+            No charge during the trial. On day 15, the selected subscription begins unless cancelled. Prices are USD. Checkout is handled by Stripe.
+          </p>
+        </section>
 
-        {/* Footnote */}
-        <p className="text-center text-[13px] text-tono-text-softer mt-3">
-          prices in USD. checkout handled by stripe — your card never touches tono.
-        </p>
-
-        {/* Back link */}
-        <div className="text-center mt-6">
-          <Link
-            href="/"
-            className="text-[13px] text-tono-text-softer hover:text-tono-text transition"
-          >
-            ← back to tono
-          </Link>
+        <div className="mt-10 text-center">
+          <Link href="/" className="inline-flex min-h-[44px] items-center text-[13px] font-semibold text-tono-text-soft hover:text-tono-text transition">← back to tono</Link>
         </div>
       </div>
     </main>

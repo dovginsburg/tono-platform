@@ -62,7 +62,7 @@ export default function PrivacyPage() {
 
           <h2 className="text-2xl font-semibold pt-6">subscription</h2>
           <p>
-            Tono Pro is a paid subscription. Every new user starts with a real 14-day free trial. After the trial, the subscription auto-renews at $3.99/month or $39.99/year unless cancelled. Cancel anytime from your account page (which opens the Stripe billing portal) — no retention, no dark patterns. Checkout is handled by Stripe (web) or App Store / Google Play (mobile); your card details never touch Tono.
+            Tono Pro is a paid subscription. Each customer is eligible for one lifetime 14-day trial. After the trial, the subscription auto-renews at $3.99/month or $39.99/year unless cancelled. Paid subscriptions include unlimited rewrites; there is no free tier. Cancel anytime from the billing controls provided for your purchase. Checkout is handled by the payment provider used for that purchase; your card details never touch Tono.
           </p>
         </section>
       </div>

@@ -186,7 +186,7 @@ function ActivePanel({ me }: { me: MeResponse | null }) {
           you're on tono pro.
         </h1>
         <p className="text-[15px] md:text-[16px] text-tono-text-soft leading-[1.6] mt-3 max-w-md mx-auto">
-          unlimited rewrites unlocked. the iOS keyboard is on its way — we'll email when it ships.
+          unlimited rewrites unlocked. tono never sends a message for you — you choose what to copy and send.
         </p>
       </div>
       {me?.subscription_renews_at ? (

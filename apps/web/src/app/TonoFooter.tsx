@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import TonoBrand from './TonoBrand'
 
 // ── Newsletter strip — replaced the no-op NewsletterSignup form
 // (which only set local "subscribed" state) with a single email link.
@@ -69,18 +70,9 @@ export default function TonoFooter() {
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-8">
           {/* Brand */}
           <div className="sm:col-span-2 md:col-span-1">
-            <div className="flex items-center gap-2.5">
-              <span
-                aria-hidden="true"
-                className="w-2.5 h-2.5 rounded-full bg-tono-accent shadow-[0_0_10px_var(--accent-glow)]"
-              />
-              <span className="text-[16px] font-bold tracking-[-0.02em] text-tono-text">
-                tono
-              </span>
-            </div>
+            <TonoBrand lockup compact />
             <p className="text-[13px] text-tono-text-soft leading-[1.6] mt-3 max-w-xs">
-              <em className="not-italic text-tono-text">say what you mean.</em>{' '}
-              four ways to say it.
+              Before you send it, see how it can land.
             </p>
           </div>
 
@@ -213,10 +205,10 @@ export default function TonoFooter() {
 
               <li>
                 <a
-                  href="mailto:hi@tonoit.com?subject=ios%20waitlist"
+                  href="mailto:hi@tonoit.com?subject=tono%20product%20updates"
                   className="text-tono-text-soft hover:text-tono-text transition"
                 >
-                  iOS — coming soon, join the waitlist
+                  Product updates
                 </a>
               </li>
             </ul>
@@ -228,7 +220,7 @@ export default function TonoFooter() {
         <NewsletterStrip />
 
         <p className="mt-8 text-[12px] text-tono-text-softer leading-relaxed">
-          Subscriptions auto-renew at $3.99/mo or $39.99/yr after the 14-day free trial unless cancelled. Cancel anytime.
+          One lifetime 14-day trial per customer, then $3.99/month or $39.99/year. Paid plans include unlimited rewrites. No free tier. Subscriptions auto-renew unless cancelled.
         </p>
 
         {/* Bottom rail */}

@@ -15,12 +15,6 @@ export const metadata: Metadata = {
 
 const POSTS = [
   {
-    date: '2026-07-08',
-    label: 'product',
-    title: 'public beta opens for the ios keyboard',
-    body: 'pro subscribers can install the tono ios keyboard today. free beta slots open weekly.',
-  },
-  {
     date: '2026-07-04',
     label: 'shipping',
     title: '/pricing, /checkout/success, /upgrade are live',

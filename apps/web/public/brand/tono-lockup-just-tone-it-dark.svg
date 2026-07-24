@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="520" viewBox="0 0 1600 520" role="img" aria-label="tono cursor-t dark">
+<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#D8B4FE"/><stop offset=".5" stop-color="#A855F7"/><stop offset="1" stop-color="#4E1A9E"/></linearGradient></defs>
+<rect width="1600" height="520" fill="#000000"/><g transform="translate(70 90)"><rect width="300" height="300" rx="66" fill="url(#g)"/><text x="141" y="224" text-anchor="middle" font-family="SF Pro Display, Inter, Arial" font-size="220" font-weight="700" fill="white">t</text><rect x="204" y="70" width="11" height="164" rx="5.5" fill="white" opacity=".86"/></g>
+<text x="430" y="260" font-family="SF Pro Display, Inter, Arial, sans-serif" font-size="190" font-weight="760" letter-spacing="-8" fill="#FFFFFF">tono</text>
+<text x="435" y="360" font-family="SF Pro Text, Inter, Arial, sans-serif" font-size="62" font-weight="500" fill="#D8B4FE">— just tone it!</text></svg>

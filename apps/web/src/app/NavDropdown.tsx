@@ -113,6 +113,7 @@ export default function TonoNavDropdown() {
   const panelRef = useRef<HTMLDivElement | null>(null)
   const itemRefs = useRef<(HTMLElement | null)[]>([])
   const pathname = usePathname() || '/'
+  const isLandingPage = pathname === '/'
 
   // Detect mobile (<768) for drawer vs dropdown
   useEffect(() => {
@@ -194,6 +195,8 @@ export default function TonoNavDropdown() {
       return () => window.clearTimeout(t)
     }
   }, [open, isMobile])
+
+  if (isLandingPage) return null
 
   // Home excluded from aria-current per spec — it's always navigable.
   const isCurrent = (href: string) => {
