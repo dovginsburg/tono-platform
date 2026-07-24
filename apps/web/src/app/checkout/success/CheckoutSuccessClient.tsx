@@ -196,7 +196,7 @@ function ActivePanel({ me }: { me: MeResponse | null }) {
       ) : null}
       <div className="flex flex-col sm:flex-row gap-3 justify-center pt-2">
         <Link
-          href="/app/app"
+          href="/app"
           className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-[12px] bg-tono-accent hover:bg-tono-accent-hover text-white font-semibold transition min-h-[44px] text-[14px] shadow-[0_8px_24px_rgba(168,85,247,0.30)]"
         >
           open the composer
@@ -265,13 +265,13 @@ function PendingPanel({
       ) : null}
       <div className="flex flex-col sm:flex-row gap-3 justify-center pt-2">
         <Link
-          href="/app/app"
+          href="/app"
           className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-[12px] bg-tono-bg-elev border border-tono-border-strong text-tono-text hover:border-tono-accent font-semibold transition min-h-[44px] text-[14px]"
         >
           try the composer anyway
         </Link>
         <Link
-          href="/app/pricing"
+          href="/pricing"
           className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-[12px] bg-transparent text-tono-text-softer hover:text-tono-text font-semibold transition min-h-[44px] text-[14px]"
         >
           ← back to pricing

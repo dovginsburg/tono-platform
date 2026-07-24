@@ -196,7 +196,7 @@ export function RewriteEditor({
       {/* NAV */}
       <header style={navStyle}>
         <div style={navInnerStyle}>
-          <Link href="/app/app" style={brandStyle} aria-label="tono home">
+          <Link href="/app" style={brandStyle} aria-label="tono home">
             <span aria-hidden style={brandDotStyle} />
             <span style={{ fontSize: 18, fontWeight: 700, letterSpacing: '-0.02em' }}>tono</span>
           </Link>
@@ -208,7 +208,7 @@ export function RewriteEditor({
             <span>{draft ? 'draft' : 'unsaved draft'}</span>
           </nav>
           <div style={navMetaStyle}>
-            <Link href="/app/app/history" style={ghostBtn} title="history">
+            <Link href="/app/history" style={ghostBtn} title="history">
               history
             </Link>
             {plan?.is_pro ? (

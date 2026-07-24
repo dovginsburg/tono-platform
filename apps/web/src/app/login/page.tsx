@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase-client';
 import { buildAuthCallbackUrl } from '@/lib/auth-redirects';
+import PasskeyLoginButton from '../PasskeyLoginButton';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 
@@ -12,10 +13,23 @@ const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 //   on localhost, callback URL is http://localhost:3000/app/auth/callback
 function buildRedirectTo(): string {
   if (typeof window === 'undefined') return '';
-  return buildAuthCallbackUrl(window.location.origin, {
+  const base = buildAuthCallbackUrl(window.location.origin, {
     NODE_ENV: process.env.NODE_ENV,
     NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL,
   });
+  // Preserve where the visitor was headed (e.g. /app/pricing to finish
+  // checkout). Supabase appends its own ?code=… to redirect_to, so the
+  // callback receives both params; it re-validates `next` with sanitizeNextPath
+  // before ever redirecting, so a hostile value can't become an open redirect.
+  const next = new URLSearchParams(window.location.search).get('next');
+  if (!next) return base;
+  try {
+    const url = new URL(base);
+    url.searchParams.set('next', next);
+    return url.toString();
+  } catch {
+    return base;
+  }
 }
 
 export default function LoginPage() {
@@ -106,6 +120,7 @@ export default function LoginPage() {
             >
               <AppleIcon /> continue with apple
             </button>
+            <PasskeyLoginButton />
           </div>
 
           <Divider />
