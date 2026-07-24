@@ -321,9 +321,9 @@ final class Build101RevenueTests: XCTestCase {
         )
     }
 
-    // MARK: - 9. Build number guard (all four plists declare 101)
+    // MARK: - 9. Build number guard (all four plists declare 102)
 
-    func testAllShippedBundlesDeclareVersion101() throws {
+    func testAllShippedBundlesDeclareVersion102() throws {
         let plists = [
             "App/Info.plist",
             "KeyboardExtension/Info.plist",
@@ -335,18 +335,18 @@ final class Build101RevenueTests: XCTestCase {
             let plist = try Self.readPlist(relative)
             let actual = plist["CFBundleVersion"] as? String
             XCTAssertEqual(
-                actual, "101",
-                "\(relative) declares CFBundleVersion \(actual ?? "nil"); build 101 requires 101 in every shipped bundle"
+                actual, "102",
+                "\(relative) declares CFBundleVersion \(actual ?? "nil"); build 102 requires 102 in every shipped bundle"
             )
         }
     }
 
-    func testBumpBuildScriptPinsExpectedBuildTo101() throws {
+    func testBumpBuildScriptPinsExpectedBuildTo102() throws {
         let script = try Self.readSource("Scripts/bump-build.sh")
         let value  = Self.shellAssignment("EXPECTED_BUILD", in: script)
         XCTAssertEqual(
-            value, "101",
-            "Scripts/bump-build.sh must pin EXPECTED_BUILD=101 so the archive guard matches the shipped plists"
+            value, "102",
+            "Scripts/bump-build.sh must pin EXPECTED_BUILD=102 so the archive guard matches the shipped plists"
         )
     }
 
