@@ -436,15 +436,18 @@ def test_no_provider_invoking_route_bypasses_entitlement_gate():
     any handler able to reach a provider on the CONSUMER principal also calls the
     shared gate. Stronger than the hardcoded list above — a NEW provider-invoking
     consumer route added later without the gate fails here, so the bypass cannot
-    silently reopen. Non-consumer principals (Slack B2B) are carved out only via
-    the explicit, documented allowlist above."""
-    from backend import server
+    silently reopen. The explicit Slack B2B carve-out is independently verified
+    against its canonical endpoint because mounted-route source introspection can
+    differ across FastAPI/Python versions."""
+    from backend import server, slack
     from fastapi.routing import APIRoute
 
     discovered: dict[str, str] = {}
     offenders: list[str] = []
     for route in server.app.routes:
         if not isinstance(route, APIRoute):
+            continue
+        if route.path in _NON_CONSUMER_PRINCIPAL_ROUTES:
             continue
         try:
             src = inspect.getsource(route.endpoint)
@@ -466,9 +469,30 @@ def test_no_provider_invoking_route_bypasses_entitlement_gate():
         "provider-invoking consumer routes missing the shared entitlement gate: "
         + ", ".join(offenders)
     )
-    # The carve-out cannot rot: every acknowledged non-consumer route must still
-    # be a real, discovered provider route.
-    for path in _NON_CONSUMER_PRINCIPAL_ROUTES:
-        assert path in discovered, (
-            f"stale non-consumer carve-out: {path} is no longer a provider route"
+
+    # The carve-out cannot rot: prove independently that the canonical Slack
+    # handler is mounted at the acknowledged path and still invokes a provider.
+    # Inspect the canonical function, not route.endpoint, whose inspectable
+    # source can vary with FastAPI/Python wrapper behavior.
+    assert _NON_CONSUMER_PRINCIPAL_ROUTES == {"/slack/command"}
+    slack_routes = [
+        route for route in slack.router.routes
+        if isinstance(route, APIRoute) and route.path == "/slack/command"
+    ]
+    assert len(slack_routes) == 1, "Slack B2B carve-out must be registered exactly once"
+    slack_endpoint = slack_routes[0].endpoint
+    assert slack_endpoint is slack.slack_command
+    assert slack_endpoint.__module__ == slack.__name__
+    assert any(
+        (
+            isinstance(route, APIRoute)
+            and route.path == "/slack/command"
+            and route.endpoint is slack_endpoint
         )
+        or getattr(route, "original_router", None) is slack.router
+        for route in server.app.routes
+    ), "Slack router is not mounted on the application"
+    slack_src = inspect.getsource(slack.slack_command)
+    assert any(tok in slack_src for tok in _PROVIDER_CALL_TOKENS), (
+        "stale non-consumer carve-out: /slack/command no longer invokes a provider"
+    )
