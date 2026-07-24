@@ -18,6 +18,8 @@ jobs:
           fetch-depth: 0
       - name: Verify clean canonical source and imported history
         run: python3 scripts/ci/verify_source.py
+      - name: Test build provenance SHA resolution
+        run: python3 -m unittest -v scripts/ci/test_prepare_provenance.py
       - name: Verify checkout starts clean
         run: git diff --exit-code && test -z "$(git status --porcelain)"
       - name: Full-history secret scan
