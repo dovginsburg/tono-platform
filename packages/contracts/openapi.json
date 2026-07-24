@@ -1443,7 +1443,7 @@
         "additionalProperties": false,
         "properties": {
           "axis": {
-            "description": "Exact variant from the allowlist: warmer | clearer | funnier | safer | custom. Server enforces the allowlist; client never chooses model.",
+            "description": "Exact variant from the allowlist: warmer | clearer | funnier | safer | affectionate | professional | concise | custom. Server enforces the allowlist; client never chooses model.",
             "title": "Axis",
             "type": "string"
           },
@@ -2382,7 +2382,7 @@
     },
     "/v1/analyze": {
       "post": {
-        "description": "Unauthenticated passthrough kept for backward compatibility with\nthe iOS Playground tab and integration tests. No billing is applied,\nbut a per-IP cap protects the shared provider credentials from abuse.",
+        "description": "Tone-analysis passthrough kept for backward compatibility with the\nhost-app Playground tab and integration tests. There is NO anonymous or\nfree rewrite path: the caller must present a valid bearer token\n(``CurrentUser`` -> 401 otherwise) AND hold a server-authoritative rewrite\nentitlement (the shared gate -> a DISTINCT 402 otherwise), both enforced\nBEFORE the per-IP window and BEFORE any provider invocation. Mirrors the\ngate on /api/analyze and /api/analyze/variant, so this route can never be\nthe free/anonymous rewrite bypass it once was.",
         "operationId": "v1_analyze_v1_analyze_post",
         "requestBody": {
           "content": {
@@ -2416,6 +2416,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "V1 Analyze"
       }
     },
