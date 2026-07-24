@@ -65,7 +65,7 @@ export default function TonoFooter() {
       </div>
 
       <div className="max-w-[1180px] mx-auto px-6 md:px-10 py-10 md:py-12">
-        {/* ── 5-column grid: Brand | Product | Company | Legal | Social
+        {/* ── 5-column grid: Brand | Product | Company | Legal | Updates
                 On desktop: 5 col. On mobile: single column stack. ── */}
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-8">
           {/* Brand */}
@@ -186,23 +186,12 @@ export default function TonoFooter() {
             </ul>
           </div>
 
-          {/* Social */}
+          {/* Updates */}
           <div className="sm:col-span-2 md:col-span-1">
             <p className="text-[11px] uppercase tracking-wider font-semibold text-tono-text-softer mb-3">
-              Social
+              Updates
             </p>
             <ul className="space-y-2 text-[13px]">
-              <li>
-                <a
-                  href="https://github.com/dovginsburg/tono-platform"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-tono-text-soft hover:text-tono-text transition"
-                >
-                  GitHub
-                </a>
-              </li>
-
               <li>
                 <a
                   href="mailto:hi@tonoit.com?subject=tono%20product%20updates"

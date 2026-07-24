@@ -45,6 +45,11 @@ test('commercial copy has one lifetime trial, two paid prices, unlimited, and no
   assert.doesNotMatch(publicAppSource, /web now|ios (?:is )?coming soon|public beta opens|install the tono ios keyboard today|free beta slots|App Store \/ Google Play/i)
 })
 
+test('public routes do not expose source-hosting or repository links', () => {
+  assert.doesNotMatch(publicAppSource, /github|gitlab\.com|bitbucket\.org|codeberg\.org|sourcehut|sr\.ht/i)
+  assert.doesNotMatch(publicAppSource, />\s*[^<]*\b(?:repo(?:sitor(?:y|ies))?|source\s+code)\b[^<]*</i)
+})
+
 test('all three campaign videos use native accessible controls and disciplined loading', () => {
   assert.match(videos, /<video/)
   assert.match(videos, /controls/)

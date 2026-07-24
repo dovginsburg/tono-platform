@@ -71,16 +71,6 @@ export default function BlogPage() {
           ))}
         </div>
 
-        <p className="mt-12 text-[13px] text-tono-text-softer text-center">
-          for the full changelog, see{' '}
-          <a
-            href="https://github.com/dovginsburg/tono-platform/commits/main"
-            className="underline hover:text-tono-text"
-          >
-            github
-          </a>
-          .
-        </p>
       </div>
     </main>
   )
