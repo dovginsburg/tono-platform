@@ -69,12 +69,29 @@ export function sanitizeNextPath(value: string | null | undefined): string {
 
   try {
     const parsed = new URL(value, CANONICAL_ORIGIN);
-    const isAppEntry =
-      parsed.origin === CANONICAL_ORIGIN &&
-      (parsed.pathname === APP_ENTRY_PATH || parsed.pathname.startsWith(`${APP_ENTRY_PATH}/`));
 
-    if (!isAppEntry) return APP_ENTRY_PATH;
-    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+    // Same-origin only — `next` must never become an open redirect.
+    if (parsed.origin !== CANONICAL_ORIGIN) return APP_ENTRY_PATH;
+
+    const pathname = parsed.pathname;
+
+    // Must land inside the app's basePath. This intentionally covers the whole
+    // signed-in surface a visitor may have been trying to reach before login —
+    // /app/pricing (so they can finish checkout), /app/account, the editor —
+    // not just the editor entry. Anything outside /app falls back to the editor.
+    const withinApp = pathname === BASE_PATH || pathname.startsWith(`${BASE_PATH}/`);
+    if (!withinApp) return APP_ENTRY_PATH;
+
+    // Never bounce back into an auth route — that would loop the sign-in flow.
+    if (
+      pathname === LOGIN_PATH ||
+      pathname.startsWith(`${LOGIN_PATH}/`) ||
+      pathname.startsWith(`${BASE_PATH}/auth`)
+    ) {
+      return APP_ENTRY_PATH;
+    }
+
+    return `${pathname}${parsed.search}${parsed.hash}`;
   } catch {
     return APP_ENTRY_PATH;
   }

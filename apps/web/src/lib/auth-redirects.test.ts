@@ -30,6 +30,22 @@ test('validated app return paths survive login and callback redirects', () => {
   assert.equal(buildAppRedirect(next, productionEnv), `https://tonoit.com${next}`);
 });
 
+test('the whole /app surface is a valid post-login destination, not just the editor', () => {
+  // Conversion depends on returning a signed-out visitor to where they were
+  // headed — /app/pricing (finish checkout), /app/account (manage billing).
+  for (const p of ['/app/pricing', '/app/account', '/app/pricing?interval=year']) {
+    assert.equal(sanitizeNextPath(p), p, p);
+  }
+});
+
+test('next never loops back into an auth route', () => {
+  // A next that points at login/callback would bounce the visitor straight
+  // back into the sign-in flow — fall back to the editor entry instead.
+  for (const p of ['/app/login', '/app/login?next=/app/pricing', '/app/auth/callback']) {
+    assert.equal(sanitizeNextPath(p), APP_ENTRY_PATH, p);
+  }
+});
+
 test('hostile next inputs cannot become cross-origin redirects', () => {
   const hostileInputs = [
     'https://evil.example/steal',

@@ -10,6 +10,7 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { cookies } from 'next/headers'
 import ManageBillingButton from './ManageBillingButton'
+import PasskeyManager from './PasskeyManager'
 
 export const metadata: Metadata = {
   title: 'your account — tono',
@@ -24,10 +25,10 @@ type Me = {
   subscription_renews_at?: string | null
 }
 
-async function loadMe(): Promise<{ signedIn: boolean; me: Me | null }> {
+async function loadMe(): Promise<{ signedIn: boolean; me: Me | null; error: boolean }> {
   const cookieStore = await cookies()
   const token = cookieStore.get('tono_api_token')?.value
-  if (!token) return { signedIn: false, me: null }
+  if (!token) return { signedIn: false, me: null, error: false }
 
   const backendUrl = process.env.TONO_BACKEND_URL || 'https://api.tonoit.com'
   try {
@@ -35,11 +36,17 @@ async function loadMe(): Promise<{ signedIn: boolean; me: Me | null }> {
       headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     })
-    if (!res.ok) return { signedIn: true, me: null }
+    // A 401/403 means the session is stale — treat as signed out so the visitor
+    // is invited to sign in again rather than shown a confusing blank plan.
+    if (res.status === 401 || res.status === 403) return { signedIn: false, me: null, error: false }
+    // Any other non-OK response is a backend fault: surface it as an explicit
+    // error state, never as a silent "free" plan (which would misreport a
+    // paying customer as unsubscribed).
+    if (!res.ok) return { signedIn: true, me: null, error: true }
     const me = (await res.json()) as Me
-    return { signedIn: true, me }
+    return { signedIn: true, me, error: false }
   } catch {
-    return { signedIn: true, me: null }
+    return { signedIn: true, me: null, error: true }
   }
 }
 
@@ -56,7 +63,7 @@ function formatDate(iso: string): string {
 }
 
 export default async function AccountPage() {
-  const { signedIn, me } = await loadMe()
+  const { signedIn, me, error } = await loadMe()
 
   return (
     <main className="min-h-screen bg-tono-bg text-tono-text font-sans antialiased">
@@ -75,6 +82,23 @@ export default async function AccountPage() {
               className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-[12px] bg-tono-accent hover:bg-tono-accent-hover text-white font-semibold transition min-h-[44px] text-[14px]"
             >
               sign in
+            </Link>
+          </div>
+        ) : error ? (
+          <div className="mt-8 space-y-6">
+            <div
+              role="alert"
+              className="rounded-[14px] border border-tono-danger/40 bg-tono-danger/10 p-5 text-[14px] text-tono-text-soft leading-[1.6]"
+            >
+              we couldn't reach your account right now. your plan and billing are
+              safe — this is a temporary connection issue on our end, not a change
+              to your subscription. please try again in a moment.
+            </div>
+            <Link
+              href="/account"
+              className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-[12px] bg-tono-accent hover:bg-tono-accent-hover text-white font-semibold transition min-h-[44px] text-[14px]"
+            >
+              retry
             </Link>
           </div>
         ) : (
@@ -127,7 +151,11 @@ export default async function AccountPage() {
             </section>
 
             <section className="pt-2 border-t border-tono-border">
-              <form action="/api/auth/signout" method="post" className="mt-6">
+              <PasskeyManager />
+            </section>
+
+            <section className="pt-2 border-t border-tono-border">
+              <form action="/app/api/auth/signout" method="post" className="mt-6">
                 <button
                   type="submit"
                   className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-[12px] bg-transparent border border-tono-border-strong text-tono-text hover:border-tono-accent font-semibold transition min-h-[44px] text-[14px]"

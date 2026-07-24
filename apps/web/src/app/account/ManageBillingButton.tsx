@@ -45,7 +45,8 @@ export default function ManageBillingButton({
         return
       }
       if (res.status === 401 || body.error === 'auth-required') {
-        window.location.assign('/app/login')
+        // After signing in, return to the account page they were managing.
+        window.location.assign('/app/login?next=%2Fapp%2Faccount')
         return
       }
       setError(

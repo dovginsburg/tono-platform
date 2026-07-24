@@ -136,12 +136,12 @@ export default function HistoryPage() {
     <div style={shell}>
       <header style={nav}>
         <div style={navInner}>
-          <Link href="/app/app" style={brand} title="back to editor">
+          <Link href="/app" style={brand} title="back to editor">
             <span style={brandDot} />
             <span style={{ fontSize: 18, fontWeight: 700, letterSpacing: '-0.02em' }}>tono</span>
           </Link>
           <div style={navRight}>
-            <Link href="/app/app" style={navLink}>
+            <Link href="/app" style={navLink}>
               ← editor
             </Link>
           </div>
@@ -185,7 +185,7 @@ export default function HistoryPage() {
           <EmptyState
             label="no rewrites yet"
             cta={
-              <Link href="/app/app" style={primaryBtn}>
+              <Link href="/app" style={primaryBtn}>
                 write your first →
               </Link>
             }

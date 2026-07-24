@@ -200,6 +200,7 @@ export default function TonoDemo() {
             {error && (
               <div
                 role="alert"
+                aria-live="assertive"
                 className="px-3 py-3 rounded-[10px] border border-tono-danger/40 bg-tono-danger/10 text-[12px] text-tono-text-soft"
               >
                 {error}

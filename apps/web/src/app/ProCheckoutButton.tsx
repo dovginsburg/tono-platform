@@ -1,12 +1,13 @@
 // ProCheckoutButton — wires the marketing Pro Subscribe CTA into the
 // Tono backend's Stripe Checkout endpoint.
 //
-// Posts to /api/checkout (which proxies to api.tonoit.com/v1/checkout).
-// No Authorization header — the backend allows anonymous checkout for
-// the public pricing flow. On 200, redirects to body.url. On non-200,
-// shows an inline error message and keeps the user on the page so
-// they can retry. Matches the behavior of the static pricing.html
-// (tono-platform-claude repo) for parity between surfaces.
+// Posts to /api/checkout (which proxies to api.tonoit.com/v1/checkout)
+// using the httpOnly tono_api_token cookie set at /auth/callback. Money must
+// bind to a canonical account, so the backend refuses anonymous checkout with
+// 401 auth-required; on that response we send the visitor to sign in with a
+// preserved ?next=/app/pricing so they return to finish the purchase. On 200,
+// redirects to body.url. On other non-200s, shows an inline error and keeps
+// the user on the page so they can retry.
 //
 // Brand voice: lowercase, no exclamation, "opening checkout…" while
 // loading, "couldn't reach checkout." on network failure.
@@ -66,7 +67,10 @@ export default function ProCheckoutButton({
       // Send the visitor to sign in rather than showing a dead error — this is
       // the "pricing → authenticated account → checkout" step of the journey.
       if (res.status === 401 || body.error === 'auth-required') {
-        window.location.assign('/app/login')
+        // Preserve the checkout intent: after signing in, land back on
+        // /pricing (basePath-qualified) so the visitor can complete the
+        // purchase in one click instead of being stranded in the editor.
+        window.location.assign('/app/login?next=%2Fapp%2Fpricing')
         return
       }
       const msg =
