@@ -164,6 +164,9 @@
 		970000000000000000000203 /* EmojiKeyboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 970000000000000000000003 /* EmojiKeyboard.swift */; };
 		970000000000000000000210 /* Build97KeyboardGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 970000000000000000000010 /* Build97KeyboardGeometryTests.swift */; };
 		970000000000000000000211 /* Build97BackspaceStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 970000000000000000000011 /* Build97BackspaceStateTests.swift */; };
+		990000000000000000000101 /* SpaceCursorEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 990000000000000000000001 /* SpaceCursorEngine.swift */; };
+		990000000000000000000201 /* SpaceCursorEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 990000000000000000000001 /* SpaceCursorEngine.swift */; };
+		990000000000000000000210 /* SpaceCursorGestureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 990000000000000000000010 /* SpaceCursorGestureTests.swift */; };
 		970000000000000000000212 /* Build97LayerNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 970000000000000000000012 /* Build97LayerNavigationTests.swift */; };
 		970000000000000000000213 /* Build97EmojiTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 970000000000000000000013 /* Build97EmojiTests.swift */; };
 		970000000000000000000220 /* Build97KeyboardRow3VisibleBoundsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 970000000000000000000020 /* Build97KeyboardRow3VisibleBoundsTests.swift */; };
@@ -312,6 +315,8 @@
 		FF7D2CE21D5E50685F393B6E /* UserMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserMemory.swift; sourceTree = "<group>"; };
 		970000000000000000000001 /* TonoKeyboardGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoKeyboardGeometry.swift; sourceTree = "<group>"; };
 		970000000000000000000002 /* BackspaceRepeatEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackspaceRepeatEngine.swift; sourceTree = "<group>"; };
+		990000000000000000000001 /* SpaceCursorEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceCursorEngine.swift; sourceTree = "<group>"; };
+		990000000000000000000010 /* SpaceCursorGestureTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SpaceCursorGestureTests.swift; sourceTree = "<group>"; };
 		970000000000000000000003 /* EmojiKeyboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmojiKeyboard.swift; sourceTree = "<group>"; };
 		970000000000000000000010 /* Build97KeyboardGeometryTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build97KeyboardGeometryTests.swift; sourceTree = "<group>"; };
 		970000000000000000000011 /* Build97BackspaceStateTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build97BackspaceStateTests.swift; sourceTree = "<group>"; };
@@ -397,6 +402,7 @@
 				970000000000000000000020 /* Build97KeyboardRow3VisibleBoundsTests.swift */,
 				970000000000000000000021 /* Build98PunctuationKeyTitleInvarianceTests.swift */,
 				970000000000000000000022 /* Build99CoachSurfaceLifecycleTests.swift */,
+				990000000000000000000010 /* SpaceCursorGestureTests.swift */,
 			);
 			name = Tests;
 			path = Tests;
@@ -528,6 +534,7 @@
 				970000000000000000000001 /* TonoKeyboardGeometry.swift */,
 				970000000000000000000002 /* BackspaceRepeatEngine.swift */,
 				970000000000000000000003 /* EmojiKeyboard.swift */,
+				990000000000000000000001 /* SpaceCursorEngine.swift */,
 			);
 			path = AppleFidelity;
 			sourceTree = "<group>";
@@ -743,6 +750,7 @@
 				970000000000000000000101 /* TonoKeyboardGeometry.swift in Sources */,
 				970000000000000000000102 /* BackspaceRepeatEngine.swift in Sources */,
 				970000000000000000000103 /* EmojiKeyboard.swift in Sources */,
+				990000000000000000000101 /* SpaceCursorEngine.swift in Sources */,
 				850000000000000000000001 /* SpellingCorrection.swift in Sources */,
 				FD395AA136FAAF23914CA72A /* TonoCoachClient.swift in Sources */,
 				53164013FEB9099C4ACC2C71 /* MetricKitReporter.swift in Sources */,
@@ -848,6 +856,8 @@
 				970000000000000000000201 /* TonoKeyboardGeometry.swift in Sources */,
 				970000000000000000000202 /* BackspaceRepeatEngine.swift in Sources */,
 				970000000000000000000203 /* EmojiKeyboard.swift in Sources */,
+				990000000000000000000201 /* SpaceCursorEngine.swift in Sources */,
+				990000000000000000000210 /* SpaceCursorGestureTests.swift in Sources */,
 				970000000000000000000210 /* Build97KeyboardGeometryTests.swift in Sources */,
 				970000000000000000000211 /* Build97BackspaceStateTests.swift in Sources */,
 				970000000000000000000212 /* Build97LayerNavigationTests.swift in Sources */,
