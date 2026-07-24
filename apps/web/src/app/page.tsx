@@ -15,7 +15,6 @@
 // Brand: docs/BRAND-TONO.md · tokens: tailwind.config.ts
 
 import Link from 'next/link'
-import TonoDemo from './TonoDemo'
 import ProCheckoutButton from './ProCheckoutButton'
 
 // ── Server component — no client state needed. ──────────────────────────
@@ -73,26 +72,74 @@ export default function LandingPage() {
                 >
                   see pricing →
                 </a>
-                <a
-                  href="#try-tono"
-                  className="inline-flex items-center justify-center gap-2 px-5 py-3.5 rounded-[12px] bg-transparent text-tono-text-soft hover:text-tono-text font-semibold transition min-h-[48px] text-[15px] underline-offset-4 hover:underline hidden sm:inline-flex"
-                >
-                  try the demo →
-                </a>
               </div>
               <p className="text-xs text-tono-muted mt-4">
                 14-day free trial. then $3.99/mo or $39.99/yr. cancel anytime.
               </p>
             </div>
 
-            {/* ── Inline demo — the actual working paste → rewrite tool ──
-                Real client component, hits POST /api/analyze. Replaces
-                the static phone-frame screenshot from the previous
-                build so the above-the-fold experience is honest.
-                `id="try-tono"` is the anchor target for the hero CTA — the
-                demo is the actual hook, not the /login wall. */}
-            <aside id="try-tono" className="relative scroll-mt-32">
-              <TonoDemo />
+            {/* ── Product preview — a finished rewrite, shown not simulated.
+                Non-interactive on purpose: there is no anonymous rewrite
+                path under the contract, so the hero shows a real example
+                artifact and routes visitors into the existing 14-day free
+                trial rather than implying a no-account demo. */}
+            <aside aria-label="tono preview — one draft, four ways to say it" className="relative">
+              {/* soft glow behind the preview card */}
+              <div
+                aria-hidden="true"
+                className="absolute -inset-6 rounded-[44px] bg-tono-accent/10 blur-2xl pointer-events-none"
+              />
+              <div className="relative rounded-[20px] bg-tono-bg-card border border-tono-border overflow-hidden">
+                {/* header bar — mirrors the iOS "tono · draft" frame */}
+                <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-tono-border">
+                  <div className="flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-tono-accent shadow-[0_0_8px_var(--accent-glow)]" />
+                    <span className="text-[10px] font-semibold tracking-[0.06em] text-tono-text uppercase">
+                      tono · preview
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-mono lowercase text-tono-muted">
+                    one draft, four ways
+                  </span>
+                </div>
+
+                {/* the draft (static example) */}
+                <div className="px-4 pt-3">
+                  <p className="text-[10px] font-mono lowercase text-tono-muted mb-1.5">your draft</p>
+                  <p className="text-[14px] text-tono-text-soft leading-[1.5]">
+                    “you still haven’t sent the file — what’s the holdup?”
+                  </p>
+                </div>
+
+                {/* four finished tones — the real artifact, not an input box */}
+                <div className="px-2.5 py-3 mt-3 space-y-1.5 border-t border-tono-border bg-tono-bg-soft">
+                  <ToneChip name="warmer" text="hey — any update on that file when you get a moment?" />
+                  <ToneChip name="clearer" text="can you send the file today? i’m blocked without it." />
+                  <ToneChip name="funnier" text="the file and i have never met — can you introduce us?" />
+                  <ToneChip name="safer" text="i might’ve missed it — did the file already go out?" />
+                </div>
+
+                {/* trial CTA — routes into the existing account/checkout flow */}
+                <div className="px-4 py-3 border-t border-tono-border">
+                  <ProCheckoutButton
+                    interval="month"
+                    label="start 14-day free trial to rewrite"
+                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-[10px] bg-tono-accent hover:bg-tono-accent-hover disabled:opacity-60 disabled:pointer-events-none text-white font-semibold text-[13px] transition min-h-[44px]"
+                  >
+                    start 14-day free trial to rewrite
+                  </ProCheckoutButton>
+                </div>
+
+                {/* footer */}
+                <div className="flex items-center justify-between px-4 py-2.5 bg-tono-bg border-t border-tono-border">
+                  <span className="text-[10px] font-mono lowercase text-tono-muted">
+                    four tones per rewrite
+                  </span>
+                  <span className="text-[10px] font-mono lowercase text-tono-accent-light">
+                    sent only when you rewrite
+                  </span>
+                </div>
+              </div>
             </aside>
           </div>
         </div>
@@ -269,14 +316,14 @@ export default function LandingPage() {
           </h2>
           <div className="mt-5 space-y-3 text-[15px] md:text-[16px] text-tono-text-soft leading-[1.65] max-w-2xl mx-auto">
             <p>
-              the demo works without an account. when you choose rewrite, your draft is sent securely to tono's rewrite service.
+              start a 14-day free trial to rewrite. when you choose rewrite, your draft is sent securely to tono's rewrite service.
             </p>
             <p>
               signed-in users get unlimited rewrites and a local history of the last 50 rewrites. tono never sends messages on your behalf, and your writing is not used to train anything.
             </p>
           </div>
           <ul className="mt-8 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-[12px] uppercase tracking-[0.14em] font-semibold text-tono-text-softer">
-            <li className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-tono-tone-safer" aria-hidden="true" />no account for the demo</li>
+            <li className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-tono-tone-safer" aria-hidden="true" />14-day free trial, cancel anytime</li>
             <li className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-tono-tone-safer" aria-hidden="true" />sent only when you rewrite</li>
             <li className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-tono-tone-safer" aria-hidden="true" />no training on your writing</li>
           </ul>
@@ -302,7 +349,7 @@ export default function LandingPage() {
               <ArrowIcon />
             </ProCheckoutButton>
             <a
-              href="mailto:hi@tonoit.com?subject=tono%20feedback"
+              href="mailto:ezra-orchestrator@agentmail.to"
               className="inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-[12px] bg-transparent text-tono-text-soft hover:text-tono-text font-semibold transition min-h-[48px]"
             >
               send feedback

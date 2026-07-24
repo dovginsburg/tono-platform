@@ -155,7 +155,7 @@ export default function PricingPage() {
         <p className="text-center text-[14px] text-tono-text-softer mt-8">
           <span className="font-semibold text-tono-text">Family — waitlist only.</span>{' '}
           <a
-            href="mailto:hello@tonoit.com?subject=family%20plan%20waitlist"
+            href="mailto:ezra-orchestrator@agentmail.to"
             className="text-tono-accent-light hover:text-tono-text underline-offset-2 hover:underline"
           >
             get notified
