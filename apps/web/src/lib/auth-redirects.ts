@@ -26,15 +26,21 @@ function parseOrigin(value: string | undefined): URL | null {
   }
 }
 
-function isAllowedOrigin(url: URL, env: RedirectEnvironment): boolean {
+function isCanonicalOrigin(url: URL, env: RedirectEnvironment): boolean {
   if (url.protocol === 'https:' && (url.hostname === 'tonoit.com' || url.hostname.endsWith('.tonoit.com'))) {
     return true;
   }
 
-  if (env.NODE_ENV !== 'production' && url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname)) {
-    return true;
-  }
+  return (
+    env.NODE_ENV !== 'production' &&
+    url.protocol === 'http:' &&
+    ['localhost', '127.0.0.1'].includes(url.hostname)
+  );
+}
 
+// This deployment's own preview host, and only when an operator has named it
+// deliberately. Never inferred — see resolvePublicOrigin.
+function isApprovedPreviewOrigin(url: URL, env: RedirectEnvironment): boolean {
   const vercelUrl = parseOrigin(env.VERCEL_URL);
   return (
     env.VERCEL_ENV === 'preview' &&
@@ -48,14 +54,28 @@ export function resolvePublicOrigin(
   candidateOrigin?: string,
   env: RedirectEnvironment = process.env
 ): string {
-  for (const candidate of [candidateOrigin, env.NEXT_PUBLIC_SITE_URL]) {
-    const parsed = parseOrigin(candidate);
-    if (parsed && isAllowedOrigin(parsed, env)) return parsed.origin;
-  }
+  // Every origin returned here becomes an externally shareable absolute URL —
+  // the Stripe success/cancel and billing-portal return URLs, and the
+  // magic-link/OAuth callback Supabase mails to the user. A preview deployment
+  // is a per-deployment *.vercel.app host that sits behind deployment
+  // protection and still runs this app's auth middleware, so any such link that
+  // leaves the browser strands its recipient on a preview auth wall instead of
+  // tonoit.com. A preview host therefore has exactly one way in: an operator
+  // naming it in NEXT_PUBLIC_SITE_URL for staging QA
+  // (docs/operations/web-protected-redirect-staging.md).
 
-  if (env.VERCEL_ENV === 'preview') {
-    const preview = parseOrigin(env.VERCEL_URL);
-    if (preview && isAllowedOrigin(preview, env)) return preview.origin;
+  // Caller-supplied — window.location.origin on the login page. This is
+  // whatever host the visitor happens to be on, so it is honoured only when
+  // already canonical; it can never introduce a preview host.
+  const candidate = parseOrigin(candidateOrigin);
+  if (candidate && isCanonicalOrigin(candidate, env)) return candidate.origin;
+
+  // Operator-configured, and the only accepted source of an approved preview
+  // origin. Note there is no fall-back to VERCEL_URL: a preview never adopts
+  // its own host by inference.
+  const configured = parseOrigin(env.NEXT_PUBLIC_SITE_URL);
+  if (configured && (isCanonicalOrigin(configured, env) || isApprovedPreviewOrigin(configured, env))) {
+    return configured.origin;
   }
 
   if (env.NODE_ENV !== 'production') return 'http://localhost:3000';
