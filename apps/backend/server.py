@@ -283,6 +283,7 @@ async def _lifespan(_: "FastAPI"):
     # served, so no legacy device is left with a NULL entitlement principal.
     try:
         backfill = store.backfill_missing_accounts()
+        store.backfill_stripe_trial_ledger()
         if backfill.get("backfilled"):
             logger.info(
                 "account backfill: linked %s legacy device(s); %s remain null",

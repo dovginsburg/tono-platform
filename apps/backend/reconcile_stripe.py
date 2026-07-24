@@ -80,6 +80,12 @@ def main() -> None:
         "Starting Stripe reconciliation (dry_run=%s, limit=%d)", args.dry_run, args.limit
     )
     accounts = store.list_accounts_with_stripe_subscriptions()
+    invariant_failures = store.stripe_trial_invariants()
+    if invariant_failures:
+        for failure in invariant_failures:
+            logger.error("Stripe trial invariant violation: %s", failure)
+        store.close()
+        sys.exit(1)
     logger.info("Found %d account-level Stripe subscriptions to check", len(accounts))
 
     for row in accounts:

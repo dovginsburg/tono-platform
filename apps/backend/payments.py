@@ -87,10 +87,18 @@ def _price_for(plan: str, interval: str) -> Optional[str]:
 
 
 def _public_base_url(request: Request) -> str:
-    return os.environ.get("PUBLIC_BASE_URL") or str(request.base_url).rstrip("/")
+    # Production redirects must never derive from the attacker-controlled Host
+    # header. Local development may explicitly configure its own base URL.
+    from urllib.parse import urlparse
+    configured = os.environ.get("PUBLIC_BASE_URL")
+    if configured:
+        parsed = urlparse(configured)
+        if parsed.scheme == "https" and parsed.netloc:
+            return configured.rstrip("/")
+    return "https://tonoit.com"
 
 
-def _portal_return_url(request: Request, requested: Optional[str]) -> str:
+def _safe_return_url(request: Request, requested: Optional[str], default_path: str) -> str:
     """Resolve where Stripe returns the user after the billing portal.
 
     A caller-supplied ``requested`` URL is honoured only when it is https and its
@@ -102,7 +110,7 @@ def _portal_return_url(request: Request, requested: Optional[str]) -> str:
     from urllib.parse import urlparse
 
     base = _public_base_url(request).rstrip("/")
-    default = f"{base}/app/account"
+    default = f"{base}{default_path}"
 
     if not requested:
         return default
@@ -120,6 +128,10 @@ def _portal_return_url(request: Request, requested: Optional[str]) -> str:
     if host in allowed_hosts or host == "tonoit.com" or host.endswith(".tonoit.com"):
         return requested
     return default
+
+
+def _portal_return_url(request: Request, requested: Optional[str]) -> str:
+    return _safe_return_url(request, requested, "/app/account")
 
 
 def _is_configured() -> bool:
@@ -217,62 +229,49 @@ def create_checkout_session(
     # Reserve before any Stripe-side creation. This is intentionally
     # fail-closed: a Stripe timeout/error retains the durable reservation,
     # because the provider may have accepted a request whose response we lost.
-    identified = user.account is not None and user.account.is_identified
-    account_id = user.account.id if identified else None
+    if user.account is None:
+        raise HTTPException(409, "canonical account missing")
+    account_id = user.account.id
+    customer_id = (
+        store.get_stripe_customer_binding(account_id)
+        or user.account.stripe_customer_id
+        or user.stripe_customer_id
+    )
     include_trial = store.reserve_stripe_trial(
-        device_id=user.device_id,
         account_id=account_id,
+        customer_id=customer_id,
     )
 
-    # Two callers share this endpoint:
-    #  - iOS app (authenticated, ``user`` is a real row): reuse the
-    #    existing Stripe customer; the subscription is attached to that
-    #    device via ``client_reference_id``.
-    #  - Public website (anonymous, ``user`` is None): no customer on
-    #    file. We let Stripe Checkout create the customer at session
-    #    time and use ``customer_email`` so the receipt already has an
-    #    address when the buyer hits the hosted page.
-    #
-    # Both flows set ``metadata.tono_source`` so the webhook can tell
-    # app-sourced subscriptions from web-sourced ones later (web
-    # subscriptions have no device row to attach to).
-    if user is not None:
-        # Every device now carries a canonical account UUID (build-91 §1), but
-        # billing routes through the account only once it is IDENTIFIED (signed
-        # in). An anonymous auto-account bills per-device exactly as before, so
-        # web/anonymous checkout is unchanged.
-        customer_id = (
-            user.account.stripe_customer_id if identified else user.stripe_customer_id
-        )
-        if not customer_id:
-            customer_metadata = {"tono_device_id": user.device_id}
-            if account_id:
-                customer_metadata["tono_account_id"] = account_id
-            customer = stripe.Customer.create(metadata=customer_metadata)
-            customer_id = customer["id"]
-            if account_id:
-                store.attach_account_stripe_customer(account_id, customer_id)
-            else:
-                store.attach_stripe_customer(user.device_id, customer_id)
-        metadata = {
+    # Authenticated anonymous installs and signed-in people both possess a
+    # canonical account UUID. There is intentionally no dormant unauthenticated
+    # checkout branch that a later refactor could accidentally make trialing.
+    if not customer_id:
+        customer = stripe.Customer.create(metadata={
             "tono_device_id": user.device_id,
-            "tono_source": "app",
-        }
-        if account_id:
-            metadata["tono_account_id"] = account_id
-        client_reference_id = user.device_id
-    else:
-        customer_id = None
-        metadata = {"tono_source": "web"}
-        client_reference_id = None
+            "tono_account_id": account_id,
+        })
+        customer_id = customer["id"]
+        if not store.attach_account_stripe_customer(account_id, customer_id):
+            customer_id = store.get_stripe_customer_binding(account_id)
+            if not customer_id:
+                raise HTTPException(409, "Stripe customer attachment conflict")
+        if include_trial and not store.reserve_customer_scope_for_account(
+            account_id, customer_id
+        ):
+            include_trial = False
+    metadata = {
+        "tono_device_id": user.device_id,
+        "tono_source": "app",
+        "tono_account_id": account_id,
+    }
+    client_reference_id = user.device_id
 
     # PUBLIC_BASE_URL wins over the request host so deployments behind
     # Railway's proxy don't surface ``*.up.railway.app`` in the user's
     # browser. The static-site caller passes ``PUBLIC_BASE_URL=https://
     # tonoit.com`` in the env, which keeps the success URL on-brand.
-    base = os.environ.get("PUBLIC_BASE_URL") or _public_base_url(request)
-    success_url = body.success_url or f"{base.rstrip('/')}/welcome-pro?s=1"
-    cancel_url = body.cancel_url or f"{base.rstrip('/')}/pricing"
+    success_url = _safe_return_url(request, body.success_url, "/welcome-pro?s=1")
+    cancel_url = _safe_return_url(request, body.cancel_url, "/pricing")
 
     # Single trial authority for web checkout: request the canonical free-trial
     # length (from the commercial catalog — 14 days) at Checkout time via
@@ -307,13 +306,9 @@ def create_checkout_session(
         session_kwargs["customer"] = customer_id
         if client_reference_id is not None:
             session_kwargs["client_reference_id"] = client_reference_id
-    else:
-        # Anonymous web flow — let Stripe create the customer from the
-        # email we pass, or prompt for one if the request didn't carry
-        # one (the static-site JS doesn't collect email up front).
-        session_kwargs["customer_email"] = body.email or None
-
     session = stripe.checkout.Session.create(**session_kwargs)
+    if include_trial:
+        store.attach_trial_session(account_id, session["id"])
 
     return CheckoutResponse(url=session["url"], session_id=session["id"])
 
@@ -406,6 +401,8 @@ def _handle_all_stripe_events(store: Store, event: dict) -> None:
         "customer.subscription.deleted",
     ):
         _handle_subscription_event(store, etype, obj)
+    elif etype == "checkout.session.expired":
+        store.release_trial_session(obj.get("id") or "")
     elif etype in ("invoice.payment_succeeded", "invoice.payment_failed"):
         _handle_invoice_event(store, etype, obj)
     elif etype == "charge.refunded":
@@ -453,8 +450,11 @@ def _handle_subscription_event(store: Store, etype: str, obj: dict) -> None:
             period_end = sub.get("current_period_end")
             product_id = _product_id_from_sub(sub)
         else:
-            status_str = "active"
-            period_end = obj.get("current_period_end")
+            logger.warning(
+                "Stripe checkout completion has no subscription; refusing Pro grant "
+                "(session=%s)", obj.get("id"),
+            )
+            return
     else:
         customer_id = obj.get("customer")
         subscription_id = obj.get("id")
@@ -492,6 +492,37 @@ def _handle_subscription_event(store: Store, etype: str, obj: dict) -> None:
     effective_status = "canceled" if is_deleted else status_str
     renews_at = _iso(period_end)
 
+    # Customer ownership and trial history are independent of mutable
+    # entitlement ordering. Apply them before the subscription projection so a
+    # delayed trialing event after cancellation/refund still consumes history.
+    if account_id and customer_id:
+        if not store.attach_account_stripe_customer(account_id, customer_id):
+            logger.error(
+                "Stripe customer attachment conflict account=%s customer=%s",
+                account_id, customer_id,
+            )
+            return
+    observed_subscription = locals().get("sub", obj)
+    if account_id and customer_id and (
+        status_str == "trialing"
+        or (hasattr(observed_subscription, "get")
+            and observed_subscription.get("trial_end"))
+        or obj.get("trial_end")
+    ):
+        fingerprint = _payment_method_fingerprint(observed_subscription)
+        conflict = store.consume_stripe_trial(
+            account_id=account_id,
+            customer_id=customer_id,
+            subscription_id=subscription_id or "",
+            fingerprint=fingerprint,
+        )
+        if conflict and subscription_id:
+            logger.error(
+                "Duplicate Stripe trial denied account=%s customer=%s sub=%s",
+                account_id, customer_id, subscription_id,
+            )
+            stripe.Subscription.modify(subscription_id, trial_end="now")
+
     # ── 1. Provider projection ──────────────────────────────────────────────
     projection_result = None
     if subscription_id and period_end_ms is not None and status_str is not None:
@@ -510,8 +541,6 @@ def _handle_subscription_event(store: Store, etype: str, obj: dict) -> None:
         return
 
     if account_id:
-        if customer_id:
-            store.attach_account_stripe_customer(account_id, customer_id)
         store.update_account_subscription(
             account_id=account_id,
             customer_id=customer_id,
@@ -798,6 +827,18 @@ def _product_id_from_sub(sub: dict) -> str:
         price = items[0].get("price") or {}
         return price.get("product") or "stripe_pro"
     return "stripe_pro"
+
+
+def _payment_method_fingerprint(sub: dict) -> Optional[str]:
+    """Return Stripe's stable card fingerprint when this payment rail exposes it."""
+    payment_method = sub.get("default_payment_method")
+    if not payment_method:
+        return None
+    if isinstance(payment_method, str):
+        payment_method = stripe.PaymentMethod.retrieve(payment_method)
+    card = payment_method.get("card") or {}
+    fingerprint = card.get("fingerprint")
+    return str(fingerprint) if fingerprint else None
 
 
 def _meta(obj: dict, key: str) -> Optional[str]:
