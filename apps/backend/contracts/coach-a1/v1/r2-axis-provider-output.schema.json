@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tonoit.com/schemas/coach-a1/v1/r2-axis-provider-output.schema.json",
+  "title": "Tono Coach A1 R2 single-axis provider output v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["axis", "text", "rationale", "risk_after"],
+  "properties": {
+    "axis": {
+      "type": "string",
+      "enum": ["warmer", "clearer", "funnier", "safer"]
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1200
+    },
+    "rationale": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "risk_after": {
+      "type": "string",
+      "enum": ["low", "medium", "high"]
+    }
+  }
+}

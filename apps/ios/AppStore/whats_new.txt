@@ -11,7 +11,7 @@ Type any message, tap Coach, and instantly see whether it might land the wrong w
 • Import contacts to build your recipient list in seconds
 • Style memory: your most-tapped axes move to the top automatically
 • Offline mode: local analysis when there's no connection
-• Widget: track your daily rewrite count from the home screen
+• Widget: see Tono activity from the home screen
 • Share Extension: analyze any text from the share sheet
 • Siri Shortcuts: "Coach my draft with Tono"
 • Daily nudge (opt-in): gentle reminder on days you haven't coached

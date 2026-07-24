@@ -323,7 +323,7 @@ struct CoachView: View {
                 HStack {
                     Image(systemName: u.isPro ? "checkmark.seal.fill" : "circle.dotted")
                         .foregroundColor(u.isPro ? .green : .white.opacity(0.5))
-                    Text(u.isPro ? "Pro · unlimited" : "Free · \(u.usedToday)/\(u.dailyLimit) today")
+                    Text(u.isPro ? "Pro · unlimited" : "Subscribe for unlimited rewrites")
                         .font(.system(size: 11, design: .rounded))
                         .foregroundColor(.white.opacity(0.45))
                     Spacer()
@@ -377,12 +377,7 @@ struct CoachView: View {
             await MainActor.run { hasRegistered = true }
             if let me = try? await TonoBackend.shared.me() {
                 await MainActor.run {
-                    usage = TonoUsage(
-                        usedToday: me.usedToday,
-                        dailyLimit: me.dailyLimit,
-                        plan: me.plan,
-                        isPro: me.isPro
-                    )
+                    usage = TonoUsage(plan: me.plan, isPro: me.isPro)
                 }
             }
         } catch {
@@ -433,12 +428,7 @@ struct CoachView: View {
             Task {
                 if let me = try? await TonoBackend.shared.me() {
                     await MainActor.run {
-                        usage = TonoUsage(
-                            usedToday: me.usedToday,
-                            dailyLimit: me.dailyLimit,
-                            plan: me.plan,
-                            isPro: me.isPro
-                        )
+                        usage = TonoUsage(plan: me.plan, isPro: me.isPro)
                     }
                 }
                 NotificationManager.shared.recordCoachSession()
@@ -467,8 +457,7 @@ struct CoachView: View {
         case .http(let code, let msg):
             let trimmed = msg.count > 200 ? String(msg.prefix(200)) + "…" : msg
             if code == 429 {
-                let today = usage.map { "\($0.usedToday)/\($0.dailyLimit)" } ?? "today's"
-                return "Daily free limit reached (\(today)). Upgrade in Settings for unlimited."
+                return "Active trial or subscription required. Open Settings to continue."
             }
             return trimmed.isEmpty ? "Server error \(code)" : "Server error \(code): \(trimmed)"
         case .notRegistered:

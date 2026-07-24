@@ -12,6 +12,7 @@ import { redirect } from 'next/navigation';
 import { createServerSupabase } from '@/lib/supabase';
 import { cookies } from 'next/headers';
 import { RewriteEditor } from './editor-client';
+import { APP_ENTRY_PATH, buildLoginRedirect } from '@/lib/auth-redirects';
 
 export default async function RewritePage() {
   const supabase = await createServerSupabase();
@@ -20,9 +21,9 @@ export default async function RewritePage() {
   } = await supabase.auth.getUser();
 
   if (!user) {
-    // App Router navigation adds basePath, so keep the redirect target relative
-    // to the application mount while preserving the full return URL.
-    redirect('/login?next=/app/app');
+    // Use an absolute, validated URL so Next cannot apply basePath twice to the
+    // Location header during a direct HTTP navigation.
+    redirect(buildLoginRedirect(APP_ENTRY_PATH));
   }
 
   const cookieStore = await cookies();

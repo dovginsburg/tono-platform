@@ -330,7 +330,9 @@ struct OnboardingEntryPointsView: View {
 ///      (server emails a 6-digit code via Resend)
 ///   2. User enters the 6-digit code → app POSTs /v1/auth/verify-otp
 ///      (server links this device to the email, returns a new api_token)
-private struct EmailSignInSheet: View {
+/// Internal (not private) so PaywallView and AccountDeletionView can present
+/// it when an identified account is required (build 101).
+struct EmailSignInSheet: View {
     @State private var email: String = ""
     @State private var otp: String = ""
     @State private var step: Step = .enterEmail

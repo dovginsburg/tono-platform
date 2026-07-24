@@ -33,6 +33,8 @@ DerivedData/
 **/keystore.properties
 **/*credentials*.json
 **/.vercel/
+**/.supabase/
+artifacts/supabase-auth-migration/
 
 # IDE/OS
 .DS_Store

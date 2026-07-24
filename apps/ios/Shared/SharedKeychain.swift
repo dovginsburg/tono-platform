@@ -55,6 +55,19 @@ public enum SharedKeychain {
         SecItemDelete(query(key) as CFDictionary)
     }
 
+    /// Purge all server-issued secrets after successful account deletion (build 101).
+    /// The caller must also call `StoreKitManager.shared.resetToAnonymous()` and
+    /// `TonePreferences.recordEntitlement(.notEntitled, isPro: false)` so extensions
+    /// see the cleared state immediately.
+    public static func purgeAccountSecrets() {
+        delete(KeychainKeys.apiToken)
+        delete(KeychainKeys.deviceID)
+        delete(KeychainKeys.accountID)
+        delete(KeychainKeys.deviceCredential)
+        delete(KeychainKeys.signedInEmail)
+        delete(KeychainKeys.apiKey)
+    }
+
     // Migrate a value from the (legacy) App Group UserDefaults into the
     // Keychain, then wipe the defaults entry. Safe to call repeatedly.
     public static func migrateFromDefaults(key: String, defaultsKey: String) {
@@ -81,6 +94,13 @@ public enum SharedKeychain {
 public enum KeychainKeys {
     public static let apiToken = "apiToken"
     public static let deviceID = "deviceID"
+    /// Canonical server-issued account UUID — the only entitlement principal
+    /// (build 91). New StoreKit purchases bind this as `appAccountToken`, never
+    /// the device id. Stored as its own secure Keychain item in the shared
+    /// access group; it is NOT an alias of `deviceID`.
+    public static let accountID = "accountID"
+    /// High-entropy proof for re-registering an existing public device id.
+    public static let deviceCredential = "deviceCredential"
     /// Direct LLM API key (legacy; only used when bypassing the backend proxy).
     /// Migrated out of UserDefaults on first launch.
     public static let apiKey   = "apiKey"

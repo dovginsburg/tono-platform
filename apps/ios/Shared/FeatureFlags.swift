@@ -30,13 +30,24 @@ public enum FeatureFlag: String, CaseIterable {
     // ── Default OFF (not a consumer product line) ─────────────────────────
     case slackEnabled      = "slack_enabled"     // B2B/Slack stays off in consumer builds
 
+    // ── Default OFF (on-device Apple Intelligence rewrite) ───────────────
+    // P0 GARY (t_c52c376d — clean recovery of t_c938d56f): runtime kill
+    // switch for the on-device SystemLanguageModel rewrite service. Both
+    // flags default OFF. `appleIntelligenceAllowsSaferRoute` is the corpus
+    // quality gate the spec mandates for the Safer axis (do not assume
+    // Apple output is clinically/safety equivalent). When this gate is
+    // closed, the safer route behaves as if the kill switch is off.
+    case appleIntelligenceRewriteEnabled  = "apple_intelligence_rewrite_enabled"
+    case appleIntelligenceAllowsSaferRoute = "apple_intelligence_allows_safer_route"
+
     // ── Collective improvement (default ON, user-controllable opt-out) ────
     case improveTono       = "improve_tono"
 
     /// Default value used before the first network fetch.
     public var defaultValue: Bool {
         switch self {
-        case .customAxes, .recipientMemory, .widgetEnabled, .siriEnabled, .emailSignIn, .slackEnabled:
+        case .customAxes, .recipientMemory, .widgetEnabled, .siriEnabled, .slackEnabled,
+             .emailSignIn, .appleIntelligenceRewriteEnabled, .appleIntelligenceAllowsSaferRoute:
             return false
         default:
             return true
@@ -59,7 +70,8 @@ public enum FeatureFlag: String, CaseIterable {
     public var isUserControllable: Bool {
         switch self {
         case .threadContext, .weeklyDigest, .riskDelta,
-             .memoryInference, .memoryContextHints, .improveTono:
+             .memoryInference, .memoryContextHints, .improveTono,
+             .appleIntelligenceRewriteEnabled, .appleIntelligenceAllowsSaferRoute:
             return true
         default:
             return false
@@ -81,6 +93,8 @@ public enum FeatureFlag: String, CaseIterable {
         case .emailSignIn:         return "Email sign-in"
         case .slackEnabled:        return "Slack integration"
         case .improveTono:           return "Help improve Tono"
+        case .appleIntelligenceRewriteEnabled:  return "On-device Apple Intelligence rewriting"
+        case .appleIntelligenceAllowsSaferRoute: return "Allow on-device Safer rewrites"
         }
     }
 
@@ -100,6 +114,10 @@ public enum FeatureFlag: String, CaseIterable {
             return "Remember preferred styles per recipient in the keyboard."
         case .improveTono:
             return "Share anonymous outcome signals (which style worked, not your messages) to help improve Tono for everyone. Your messages never leave your device."
+        case .appleIntelligenceRewriteEnabled:
+            return "When your device supports Apple Intelligence, rewrite selected text on-device instead of contacting Tono's server. Your draft never leaves the device."
+        case .appleIntelligenceAllowsSaferRoute:
+            return "Permit the on-device model to attempt the Safer rewrite axis. Off by default — Tono's Safer rewrite has been tuned against a sensitive-corpus evaluation; on-device output has not."
         default:
             return ""
         }
@@ -111,7 +129,10 @@ public enum FeatureFlag: String, CaseIterable {
 public enum FeatureFlags {
 
     public static func isEnabled(_ flag: FeatureFlag) -> Bool {
-        if flag.requiresPro && !TonePreferences().proUnlocked {
+        // Pro gating reads the canonical tri-state authority, not the cached
+        // `proUnlocked` Bool: a missing/unknown backend state fails closed
+        // (build 91 §7).
+        if flag.requiresPro && !TonePreferences().isProAuthoritative {
             return false
         }
         return cached()[flag.rawValue] ?? flag.defaultValue

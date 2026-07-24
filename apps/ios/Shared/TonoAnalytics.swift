@@ -43,6 +43,23 @@ public enum AnalyticsEvent: Sendable {
         rewriteUsed: Bool,
         editAfter: Bool
     )
+    /// P0 GARY (t_c52c376d — clean recovery of t_c938d56f): on-device rewrite route decision for a single
+    /// selected-rewrite tap. Fields are enums and counts only — NO draft
+    /// text, NO rewrite text, NO recipient identifier. Used to attribute
+    /// each selected-rewrite tap to either the on-device SystemLanguageModel
+    /// route or the cloud fallback, and to surface the typed reason when
+    /// the on-device path was unavailable.
+    case onDeviceRewriteRoute(
+        axis: String,
+        route: String,              // "onDevice" | "cloudFallback"
+        reason: String,             // enum string from OnDeviceRewriteUnavailableReason
+        availabilityReason: String?, // "available" / "deviceNotEligible" / …
+        bytesIn: Int?,
+        bytesOut: Int?,
+        firstTokenMs: Double?,
+        completionMs: Double?,
+        hasFullAccess: Bool
+    )
 
     public var name: String {
         switch self {
@@ -53,6 +70,7 @@ public enum AnalyticsEvent: Sendable {
         case .axisRejected:             return "axis_rejected"
         case .suggestionTapped:         return "suggestion_tapped"
         case .improvementOutcome:       return "improvement_outcome"
+        case .onDeviceRewriteRoute:     return "on_device_rewrite_route"
         }
     }
 
@@ -80,6 +98,21 @@ public enum AnalyticsEvent: Sendable {
                 "edit_after": edit,
             ]
             if let axis { props["selected_axis"] = axis }
+            return props
+        case .onDeviceRewriteRoute(let axis, let route, let reason, let availability,
+                                    let bytesIn, let bytesOut, let firstTokenMs, let completionMs,
+                                    let hasFullAccess):
+            var props: [String: Any] = [
+                "axis": axis,
+                "route": route,
+                "reason": reason,
+                "has_full_access": hasFullAccess,
+            ]
+            if let availability { props["availability_reason"] = availability }
+            if let bytesIn { props["bytes_in"] = bytesIn }
+            if let bytesOut { props["bytes_out"] = bytesOut }
+            if let firstTokenMs { props["first_token_ms"] = Int(firstTokenMs) }
+            if let completionMs { props["completion_ms"] = Int(completionMs) }
             return props
         }
     }

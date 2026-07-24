@@ -1,0 +1,55 @@
+{
+  "contract": "tono-coach-a1",
+  "version": "1.0.0",
+  "status": "stage-1-candidate",
+  "architecture": "fast-first-atomic-rewrite-then-asynchronous-axes",
+  "transport": "atomic-json-only",
+  "streaming": false,
+  "input": {
+    "normalization": "production-intended-draft",
+    "maximum_characters": 1200,
+    "over_limit_behavior": "typed-error-no-truncation"
+  },
+  "r1": {
+    "endpoint": "/v2/rewrite",
+    "provider_calls": 1,
+    "system_prompt": "r1-system.txt",
+    "user_prompt_template": "r1-user.txt",
+    "provider_output_schema": "r1-provider-output.schema.json",
+    "maximum_output_tokens": 120,
+    "temperature": 0.4,
+    "stop_sequences": ["\n\nHuman:"],
+    "validation_unit": "complete-rewrite-string",
+    "provider_deadline_milliseconds": 1600
+  },
+  "r2": {
+    "endpoint": "/v2/axes",
+    "provider_strategy": "one-independent-call-per-axis-after-r1-commit",
+    "ordered_axes": ["warmer", "clearer", "funnier", "safer"],
+    "system_prompt": "r2-axis-system.txt",
+    "user_prompt_template": "r2-axis-user.txt",
+    "provider_output_schema": "r2-axis-provider-output.schema.json",
+    "maximum_output_tokens_per_axis": 150,
+    "temperature": 0.4,
+    "stop_sequences": ["\n\nHuman:"],
+    "validation_unit": "complete-axis-rewrite-string",
+    "failed_axis_behavior": "omit-never-stub"
+  },
+  "safety": {
+    "local_crisis_preemption": true,
+    "deterministic_network_free_server_validation": true,
+    "unvalidated_text_rendering": "prohibited",
+    "partial_text_salvage": "prohibited",
+    "provider_output_logging": "prohibited"
+  },
+  "benchmark": {
+    "stage": 1,
+    "fixtures": 200,
+    "warm_runs_per_fixture_batch": 30,
+    "daypart_windows": 3,
+    "provider_p95_go_milliseconds": 1500,
+    "go_windows_required": 2,
+    "provider_p95_no_go_milliseconds": 1800,
+    "no_go_windows_required": 2
+  }
+}
