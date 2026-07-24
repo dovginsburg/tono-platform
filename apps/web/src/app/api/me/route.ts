@@ -1,5 +1,7 @@
-// Returns plan + daily usage for the current user (via tono_api_token cookie).
-// Falls back to {plan: 'free', used_today: 0, daily_limit: -1} if anonymous.
+// Returns plan + entitlement for the current user (via tono_api_token cookie).
+// Anonymous callers are NOT entitled: there is no free tier, so we fail closed
+// with daily_limit: 0 (a zero allowance), never -1/unlimited. -1 means unlimited
+// and is reserved for a genuinely entitled (Pro/trial) caller from the backend.
 
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
@@ -12,10 +14,10 @@ export async function GET() {
   if (!token) {
     return NextResponse.json({
       device_id: null,
-      plan: 'free',
+      plan: 'anonymous',
       is_pro: false,
       used_today: 0,
-      daily_limit: -1,
+      daily_limit: 0,
     });
   }
 

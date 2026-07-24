@@ -10,14 +10,20 @@
 // on the correct axis and returns that single variant's text.
 //
 // Parity + honesty contract (mirrors TonoMessagesExtension.requestRewrite):
-//   * Account gate: fail closed when the device is not registered.
+//   * Registration pre-check: fail closed when the device has no account token
+//     (it cannot make an authenticated call). This is a PRINCIPAL check, not an
+//     entitlement grant — being registered does NOT mean being entitled.
+//   * Entitlement gate: enforced SERVER-side. There is no free tier, so a
+//     registered-but-non-entitled device is refused by the backend with a
+//     distinct HTTP 402. That 402 maps to the honest
+//     ShortcutRewrite.Failure.entitlementRequired ("active trial or
+//     subscription required"), never a rewrite. 429 (per-IP rate limit) and 401
+//     (sign-in) map to their own truthful messages via TonoBackendError.
 //   * Custom: validated and capped at 120 characters (never silently
 //     truncated into a "success").
 //   * No-op guard: a blocked envelope, an empty rewrite, or a rewrite that is
 //     near-identical to the source draft is an honest FAILURE — the source
 //     draft is NEVER returned as a successful rewrite.
-//   * Entitlement / sign-in failures propagate honestly (the backend's 429 /
-//     401 map to truthful messages via TonoBackendError).
 //
 // No clipboard, no fake shortcut-import URL, no silent success, no auto-send,
 // no app-level side effect. The intent runs in the app's background process
@@ -96,8 +102,10 @@ struct CoachDraftIntent: AppIntent {
         guard !source.isEmpty else {
             throw honest(.emptyDraft)
         }
-        // Account gate — fail closed when the device is not registered, exactly
-        // like the keyboard and iMessage surfaces. No anonymous rewrite call.
+        // Registration pre-check — fail closed when the device has no account
+        // token, exactly like the keyboard and iMessage surfaces. This is only
+        // a principal check (no token => no authenticated call); it is NOT an
+        // entitlement grant. Entitlement is decided server-side below.
         guard TonoBackend.shared.isRegistered() else {
             throw honest(.notRegistered)
         }
@@ -113,14 +121,26 @@ struct CoachDraftIntent: AppIntent {
             }
         }
 
-        // Exactly one authenticated request on the selected axis. Entitlement
-        // (429) and sign-in (401) failures surface through TonoBackendError's
-        // truthful messages.
-        let result: TonoVariantResult = try await TonoBackend.shared.analyzeVariant(
-            text: source,
-            axis: selected.axis,
-            customPrompt: customPrompt
-        )
+        // Exactly one authenticated request on the selected axis. The
+        // server-authoritative entitlement gate refuses a non-entitled device
+        // with HTTP 402 (there is no free tier); map that to the honest
+        // ShortcutRewrite entitlement failure so the Shortcuts runtime shows
+        // "active trial or subscription required" and returns no rewrite.
+        // Sign-in (401) and rate-limit (429) failures keep their own truthful
+        // TonoBackendError messages.
+        let result: TonoVariantResult
+        do {
+            result = try await TonoBackend.shared.analyzeVariant(
+                text: source,
+                axis: selected.axis,
+                customPrompt: customPrompt
+            )
+        } catch let error as TonoBackendError {
+            if case .http(402, _) = error {
+                throw honest(.entitlementRequired)
+            }
+            throw error
+        }
 
         // Resolve the strict ok|blocked envelope into a distinct rewrite or an
         // honest failure. The source draft is NEVER returned as a success.

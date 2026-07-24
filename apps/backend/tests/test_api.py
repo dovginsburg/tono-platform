@@ -34,6 +34,22 @@ def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _grant_pro(device_id: str, status: str = "active") -> None:
+    """Grant a server-side entitlement so this device can rewrite. Registration
+    alone is only an entitlement principal; under the contract there is no free
+    tier, so the shared server gate fails closed (402) without an active
+    trial/paid subscription (or a durable founder grant)."""
+    from backend.store import get_store
+
+    get_store().update_subscription(
+        device_id=device_id,
+        customer_id=None,
+        subscription_id=f"sub_{device_id}",
+        status=status,
+        renews_at=None,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Sanity
 # ---------------------------------------------------------------------------
@@ -45,8 +61,9 @@ def test_health(client):
     j = r.json()
     assert j["status"] == "ok"
     assert "version" in j
-    # Free limit comes from FREE_DAILY_LIMIT (set to 3 in conftest).
-    assert j["free_daily_limit"] == 3
+    # No free daily tier exists, so /health must not disclose one (contract
+    # §C3/§L2). The old free_daily_limit field is gone.
+    assert "free_daily_limit" not in j
     # Stripe off in test env.
     assert j["stripe_configured"] is False
 
@@ -117,7 +134,11 @@ def test_register_then_me(client):
     me = r.json()
     assert me["device_id"] == reg["device_id"]
     assert me["used_today"] == 0
-    assert me["daily_limit"] == 3  # FREE_DAILY_LIMIT in conftest
+    # Fresh registration is a principal, not access: no free tier means a
+    # non-entitled device is disclosed with a zero allowance, never a positive
+    # free-tier number and never -1/unlimited (contract §C3/§M2).
+    assert me["daily_limit"] == 0
+    assert me["is_pro"] is False
 
 
 def test_register_idempotent(client):
@@ -145,6 +166,7 @@ def test_me_rejects_bad_token(client):
 
 def test_api_analyze_happy_path(client):
     reg = _register(client)
+    _grant_pro(reg["device_id"])  # entitlement is required to rewrite
     r = client.post(
         "/api/analyze",
         headers=_auth(reg["api_token"]),
@@ -155,8 +177,8 @@ def test_api_analyze_happy_path(client):
     assert j["risk_level"] == "high"
     assert "passive-aggressive" in j["flags"]
     assert j["used_today"] == 1
-    assert j["daily_limit"] == 3
-    assert j["plan"] == "free"
+    assert j["daily_limit"] == -1  # entitled => unlimited, no free tier
+    assert j["plan"] == "pro"
     # The "safer" rewrite should drop the passive-aggressive phrase.
     safer = next(s for s in j["suggestions"] if s["axis"] == "safer")
     assert "per my last" not in safer["text"].lower()
@@ -164,6 +186,7 @@ def test_api_analyze_happy_path(client):
 
 def test_api_analyze_enforces_canonical_coach_axes(client):
     reg = _register(client)
+    _grant_pro(reg["device_id"])  # entitlement is required to rewrite
     r = client.post(
         "/api/analyze",
         headers=_auth(reg["api_token"]),
@@ -181,6 +204,7 @@ def test_api_analyze_treats_invalid_cached_coach_payload_as_miss(client, monkeyp
     from backend.store import get_store
 
     reg = _register(client)
+    _grant_pro(reg["device_id"])  # entitlement is required to rewrite
     text = "Please help with this request."
     axes = list(server.CANONICAL_COACH_AXES)
     cache_key = server._analysis_cache_key(text, axes, None, "en")
@@ -236,31 +260,30 @@ def test_api_analyze_requires_auth(client):
     assert r.status_code == 401
 
 
-def test_api_analyze_rate_limit(client):
-    """FREE_DAILY_LIMIT=3 in conftest. 3 should succeed, 4th returns 429."""
+def test_api_analyze_non_entitled_fails_closed(client, monkeypatch):
+    """No free daily tier: a fresh registered (non-entitled) device fails closed
+    with a distinct 402 entitlement denial on the FIRST rewrite — never a 200
+    free-tier grant and never the IP-rate 429. No FREE_DAILY_LIMIT value can
+    reopen a free allowance."""
+
+    # A large free-tier env must NOT restore access — the counter is retired.
+    monkeypatch.setenv("FREE_DAILY_LIMIT", "100000")
 
     reg = _register(client)
     headers = _auth(reg["api_token"])
 
-    for i in range(3):
-        r = client.post(
-            "/api/analyze",
-            headers=headers,
-            json={"text": f"message {i}"},
-        )
-        assert r.status_code == 200, f"call {i}: {r.text}"
-        assert r.json()["used_today"] == i + 1
+    r = client.post("/api/analyze", headers=headers, json={"text": "first message"})
+    assert r.status_code == 402, r.text
+    err = r.json()["error"]
+    # Distinct, honest entitlement denial — not overloaded onto the 429 path.
+    assert err["code"] == 402
+    assert err["reason"] == "entitlement_required"
+    assert "daily" not in str(err).lower()
 
-    r = client.post(
-        "/api/analyze",
-        headers=headers,
-        json={"text": "this should be blocked"},
-    )
-    assert r.status_code == 429
-    detail = r.json()["error"]["message"]
-    # Detail is a dict for 429s; TestClient's HTTPException handler
-    # serializes whatever detail we passed.
-    assert "daily" in str(detail).lower()
+    # It stays closed on every repeat; there is no allowance to burn down.
+    for i in range(5):
+        rr = client.post("/api/analyze", headers=headers, json={"text": f"msg {i}"})
+        assert rr.status_code == 402, f"call {i}: {rr.text}"
 
 
 def test_api_analyze_pro_unlimited(client, monkeypatch):

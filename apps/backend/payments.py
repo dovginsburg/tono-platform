@@ -189,6 +189,15 @@ def create_checkout_session(
     success_url = body.success_url or f"{base.rstrip('/')}/welcome-pro?s=1"
     cancel_url = body.cancel_url or f"{base.rstrip('/')}/pricing"
 
+    # Single trial authority for web checkout: request the canonical free-trial
+    # length (from the commercial catalog — 14 days) at Checkout time via
+    # ``trial_period_days``. This is the ONLY place the web trial is set, so the
+    # "14-day free trial" copy is code-backed, not reliant on undocumented
+    # console config. Provider-console gate (do NOT mutate from here): the Stripe
+    # Price object must stay trial-less, otherwise Stripe would stack a second
+    # trial. Asserted trial-length + single-source by the payments tests.
+    trial_period_days = catalog.trial_days()
+
     session_kwargs: dict[str, Any] = dict(
         mode="subscription",
         line_items=[{"price": price_id, "quantity": 1}],
@@ -206,7 +215,7 @@ def create_checkout_session(
         # the express-checkout row when the buyer's browser supports
         # them. This matches how Stripe-hosted Checkout Pages work.
         payment_method_types=["card"],
-        subscription_data={"metadata": metadata},
+        subscription_data={"metadata": metadata, "trial_period_days": trial_period_days},
         metadata=metadata,
     )
     if customer_id is not None:

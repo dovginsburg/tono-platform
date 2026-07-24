@@ -24,7 +24,7 @@ relationship with them as a paying customer.
 | Browsing History | — | No | — | — | — |
 | Search History | — | No | — | — | — |
 | Identifiers | — | No | — | — | — |
-| Usage Data | Product interaction | Yes (on-device only) | No | No | Local free-tier counter |
+| Usage Data | Product interaction | Yes (on-device only) | No | No | Content-free interaction signals (opt-in) |
 | Diagnostics | — | No | — | — | — |
 | Purchases | Subscription status | Yes | Yes | No | App Store IAP |
 | Other Data | — | No | — | — | — |
@@ -54,7 +54,6 @@ Stored in the App Group container `group.com.tonocoach.shared`:
 - `tc.apiKey` — API key (use Keychain for stronger protection in v1.1)
 - `tc.preferredVoice` — user style hint
 - `tc.axes` — enabled rewrite axes
-- `tc.freeTierUsed`, `tc.freeTierDay`, `tc.freeTierLimit` — daily counter
 - `tc.proUnlocked` — subscription status
 - `tc.lastRewriteVoice` — last accepted rewrite (style memory)
 
