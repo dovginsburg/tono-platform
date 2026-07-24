@@ -3,16 +3,19 @@
 
 Two API surfaces share one FastAPI app:
 
-  PUBLIC (no auth, used by Playground / integration tests):
-    GET  /health
-    POST /v1/analyze              -> tone-analysis passthrough. No API key,
-                                    no rate limit; caller pays the cost.
+  PUBLIC (no auth):
+    GET  /health                  -> liveness + non-PII config disclosure
 
-  AUTHENTICATED (device bearer token, used by the keyboard + host app):
+  AUTHENTICATED (device bearer token; every rewrite route also requires an
+  active entitlement — the shared server gate fails closed with a distinct
+  402 before any provider call, and there is NO free daily tier):
     POST /v1/register             -> mint/refresh a bearer token
-    GET  /v1/me                   -> device plan + daily usage
+    GET  /v1/me                   -> device plan + usage
+    POST /v1/analyze              -> tone-analysis passthrough (back-compat).
+                                    Bearer token + entitlement gate; 401/402
+                                    fail-closed before any provider call.
     POST /api/analyze             -> rewrite draft, server holds the
-                                    LLM API key, daily + IP rate limits applied
+                                    LLM API key; entitlement gate + IP rate limit
     POST /v1/event/axis           -> log which rewrite axis the user tapped
     POST /v1/checkout             -> Stripe Checkout Session for Pro (web/B2B)
     POST /v1/portal               -> Stripe Billing Portal
@@ -313,8 +316,8 @@ app = FastAPI(
 # that call this API directly with no server-side proxy in front of them.
 # Native clients (iOS/Android/Slack) don't go through a browser so they're
 # unaffected either way. Comma-separated allowlist; "*" (default) is fine
-# for the public /v1/analyze passthrough but should be locked down to real
-# origins in production once apps/web has a deployed domain.
+# for local development but should be locked down to real origins in
+# production once apps/web has a deployed domain.
 _CORS_ORIGINS = [
     o.strip()
     for o in os.environ.get("CORS_ALLOWED_ORIGINS", "*").split(",")
@@ -472,11 +475,26 @@ async def list_locales() -> dict[str, Any]:
 
 
 @app.post("/v1/analyze", response_model=ToneAnalysis)
-async def v1_analyze(req: AnalyzeRequest, request: Request) -> dict[str, Any]:
-    """Unauthenticated passthrough kept for backward compatibility with
-    the iOS Playground tab and integration tests. No billing is applied,
-    but a per-IP cap protects the shared provider credentials from abuse.
+async def v1_analyze(
+    req: AnalyzeRequest,
+    request: Request,
+    user: CurrentUser,
+) -> dict[str, Any]:
+    """Tone-analysis passthrough kept for backward compatibility with the
+    host-app Playground tab and integration tests. There is NO anonymous or
+    free rewrite path: the caller must present a valid bearer token
+    (``CurrentUser`` -> 401 otherwise) AND hold a server-authoritative rewrite
+    entitlement (the shared gate -> a DISTINCT 402 otherwise), both enforced
+    BEFORE the per-IP window and BEFORE any provider invocation. Mirrors the
+    gate on /api/analyze and /api/analyze/variant, so this route can never be
+    the free/anonymous rewrite bypass it once was.
     """
+    # Shared server-authoritative entitlement gate — the SAME chokepoint as
+    # /api/analyze and /api/analyze/variant. Fail closed with an honest 402
+    # (never the IP-rate 429) BEFORE the per-IP window and BEFORE any provider
+    # call. Registration / sign-in is a PRINCIPAL, not a grant.
+    _require_rewrite_entitlement(user)
+
     if not _check_ip_rate(_get_client_ip(request)):
         raise HTTPException(
             status_code=429,
