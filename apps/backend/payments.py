@@ -214,6 +214,16 @@ def create_checkout_session(
 
     stripe.api_key = _secret()
 
+    # Reserve before any Stripe-side creation. This is intentionally
+    # fail-closed: a Stripe timeout/error retains the durable reservation,
+    # because the provider may have accepted a request whose response we lost.
+    identified = user.account is not None and user.account.is_identified
+    account_id = user.account.id if identified else None
+    include_trial = store.reserve_stripe_trial(
+        device_id=user.device_id,
+        account_id=account_id,
+    )
+
     # Two callers share this endpoint:
     #  - iOS app (authenticated, ``user`` is a real row): reuse the
     #    existing Stripe customer; the subscription is attached to that
@@ -231,8 +241,6 @@ def create_checkout_session(
         # billing routes through the account only once it is IDENTIFIED (signed
         # in). An anonymous auto-account bills per-device exactly as before, so
         # web/anonymous checkout is unchanged.
-        identified = user.account is not None and user.account.is_identified
-        account_id = user.account.id if identified else None
         customer_id = (
             user.account.stripe_customer_id if identified else user.stripe_customer_id
         )
@@ -273,8 +281,6 @@ def create_checkout_session(
     # console config. Provider-console gate (do NOT mutate from here): the Stripe
     # Price object must stay trial-less, otherwise Stripe would stack a second
     # trial. Asserted trial-length + single-source by the payments tests.
-    trial_period_days = catalog.trial_days()
-
     session_kwargs: dict[str, Any] = dict(
         mode="subscription",
         line_items=[{"price": price_id, "quantity": 1}],
@@ -292,9 +298,11 @@ def create_checkout_session(
         # the express-checkout row when the buyer's browser supports
         # them. This matches how Stripe-hosted Checkout Pages work.
         payment_method_types=["card"],
-        subscription_data={"metadata": metadata, "trial_period_days": trial_period_days},
+        subscription_data={"metadata": metadata},
         metadata=metadata,
     )
+    if include_trial:
+        session_kwargs["subscription_data"]["trial_period_days"] = catalog.trial_days()
     if customer_id is not None:
         session_kwargs["customer"] = customer_id
         if client_reference_id is not None:

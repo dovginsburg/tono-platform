@@ -47,6 +47,9 @@ CREATE TABLE IF NOT EXISTS users (
     stripe_subscription_id TEXT,
     subscription_status  TEXT,
     subscription_renews_at TEXT,
+    -- Sticky, fail-closed lifetime Stripe trial reservation. Once set it is
+    -- never cleared, including cancellation/refund/reinstall/linking.
+    stripe_trial_reserved_at TEXT,
     daily_count          INTEGER NOT NULL DEFAULT 0,
     daily_day            TEXT,
     created_at           TEXT NOT NULL,
@@ -80,6 +83,8 @@ CREATE TABLE IF NOT EXISTS accounts (
     stripe_subscription_id  TEXT,
     subscription_status     TEXT,
     subscription_renews_at  TEXT,
+    -- Canonical-person counterpart to users.stripe_trial_reserved_at.
+    stripe_trial_reserved_at TEXT,
     coupon_pro_expires_at   TEXT,
     -- Non-authorizing daily rewrite telemetry counter, pooled across every
     -- device linked to this account — see record_rewrite (there is NO free
@@ -589,6 +594,8 @@ class Store:
             "ALTER TABLE users ADD COLUMN previous_api_token_expires_at TEXT",
             "ALTER TABLE accounts ADD COLUMN supabase_sub TEXT",
             "ALTER TABLE accounts ADD COLUMN deleted_at TEXT",
+            "ALTER TABLE users ADD COLUMN stripe_trial_reserved_at TEXT",
+            "ALTER TABLE accounts ADD COLUMN stripe_trial_reserved_at TEXT",
         ):
             with contextlib.suppress(sqlite3.OperationalError):
                 self._conn.execute(stmt)
@@ -606,6 +613,25 @@ class Store:
         # column migration, guarantees it works for both fresh and existing DBs.
         self._conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_supabase_sub ON accounts(supabase_sub)"
+        )
+        # Fail-closed backfill: any pre-migration Stripe billing identity or
+        # subscription is prior checkout history and therefore ineligible for
+        # another introductory trial. Provider/mobile founder entitlements are
+        # intentionally separate and do not participate in this Stripe flag.
+        now = _now_iso()
+        self._conn.execute(
+            """UPDATE users
+                  SET stripe_trial_reserved_at = COALESCE(stripe_trial_reserved_at, created_at, ?)
+                WHERE stripe_trial_reserved_at IS NULL
+                  AND (stripe_customer_id IS NOT NULL OR stripe_subscription_id IS NOT NULL)""",
+            (now,),
+        )
+        self._conn.execute(
+            """UPDATE accounts
+                  SET stripe_trial_reserved_at = COALESCE(stripe_trial_reserved_at, created_at, ?)
+                WHERE stripe_trial_reserved_at IS NULL
+                  AND (stripe_customer_id IS NOT NULL OR stripe_subscription_id IS NOT NULL)""",
+            (now,),
         )
         self._seed_feature_flags()
 
@@ -878,6 +904,58 @@ class Store:
 
         self._run(_do).result()
 
+    def reserve_stripe_trial(self, *, device_id: str, account_id: Optional[str]) -> bool:
+        """Atomically reserve the one lifetime Stripe trial for a principal.
+
+        Identified callers reserve on the canonical account; anonymous callers
+        reserve on the install/device fallback. The conditional UPDATE is the
+        uniqueness primitive. The reservation is deliberately retained if any
+        later Stripe API call fails, so ambiguous provider outcomes cannot
+        reopen eligibility.
+        """
+        def _do() -> bool:
+            cur = self._conn.cursor()
+            now = _now_iso()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                if account_id:
+                    # Merge any pre-sign-in device history before attempting
+                    # the account reservation. This is sticky in both directions:
+                    # linking can consume an account trial, never restore one.
+                    cur.execute(
+                        """UPDATE accounts
+                              SET stripe_trial_reserved_at = COALESCE(
+                                      stripe_trial_reserved_at,
+                                      (SELECT stripe_trial_reserved_at FROM users
+                                        WHERE device_id = ?)
+                                  ),
+                                  updated_at = ?
+                            WHERE id = ?""",
+                        (device_id, now, account_id),
+                    )
+                    cur.execute(
+                        """UPDATE accounts
+                              SET stripe_trial_reserved_at = ?, updated_at = ?
+                            WHERE id = ? AND stripe_trial_reserved_at IS NULL""",
+                        (now, now, account_id),
+                    )
+                else:
+                    cur.execute(
+                        """UPDATE users
+                              SET stripe_trial_reserved_at = ?, updated_at = ?
+                            WHERE device_id = ? AND stripe_trial_reserved_at IS NULL""",
+                        (now, now, device_id),
+                    )
+                reserved = cur.rowcount == 1
+                cur.execute("COMMIT")
+                return reserved
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
+
+        return self._run(_do).result()
+
     def update_subscription(
         self,
         *,
@@ -1074,10 +1152,33 @@ class Store:
         device shares the account's Pro status from then on."""
 
         def _do() -> None:
-            self._conn.execute(
-                "UPDATE users SET account_id = ?, updated_at = ? WHERE device_id = ?",
-                (account_id, _now_iso(), device_id),
-            )
+            cur = self._conn.cursor()
+            now = _now_iso()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                # Anonymous checkout history follows the person at sign-in.
+                # COALESCE makes the merge monotonic: neither a fresh device nor
+                # customer reassignment can erase canonical trial history.
+                cur.execute(
+                    """UPDATE accounts
+                          SET stripe_trial_reserved_at = COALESCE(
+                                  stripe_trial_reserved_at,
+                                  (SELECT stripe_trial_reserved_at FROM users
+                                    WHERE device_id = ?)
+                              ),
+                              updated_at = ?
+                        WHERE id = ?""",
+                    (device_id, now, account_id),
+                )
+                cur.execute(
+                    "UPDATE users SET account_id = ?, updated_at = ? WHERE device_id = ?",
+                    (account_id, now, device_id),
+                )
+                cur.execute("COMMIT")
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
 
         self._run(_do).result()
 

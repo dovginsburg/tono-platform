@@ -11,6 +11,8 @@ are about OUR metadata/routing logic, not Stripe's SDK.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+import threading
 from urllib.parse import urlencode
 
 import pytest
@@ -131,6 +133,164 @@ def test_checkout_requests_exactly_the_catalog_trial(client, monkeypatch):
     # Single trial source — no stacked/ambiguous second trial on the request.
     assert "trial_end" not in sub_data
     assert "trial_end" not in captured
+
+
+def test_repeat_checkout_and_cancel_resubscribe_never_repeat_trial(client, monkeypatch):
+    from backend.store import get_store
+    import backend.payments as payments_mod
+
+    _configure_stripe(monkeypatch)
+    device = _register(client)
+    captured = []
+    monkeypatch.setattr(
+        payments_mod.stripe.Customer,
+        "create",
+        lambda **_kwargs: _FakeCustomer(id="cus_repeat"),
+    )
+    monkeypatch.setattr(
+        payments_mod.stripe.checkout.Session,
+        "create",
+        lambda **kwargs: captured.append(kwargs)
+        or {"url": "https://checkout.stripe.test/session", "id": f"cs_{len(captured)}"},
+    )
+
+    for _ in range(2):
+        r = client.post(
+            "/v1/checkout", json={"interval": "month"}, headers=_auth(device["api_token"])
+        )
+        assert r.status_code == 200, r.text
+    assert captured[0]["subscription_data"]["trial_period_days"] == 14
+    assert "trial_period_days" not in captured[1]["subscription_data"]
+
+    # Cancellation changes entitlement only; it must not touch trial history.
+    get_store().update_subscription(
+        device_id=device["device_id"],
+        subscription_id="sub_old",
+        status="canceled",
+        renews_at=None,
+    )
+    r = client.post(
+        "/v1/checkout", json={"interval": "month"}, headers=_auth(device["api_token"])
+    )
+    assert r.status_code == 200, r.text
+    assert "trial_period_days" not in captured[2]["subscription_data"]
+
+
+def test_simultaneous_checkout_only_one_gets_trial(client, monkeypatch):
+    import backend.payments as payments_mod
+
+    _configure_stripe(monkeypatch)
+    device = _register(client)
+    captured = []
+    capture_lock = threading.Lock()
+    monkeypatch.setattr(
+        payments_mod.stripe.Customer,
+        "create",
+        lambda **_kwargs: _FakeCustomer(id="cus_concurrent"),
+    )
+
+    def fake_session_create(**kwargs):
+        with capture_lock:
+            captured.append(kwargs)
+            number = len(captured)
+        return {"url": "https://checkout.stripe.test/session", "id": f"cs_{number}"}
+
+    monkeypatch.setattr(payments_mod.stripe.checkout.Session, "create", fake_session_create)
+
+    def checkout(_):
+        return client.post(
+            "/v1/checkout", json={"interval": "month"}, headers=_auth(device["api_token"])
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(checkout, range(2)))
+    assert [r.status_code for r in responses] == [200, 200]
+    assert sum(
+        kwargs["subscription_data"].get("trial_period_days") == 14 for kwargs in captured
+    ) == 1
+
+
+def test_anonymous_history_merges_to_account_and_survives_new_device(
+    client, monkeypatch
+):
+    from backend.server import app
+    import backend.payments as payments_mod
+
+    _configure_stripe(monkeypatch)
+    first_device = _register(client)
+    captured = []
+    monkeypatch.setattr(
+        payments_mod.stripe.Customer,
+        "create",
+        lambda **_kwargs: _FakeCustomer(id=f"cus_{len(captured)}"),
+    )
+    monkeypatch.setattr(
+        payments_mod.stripe.checkout.Session,
+        "create",
+        lambda **kwargs: captured.append(kwargs)
+        or {"url": "https://checkout.stripe.test/session", "id": f"cs_{len(captured)}"},
+    )
+
+    assert client.post(
+        "/v1/checkout",
+        json={"interval": "month"},
+        headers=_auth(first_device["api_token"]),
+    ).status_code == 200
+    account_id = _sign_in_apple(
+        client, app, first_device["api_token"], sub="apple-trial-merge"
+    )
+
+    # Simulate reinstall/new hardware: a fresh anonymous device signs into the
+    # same account, whose canonical reservation must win.
+    second_device = _register(client)
+    assert (
+        _sign_in_apple(
+            client, app, second_device["api_token"], sub="apple-trial-merge"
+        )
+        == account_id
+    )
+    r = client.post(
+        "/v1/checkout",
+        json={"interval": "month"},
+        headers=_auth(second_device["api_token"]),
+    )
+    assert r.status_code == 200, r.text
+    assert captured[0]["subscription_data"]["trial_period_days"] == 14
+    assert "trial_period_days" not in captured[1]["subscription_data"]
+
+
+def test_stripe_creation_failure_retains_trial_reservation(client, monkeypatch):
+    import backend.payments as payments_mod
+
+    _configure_stripe(monkeypatch)
+    device = _register(client)
+    monkeypatch.setattr(
+        payments_mod.stripe.Customer,
+        "create",
+        lambda **_kwargs: _FakeCustomer(id="cus_failure"),
+    )
+
+    def fail_session(**_kwargs):
+        raise RuntimeError("ambiguous Stripe timeout")
+
+    monkeypatch.setattr(payments_mod.stripe.checkout.Session, "create", fail_session)
+    with pytest.raises(RuntimeError, match="ambiguous Stripe timeout"):
+        client.post(
+            "/v1/checkout", json={"interval": "month"}, headers=_auth(device["api_token"])
+        )
+
+    captured = {}
+    monkeypatch.setattr(
+        payments_mod.stripe.checkout.Session,
+        "create",
+        lambda **kwargs: captured.update(kwargs)
+        or {"url": "https://checkout.stripe.test/session", "id": "cs_after_failure"},
+    )
+    r = client.post(
+        "/v1/checkout", json={"interval": "month"}, headers=_auth(device["api_token"])
+    )
+    assert r.status_code == 200, r.text
+    assert "trial_period_days" not in captured["subscription_data"]
 
 
 def test_checkout_bills_device_when_anonymous(client, monkeypatch):
