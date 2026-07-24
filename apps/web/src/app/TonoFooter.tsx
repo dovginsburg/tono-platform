@@ -11,7 +11,7 @@ function NewsletterStrip() {
           Get the next rewrite.
         </p>
         <a
-          href="mailto:hello@tonoit.com?subject=tono%20newsletter"
+          href="mailto:ezra-orchestrator@agentmail.to"
           className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-[10px] bg-tono-accent hover:bg-tono-accent-hover text-white font-semibold transition min-h-[44px] text-[13px]"
         >
           Subscribe by email
@@ -112,7 +112,7 @@ export default function TonoFooter() {
               </li>
               <li>
                 <a
-                  href="mailto:hi@tonoit.com?subject=tono%20feedback"
+                  href="mailto:ezra-orchestrator@agentmail.to"
                   className="text-tono-text-soft hover:text-tono-text transition"
                 >
                   Feedback
@@ -147,7 +147,7 @@ export default function TonoFooter() {
               </li>
               <li>
                 <a
-                  href="mailto:press@tonoit.com"
+                  href="mailto:ezra-orchestrator@agentmail.to"
                   className="text-tono-text-soft hover:text-tono-text transition"
                 >
                   Press
@@ -155,7 +155,7 @@ export default function TonoFooter() {
               </li>
               <li>
                 <a
-                  href="mailto:hello@tonoit.com"
+                  href="mailto:ezra-orchestrator@agentmail.to"
                   className="text-tono-text-soft hover:text-tono-text transition"
                 >
                   Partnerships
@@ -185,7 +185,7 @@ export default function TonoFooter() {
               </li>
               <li>
                 <a
-                  href="mailto:hi@tonoit.com?subject=tono%20data%20deletion"
+                  href="mailto:ezra-orchestrator@agentmail.to"
                   className="text-tono-text-soft hover:text-tono-text transition"
                 >
                   Data deletion
@@ -202,18 +202,7 @@ export default function TonoFooter() {
             <ul className="space-y-2 text-[13px]">
               <li>
                 <a
-                  href="https://github.com/dovginsburg/tono-platform"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-tono-text-soft hover:text-tono-text transition"
-                >
-                  GitHub
-                </a>
-              </li>
-
-              <li>
-                <a
-                  href="mailto:hi@tonoit.com?subject=ios%20waitlist"
+                  href="mailto:ezra-orchestrator@agentmail.to"
                   className="text-tono-text-soft hover:text-tono-text transition"
                 >
                   iOS — coming soon, join the waitlist

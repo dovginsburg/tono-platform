@@ -5,6 +5,6 @@ Disallow: /api/
 # Tono — pre-send rewrite tool
 # Marketing: https://tonoit.com
 # Docs:     https://tonoit.com/about
-# Support:  hi@tonoit.com
+# Support:  ezra-orchestrator@agentmail.to
 
 Sitemap: https://tonoit.com/sitemap.xml

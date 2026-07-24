@@ -48,7 +48,7 @@ export default function TermsPage() {
           <h2 className="text-2xl font-semibold pt-6">refunds</h2>
           <p>
             within 14 days of any charge, email{" "}
-            <a href="mailto:hi@tonoit.com" className="underline">hi@tonoit.com</a>{" "}
+            <a href="mailto:ezra-orchestrator@agentmail.to" className="underline">ezra-orchestrator@agentmail.to</a>{" "}
             and we refund. no questions.
           </p>
 
@@ -67,7 +67,7 @@ export default function TermsPage() {
 
           <h2 className="text-2xl font-semibold pt-6">contact</h2>
           <p>
-            questions: <a href="mailto:hi@tonoit.com" className="underline">hi@tonoit.com</a>
+            questions: <a href="mailto:ezra-orchestrator@agentmail.to" className="underline">ezra-orchestrator@agentmail.to</a>
           </p>
         </section>
       </div>

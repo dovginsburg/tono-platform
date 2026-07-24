@@ -302,7 +302,7 @@ export default function LandingPage() {
               <ArrowIcon />
             </ProCheckoutButton>
             <a
-              href="mailto:hi@tonoit.com?subject=tono%20feedback"
+              href="mailto:ezra-orchestrator@agentmail.to"
               className="inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-[12px] bg-transparent text-tono-text-soft hover:text-tono-text font-semibold transition min-h-[48px]"
             >
               send feedback

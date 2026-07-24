@@ -22,25 +22,25 @@ const CHANNELS = [
     label: 'support',
     title: 'help with your account',
     body: 'login trouble, billing questions, or a bug you hit. include your account email and a screenshot when you can.',
-    email: 'hi@tonoit.com',
+    email: 'ezra-orchestrator@agentmail.to',
   },
   {
     label: 'feedback',
     title: 'product feedback',
     body: 'a tone that misses, a workflow that\'s clunky, an idea you want us to hear. we read every email.',
-    email: 'hi@tonoit.com',
+    email: 'ezra-orchestrator@agentmail.to',
   },
   {
     label: 'press',
     title: 'media & partnerships',
     body: 'podcast guest pitches, product reviews, and integration partners.',
-    email: 'hi@tonoit.com',
+    email: 'ezra-orchestrator@agentmail.to',
   },
   {
     label: 'security',
     title: 'report a vulnerability',
     body: 'responsible disclosure. we triage within 24 hours and credit reporters who follow coordinated disclosure.',
-    email: 'hi@tonoit.com',
+    email: 'ezra-orchestrator@agentmail.to',
   },
 ]
 
@@ -83,7 +83,7 @@ export default function ContactPage() {
                 {c.body}
               </p>
               <a
-                href={`mailto:${c.email}?subject=${encodeURIComponent(c.label)}`}
+                href={`mailto:${c.email}`}
                 className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-[10px] bg-tono-accent hover:bg-tono-accent-hover text-white font-semibold transition min-h-[44px] text-[13px]"
               >
                 email {c.label}
