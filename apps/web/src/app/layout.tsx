@@ -4,8 +4,8 @@ import NavDropdown from './NavDropdown';
 import TonoFooter from './TonoFooter';
 
 export const metadata: Metadata = {
-  title: 'tono — say what you mean',
-  description: 'four ways to say it. pick one, copy, send.',
+  title: 'tono — just tone it!',
+  description: 'Before you send it, see how it can land. Compare warmer, clearer, funnier, and safer rewrites.',
   applicationName: 'tono',
   appleWebApp: {
     capable: true,

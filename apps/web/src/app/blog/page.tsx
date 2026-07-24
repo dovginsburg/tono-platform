@@ -15,12 +15,6 @@ export const metadata: Metadata = {
 
 const POSTS = [
   {
-    date: '2026-07-08',
-    label: 'product',
-    title: 'public beta opens for the ios keyboard',
-    body: 'pro subscribers can install the tono ios keyboard today. free beta slots open weekly.',
-  },
-  {
     date: '2026-07-04',
     label: 'shipping',
     title: '/pricing, /checkout/success, /upgrade are live',
@@ -77,16 +71,6 @@ export default function BlogPage() {
           ))}
         </div>
 
-        <p className="mt-12 text-[13px] text-tono-text-softer text-center">
-          for the full changelog, see{' '}
-          <a
-            href="https://github.com/dovginsburg/tono-platform/commits/main"
-            className="underline hover:text-tono-text"
-          >
-            github
-          </a>
-          .
-        </p>
       </div>
     </main>
   )

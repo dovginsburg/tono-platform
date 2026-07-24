@@ -56,7 +56,7 @@ export default function FeaturesPage() {
           what tono does, on one page.
         </h1>
         <p className="text-tono-text-soft text-base md:text-lg leading-[1.65] mt-5">
-          four rewrite modes, a 14-day free trial, an ios keyboard coming soon,
+          four rewrite modes, one lifetime 14-day trial per customer, paid unlimited rewrites,
           and a local history. that's the whole product.
         </p>
 
