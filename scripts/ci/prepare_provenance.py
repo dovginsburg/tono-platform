@@ -12,14 +12,34 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACT = ROOT / "packages/contracts/openapi.json"
-FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
+FULL_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
+SHA_ENVIRONMENT_VARIABLES = (
+    "TONO_CANONICAL_SHA",
+    "VERCEL_GIT_COMMIT_SHA",
+    "GITHUB_SHA",
+)
 
 
-def git_sha() -> str:
-    override = os.environ.get("TONO_CANONICAL_SHA")
-    if override:
-        return override
-    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+def resolve_sha(explicit_sha: str | None = None) -> str:
+    sha = explicit_sha
+    if sha is None:
+        sha = next(
+            (os.environ[name] for name in SHA_ENVIRONMENT_VARIABLES if name in os.environ),
+            None,
+        )
+    if sha is None:
+        try:
+            sha = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                cwd=ROOT,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            pass
+    if sha is None or not FULL_SHA.fullmatch(sha):
+        raise ValueError("canonical SHA must be a full 40-character hexadecimal Git SHA")
+    return sha.lower()
 
 
 def schema_revision() -> str:
@@ -39,9 +59,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--sha", default=None)
     args = parser.parse_args()
-    sha = args.sha or git_sha()
-    if not FULL_SHA.fullmatch(sha):
-        parser.error("canonical SHA must be a full 40-character lowercase Git SHA")
+    try:
+        sha = resolve_sha(args.sha)
+    except ValueError as error:
+        parser.error(str(error))
     revision = schema_revision()
     contract_hash = sha256(CONTRACT)
     payload = {
