@@ -22,7 +22,7 @@ import json
 
 # Reuse the vetted Stripe-lifecycle helpers so this test drives the exact same
 # canonical account + webhook path the standalone lineage already QA'd.
-from tests.test_stripe_lifecycle import (
+from .test_stripe_lifecycle import (
     _auth,
     _configure_stripe,
     _fake_sub_retrieve,
