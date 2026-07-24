@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import hashlib
 import json
 import os
 import secrets
@@ -38,6 +39,9 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     device_id            TEXT PRIMARY KEY,
     api_token            TEXT NOT NULL UNIQUE,
+    device_credential_hash TEXT,
+    previous_api_token     TEXT,
+    previous_api_token_expires_at TEXT,
     plan                 TEXT NOT NULL DEFAULT 'free',
     stripe_customer_id   TEXT,
     stripe_subscription_id TEXT,
@@ -61,6 +65,15 @@ CREATE TABLE IF NOT EXISTS accounts (
     id                      TEXT PRIMARY KEY,
     apple_sub               TEXT UNIQUE,
     google_sub              TEXT UNIQUE,
+    -- Supabase user id (the web sign-in provider subject). Stable per person
+    -- across browsers and OAuth providers, so two browsers signing into the
+    -- same Supabase user converge onto this one account. UNIQUE so a subject
+    -- can never silently belong to two accounts.
+    supabase_sub            TEXT,
+    -- Set to the account's own id when the account is deleted: the row is
+    -- kept (tombstoned) so append-only billing/provider audit facts that
+    -- reference it stay valid, but all identity/private columns are cleared.
+    deleted_at              TEXT,
     email                   TEXT,
     plan                    TEXT NOT NULL DEFAULT 'free',
     stripe_customer_id      TEXT,
@@ -68,10 +81,11 @@ CREATE TABLE IF NOT EXISTS accounts (
     subscription_status     TEXT,
     subscription_renews_at  TEXT,
     coupon_pro_expires_at   TEXT,
-    -- Free-tier daily allowance, pooled across every device linked to this
-    -- account — see consume_rewrite. Same shape as users.daily_count/
-    -- daily_day, deliberately: a device with no account_id still counts
-    -- against ITS OWN columns of the same name on `users`.
+    -- Non-authorizing daily rewrite telemetry counter, pooled across every
+    -- device linked to this account — see record_rewrite (there is NO free
+    -- daily tier; this counter never grants access). Same shape as
+    -- users.daily_count/daily_day, deliberately: a device with no account_id
+    -- still counts against ITS OWN columns of the same name on `users`.
     daily_count             INTEGER NOT NULL DEFAULT 0,
     daily_day               TEXT,
     created_at              TEXT NOT NULL,
@@ -80,6 +94,47 @@ CREATE TABLE IF NOT EXISTS accounts (
 CREATE INDEX IF NOT EXISTS idx_accounts_apple_sub ON accounts(apple_sub);
 CREATE INDEX IF NOT EXISTS idx_accounts_google_sub ON accounts(google_sub);
 CREATE INDEX IF NOT EXISTS idx_accounts_stripe_customer ON accounts(stripe_customer_id);
+
+-- Monotonic one-lifetime-trial authority.  The primary key is the concurrency
+-- arbiter on SQLite and maps directly to PostgreSQL ON CONFLICT semantics.
+CREATE TABLE IF NOT EXISTS stripe_trial_ledger (
+    scope             TEXT NOT NULL CHECK(scope IN ('account','customer','fingerprint')),
+    scope_id          TEXT NOT NULL,
+    state             TEXT NOT NULL CHECK(state IN ('reserved','consumed','released')),
+    session_id        TEXT,
+    subscription_id   TEXT,
+    account_id        TEXT,
+    customer_id       TEXT,
+    reserved_at       TEXT NOT NULL,
+    consumed_at       TEXT,
+    updated_at        TEXT NOT NULL,
+    PRIMARY KEY (scope, scope_id)
+);
+CREATE INDEX IF NOT EXISTS idx_trial_ledger_session ON stripe_trial_ledger(session_id);
+CREATE INDEX IF NOT EXISTS idx_trial_ledger_subscription ON stripe_trial_ledger(subscription_id);
+
+-- Canonical Stripe customer ownership. Both columns are unique, preventing a
+-- customer from moving between accounts and an account from acquiring two
+-- reachable customers under concurrent checkout.
+CREATE TABLE IF NOT EXISTS stripe_customer_bindings (
+    customer_id TEXT PRIMARY KEY,
+    account_id  TEXT NOT NULL UNIQUE REFERENCES accounts(id),
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS stripe_trial_conflicts (
+    id              TEXT PRIMARY KEY,
+    conflict_kind   TEXT NOT NULL,
+    scope           TEXT NOT NULL,
+    scope_id        TEXT NOT NULL,
+    account_id      TEXT,
+    customer_id     TEXT,
+    subscription_id TEXT,
+    detail          TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    UNIQUE(conflict_kind, scope, scope_id, account_id, customer_id, subscription_id)
+);
 
 -- A passkey (WebAuthn credential) is what makes Face ID / Touch ID /
 -- Windows Hello / Android biometric unlock work as a *login* method on
@@ -189,6 +244,120 @@ CREATE TABLE IF NOT EXISTS user_feature_overrides (
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     PRIMARY KEY (device_id, flag_key)
 );
+
+-- ── Build-91 mobile (Apple) entitlement seam ───────────────────────────────
+-- Minimum durable model that keeps three concepts from collapsing into one:
+--   * who OWNS the store purchase        -> provider_purchases
+--   * who is ENTITLED to paid service    -> entitlement_grants (per beneficiary)
+--   * who first CLAIMED a tokenless lineage -> legacy_claims (uniqueness wins)
+-- This is deliberately NOT a general append-only event ledger/materializer;
+-- it is the smallest schema that makes purchase, entitlement, and account
+-- recovery independently addressable (see build-91 contract §2).
+
+-- One row per store purchase lineage (keyed by original transaction).
+-- `lifecycle_state` is the durable current-provider truth, kept current by
+-- verified App Store Server Notifications V2 plus purchase/restore sync, so a
+-- replayed older signed transaction can never resurrect a refunded/revoked
+-- purchase (contract §3). `latest_signed_ms` is the newest provider timestamp
+-- we've accepted; older signed evidence is ignored (timestamp guard).
+CREATE TABLE IF NOT EXISTS provider_purchases (
+    id                      TEXT PRIMARY KEY,
+    provider                TEXT NOT NULL,
+    original_transaction_id TEXT NOT NULL,
+    latest_transaction_id   TEXT,
+    product_id              TEXT NOT NULL,
+    environment             TEXT NOT NULL,
+    ownership_type          TEXT NOT NULL,     -- 'PURCHASED' | 'FAMILY_SHARED'
+    app_account_token       TEXT,              -- canonical account UUID, or NULL (legacy/family)
+    lifecycle_state         TEXT NOT NULL,     -- 'active'|'expired'|'refunded'|'revoked'
+    latest_signed_ms        INTEGER NOT NULL DEFAULT 0,
+    expires_ms              INTEGER,
+    trial_consumed          INTEGER NOT NULL DEFAULT 0,
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL,
+    UNIQUE(provider, original_transaction_id)
+);
+
+-- Durable inbox for verified provider events (transaction ids + notification
+-- UUIDs). The UNIQUE key is the replay-safety primitive for crash-recovery and
+-- duplicate/out-of-order notification delivery (contract §9, hostile 11/16).
+CREATE TABLE IF NOT EXISTS provider_transactions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider      TEXT NOT NULL,
+    event_id      TEXT NOT NULL,               -- transactionId or notificationUUID
+    kind          TEXT NOT NULL,               -- 'transaction' | 'notification'
+    outcome       TEXT NOT NULL,
+    received_at   TEXT NOT NULL,
+    UNIQUE(provider, event_id)
+);
+
+-- Revocable entitlement to paid service for one beneficiary account. A direct
+-- purchase grants the purchaser; a FAMILY_SHARED purchase grants the family
+-- beneficiary without transferring ownership (contract §4/§6). At most one
+-- grant row per (purchase, beneficiary).
+CREATE TABLE IF NOT EXISTS entitlement_grants (
+    id            TEXT PRIMARY KEY,
+    purchase_id   TEXT NOT NULL REFERENCES provider_purchases(id),
+    account_id    TEXT NOT NULL REFERENCES accounts(id),
+    grant_kind    TEXT NOT NULL,               -- 'direct' | 'family'
+    state         TEXT NOT NULL,               -- 'active' | 'revoked'
+    effective_at  TEXT NOT NULL,
+    expires_at    TEXT,
+    revoked_at    TEXT,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    UNIQUE(purchase_id, account_id)
+);
+CREATE INDEX IF NOT EXISTS idx_grants_account ON entitlement_grants(account_id);
+
+-- Immutable first-claim evidence for a tokenless (build-90/stale-client)
+-- direct purchase. The UNIQUE lineage key — not timing or app memory — selects
+-- the single first claimant; later different-account claims conflict, identical
+-- retries by the winner are idempotent (contract §5, hostile 10).
+CREATE TABLE IF NOT EXISTS legacy_claims (
+    id                      TEXT PRIMARY KEY,
+    provider                TEXT NOT NULL,
+    original_transaction_id TEXT NOT NULL,
+    claimant_account_id     TEXT NOT NULL REFERENCES accounts(id),
+    evidence_key            TEXT NOT NULL,      -- transaction id used as claim evidence
+    result                  TEXT NOT NULL,      -- 'granted'
+    claimed_at              TEXT NOT NULL,
+    UNIQUE(provider, original_transaction_id)
+);
+
+-- Durable record + retry state for outbound mutable provider actions (Set App
+-- Account Token after a tokenless claim). A transient failure never erases an
+-- already provider-verified paid entitlement; the op is retried (contract §5/§9,
+-- hostile 12). One op per lineage.
+CREATE TABLE IF NOT EXISTS provider_operations (
+    id                      TEXT PRIMARY KEY,
+    provider                TEXT NOT NULL,
+    op_kind                 TEXT NOT NULL,      -- 'set_app_account_token'
+    original_transaction_id TEXT NOT NULL,
+    account_id              TEXT NOT NULL,
+    state                   TEXT NOT NULL,      -- 'pending'|'succeeded'|'failed'
+    attempts                INTEGER NOT NULL DEFAULT 0,
+    last_error              TEXT,
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL,
+    UNIQUE(provider, op_kind, original_transaction_id)
+);
+
+-- Non-destructive record of a verified provider event we could not safely
+-- apply because the target beneficiary can't be proven — e.g. a tokenless
+-- FAMILY_SHARED revoke, which must NOT mass-revoke every beneficiary. The event
+-- is durably parked here for provider reconciliation instead of guessing who to
+-- revoke (contract §6, P0 tokenless family revoke). Deduped by notificationUUID.
+CREATE TABLE IF NOT EXISTS provider_unresolved_events (
+    id                      TEXT PRIMARY KEY,
+    provider                TEXT NOT NULL,
+    notification_uuid       TEXT NOT NULL,
+    notification_type       TEXT NOT NULL,
+    original_transaction_id TEXT NOT NULL,
+    reason                  TEXT NOT NULL,
+    created_at              TEXT NOT NULL,
+    UNIQUE(provider, notification_uuid)
+);
 """
 
 _DEFAULT_FLAGS = [
@@ -206,6 +375,30 @@ _DEFAULT_FLAGS = [
 ]
 
 
+# Terminal (not-entitled) provider lifecycle states. A purchase in any of these
+# never grants Pro, and — with deterministic equal-timestamp precedence — an
+# older-or-equal active event can never resurrect it (contract §3/§15; P0
+# equal-timestamp resurrection).
+_TERMINAL_STATES = frozenset({"refunded", "revoked", "expired"})
+
+# The only ownership types we will build an entitlement grant for. Anything else
+# is refused before any DB mutation (contract §4/§6; P0 fail-closed ownership).
+_GRANTABLE_OWNERSHIP = frozenset({"PURCHASED", "FAMILY_SHARED"})
+
+# Stripe subscription status → our append-only lifecycle_state.
+# past_due keeps access during the dunning grace period; unpaid/canceled revoke it.
+_STRIPE_STATUS_TO_LIFECYCLE: dict = {
+    "active":             "active",
+    "trialing":           "active",
+    "past_due":           "active",   # grace period — keep access
+    "incomplete":         "active",   # first invoice still pending
+    "canceled":           "expired",
+    "unpaid":             "expired",  # dunning failed
+    "incomplete_expired": "expired",
+    "paused":             "expired",
+}
+
+
 class AccountConflictError(Exception):
     """Raised when linking a provider identity or passkey would silently
     merge two distinct accounts. Callers (server.py) should surface this as
@@ -213,8 +406,21 @@ class AccountConflictError(Exception):
     never something inferred from a login attempt."""
 
 
+class DeviceRegistrationProofError(Exception):
+    """An existing public device id was presented without its secret proof."""
+
+
 def _plan_grants_pro(plan: str, subscription_status: Optional[str], coupon_pro_expires_at: Optional[str]) -> bool:
-    if plan == "pro" and subscription_status in ("active", "trialing"):
+    # Single source of truth for plan/status/coupon entitlement. Every rewrite
+    # gate resolves through this (via ``User.is_pro`` / ``Account.is_pro``);
+    # there is no second, disagreeing inline check anywhere (the free-tier
+    # counter was retired — see ``record_rewrite``). ``past_due`` is the
+    # deliberate auto-renew GRACE window: a renewal charge is retrying and the
+    # subscription is not yet canceled, so access continues. Once the provider
+    # transitions the row to ``canceled``/expired (or a coupon lapses), no
+    # branch here matches and every surface fails closed — contract "expired/
+    # canceled/non-entitled fail closed; trial auto-renews unless canceled".
+    if plan == "pro" and subscription_status in ("active", "trialing", "past_due"):
         return True
     if coupon_pro_expires_at:
         try:
@@ -247,10 +453,25 @@ class Account:
     updated_at: str
     daily_count: int = 0
     daily_day: Optional[str] = None
+    supabase_sub: Optional[str] = None
+    deleted_at: Optional[str] = None
 
     @property
     def is_pro(self) -> bool:
         return _plan_grants_pro(self.plan, self.subscription_status, self.coupon_pro_expires_at)
+
+    @property
+    def is_identified(self) -> bool:
+        """True once this account carries a real sign-in identity (Apple/
+        Google/email). An anonymous auto-account created at registration is
+        NOT identified: build 91 gives every device a canonical account UUID
+        (the entitlement principal), but an anonymous account remains
+        non-entitled and fails closed — the account only becomes the billing
+        and entitlement source of truth once the
+        person actually signs in. Passkey-only accounts always carry an email
+        at registration, so the columns are a sufficient signal. A Supabase web
+        sign-in is an identity too (verified Apple/Google via Supabase)."""
+        return bool(self.apple_sub or self.google_sub or self.supabase_sub or self.email)
 
 
 @dataclass
@@ -285,20 +506,88 @@ class User:
     coupon_pro_expires_at: Optional[str] = None
     account_id: Optional[str] = None
     account: Optional[Account] = None
+    # True when the canonical account holds an active Apple entitlement grant
+    # (direct purchase or family beneficiary). Populated by _attach_account.
+    provider_entitlement_active: bool = False
 
     @property
     def is_pro(self) -> bool:
-        # A linked account is the source of truth once one exists — a
+        # An Apple entitlement grant attaches to the canonical account —
+        # anonymous or identified — and always counts (build-91 §4/§6).
+        if self.provider_entitlement_active:
+            return True
+        # An IDENTIFIED (signed-in) account is the billing source of truth: a
         # device that signed in inherits Pro from the account even if that
-        # particular device never itself had a Stripe subscription.
-        if self.account is not None:
-            return self.account.is_pro
+        # device never itself had a subscription.
+        if self.account is not None and self.account.is_identified and self.account.is_pro:
+            return True
+        # Fall through to the device's own fields — unchanged pre-accounts
+        # behavior for anonymous auto-accounts, and it also preserves a
+        # device-level coupon/Stripe grant across the anonymous->identified
+        # upgrade so signing in never silently drops Pro (contract §1/hostile 4).
         return _plan_grants_pro(self.plan, self.subscription_status, self.coupon_pro_expires_at)
 
     @property
     def plan_resolved(self) -> str:
-        """`plan`, but resolved through the linked account when present."""
-        return self.account.plan if self.account is not None else self.plan
+        """`plan`, but resolved through the linked account once identified."""
+        if self.account is not None and self.account.is_identified:
+            return self.account.plan
+        return self.plan
+
+
+@dataclass
+class DeviceRegistration:
+    user: User
+    device_credential: Optional[str] = None
+    migrated_legacy_token: bool = False
+
+
+@dataclass
+class AppleEntitlementResult:
+    """Outcome of applying one verified Apple transaction. `outcome` is one of:
+    'direct_granted', 'family_granted', 'legacy_granted' (all entitle the
+    account), 'conflict' (bound/claimed elsewhere), 'revoked' (a stale signed
+    transaction that must not resurrect a terminated purchase), 'not_active'
+    (verified but expired/revoked evidence)."""
+    outcome: str
+    detail: str = ""
+    purchase_id: Optional[str] = None
+
+    @property
+    def granted(self) -> bool:
+        return self.outcome in ("direct_granted", "family_granted", "legacy_granted")
+
+
+# States a Google Play subscription lineage can reach that must NEVER be
+# resurrected by a later apparently-active re-query or a replayed token
+# (contract §3; hostile "stale active after revoke" / "linked replacement").
+# 'expired' is soft-terminal instead: a strictly-newer active re-query on the
+# same token may legitimately supersede it (rare, but deterministic).
+_GOOGLE_HARD_TERMINAL = frozenset({"refunded", "revoked", "replaced"})
+
+
+@dataclass
+class GoogleEntitlementResult:
+    """Outcome of projecting one verified Google Play subscription snapshot.
+
+    `outcome` is one of: 'granted' (an active/grace/canceled-with-future-expiry
+    purchase bound to the account entitles it), 'not_active' (verified but the
+    subscription is on-hold/paused/pending/expired/revoked so no entitlement),
+    'conflict' (the purchase is bound to a different account via
+    obfuscatedExternalAccountId or a prior first-claim), 'stale' (older or
+    hard-terminal-superseded evidence that must not resurrect entitlement),
+    'unbound' (a valid purchase with no resolvable beneficiary yet — recorded so
+    a later authenticated sync can bind it, but nothing is granted)."""
+
+    outcome: str
+    detail: str = ""
+    purchase_id: Optional[str] = None
+    lifecycle_state: Optional[str] = None
+    acknowledge_pending: bool = False
+
+    @property
+    def granted(self) -> bool:
+        return self.outcome == "granted"
 
 
 # ---------------------------------------------------------------------------
@@ -336,10 +625,78 @@ class Store:
             "ALTER TABLE users ADD COLUMN account_id TEXT REFERENCES accounts(id)",
             "ALTER TABLE accounts ADD COLUMN daily_count INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE accounts ADD COLUMN daily_day TEXT",
+            "ALTER TABLE users ADD COLUMN device_credential_hash TEXT",
+            "ALTER TABLE users ADD COLUMN previous_api_token TEXT",
+            "ALTER TABLE users ADD COLUMN previous_api_token_expires_at TEXT",
+            "ALTER TABLE accounts ADD COLUMN supabase_sub TEXT",
+            "ALTER TABLE accounts ADD COLUMN deleted_at TEXT",
         ):
             with contextlib.suppress(sqlite3.OperationalError):
                 self._conn.execute(stmt)
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_users_previous_token ON users(previous_api_token)"
+        )
+        for stmt in (
+            "ALTER TABLE stripe_events ADD COLUMN processed_at TEXT",
+        ):
+            with contextlib.suppress(sqlite3.OperationalError):
+                self._conn.execute(stmt)
+        # Must run after ALTER TABLE adds supabase_sub: on migrated DBs the
+        # CREATE TABLE IF NOT EXISTS is a no-op, so the column doesn't exist
+        # when SCHEMA's executescript runs. Placing the index here, after the
+        # column migration, guarantees it works for both fresh and existing DBs.
+        self._conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_supabase_sub ON accounts(supabase_sub)"
+        )
+        self._backfill_stripe_trial_ledger()
         self._seed_feature_flags()
+
+    def _backfill_stripe_trial_ledger(self) -> None:
+        """Conservatively consume every legacy Stripe-touching principal.
+
+        Tombstones are intentionally included. Conflicting legacy customer
+        ownership is audited and the first binding is retained; no row is
+        silently reassigned. The whole migration is replay-safe.
+        """
+        cur = self._conn.cursor()
+        now = _now_iso()
+        cur.execute("BEGIN IMMEDIATE")
+        try:
+            cur.execute(
+                """SELECT a.id account_id, a.stripe_customer_id customer_id
+                     FROM accounts a
+                    WHERE a.stripe_customer_id IS NOT NULL
+                       OR a.stripe_subscription_id IS NOT NULL
+                       OR a.subscription_status IS NOT NULL
+                   UNION
+                   SELECT u.account_id, u.stripe_customer_id
+                     FROM users u
+                    WHERE u.account_id IS NOT NULL
+                      AND (u.stripe_customer_id IS NOT NULL
+                       OR u.stripe_subscription_id IS NOT NULL
+                       OR u.subscription_status IS NOT NULL)
+                   UNION
+                   SELECT p.app_account_token, NULL
+                     FROM provider_purchases p
+                    WHERE p.provider='stripe' AND p.app_account_token IS NOT NULL"""
+            )
+            for row in cur.fetchall():
+                account_id, customer_id = row["account_id"], row["customer_id"]
+                if account_id:
+                    self._insert_consumed_scope(
+                        cur, "account", account_id, now, account_id, customer_id, None
+                    )
+                if customer_id:
+                    self._insert_consumed_scope(
+                        cur, "customer", customer_id, now, account_id, customer_id, None
+                    )
+                    if account_id:
+                        self._bind_customer_tx(cur, account_id, customer_id, now)
+            cur.execute("COMMIT")
+        except Exception:
+            with contextlib.suppress(sqlite3.Error):
+                cur.execute("ROLLBACK")
+            raise
 
     def _seed_feature_flags(self) -> None:
         cur = self._conn.cursor()
@@ -400,49 +757,153 @@ class Store:
 
     # ---- user / device ----
 
-    def register_device(self, device_id: Optional[str] = None) -> User:
+    def register_device(
+        self,
+        device_id: Optional[str] = None,
+        *,
+        device_credential: Optional[str] = None,
+        bearer_token: Optional[str] = None,
+        legacy_grace_seconds: int = 86400,
+    ) -> DeviceRegistration:
         now = _now_iso()
 
-        def _do() -> User:
+        def _do() -> DeviceRegistration:
             cur = self._conn.cursor()
             if device_id:
                 cur.execute("SELECT * FROM users WHERE device_id = ?", (device_id,))
                 row = cur.fetchone()
                 if row:
-                    if not row["api_token"]:
-                        token = _new_token()
-                        cur.execute(
-                            "UPDATE users SET api_token=?, updated_at=? WHERE device_id=?",
-                            (token, now, device_id),
+                    credential_hash = row["device_credential_hash"]
+                    credential_ok = bool(
+                        credential_hash
+                        and device_credential
+                        and secrets.compare_digest(
+                            credential_hash,
+                            _hash_device_credential(device_credential),
                         )
-                        return _row_to_user({**dict(row), "api_token": token, "updated_at": now})
-                    return _row_to_user(row)
+                    )
+                    if credential_ok:
+                        user = _row_to_user(row)
+                        # Defensive backfill: a device that predates the
+                        # account-first contract (or a legacy row) must still
+                        # end up with a canonical account_id (contract §1).
+                        self._ensure_account(cur, user, now)
+                        return DeviceRegistration(user=user)
+
+                    legacy_ok = bool(
+                        bearer_token
+                        and not credential_hash
+                        and secrets.compare_digest(row["api_token"], bearer_token)
+                    )
+                    if legacy_ok:
+                        credential = _new_device_credential()
+                        token = _new_token()
+                        expires_at = (
+                            dt.datetime.now(dt.timezone.utc)
+                            + dt.timedelta(seconds=max(0, legacy_grace_seconds))
+                        ).isoformat()
+                        cur.execute("BEGIN IMMEDIATE")
+                        try:
+                            cur.execute(
+                                """UPDATE users
+                                      SET api_token=?, device_credential_hash=?,
+                                          previous_api_token=?, previous_api_token_expires_at=?,
+                                          updated_at=?
+                                    WHERE device_id=? AND api_token=?
+                                      AND device_credential_hash IS NULL""",
+                                (
+                                    token,
+                                    _hash_device_credential(credential),
+                                    row["api_token"],
+                                    expires_at,
+                                    now,
+                                    device_id,
+                                    bearer_token,
+                                ),
+                            )
+                            if cur.rowcount != 1:
+                                cur.execute("ROLLBACK")
+                                raise DeviceRegistrationProofError()
+                            cur.execute("SELECT * FROM users WHERE device_id = ?", (device_id,))
+                            user = _row_to_user(cur.fetchone())
+                            self._ensure_account(cur, user, now)
+                            cur.execute("COMMIT")
+                        except DeviceRegistrationProofError:
+                            raise
+                        except Exception:
+                            with contextlib.suppress(sqlite3.Error):
+                                cur.execute("ROLLBACK")
+                            raise
+                        return DeviceRegistration(
+                            user=user,
+                            device_credential=credential,
+                            migrated_legacy_token=True,
+                        )
+                    raise DeviceRegistrationProofError()
+
             did = device_id or str(uuid.uuid4())
             token = _new_token()
-            cur.execute(
-                "INSERT INTO users (device_id, api_token, plan, created_at, updated_at) VALUES (?, ?, 'free', ?, ?)",
-                (did, token, now, now),
-            )
-            cur.execute("SELECT * FROM users WHERE device_id = ?", (did,))
-            return _row_to_user(cur.fetchone())
+            credential = _new_device_credential()
+            # Registration atomically mints the canonical (anonymous) account
+            # UUID and the device row that references it, so no write ever
+            # leaves an unlinked device (contract §1).
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                account_id = _insert_anonymous_account(cur, now)
+                cur.execute(
+                    """INSERT INTO users
+                           (device_id, api_token, device_credential_hash, plan,
+                            account_id, created_at, updated_at)
+                         VALUES (?, ?, ?, 'free', ?, ?, ?)""",
+                    (did, token, _hash_device_credential(credential), account_id, now, now),
+                )
+                cur.execute("SELECT * FROM users WHERE device_id = ?", (did,))
+                user = _row_to_user(cur.fetchone())
+                cur.execute("COMMIT")
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
+            self._attach_account(cur, user)
+            return DeviceRegistration(user=user, device_credential=credential)
 
         return self._run(_do).result()
 
+    def _ensure_account(self, cur: sqlite3.Cursor, user: User, now: str) -> None:
+        """Guarantee `user` references a canonical account, minting an
+        anonymous one in place if a legacy/pre-contract row has none. Runs on
+        the DB executor thread with the caller's cursor; mutates `user`."""
+        if not user.account_id:
+            account_id = _insert_anonymous_account(cur, now)
+            cur.execute(
+                "UPDATE users SET account_id = ?, updated_at = ? WHERE device_id = ?",
+                (account_id, now, user.device_id),
+            )
+            user.account_id = account_id
+        self._attach_account(cur, user)
+
     def _attach_account(self, cur: sqlite3.Cursor, user: User) -> User:
-        """Populate `user.account` when the device is linked to one. Called
-        inline (same cursor/thread) rather than through another `_run` — this
-        already runs on the DB executor thread."""
+        """Populate `user.account` and the provider-entitlement flag when the
+        device is linked to one. Called inline (same cursor/thread) rather than
+        through another `_run` — this already runs on the DB executor thread."""
         if user.account_id:
             cur.execute("SELECT * FROM accounts WHERE id = ?", (user.account_id,))
             acct_row = cur.fetchone()
             if acct_row:
                 user.account = _row_to_account(acct_row)
+            user.provider_entitlement_active = _account_has_active_grant(cur, user.account_id)
         return user
 
     def get_by_token(self, token: str) -> Optional[User]:
         def _do() -> Optional[User]:
             cur = self._conn.cursor()
-            cur.execute("SELECT * FROM users WHERE api_token = ?", (token,))
+            cur.execute(
+                """SELECT * FROM users
+                     WHERE api_token = ?
+                        OR (previous_api_token = ?
+                            AND previous_api_token_expires_at > ?)""",
+                (token, token, _now_iso()),
+            )
             row = cur.fetchone()
             return self._attach_account(cur, _row_to_user(row)) if row else None
 
@@ -457,35 +918,289 @@ class Store:
 
         return self._run(_do).result()
 
+    def ensure_account(self, device_id: str) -> Optional[User]:
+        """Return the device's user, minting + linking a canonical anonymous
+        account first if a legacy row still has none (contract §1). Idempotent."""
+
+        def _do() -> Optional[User]:
+            cur = self._conn.cursor()
+            cur.execute("SELECT * FROM users WHERE device_id = ?", (device_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            user = _row_to_user(row)
+            self._ensure_account(cur, user, _now_iso())
+            return user
+
+        return self._run(_do).result()
+
     def rotate_token(self, device_id: str) -> Optional[str]:
         def _do() -> Optional[str]:
             cur = self._conn.cursor()
             token = _new_token()
             cur.execute(
-                "UPDATE users SET api_token=?, updated_at=? WHERE device_id=?",
+                """UPDATE users
+                      SET api_token=?, previous_api_token=NULL,
+                          previous_api_token_expires_at=NULL, updated_at=?
+                    WHERE device_id=?""",
                 (token, _now_iso(), device_id),
             )
             return token if cur.rowcount else None
 
         return self._run(_do).result()
 
-    def attach_stripe_customer(self, device_id: str, customer_id: str) -> None:
-        def _do() -> None:
-            self._conn.execute(
-                "UPDATE users SET stripe_customer_id=?, updated_at=? WHERE device_id=?",
-                (customer_id, _now_iso(), device_id),
-            )
+    def _record_trial_conflict(
+        self, cur, kind, scope, scope_id, account_id, customer_id, subscription_id, detail
+    ) -> None:
+        cur.execute(
+            """INSERT OR IGNORE INTO stripe_trial_conflicts
+               (id, conflict_kind, scope, scope_id, account_id, customer_id,
+                subscription_id, detail, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (str(uuid.uuid4()), kind, scope, scope_id, account_id, customer_id,
+             subscription_id, detail, _now_iso()),
+        )
 
+    def _bind_customer_tx(self, cur, account_id: str, customer_id: str, now: str) -> bool:
+        cur.execute(
+            """INSERT OR IGNORE INTO stripe_customer_bindings
+               (customer_id, account_id, created_at, updated_at) VALUES (?, ?, ?, ?)""",
+            (customer_id, account_id, now, now),
+        )
+        cur.execute(
+            "SELECT customer_id, account_id FROM stripe_customer_bindings "
+            "WHERE customer_id=? OR account_id=?",
+            (customer_id, account_id),
+        )
+        bindings = cur.fetchall()
+        winner = next(
+            (r for r in bindings
+             if r["customer_id"] == customer_id and r["account_id"] == account_id), None
+        )
+        if winner is None:
+            self._record_trial_conflict(
+                cur, "customer_binding", "customer", customer_id, account_id,
+                customer_id, None, "customer or account is already bound"
+            )
+            return False
+        cur.execute(
+            """UPDATE accounts SET stripe_customer_id=COALESCE(stripe_customer_id, ?),
+                   updated_at=? WHERE id=? AND
+                   (stripe_customer_id IS NULL OR stripe_customer_id=?)""",
+            (customer_id, now, account_id, customer_id),
+        )
+        return True
+
+    def attach_account_stripe_customer(self, account_id: str, customer_id: str) -> bool:
+        def _do() -> bool:
+            cur = self._conn.cursor()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                result = self._bind_customer_tx(cur, account_id, customer_id, _now_iso())
+                cur.execute("COMMIT")
+                return result
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
+        return self._run(_do).result()
+
+    def attach_stripe_customer(self, device_id: str, customer_id: str) -> bool:
+        user = self.get_by_device(device_id)
+        return bool(
+            user and user.account_id
+            and self.attach_account_stripe_customer(user.account_id, customer_id)
+        )
+
+    def get_stripe_customer_binding(self, account_id: str) -> Optional[str]:
+        def _do():
+            row = self._conn.execute(
+                "SELECT customer_id FROM stripe_customer_bindings WHERE account_id=?",
+                (account_id,),
+            ).fetchone()
+            return row["customer_id"] if row else None
+        return self._run(_do).result()
+
+    def reserve_stripe_trial(self, *, account_id: str, customer_id: Optional[str]) -> bool:
+        """Atomically reserve account and existing-customer scopes."""
+        def _do() -> bool:
+            cur = self._conn.cursor()
+            now = _now_iso()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                scopes = [("account", account_id)]
+                if customer_id:
+                    scopes.append(("customer", customer_id))
+                for scope, scope_id in scopes:
+                    row = cur.execute(
+                        "SELECT state FROM stripe_trial_ledger WHERE scope=? AND scope_id=?",
+                        (scope, scope_id),
+                    ).fetchone()
+                    if row and row["state"] != "released":
+                        cur.execute("COMMIT")
+                        return False
+                for scope, scope_id in scopes:
+                    cur.execute(
+                        """INSERT INTO stripe_trial_ledger
+                           (scope, scope_id, state, account_id, customer_id,
+                            reserved_at, updated_at)
+                           VALUES (?, ?, 'reserved', ?, ?, ?, ?)
+                           ON CONFLICT(scope, scope_id) DO UPDATE SET
+                             state='reserved', session_id=NULL, subscription_id=NULL,
+                             account_id=excluded.account_id,
+                             customer_id=excluded.customer_id,
+                             reserved_at=excluded.reserved_at,
+                             updated_at=excluded.updated_at
+                           WHERE stripe_trial_ledger.state='released'""",
+                        (scope, scope_id, account_id, customer_id, now, now),
+                    )
+                    if cur.rowcount != 1:
+                        raise RuntimeError("trial reservation conflict")
+                cur.execute("COMMIT")
+                return True
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
+        return self._run(_do).result()
+
+    def attach_trial_session(self, account_id: str, session_id: str) -> None:
+        def _do():
+            self._conn.execute(
+                """UPDATE stripe_trial_ledger SET session_id=?, updated_at=?
+                   WHERE account_id=? AND state='reserved' AND session_id IS NULL""",
+                (session_id, _now_iso(), account_id),
+            )
         self._run(_do).result()
 
-    def attach_account_stripe_customer(self, account_id: str, customer_id: str) -> None:
-        def _do() -> None:
-            self._conn.execute(
-                "UPDATE accounts SET stripe_customer_id=?, updated_at=? WHERE id=?",
-                (customer_id, _now_iso(), account_id),
-            )
+    def reserve_customer_scope_for_account(self, account_id: str, customer_id: str) -> bool:
+        """Add a newly-created/bound customer to an existing account reservation."""
+        def _do():
+            cur = self._conn.cursor()
+            now = _now_iso()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                account = cur.execute(
+                    """SELECT state FROM stripe_trial_ledger
+                       WHERE scope='account' AND scope_id=?""", (account_id,)
+                ).fetchone()
+                if not account or account["state"] != "reserved":
+                    cur.execute("COMMIT")
+                    return False
+                cur.execute(
+                    """INSERT INTO stripe_trial_ledger
+                       (scope, scope_id, state, account_id, customer_id,
+                        reserved_at, updated_at)
+                       VALUES ('customer', ?, 'reserved', ?, ?, ?, ?)
+                       ON CONFLICT(scope, scope_id) DO UPDATE SET
+                         state='reserved', account_id=excluded.account_id,
+                         customer_id=excluded.customer_id,
+                         reserved_at=excluded.reserved_at, updated_at=excluded.updated_at
+                       WHERE stripe_trial_ledger.state='released'""",
+                    (customer_id, account_id, customer_id, now, now),
+                )
+                ok = cur.rowcount == 1
+                cur.execute("COMMIT")
+                return ok
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
+        return self._run(_do).result()
 
-        self._run(_do).result()
+    def release_trial_session(self, session_id: str) -> int:
+        """Release only an exact, definitive Checkout expiry; consumed is terminal."""
+        def _do():
+            cur = self._conn.execute(
+                """UPDATE stripe_trial_ledger SET state='released', updated_at=?
+                   WHERE session_id=? AND state='reserved'""",
+                (_now_iso(), session_id),
+            )
+            return cur.rowcount
+        return self._run(_do).result()
+
+    def _insert_consumed_scope(
+        self, cur, scope, scope_id, now, account_id, customer_id, subscription_id
+    ) -> bool:
+        row = cur.execute(
+            "SELECT state, account_id, customer_id, subscription_id "
+            "FROM stripe_trial_ledger "
+            "WHERE scope=? AND scope_id=?",
+            (scope, scope_id),
+        ).fetchone()
+        conflict = bool(
+            row and row["state"] == "consumed"
+            and ((row["subscription_id"] and
+                  row["subscription_id"] != subscription_id)
+                 or (row["account_id"] and row["account_id"] != account_id)
+                 or (row["customer_id"] and row["customer_id"] != customer_id))
+        )
+        cur.execute(
+            """INSERT INTO stripe_trial_ledger
+               (scope, scope_id, state, subscription_id, account_id, customer_id,
+                reserved_at, consumed_at, updated_at)
+               VALUES (?, ?, 'consumed', ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(scope, scope_id) DO UPDATE SET
+                 state='consumed',
+                 subscription_id=COALESCE(stripe_trial_ledger.subscription_id,
+                                          excluded.subscription_id),
+                 consumed_at=COALESCE(stripe_trial_ledger.consumed_at,
+                                      excluded.consumed_at),
+                 updated_at=excluded.updated_at
+               WHERE stripe_trial_ledger.state != 'consumed'""",
+            (scope, scope_id, subscription_id, account_id, customer_id, now, now, now),
+        )
+        return conflict
+
+    def consume_stripe_trial(
+        self, *, account_id: str, customer_id: str, subscription_id: str,
+        fingerprint: Optional[str],
+    ) -> bool:
+        """Consume all observed scopes; return True on cross-principal reuse."""
+        def _do():
+            cur = self._conn.cursor()
+            now = _now_iso()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                conflict = False
+                for scope, scope_id in (
+                    ("account", account_id), ("customer", customer_id),
+                    ("fingerprint", fingerprint),
+                ):
+                    if not scope_id:
+                        continue
+                    hit = self._insert_consumed_scope(
+                        cur, scope, scope_id, now, account_id, customer_id, subscription_id
+                    )
+                    if hit:
+                        conflict = True
+                        self._record_trial_conflict(
+                            cur, "trial_scope_reuse", scope, scope_id, account_id,
+                            customer_id, subscription_id,
+                            "trialing subscription reused a consumed scope"
+                        )
+                cur.execute("COMMIT")
+                return conflict
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
+        return self._run(_do).result()
+
+    def stripe_trial_invariants(self) -> list[dict]:
+        def _do():
+            rows = self._conn.execute(
+                """SELECT 'customer_conflict' kind, stripe_customer_id scope_id, COUNT(*) count
+                     FROM accounts WHERE stripe_customer_id IS NOT NULL
+                 GROUP BY stripe_customer_id HAVING COUNT(*) > 1
+                 UNION ALL
+                   SELECT 'duplicate_trial_history', subscription_id, COUNT(*)
+                     FROM stripe_trial_ledger
+                    WHERE state='consumed' AND subscription_id IS NOT NULL
+                 GROUP BY subscription_id HAVING COUNT(DISTINCT account_id) > 1"""
+            ).fetchall()
+            return [dict(r) for r in rows]
+        return self._run(_do).result()
 
     def update_subscription(
         self,
@@ -502,7 +1217,7 @@ class Store:
             cur = self._conn.cursor()
             where = "device_id = ?" if device_id else "stripe_customer_id = ?"
             arg = device_id or customer_id
-            plan = "pro" if status in ("active", "trialing") else "free"
+            plan = "pro" if status in ("active", "trialing", "past_due") else "free"
             cur.execute(
                 f"""
                 UPDATE users
@@ -541,7 +1256,7 @@ class Store:
         each have their own history — merging is a decision a person
         should confirm explicitly, not something we do for them.
         """
-        assert provider in ("apple", "google"), f"unknown provider: {provider}"
+        assert provider in ("apple", "google", "supabase"), f"unknown provider: {provider}"
         column = f"{provider}_sub"
 
         def _do() -> Account:
@@ -602,6 +1317,80 @@ class Store:
 
         return self._run(_do).result()
 
+    def delete_account(self, account_id: str) -> dict:
+        """Delete a person's account: revoke every session/device, drop private
+        identity data, and TOMBSTONE the account row rather than deleting it.
+
+        Why tombstone instead of DELETE: append-only billing/provider audit
+        facts (entitlement_grants, stripe_events, and the account's own Stripe
+        customer/subscription ids) reference this account id and must remain
+        valid for legal/accounting reasons. So we keep the row (and its Stripe
+        ids) but clear every identity/private column and stamp ``deleted_at``.
+        After this, ``is_identified`` is false, so the account can never again
+        be resolved by a provider subject or drive Pro entitlement by identity.
+
+        Revocation is real: for every linked device we mint a fresh random
+        api_token the caller never learns, void any previous-token grace, and
+        null the device credential hash — so every bearer that existed before
+        deletion (and any recovery proof) stops working immediately.
+
+        Returns a summary dict for the caller/tests. Idempotent-ish: deleting
+        an already-tombstoned account revokes nothing new and reports 0."""
+
+        def _do() -> dict:
+            cur = self._conn.cursor()
+            cur.execute("SELECT * FROM accounts WHERE id = ?", (account_id,))
+            row = cur.fetchone()
+            if row is None:
+                return {"deleted": False, "revoked_devices": 0}
+            now = _now_iso()
+
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                # 1) Revoke every device linked to this account.
+                cur.execute(
+                    "SELECT device_id FROM users WHERE account_id = ?", (account_id,)
+                )
+                device_ids = [r["device_id"] for r in cur.fetchall()]
+                for did in device_ids:
+                    cur.execute(
+                        """UPDATE users
+                              SET api_token = ?,
+                                  previous_api_token = NULL,
+                                  previous_api_token_expires_at = NULL,
+                                  device_credential_hash = NULL,
+                                  updated_at = ?
+                            WHERE device_id = ?""",
+                        (_new_token(), now, did),
+                    )
+
+                # 2) Drop private identity data (passkeys) tied to the account.
+                cur.execute(
+                    "DELETE FROM webauthn_credentials WHERE account_id = ?", (account_id,)
+                )
+
+                # 3) Tombstone: clear identity/contact columns, keep the row and
+                #    its Stripe billing ids (append-only audit), stamp deleted_at.
+                cur.execute(
+                    """UPDATE accounts
+                          SET apple_sub = NULL,
+                              google_sub = NULL,
+                              supabase_sub = NULL,
+                              email = NULL,
+                              deleted_at = ?,
+                              updated_at = ?
+                        WHERE id = ?""",
+                    (now, now, account_id),
+                )
+                cur.execute("COMMIT")
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
+            return {"deleted": True, "revoked_devices": len(device_ids)}
+
+        return self._run(_do).result()
+
     def link_device_to_account(self, device_id: str, account_id: str) -> None:
         """Attach this device to an account. Safe to call repeatedly (e.g.
         re-signing-in on the same device) and safe to call from multiple
@@ -609,10 +1398,19 @@ class Store:
         device shares the account's Pro status from then on."""
 
         def _do() -> None:
-            self._conn.execute(
-                "UPDATE users SET account_id = ?, updated_at = ? WHERE device_id = ?",
-                (account_id, _now_iso(), device_id),
-            )
+            cur = self._conn.cursor()
+            now = _now_iso()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                cur.execute(
+                    "UPDATE users SET account_id = ?, updated_at = ? WHERE device_id = ?",
+                    (account_id, now, device_id),
+                )
+                cur.execute("COMMIT")
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
 
         self._run(_do).result()
 
@@ -638,7 +1436,7 @@ class Store:
             cur = self._conn.cursor()
             where = "id = ?" if account_id else "stripe_customer_id = ?"
             arg = account_id or customer_id
-            plan = "pro" if status in ("active", "trialing") else "free"
+            plan = "pro" if status in ("active", "trialing", "past_due") else "free"
             cur.execute(
                 f"""
                 UPDATE accounts
@@ -743,54 +1541,52 @@ class Store:
 
         return self._run(_do).result()
 
-    # ---- rate limit ----
+    # ---- rewrite telemetry (NON-authorizing) ----
 
-    def consume_rewrite(self, device_id: str) -> tuple[bool, int, int]:
-        """Check + increment the daily free-tier counter.
+    def record_rewrite(self, device_id: str) -> int:
+        """Advance the per-day rewrite telemetry counter and return the running
+        count for today (post-increment).
 
-        Anonymous devices count against their own `users.daily_count` row,
-        exactly as before accounts existed. A device linked to an account
-        counts against `accounts.daily_count` instead — pooled across every
-        device linked to that account, so a free user's 10/day is one
-        shared allowance across their phone, laptop, etc., not 10 per
-        device. `table`/`key_col` below are fixed internal literals (never
-        user input), picking which row anchors the quota.
+        This method is **non-authorizing**. Under the commercial contract there
+        is NO free daily tier: the sole rewrite gate is the shared
+        server-authoritative entitlement projection (``User.is_pro``, enforced by
+        ``server._require_rewrite_entitlement`` before any provider call). Every
+        caller that reaches here has already passed that gate, so this counter
+        never grants, never denies, and never reads ``FREE_DAILY_LIMIT`` — it
+        exists only for the ``used_today`` disclosure and abuse metering.
+
+        The counter pools on the account once the device is IDENTIFIED (signed
+        in) and otherwise counts per-device, matching the historical quota
+        anchoring. `table`/`key_col` are fixed internal literals (never user
+        input), picking which row the counter lives on.
         """
 
-        def _do() -> tuple[bool, int, int]:
+        def _do() -> int:
             cur = self._conn.cursor()
             cur.execute(
-                "SELECT plan, subscription_status, coupon_pro_expires_at, daily_count, daily_day, account_id "
-                "FROM users WHERE device_id = ?",
+                "SELECT daily_count, daily_day, account_id FROM users WHERE device_id = ?",
                 (device_id,),
             )
             row = cur.fetchone()
             if not row:
-                return (False, 0, 0)
+                return 0
 
+            account_row = None
             if row["account_id"]:
-                cur.execute(
-                    "SELECT plan, subscription_status, coupon_pro_expires_at, daily_count, daily_day "
-                    "FROM accounts WHERE id = ?",
-                    (row["account_id"],),
-                )
-                quota_row = cur.fetchone()
+                cur.execute("SELECT * FROM accounts WHERE id = ?", (row["account_id"],))
+                account_row = cur.fetchone()
+            identified = bool(
+                account_row
+                and (account_row["apple_sub"] or account_row["google_sub"] or account_row["email"])
+            )
+            if identified:
+                quota_row = account_row
                 table, key_col, key_val = "accounts", "id", row["account_id"]
             else:
                 quota_row = row
                 table, key_col, key_val = "users", "device_id", device_id
 
-            if quota_row["plan"] == "pro" and quota_row["subscription_status"] in ("active", "trialing"):
-                return (True, quota_row["daily_count"], -1)
-            if quota_row["coupon_pro_expires_at"] and quota_row["coupon_pro_expires_at"] > _now_iso():
-                return (True, quota_row["daily_count"], -1)
-
             today = _today_utc()
-            used = quota_row["daily_count"] if quota_row["daily_day"] == today else 0
-            limit = int(os.environ.get("FREE_DAILY_LIMIT", "10"))
-            if used >= limit:
-                return (False, used, limit)
-
             cur.execute("BEGIN IMMEDIATE")
             try:
                 if quota_row["daily_day"] != today:
@@ -804,12 +1600,12 @@ class Store:
                         f"UPDATE {table} SET daily_count=daily_count+1, updated_at=? WHERE {key_col}=?",
                         (_now_iso(), key_val),
                     )
-                    used += 1
+                    used = (quota_row["daily_count"] or 0) + 1
                 cur.execute("COMMIT")
             except Exception:
                 cur.execute("ROLLBACK")
                 raise
-            return (True, used, limit)
+            return used
 
         return self._run(_do).result()
 
@@ -1311,17 +2107,1218 @@ class Store:
 
     # ---- stripe events ----
 
-    def record_stripe_event(self, event_id: str, type_: str, payload: str) -> bool:
-        def _do() -> bool:
+    def record_stripe_event(self, event_id: str, type_: str, payload: str) -> str:
+        """Insert a new stripe_events row.
+
+        Returns:
+          'new'              – never seen; caller must process then call mark_stripe_event_processed.
+          'duplicate_ok'     – already successfully processed; safe to ACK 2xx immediately.
+          'duplicate_pending' – seen but handler failed last time; caller should retry.
+        """
+        def _do() -> str:
             cur = self._conn.cursor()
             try:
                 cur.execute(
                     "INSERT INTO stripe_events (event_id, received_at, type, payload) VALUES (?, ?, ?, ?)",
                     (event_id, _now_iso(), type_, payload),
                 )
+                return "new"
+            except sqlite3.IntegrityError:
+                cur.execute("SELECT processed_at FROM stripe_events WHERE event_id = ?", (event_id,))
+                row = cur.fetchone()
+                if row and row["processed_at"] is not None:
+                    return "duplicate_ok"
+                return "duplicate_pending"
+
+        return self._run(_do).result()
+
+    def mark_stripe_event_processed(self, event_id: str) -> None:
+        """Stamp a stripe_events row as successfully processed so subsequent
+        deliveries of the same event_id are immediately ACK'd 2xx."""
+        def _do() -> None:
+            self._conn.execute(
+                "UPDATE stripe_events SET processed_at = ? WHERE event_id = ?",
+                (_now_iso(), event_id),
+            )
+        self._run(_do).result()
+
+    # ---- Stripe provider projection (provider_purchases + entitlement_grants) ----
+
+    def apply_stripe_subscription_fact(
+        self,
+        *,
+        account_id: Optional[str],
+        subscription_id: str,
+        stripe_status: str,
+        period_end_ms: int,
+        product_id: str = "stripe_pro",
+        force: bool = False,
+    ) -> str:
+        """Project one verified Stripe subscription event into provider_purchases and
+        entitlement_grants using the same append-only, version-guarded model as Apple IAP.
+
+        period_end_ms (current_period_end × 1000) is the monotonic version oracle:
+        older events with a smaller period_end_ms cannot override a newer fact.
+        Terminal states (expired/refunded/revoked) cannot be resurrected by active events
+        unless force=True (use only for explicit dispute reinstatements).
+
+        Returns the lifecycle_state applied ('active', 'expired', 'stale', …).
+        Does NOT touch the mutable accounts.plan columns — callers keep calling
+        update_account_subscription for backward compat during the transition.
+        """
+        lifecycle_state = _STRIPE_STATUS_TO_LIFECYCLE.get(stripe_status, "expired")
+
+        def _do() -> str:
+            cur = self._conn.cursor()
+            now = _now_iso()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                result = self._apply_stripe_fact_locked(
+                    cur, now,
+                    account_id=account_id,
+                    subscription_id=subscription_id,
+                    stripe_status=stripe_status,
+                    lifecycle_state=lifecycle_state,
+                    period_end_ms=period_end_ms,
+                    product_id=product_id,
+                    force=force,
+                )
+                cur.execute("COMMIT")
+                return result
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
+
+        return self._run(_do).result()
+
+    def _apply_stripe_fact_locked(
+        self, cur, now, *,
+        account_id, subscription_id, stripe_status,
+        lifecycle_state, period_end_ms, product_id,
+        force=False,
+    ) -> str:
+        cur.execute(
+            "SELECT * FROM provider_purchases WHERE provider = 'stripe' AND original_transaction_id = ?",
+            (subscription_id,),
+        )
+        existing = cur.fetchone()
+
+        if existing is not None:
+            stored_ms = existing["latest_signed_ms"] or 0
+            stored_state = existing["lifecycle_state"]
+
+            if not force:
+                # Terminal states cannot be resurrected by active events
+                if stored_state in _TERMINAL_STATES and lifecycle_state == "active":
+                    return "stale"
+                # Equal-timestamp: terminal beats active
+                if period_end_ms == stored_ms and lifecycle_state == "active" and stored_state in _TERMINAL_STATES:
+                    return "stale"
+                # Genuinely stale active event — newer fact already stored
+                if period_end_ms < stored_ms and lifecycle_state == "active":
+                    return "stale"
+
+            cur.execute(
+                """UPDATE provider_purchases
+                      SET lifecycle_state = ?, latest_signed_ms = ?,
+                          latest_transaction_id = ?, product_id = ?,
+                          app_account_token = COALESCE(?, app_account_token),
+                          expires_ms = ?, updated_at = ?
+                    WHERE id = ?""",
+                (lifecycle_state, period_end_ms, subscription_id, product_id,
+                 account_id, period_end_ms, now, existing["id"]),
+            )
+            purchase_id = existing["id"]
+        else:
+            purchase_id = str(uuid.uuid4())
+            cur.execute(
+                """INSERT INTO provider_purchases
+                       (id, provider, original_transaction_id, latest_transaction_id, product_id,
+                        environment, ownership_type, app_account_token, lifecycle_state,
+                        latest_signed_ms, expires_ms, trial_consumed, created_at, updated_at)
+                     VALUES (?, 'stripe', ?, ?, ?, 'production', 'PURCHASED', ?, ?, ?, ?, 0, ?, ?)""",
+                (purchase_id, subscription_id, subscription_id, product_id,
+                 account_id, lifecycle_state, period_end_ms, period_end_ms, now, now),
+            )
+
+        # Grant or revoke entitlement for the account
+        if account_id:
+            # Guard against orphan grants into non-existent accounts (FK safety)
+            cur.execute("SELECT id FROM accounts WHERE id = ?", (account_id,))
+            if cur.fetchone() is None:
+                import logging as _log
+                _log.getLogger(__name__).warning(
+                    "apply_stripe_fact: account_id=%s not found; purchase recorded, grant skipped",
+                    account_id,
+                )
+                return lifecycle_state
+            if lifecycle_state == "active":
+                self._upsert_grant(cur, purchase_id, account_id, "direct", period_end_ms, now)
+            else:
+                self._revoke_grants_for_purchase(cur, purchase_id, now)
+
+        return lifecycle_state
+
+    def apply_stripe_terminal_fact(
+        self,
+        *,
+        subscription_id: str,
+        account_id: Optional[str],
+        lifecycle_state: str,
+    ) -> str:
+        """Apply a terminal fact (refund/dispute reversal) that wins regardless of
+        stored version. Uses max(now_ms, stored+1) so no subsequent active event
+        can resurrect the terminated purchase.
+
+        Does NOT touch mutable account columns — callers do that separately.
+        """
+        def _do() -> str:
+            cur = self._conn.cursor()
+            now = _now_iso()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                cur.execute(
+                    "SELECT id, latest_signed_ms FROM provider_purchases "
+                    "WHERE provider = 'stripe' AND original_transaction_id = ?",
+                    (subscription_id,),
+                )
+                row = cur.fetchone()
+                terminal_ms = _now_ms()
+
+                if row:
+                    terminal_ms = max(terminal_ms, (row["latest_signed_ms"] or 0) + 1)
+                    cur.execute(
+                        """UPDATE provider_purchases
+                              SET lifecycle_state = ?, latest_signed_ms = ?,
+                                  expires_ms = NULL, updated_at = ?
+                            WHERE id = ?""",
+                        (lifecycle_state, terminal_ms, now, row["id"]),
+                    )
+                    self._revoke_grants_for_purchase(cur, row["id"], now)
+                else:
+                    purchase_id = str(uuid.uuid4())
+                    cur.execute(
+                        """INSERT INTO provider_purchases
+                               (id, provider, original_transaction_id, latest_transaction_id,
+                                product_id, environment, ownership_type, app_account_token,
+                                lifecycle_state, latest_signed_ms, expires_ms, trial_consumed,
+                                created_at, updated_at)
+                             VALUES (?, 'stripe', ?, ?, 'stripe_pro', 'production', 'PURCHASED', ?,
+                                     ?, ?, NULL, 0, ?, ?)""",
+                        (purchase_id, subscription_id, subscription_id, account_id,
+                         lifecycle_state, terminal_ms, now, now),
+                    )
+
+                cur.execute("COMMIT")
+                return lifecycle_state
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
+
+        return self._run(_do).result()
+
+    def get_account_by_stripe_customer(self, customer_id: str) -> Optional["Account"]:
+        """Look up the account that owns a Stripe customer ID."""
+        def _do() -> Optional[Account]:
+            cur = self._conn.cursor()
+            cur.execute(
+                """SELECT a.* FROM stripe_customer_bindings b
+                   JOIN accounts a ON a.id=b.account_id WHERE b.customer_id=?""",
+                (customer_id,),
+            )
+            row = cur.fetchone()
+            return _row_to_account(row) if row else None
+        return self._run(_do).result()
+
+    def list_accounts_with_stripe_subscriptions(self) -> list:
+        """Return accounts that have a stripe_subscription_id — used by reconciliation."""
+        def _do() -> list:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT id, stripe_customer_id, stripe_subscription_id, subscription_status "
+                "FROM accounts WHERE stripe_subscription_id IS NOT NULL"
+            )
+            return [dict(r) for r in cur.fetchall()]
+        return self._run(_do).result()
+
+    def get_stripe_purchase(self, subscription_id: str) -> Optional[dict]:
+        """Return the provider_purchases row for a Stripe subscription, or None."""
+        def _do() -> Optional[dict]:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT * FROM provider_purchases WHERE provider = 'stripe' AND original_transaction_id = ?",
+                (subscription_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+        return self._run(_do).result()
+
+    # ---- accounts: provider-identity lookup / in-place upgrade ----
+
+    def get_account_by_provider(self, provider: str, sub: str) -> Optional[Account]:
+        assert provider in ("apple", "google", "supabase"), f"unknown provider: {provider}"
+        column = f"{provider}_sub"
+
+        def _do() -> Optional[Account]:
+            cur = self._conn.cursor()
+            cur.execute(f"SELECT * FROM accounts WHERE {column} = ?", (sub,))
+            row = cur.fetchone()
+            return _row_to_account(row) if row else None
+
+        return self._run(_do).result()
+
+    def backfill_missing_accounts(self) -> dict:
+        """One-shot migration: mint exactly one canonical account for every
+        device row that still has ``account_id IS NULL`` and link it, copying
+        the device's own billing fields so no Pro is lost. Transactional,
+        count-checked, and idempotent — a rerun finds nothing null and is a
+        no-op; rows that already have an account are never touched (contract
+        §1, hostile 3)."""
+
+        def _do() -> dict:
+            cur = self._conn.cursor()
+            now = _now_iso()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                cur.execute(
+                    """SELECT device_id, plan, stripe_customer_id, stripe_subscription_id,
+                              subscription_status, subscription_renews_at, coupon_pro_expires_at
+                         FROM users WHERE account_id IS NULL"""
+                )
+                rows = cur.fetchall()
+                created = 0
+                for r in rows:
+                    account_id = str(uuid.uuid4())
+                    cur.execute(
+                        """INSERT INTO accounts
+                               (id, plan, stripe_customer_id, stripe_subscription_id,
+                                subscription_status, subscription_renews_at,
+                                coupon_pro_expires_at, created_at, updated_at)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            account_id, r["plan"] or "free", r["stripe_customer_id"],
+                            r["stripe_subscription_id"], r["subscription_status"],
+                            r["subscription_renews_at"], r["coupon_pro_expires_at"], now, now,
+                        ),
+                    )
+                    cur.execute(
+                        "UPDATE users SET account_id = ?, updated_at = ? "
+                        "WHERE device_id = ? AND account_id IS NULL",
+                        (account_id, now, r["device_id"]),
+                    )
+                    created += 1
+                cur.execute("SELECT COUNT(*) AS c FROM users WHERE account_id IS NULL")
+                remaining = cur.fetchone()["c"]
+                cur.execute("COMMIT")
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
+            return {"backfilled": created, "remaining_null": remaining}
+
+        return self._run(_do).result()
+
+    def backfill_stripe_trial_ledger(self) -> None:
+        """Replay the conflict-safe Stripe history backfill after account minting."""
+        self._run(self._backfill_stripe_trial_ledger).result()
+
+    # ---- Apple entitlement (build-91) ----
+
+    def apply_apple_transaction(
+        self,
+        *,
+        account_id: str,
+        original_transaction_id: str,
+        transaction_id: str,
+        product_id: str,
+        environment: str,
+        ownership_type: str,
+        app_account_token: Optional[str],
+        signed_ms: int,
+        expires_ms: Optional[int] = None,
+        revocation_ms: Optional[int] = None,
+        is_trial: bool = False,
+        current_provider_state: Optional[str] = None,
+        provider: str = "apple",
+    ) -> AppleEntitlementResult:
+        """Apply one verified Apple transaction as purchase + grant + claim in a
+        single DB transaction (contract §3). Adjudication (direct vs family vs
+        tokenless-legacy vs conflict vs stale) is decided against durable state
+        so it is idempotent under replay/crash-recovery.
+
+        `current_provider_state` (when supplied by the App Store Server API
+        current-provider seam) is authoritative: a terminal live state overrides
+        replayed active client proof so a refunded/revoked purchase cannot be
+        resurrected (contract §3)."""
+
+        def _do() -> AppleEntitlementResult:
+            cur = self._conn.cursor()
+            now = _now_iso()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                result = self._apply_apple_tx_locked(
+                    cur, now,
+                    account_id=account_id,
+                    original_transaction_id=original_transaction_id,
+                    transaction_id=transaction_id,
+                    product_id=product_id,
+                    environment=environment,
+                    ownership_type=ownership_type,
+                    app_account_token=app_account_token,
+                    signed_ms=signed_ms,
+                    expires_ms=expires_ms,
+                    revocation_ms=revocation_ms,
+                    is_trial=is_trial,
+                    current_provider_state=current_provider_state,
+                    provider=provider,
+                )
+                cur.execute("COMMIT")
+                return result
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
+
+        return self._run(_do).result()
+
+    def _apply_apple_tx_locked(
+        self, cur, now, *, account_id, original_transaction_id, transaction_id,
+        product_id, environment, ownership_type, app_account_token,
+        signed_ms, expires_ms, revocation_ms, is_trial, current_provider_state=None,
+        provider="apple",
+    ) -> AppleEntitlementResult:
+        # Mutation-safety assertions: never grant on unverified identity/ownership.
+        assert original_transaction_id and transaction_id, "missing transaction identifiers"
+        assert ownership_type in _GRANTABLE_OWNERSHIP, (
+            f"refusing to apply transaction with ownership {ownership_type!r}"
+        )
+        now_ms = _now_ms()
+        # Durable inbox record for this transaction id (replay observability).
+        with contextlib.suppress(sqlite3.IntegrityError):
+            cur.execute(
+                "INSERT INTO provider_transactions (provider, event_id, kind, outcome, received_at) "
+                "VALUES (?, ?, 'transaction', 'processed', ?)",
+                (provider, transaction_id, now),
+            )
+
+        cur.execute(
+            "SELECT * FROM provider_purchases WHERE provider = ? AND original_transaction_id = ?",
+            (provider, original_transaction_id),
+        )
+        existing = cur.fetchone()
+
+        if revocation_ms is not None:
+            incoming_state = "revoked"
+        elif expires_ms is not None and expires_ms <= now_ms:
+            incoming_state = "expired"
+        else:
+            incoming_state = "active"
+
+        # Current-provider override (contract §3): when the App Store Server API
+        # reports a terminal live state for this lineage, it is authoritative and
+        # wins over apparently-active replayed client proof — a refunded/revoked
+        # purchase cannot be resurrected even if we never saw the notification.
+        if current_provider_state in _TERMINAL_STATES:
+            incoming_state = current_provider_state
+
+        # Stale-replay guard: an older signed transaction can never resurrect a
+        # terminated purchase (contract §3/§15). Current provider state wins.
+        if existing is not None:
+            stored_state = existing["lifecycle_state"]
+            stored_signed = existing["latest_signed_ms"] or 0
+            if (
+                stored_state in ("revoked", "refunded", "expired")
+                and incoming_state == "active"
+                and signed_ms <= stored_signed
+            ):
+                return AppleEntitlementResult(
+                    "revoked", "stale signed transaction cannot resurrect a terminated purchase",
+                    purchase_id=existing["id"],
+                )
+
+        purchase_id = existing["id"] if existing else str(uuid.uuid4())
+        apply_lifecycle = existing is None or signed_ms >= (existing["latest_signed_ms"] or 0)
+        trial_flag = 1 if (is_trial or (existing and existing["trial_consumed"])) else 0
+
+        if existing is None:
+            cur.execute(
+                """INSERT INTO provider_purchases
+                       (id, provider, original_transaction_id, latest_transaction_id, product_id,
+                        environment, ownership_type, app_account_token, lifecycle_state,
+                        latest_signed_ms, expires_ms, trial_consumed, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (purchase_id, provider, original_transaction_id, transaction_id, product_id,
+                 environment, ownership_type, app_account_token, incoming_state,
+                 signed_ms, expires_ms, trial_flag, now, now),
+            )
+            effective_state = incoming_state
+        elif apply_lifecycle:
+            cur.execute(
+                """UPDATE provider_purchases
+                      SET latest_transaction_id = ?, product_id = ?, environment = ?,
+                          ownership_type = ?,
+                          app_account_token = COALESCE(?, app_account_token),
+                          lifecycle_state = ?, latest_signed_ms = ?, expires_ms = ?,
+                          trial_consumed = ?, updated_at = ?
+                    WHERE id = ?""",
+                (transaction_id, product_id, environment, ownership_type, app_account_token,
+                 incoming_state, signed_ms, expires_ms, trial_flag, now, purchase_id),
+            )
+            effective_state = incoming_state
+        else:
+            # Older-but-not-a-resurrection: keep trial_consumed sticky, but the
+            # authoritative lifecycle stays whatever the newest evidence set.
+            if trial_flag and not existing["trial_consumed"]:
+                cur.execute(
+                    "UPDATE provider_purchases SET trial_consumed = 1, updated_at = ? WHERE id = ?",
+                    (now, purchase_id),
+                )
+            effective_state = existing["lifecycle_state"]
+
+        if effective_state != "active":
+            self._revoke_grants_for_purchase(cur, purchase_id, now)
+            return AppleEntitlementResult("not_active", f"purchase is {effective_state}", purchase_id=purchase_id)
+
+        # FAMILY_SHARED — revocable beneficiary grant only; no token, no
+        # ownership, no account recovery authority (contract §6).
+        if ownership_type == "FAMILY_SHARED":
+            self._upsert_grant(cur, purchase_id, account_id, "family", expires_ms, now)
+            return AppleEntitlementResult("family_granted", purchase_id=purchase_id)
+
+        # PURCHASED with a bound appAccountToken.
+        if app_account_token:
+            if app_account_token == account_id:
+                self._upsert_grant(cur, purchase_id, account_id, "direct", expires_ms, now)
+                return AppleEntitlementResult("direct_granted", purchase_id=purchase_id)
+            # Non-null token belonging to another account -> deterministic
+            # conflict. Never fall through to the tokenless legacy path
+            # (contract §4, hostile 9).
+            return AppleEntitlementResult(
+                "conflict", "purchase is bound to a different account", purchase_id=purchase_id
+            )
+
+        # PURCHASED tokenless -> permanent legacy claim. The UNIQUE lineage
+        # constraint selects the single first claimant (contract §5).
+        cur.execute(
+            "SELECT * FROM legacy_claims WHERE provider = ? AND original_transaction_id = ?",
+            (provider, original_transaction_id),
+        )
+        claim = cur.fetchone()
+        if claim is None:
+            try:
+                cur.execute(
+                    """INSERT INTO legacy_claims
+                           (id, provider, original_transaction_id, claimant_account_id,
+                            evidence_key, result, claimed_at)
+                         VALUES (?, ?, ?, ?, ?, 'granted', ?)""",
+                    (str(uuid.uuid4()), provider, original_transaction_id, account_id, transaction_id, now),
+                )
+            except sqlite3.IntegrityError:
+                cur.execute(
+                    "SELECT * FROM legacy_claims WHERE provider = ? AND original_transaction_id = ?",
+                    (provider, original_transaction_id),
+                )
+                claim = cur.fetchone()
+        if claim is not None and claim["claimant_account_id"] != account_id:
+            return AppleEntitlementResult(
+                "conflict", "purchase already claimed by another account", purchase_id=purchase_id
+            )
+        # Winner: fresh claim, or idempotent retry by the same account.
+        self._upsert_grant(cur, purchase_id, account_id, "direct", expires_ms, now)
+        self._record_set_token_op(cur, provider, original_transaction_id, account_id, now)
+        return AppleEntitlementResult("legacy_granted", purchase_id=purchase_id)
+
+    def _upsert_grant(self, cur, purchase_id, account_id, grant_kind, expires_ms, now) -> None:
+        expires_at = _ms_to_iso(expires_ms)
+        cur.execute(
+            "SELECT id FROM entitlement_grants WHERE purchase_id = ? AND account_id = ?",
+            (purchase_id, account_id),
+        )
+        g = cur.fetchone()
+        if g:
+            cur.execute(
+                """UPDATE entitlement_grants
+                      SET grant_kind = ?, state = 'active',
+                          effective_at = COALESCE(effective_at, ?),
+                          expires_at = ?, revoked_at = NULL, updated_at = ?
+                    WHERE id = ?""",
+                (grant_kind, now, expires_at, now, g["id"]),
+            )
+        else:
+            cur.execute(
+                """INSERT INTO entitlement_grants
+                       (id, purchase_id, account_id, grant_kind, state, effective_at,
+                        expires_at, revoked_at, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, 'active', ?, ?, NULL, ?, ?)""",
+                (str(uuid.uuid4()), purchase_id, account_id, grant_kind, now, expires_at, now, now),
+            )
+
+    def _revoke_grants_for_purchase(self, cur, purchase_id, now, only_account: Optional[str] = None) -> None:
+        if only_account is not None:
+            cur.execute(
+                "UPDATE entitlement_grants SET state = 'revoked', revoked_at = ?, updated_at = ? "
+                "WHERE purchase_id = ? AND account_id = ? AND state = 'active'",
+                (now, now, purchase_id, only_account),
+            )
+        else:
+            cur.execute(
+                "UPDATE entitlement_grants SET state = 'revoked', revoked_at = ?, updated_at = ? "
+                "WHERE purchase_id = ? AND state = 'active'",
+                (now, now, purchase_id),
+            )
+
+    def _record_set_token_op(self, cur, provider, original_transaction_id, account_id, now) -> None:
+        with contextlib.suppress(sqlite3.IntegrityError):
+            cur.execute(
+                """INSERT INTO provider_operations
+                       (id, provider, op_kind, original_transaction_id, account_id,
+                        state, attempts, created_at, updated_at)
+                     VALUES (?, ?, 'set_app_account_token', ?, ?, 'pending', 0, ?, ?)""",
+                (str(uuid.uuid4()), provider, original_transaction_id, account_id, now, now),
+            )
+
+    def apply_apple_notification(
+        self,
+        *,
+        notification_uuid: str,
+        notification_type: str,
+        original_transaction_id: str,
+        signed_ms: int,
+        subtype: Optional[str] = None,
+        ownership_type: Optional[str] = None,
+        beneficiary_account_id: Optional[str] = None,
+        expires_ms: Optional[int] = None,
+        provider: str = "apple",
+    ) -> str:
+        """Apply one verified App Store Server Notification V2. Deduped by
+        notificationUUID; older-than-current events are ignored, and on an EQUAL
+        provider timestamp a terminal state deterministically beats an active
+        event so a refund/revoke/expire can never be resurrected (contract §3,
+        hostile 15/16; P0 equal-timestamp resurrection).
+
+        `ownership_type` is the verified nested-transaction ownership. A
+        FAMILY_SHARED-scoped terminal event revokes ONLY a proven beneficiary
+        grant; if no beneficiary can be proven it is parked as a non-destructive
+        unresolved event rather than mass-revoking every beneficiary (contract
+        §6; P0 tokenless family revoke)."""
+
+        terminal = {
+            "REFUND": "refunded",
+            "REVOKE": "revoked",
+            "EXPIRED": "expired",
+            "GRACE_PERIOD_EXPIRED": "expired",
+        }
+        active = {"SUBSCRIBED", "DID_RENEW", "OFFER_REDEEMED", "RESUBSCRIBE"}
+
+        def _do() -> str:
+            cur = self._conn.cursor()
+            now = _now_iso()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                try:
+                    cur.execute(
+                        "INSERT INTO provider_transactions (provider, event_id, kind, outcome, received_at) "
+                        "VALUES (?, ?, 'notification', ?, ?)",
+                        (provider, notification_uuid, notification_type, now),
+                    )
+                except sqlite3.IntegrityError:
+                    cur.execute("COMMIT")
+                    return "duplicate"
+
+                cur.execute(
+                    "SELECT * FROM provider_purchases WHERE provider = ? AND original_transaction_id = ?",
+                    (provider, original_transaction_id),
+                )
+                purchase = cur.fetchone()
+                if purchase is None:
+                    cur.execute("COMMIT")
+                    return "unknown_purchase"
+
+                stored_signed = purchase["latest_signed_ms"] or 0
+                stored_state = purchase["lifecycle_state"]
+                is_terminal_event = notification_type in terminal
+                is_active_event = notification_type in active
+                # Out-of-order guard: ignore an event strictly older than the
+                # newest we've already applied. Current provider state wins.
+                if signed_ms < stored_signed:
+                    cur.execute("COMMIT")
+                    return "stale"
+                # Equal-timestamp precedence (P0): a terminal state beats an
+                # active event on a tie, so an equal-or-older active event can
+                # never resurrect a refunded/revoked/expired purchase. Terminal
+                # events still apply on a tie (terminal-over-active), preserving
+                # idempotence for a re-delivered terminal notification.
+                if (
+                    signed_ms == stored_signed
+                    and is_active_event
+                    and stored_state in _TERMINAL_STATES
+                ):
+                    cur.execute("COMMIT")
+                    return "stale"
+
+                if is_terminal_event:
+                    new_state = terminal[notification_type]
+                    if ownership_type == "FAMILY_SHARED":
+                        # Family-scoped revoke: only a cryptographically present,
+                        # valid beneficiary token that maps to an EXISTING family
+                        # grant proves whom to revoke. Never touch the purchase
+                        # lifecycle or any other beneficiary/purchaser grant.
+                        if beneficiary_account_id is not None and _purchase_has_active_grant(
+                            cur, purchase["id"], beneficiary_account_id
+                        ):
+                            self._revoke_grants_for_purchase(
+                                cur, purchase["id"], now, only_account=beneficiary_account_id
+                            )
+                            outcome = "beneficiary_revoked"
+                        else:
+                            # No provable beneficiary -> fail closed: park the
+                            # event for provider reconciliation, mutate nothing.
+                            self._record_unresolved_event(
+                                cur, provider, notification_uuid, notification_type,
+                                original_transaction_id, "family_revoke_no_provable_beneficiary", now,
+                            )
+                            outcome = "unresolved_beneficiary"
+                    else:
+                        # Purchaser/direct-scoped terminal: the whole lineage ends.
+                        cur.execute(
+                            "UPDATE provider_purchases SET lifecycle_state = ?, latest_signed_ms = ?, updated_at = ? WHERE id = ?",
+                            (new_state, signed_ms, now, purchase["id"]),
+                        )
+                        self._revoke_grants_for_purchase(cur, purchase["id"], now)
+                        outcome = new_state
+                elif is_active_event:
+                    cur.execute(
+                        "UPDATE provider_purchases SET lifecycle_state = 'active', latest_signed_ms = ?, "
+                        "expires_ms = COALESCE(?, expires_ms), updated_at = ? WHERE id = ?",
+                        (signed_ms, expires_ms, now, purchase["id"]),
+                    )
+                    # Re-activate this purchase's grants and refresh expiry.
+                    cur.execute(
+                        "UPDATE entitlement_grants SET state = 'active', revoked_at = NULL, "
+                        "expires_at = COALESCE(?, expires_at), updated_at = ? WHERE purchase_id = ?",
+                        (_ms_to_iso(expires_ms), now, purchase["id"]),
+                    )
+                    outcome = "active"
+                else:
+                    outcome = "ignored"
+
+                cur.execute("COMMIT")
+                return outcome
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
+
+        return self._run(_do).result()
+
+    def _record_unresolved_event(
+        self, cur, provider, notification_uuid, notification_type,
+        original_transaction_id, reason, now,
+    ) -> None:
+        with contextlib.suppress(sqlite3.IntegrityError):
+            cur.execute(
+                """INSERT INTO provider_unresolved_events
+                       (id, provider, notification_uuid, notification_type,
+                        original_transaction_id, reason, created_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (str(uuid.uuid4()), provider, notification_uuid, notification_type,
+                 original_transaction_id, reason, now),
+            )
+
+    # ---- Google Play provider projection (provider_purchases + entitlement_grants) ----
+
+    def record_provider_notification(
+        self, provider: str, event_id: str, notification_type: str
+    ) -> bool:
+        """Reserve a durable notification for processing.
+
+        Completed messages are duplicates. A pending message is deliberately
+        retryable after a transient failure or process crash.
+        """
+
+        def _do() -> bool:
+            cur = self._conn.cursor()
+            try:
+                cur.execute(
+                    "INSERT INTO provider_transactions (provider, event_id, kind, outcome, received_at) "
+                    "VALUES (?, ?, 'notification', ?, ?)",
+                    (provider, event_id, f"pending:{notification_type}", _now_iso()),
+                )
                 return True
             except sqlite3.IntegrityError:
-                return False
+                row = cur.execute(
+                    "SELECT outcome FROM provider_transactions WHERE provider = ? AND event_id = ?",
+                    (provider, event_id),
+                ).fetchone()
+                return bool(row and row["outcome"].startswith("pending:"))
+
+        return self._run(_do).result()
+
+    def complete_provider_notification(
+        self, provider: str, event_id: str, outcome: str
+    ) -> None:
+        """Mark a reserved inbox message completed only after projection."""
+
+        def _do() -> None:
+            self._conn.execute(
+                "UPDATE provider_transactions SET outcome = ? "
+                "WHERE provider = ? AND event_id = ? AND outcome LIKE 'pending:%'",
+                (f"completed:{outcome}", provider, event_id),
+            )
+
+        self._run(_do).result()
+
+    def apply_google_purchase(
+        self,
+        *,
+        account_id: Optional[str],
+        purchase_token: str,
+        subscription_id: str,
+        obfuscated_account_id: Optional[str],
+        lifecycle_state: str,
+        entitled: bool,
+        hard_terminal: bool,
+        signed_ms: int,
+        expires_ms: Optional[int] = None,
+        environment: str = "production",
+        linked_purchase_token: Optional[str] = None,
+        acknowledged: bool = False,
+        provider: str = "google",
+    ) -> GoogleEntitlementResult:
+        """Project ONE server-verified Google Play subscription snapshot into the
+        same append-only provider_purchases -> entitlement_grants model Apple and
+        Stripe use, keyed by the purchase token as the lineage id (contract §3).
+
+        The snapshot MUST come from a server-side Developer API re-query — never
+        from a client or an RTDN payload. `entitled`/`hard_terminal`/
+        `lifecycle_state` are the normalized decision the verified provider state
+        yields; this method only persists it deterministically and idempotently.
+
+        Beneficiary binding (contract §1/§4):
+          * `obfuscated_account_id` (obfuscatedExternalAccountId, set by the
+            client at purchase) is the authoritative person binding when present.
+            On the authenticated direct-sync path a value that disagrees with the
+            caller's `account_id` is a hard conflict — a token cannot be claimed
+            across accounts.
+          * absent it, the first authenticated account to register the token wins
+            via the shared legacy_claims lineage lock; a later different account
+            conflicts.
+          * `account_id` is None on the unauthenticated RTDN path: an existing
+            lineage's grants are reconciled in place, and a brand-new purchase
+            with a provable obfuscated beneficiary is bound, but a beneficiary we
+            cannot prove is recorded 'unbound' rather than guessed.
+
+        Terminal precedence: a hard-terminal state (refunded/revoked/replaced)
+        can never be resurrected, and an equal-or-older active re-query can never
+        revive an expired lineage (deterministic, replay-safe)."""
+
+        def _do() -> GoogleEntitlementResult:
+            cur = self._conn.cursor()
+            now = _now_iso()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                result = self._apply_google_purchase_locked(
+                    cur, now,
+                    account_id=account_id,
+                    purchase_token=purchase_token,
+                    subscription_id=subscription_id,
+                    obfuscated_account_id=obfuscated_account_id,
+                    lifecycle_state=lifecycle_state,
+                    entitled=entitled,
+                    hard_terminal=hard_terminal,
+                    signed_ms=signed_ms,
+                    expires_ms=expires_ms,
+                    environment=environment,
+                    linked_purchase_token=linked_purchase_token,
+                    acknowledged=acknowledged,
+                    provider=provider,
+                )
+                cur.execute("COMMIT")
+                return result
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
+
+        return self._run(_do).result()
+
+    def _apply_google_purchase_locked(
+        self, cur, now, *, account_id, purchase_token, subscription_id,
+        obfuscated_account_id, lifecycle_state, entitled, hard_terminal,
+        signed_ms, expires_ms, environment, linked_purchase_token,
+        acknowledged, provider,
+    ) -> GoogleEntitlementResult:
+        assert purchase_token and subscription_id, "missing google purchase identifiers"
+
+        # Resolve both sides of a replacement before touching either lineage.
+        # A linked token is continuity evidence, never authority to transfer a
+        # subscription between canonical accounts.
+        new_beneficiary = obfuscated_account_id or account_id
+        if new_beneficiary is None:
+            cur.execute(
+                """SELECT eg.account_id
+                     FROM provider_purchases pp
+                     JOIN entitlement_grants eg ON eg.purchase_id = pp.id
+                    WHERE pp.provider = ? AND pp.original_transaction_id = ?
+                    ORDER BY CASE eg.state WHEN 'active' THEN 0 ELSE 1 END
+                    LIMIT 1""",
+                (provider, purchase_token),
+            )
+            new_row = cur.fetchone()
+            new_beneficiary = new_row["account_id"] if new_row else None
+
+        old = None
+        old_beneficiary = None
+        if linked_purchase_token and linked_purchase_token != purchase_token:
+            cur.execute(
+                "SELECT * FROM provider_purchases WHERE provider = ? AND original_transaction_id = ?",
+                (provider, linked_purchase_token),
+            )
+            old = cur.fetchone()
+            if old is not None:
+                cur.execute(
+                    """SELECT account_id FROM entitlement_grants
+                        WHERE purchase_id = ?
+                        ORDER BY CASE state WHEN 'active' THEN 0 ELSE 1 END
+                        LIMIT 1""",
+                    (old["id"],),
+                )
+                old_grant = cur.fetchone()
+                old_beneficiary = old_grant["account_id"] if old_grant else None
+                if (
+                    old_beneficiary is not None
+                    and new_beneficiary is not None
+                    and old_beneficiary != new_beneficiary
+                ):
+                    return GoogleEntitlementResult(
+                        "conflict",
+                        "linked purchase belongs to a different account",
+                        lifecycle_state=lifecycle_state,
+                    )
+
+        cur.execute(
+            "SELECT * FROM provider_purchases WHERE provider = ? AND original_transaction_id = ?",
+            (provider, purchase_token),
+        )
+        existing = cur.fetchone()
+
+        if existing is not None:
+            stored_state = existing["lifecycle_state"]
+            stored_signed = existing["latest_signed_ms"] or 0
+            # Hard-terminal is permanent. A still-active re-query (a stale client
+            # replay, or a provider lag) must not resurrect it.
+            if stored_state in _GOOGLE_HARD_TERMINAL and not hard_terminal:
+                if entitled:
+                    return GoogleEntitlementResult(
+                        "stale", f"{stored_state} purchase cannot be resurrected",
+                        purchase_id=existing["id"], lifecycle_state=stored_state,
+                    )
+                return GoogleEntitlementResult(
+                    "not_active", f"purchase is {stored_state}",
+                    purchase_id=existing["id"], lifecycle_state=stored_state,
+                )
+            # Soft-terminal 'expired': only strictly-newer active supersedes.
+            if stored_state == "expired" and entitled and signed_ms <= stored_signed:
+                return GoogleEntitlementResult(
+                    "stale", "stale active cannot resurrect an expired purchase",
+                    purchase_id=existing["id"], lifecycle_state="expired",
+                )
+            # Generic out-of-order guard: ignore strictly-older non-terminal
+            # evidence. A hard-terminal event always applies (safety wins).
+            if signed_ms < stored_signed and not hard_terminal:
+                return GoogleEntitlementResult(
+                    "stale", "older provider evidence ignored",
+                    purchase_id=existing["id"], lifecycle_state=stored_state,
+                )
+
+        purchase_id = existing["id"] if existing else str(uuid.uuid4())
+        effective_signed = max(signed_ms, existing["latest_signed_ms"] or 0) if existing else signed_ms
+
+        if existing is None:
+            cur.execute(
+                """INSERT INTO provider_purchases
+                       (id, provider, original_transaction_id, latest_transaction_id, product_id,
+                        environment, ownership_type, app_account_token, lifecycle_state,
+                        latest_signed_ms, expires_ms, trial_consumed, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, 'PURCHASED', ?, ?, ?, ?, 0, ?, ?)""",
+                (purchase_id, provider, purchase_token, purchase_token, subscription_id,
+                 environment, obfuscated_account_id, lifecycle_state,
+                 effective_signed, expires_ms, now, now),
+            )
+        else:
+            cur.execute(
+                """UPDATE provider_purchases
+                      SET product_id = ?, environment = ?,
+                          app_account_token = COALESCE(app_account_token, ?),
+                          lifecycle_state = ?, latest_signed_ms = ?, expires_ms = ?,
+                          updated_at = ?
+                    WHERE id = ?""",
+                (subscription_id, environment, obfuscated_account_id, lifecycle_state,
+                 effective_signed, expires_ms, now, purchase_id),
+            )
+
+        # Not entitled -> ensure no grant survives, record the durable state.
+        if not entitled:
+            self._revoke_grants_for_purchase(cur, purchase_id, now)
+            return GoogleEntitlementResult(
+                "not_active", f"purchase is {lifecycle_state}",
+                purchase_id=purchase_id, lifecycle_state=lifecycle_state,
+            )
+
+        # ---- entitled: resolve the beneficiary account ----
+
+        # obfuscatedExternalAccountId, when present, is the authoritative binding.
+        if obfuscated_account_id is not None:
+            if account_id is not None and obfuscated_account_id != account_id:
+                # Authenticated caller trying to claim a token bound to someone
+                # else -> deterministic conflict (hostile: token replay across
+                # accounts). Never fall through to a first-claim.
+                return GoogleEntitlementResult(
+                    "conflict", "purchase is bound to a different account",
+                    purchase_id=purchase_id, lifecycle_state=lifecycle_state,
+                )
+            beneficiary = obfuscated_account_id
+        elif account_id is not None:
+            # Tokenless (no obfuscated id): first authenticated claimant wins the
+            # lineage via the shared UNIQUE lock; a later different account 409s.
+            cur.execute(
+                "SELECT * FROM legacy_claims WHERE provider = ? AND original_transaction_id = ?",
+                (provider, purchase_token),
+            )
+            claim = cur.fetchone()
+            if claim is None:
+                try:
+                    cur.execute(
+                        """INSERT INTO legacy_claims
+                               (id, provider, original_transaction_id, claimant_account_id,
+                                evidence_key, result, claimed_at)
+                             VALUES (?, ?, ?, ?, ?, 'granted', ?)""",
+                        (str(uuid.uuid4()), provider, purchase_token, account_id, purchase_token, now),
+                    )
+                except sqlite3.IntegrityError:
+                    cur.execute(
+                        "SELECT * FROM legacy_claims WHERE provider = ? AND original_transaction_id = ?",
+                        (provider, purchase_token),
+                    )
+                    claim = cur.fetchone()
+            if claim is not None and claim["claimant_account_id"] != account_id:
+                return GoogleEntitlementResult(
+                    "conflict", "purchase already claimed by another account",
+                    purchase_id=purchase_id, lifecycle_state=lifecycle_state,
+                )
+            beneficiary = account_id
+        else:
+            # RTDN (no caller) with no provable beneficiary. If the lineage
+            # already has a grant, we've already reactivated it below; otherwise
+            # record it 'unbound' and wait for an authenticated sync to bind it —
+            # never guess who to grant.
+            cur.execute(
+                "SELECT account_id FROM entitlement_grants WHERE purchase_id = ? AND state = 'active' LIMIT 1",
+                (purchase_id,),
+            )
+            existing_grant = cur.fetchone()
+            if existing_grant is None:
+                # Reactivate any previously-revoked grant on this lineage (e.g. an
+                # on-hold recovery arriving before the client re-syncs).
+                cur.execute(
+                    "SELECT account_id FROM entitlement_grants WHERE purchase_id = ? LIMIT 1",
+                    (purchase_id,),
+                )
+                prior = cur.fetchone()
+                if prior is None:
+                    return GoogleEntitlementResult(
+                        "unbound", "no resolvable beneficiary for this purchase yet",
+                        purchase_id=purchase_id, lifecycle_state=lifecycle_state,
+                    )
+                beneficiary = prior["account_id"]
+            else:
+                beneficiary = existing_grant["account_id"]
+
+        # Never grant to an account that does not exist. On the RTDN path an
+        # obfuscatedExternalAccountId is attacker/garbage-influenced; binding a
+        # grant to a non-account would both violate the FK and grant nothing
+        # useful. Record it unbound and wait for an authenticated sync instead.
+        if not _account_exists(cur, beneficiary):
+            return GoogleEntitlementResult(
+                "unbound", "beneficiary account does not exist",
+                purchase_id=purchase_id, lifecycle_state=lifecycle_state,
+            )
+
+        # Replacement continuity (contract §3): mutate OLD only after every NEW
+        # acceptance guard above has passed (terminal/staleness, ownership,
+        # beneficiary resolution, and account existence). The surrounding
+        # transaction then makes OLD revoke + NEW grant atomic: any grant error
+        # rolls both lineages back.
+        if (
+            linked_purchase_token
+            and linked_purchase_token != purchase_token
+            and old is not None
+            and old["lifecycle_state"] not in _GOOGLE_HARD_TERMINAL
+        ):
+            cur.execute(
+                "UPDATE provider_purchases SET lifecycle_state = 'replaced', updated_at = ? WHERE id = ?",
+                (now, old["id"]),
+            )
+            self._revoke_grants_for_purchase(cur, old["id"], now)
+
+        self._upsert_grant(cur, purchase_id, beneficiary, "direct", expires_ms, now)
+
+        ack_pending = False
+        if not acknowledged:
+            self._record_ack_op(cur, provider, purchase_token, beneficiary, now)
+            ack_pending = True
+        return GoogleEntitlementResult(
+            "granted", purchase_id=purchase_id, lifecycle_state=lifecycle_state,
+            acknowledge_pending=ack_pending,
+        )
+
+    def _record_ack_op(self, cur, provider, purchase_token, account_id, now) -> None:
+        """Record a durable, retriable 'acknowledge' op. Acknowledgement is only
+        ever recorded AFTER a successful ownership binding + grant (contract §5),
+        and a transient failure to acknowledge never erases the entitlement."""
+        with contextlib.suppress(sqlite3.IntegrityError):
+            cur.execute(
+                """INSERT INTO provider_operations
+                       (id, provider, op_kind, original_transaction_id, account_id,
+                        state, attempts, created_at, updated_at)
+                     VALUES (?, ?, 'acknowledge', ?, ?, 'pending', 0, ?, ?)""",
+                (str(uuid.uuid4()), provider, purchase_token, account_id, now, now),
+            )
+
+    def list_pending_google_acknowledgements(self, provider: str = "google") -> list[dict]:
+        """Pending/failed acknowledge ops joined to their purchase so a drainer
+        has the (subscription_id, purchase_token) the Developer API needs. Only
+        lineages still holding an active grant are acknowledged — a purchase that
+        was revoked before we could acknowledge is dropped, not acknowledged."""
+
+        def _do() -> list[dict]:
+            cur = self._conn.cursor()
+            cur.execute(
+                """SELECT o.id AS op_id,
+                          o.original_transaction_id AS purchase_token,
+                          p.product_id AS subscription_id,
+                          p.lifecycle_state AS lifecycle_state
+                     FROM provider_operations o
+                     JOIN provider_purchases p
+                       ON p.provider = o.provider
+                      AND p.original_transaction_id = o.original_transaction_id
+                    WHERE o.provider = ? AND o.op_kind = 'acknowledge'
+                      AND o.state IN ('pending', 'failed')""",
+                (provider,),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+        return self._run(_do).result()
+
+    def mark_provider_operation(self, op_id: str, *, state: str, error: Optional[str] = None) -> None:
+        """Advance a durable provider op's retry state (shared by Apple's
+        Set-App-Account-Token and Google's acknowledge ops)."""
+
+        def _do() -> None:
+            self._conn.execute(
+                "UPDATE provider_operations SET state = ?, attempts = attempts + 1, "
+                "last_error = ?, updated_at = ? WHERE id = ?",
+                (state, error, _now_iso(), op_id),
+            )
+
+        self._run(_do).result()
+
+    def list_unresolved_events(self, provider: str = "apple") -> list[dict]:
+        """Durable, non-destructive events awaiting provider reconciliation
+        (e.g. tokenless family revokes). Support-visible; never auto-applied."""
+        def _do() -> list[dict]:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT * FROM provider_unresolved_events WHERE provider = ? ORDER BY created_at",
+                (provider,),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+        return self._run(_do).result()
+
+    def account_entitlement_active(self, account_id: str) -> bool:
+        def _do() -> bool:
+            cur = self._conn.cursor()
+            return _account_has_active_grant(cur, account_id)
+
+        return self._run(_do).result()
+
+    # ---- outbound Set-App-Account-Token reconciliation (retry state) ----
+
+    def list_pending_set_token_operations(self, provider: str = "apple") -> list[dict]:
+        def _do() -> list[dict]:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT * FROM provider_operations WHERE provider = ? "
+                "AND op_kind = 'set_app_account_token' AND state IN ('pending', 'failed')",
+                (provider,),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+        return self._run(_do).result()
+
+    def mark_set_token_operation(self, op_id: str, *, state: str, error: Optional[str] = None) -> None:
+        def _do() -> None:
+            self._conn.execute(
+                "UPDATE provider_operations SET state = ?, attempts = attempts + 1, "
+                "last_error = ?, updated_at = ? WHERE id = ?",
+                (state, error, _now_iso(), op_id),
+            )
+
+        self._run(_do).result()
+
+    def get_set_token_operation(
+        self, original_transaction_id: str, provider: str = "apple"
+    ) -> Optional[dict]:
+        def _do() -> Optional[dict]:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT * FROM provider_operations WHERE provider = ? AND op_kind = 'set_app_account_token' "
+                "AND original_transaction_id = ?",
+                (provider, original_transaction_id),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+        return self._run(_do).result()
+
+    # ---- entitlement read helpers (support-visible durable records) ----
+
+    def get_provider_purchase(
+        self, original_transaction_id: str, provider: str = "apple"
+    ) -> Optional[dict]:
+        def _do() -> Optional[dict]:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT * FROM provider_purchases WHERE provider = ? AND original_transaction_id = ?",
+                (provider, original_transaction_id),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+        return self._run(_do).result()
+
+    def list_entitlement_grants(self, account_id: str) -> list[dict]:
+        def _do() -> list[dict]:
+            cur = self._conn.cursor()
+            cur.execute("SELECT * FROM entitlement_grants WHERE account_id = ?", (account_id,))
+            return [dict(r) for r in cur.fetchall()]
+
+        return self._run(_do).result()
+
+    def get_legacy_claim(
+        self, original_transaction_id: str, provider: str = "apple"
+    ) -> Optional[dict]:
+        def _do() -> Optional[dict]:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT * FROM legacy_claims WHERE provider = ? AND original_transaction_id = ?",
+                (provider, original_transaction_id),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
 
         return self._run(_do).result()
 
@@ -1367,6 +3364,8 @@ def _row_to_account(row: sqlite3.Row | dict) -> Account:
         updated_at=d.get("updated_at") or "",
         daily_count=d.get("daily_count") or 0,
         daily_day=d.get("daily_day"),
+        supabase_sub=d.get("supabase_sub"),
+        deleted_at=d.get("deleted_at"),
     )
 
 
@@ -1389,12 +3388,79 @@ def _new_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+def _new_device_credential() -> str:
+    return secrets.token_urlsafe(48)
+
+
+def _hash_device_credential(credential: str) -> str:
+    return hashlib.sha256(credential.encode("utf-8")).hexdigest()
+
+
 def _now_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 
 
+def _now_ms() -> int:
+    return int(dt.datetime.now(dt.timezone.utc).timestamp() * 1000)
+
+
+def _ms_to_iso(ms: Optional[int]) -> Optional[str]:
+    """Convert an Apple epoch-millisecond timestamp to a UTC ISO-8601 string
+    (second precision), matching _now_iso() so grant expiry compares correctly."""
+    if ms is None:
+        return None
+    return dt.datetime.fromtimestamp(ms / 1000, tz=dt.timezone.utc).isoformat(timespec="seconds")
+
+
 def _today_utc() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+
+
+def _insert_anonymous_account(cur: sqlite3.Cursor, now: str) -> str:
+    """Insert a fresh anonymous account (no provider identity) and return its
+    UUID. Caller supplies the cursor so this joins the surrounding transaction."""
+    account_id = str(uuid.uuid4())
+    cur.execute(
+        "INSERT INTO accounts (id, plan, created_at, updated_at) VALUES (?, 'free', ?, ?)",
+        (account_id, now, now),
+    )
+    return account_id
+
+
+def _purchase_has_active_grant(cur: sqlite3.Cursor, purchase_id: str, account_id: str) -> bool:
+    """True when `account_id` holds an active grant on this specific purchase —
+    i.e. it is a proven beneficiary/purchaser of this lineage. Used to gate a
+    family-scoped revoke so a token that doesn't map to a known beneficiary
+    can't cause any mutation (contract §6)."""
+    cur.execute(
+        "SELECT 1 FROM entitlement_grants WHERE purchase_id = ? AND account_id = ? "
+        "AND state = 'active' LIMIT 1",
+        (purchase_id, account_id),
+    )
+    return cur.fetchone() is not None
+
+
+def _account_exists(cur: sqlite3.Cursor, account_id: Optional[str]) -> bool:
+    """True when `account_id` names a real account row. Gates provider grants so
+    a garbage/attacker-supplied obfuscatedExternalAccountId can never bind."""
+    if not account_id:
+        return False
+    cur.execute("SELECT 1 FROM accounts WHERE id = ? LIMIT 1", (account_id,))
+    return cur.fetchone() is not None
+
+
+def _account_has_active_grant(cur: sqlite3.Cursor, account_id: str) -> bool:
+    """True when the account holds at least one active, unexpired entitlement
+    grant. `expires_at` is an ISO string comparable lexicographically against
+    _now_iso() (both are UTC, second precision)."""
+    cur.execute(
+        """SELECT 1 FROM entitlement_grants
+              WHERE account_id = ? AND state = 'active'
+                AND (expires_at IS NULL OR expires_at > ?)
+              LIMIT 1""",
+        (account_id, _now_iso()),
+    )
+    return cur.fetchone() is not None
 
 
 # ---------------------------------------------------------------------------
@@ -1405,13 +3471,69 @@ def _today_utc() -> str:
 _store: Optional[Store] = None
 _store_lock = threading.Lock()
 
+# Render mounts a persistent disk at /data for srv-d9gg8ngk1i2s738lngd0.
+# A DB written anywhere else on Render (the default "./tono.db" in the
+# container's ephemeral filesystem, or any path outside /data) is silently
+# wiped on every deploy/restart — every device row, account, and Stripe
+# linkage lost. That is a data-loss trap, not a soft config warning.
+_RENDER_PERSISTENT_ROOT = "/data"
+
+
+class EphemeralDatabasePathError(RuntimeError):
+    """Raised on Render when TONO_DB_PATH is unset or points outside the
+    persistent /data disk — where SQLite would be wiped on every deploy."""
+
+
+def _is_render() -> bool:
+    """Render injects RENDER=true into every service's environment. We treat
+    any truthy value as "running on Render" so the fail-closed guard cannot be
+    defeated by a lowercase/quoted value."""
+    return (os.environ.get("RENDER", "") or "").strip().lower() in {"true", "1", "yes"}
+
+
+def resolve_db_path() -> str:
+    """Resolve the SQLite path, failing CLOSED on Render (G-1).
+
+    On Render (``RENDER`` truthy), production MUST write to the persistent
+    ``/data`` disk. We reject a missing ``TONO_DB_PATH`` and any resolved path
+    outside ``/data`` rather than silently opening an ephemeral DB that is
+    wiped on the next deploy. Off Render (local/dev/test), the historical
+    ``./tono.db`` default is preserved unchanged.
+    """
+    raw = os.environ.get("TONO_DB_PATH")
+
+    if not _is_render():
+        # Local/dev/test: preserve the long-standing default exactly.
+        return raw if raw else "./tono.db"
+
+    # --- Render: fail closed ---
+    if not raw or not raw.strip():
+        raise EphemeralDatabasePathError(
+            "TONO_DB_PATH is unset on Render. Production must write SQLite to the "
+            f"persistent disk at {_RENDER_PERSISTENT_ROOT} (e.g. {_RENDER_PERSISTENT_ROOT}/tono.db); "
+            "an unset path would open an ephemeral DB that is wiped on every deploy."
+        )
+    # Normalize to an absolute, symlink-free path and require containment in
+    # /data. ``os.path.realpath`` collapses ``..`` and symlink escapes so a
+    # value like ``/data/../tmp/x`` cannot slip past the containment check.
+    resolved = os.path.realpath(raw)
+    persistent_root = os.path.realpath(_RENDER_PERSISTENT_ROOT)
+    if resolved != persistent_root and not resolved.startswith(persistent_root + os.sep):
+        raise EphemeralDatabasePathError(
+            f"TONO_DB_PATH={raw!r} resolves to {resolved!r}, which is outside the "
+            f"persistent disk at {persistent_root} on Render. SQLite there would be "
+            "wiped on every deploy. Set TONO_DB_PATH to a path under "
+            f"{persistent_root} (e.g. {persistent_root}/tono.db)."
+        )
+    return raw
+
 
 def get_store() -> Store:
     global _store
     if _store is None:
         with _store_lock:
             if _store is None:
-                path = os.environ.get("TONO_DB_PATH", "./tono.db")
+                path = resolve_db_path()
                 _store = Store(path)
     return _store
 

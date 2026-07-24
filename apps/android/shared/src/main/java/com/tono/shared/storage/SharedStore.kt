@@ -11,12 +11,14 @@ object SharedKeys {
     const val PROVIDER          = "tc.provider"
     const val PREFERRED_VOICE   = "tc.preferredVoice"
     const val AXES              = "tc.axes"
-    const val FREE_TIER_USED    = "tc.freeTierUsed"
-    const val FREE_TIER_DAY     = "tc.freeTierDay"
+    // NOTE: the client-side free-tier counter keys (freeTierUsed/freeTierDay)
+    // were removed. There is no free daily tier; rewrite authorization is
+    // server-authoritative (the backend fails closed with HTTP 402).
     const val PRO_UNLOCKED      = "tc.proUnlocked"
     const val LAST_REWRITE_VOICE = "tc.lastRewriteVoice"
     const val BACKEND_URL       = "tc.backendURL"
     const val REGISTERED_AT     = "tc.registeredAt"
+    const val ACCOUNT_ID        = "tc.accountId"
     const val KEYBOARD_LOADED   = "tc.keyboardLoaded"
     const val COACH_USE_COUNT   = "tc.coachUseCount"
     const val DRAFT_HISTORY     = "tc.draftHistory"

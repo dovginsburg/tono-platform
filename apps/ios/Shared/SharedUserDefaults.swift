@@ -11,14 +11,20 @@ public enum SharedKeys {
     public static let apiKey = "tc.apiKey"
     public static let preferredVoice = "tc.preferredVoice"
     public static let axes = "tc.axes"
-    public static let freeTierUsed = "tc.freeTierUsed"
-    public static let freeTierDay = "tc.freeTierDay"
-    public static let freeTierLimit = "tc.freeTierLimit"
     public static let proUnlocked = "tc.proUnlocked"
     public static let lastRewriteVoice = "tc.lastRewriteVoice"
-    // Apple-managed 7-day free trial state (set by StoreKit 2 from
-    // currentEntitlements; read by both host app and keyboard extension).
+    // Apple-managed free-trial state — the introductory 14-day free trial
+    // configured in App Store Connect, mirrored by StoreKit 2 from
+    // currentEntitlements; read by both host app and keyboard extension. There
+    // is no client-side free tier; entitlement is server-authoritative.
     public static let inFreeTrial = "tc.inFreeTrial"
+    // Tri-state entitlement (build 91): the last backend verdict —
+    // "entitled" | "notEntitled" | "unknown". `proUnlocked` above is a mirror;
+    // entitlement authorization is freshness-aware and reads THIS (see
+    // TonePreferences.isProAuthoritative), so a stale cached Bool is never
+    // presented as authoritative when the backend can't be reached.
+    public static let entitlementState = "tc.entitlementState"
+    public static let entitlementCheckedAt = "tc.entitlementCheckedAt"
 
     // Backend-proxy auth (v0.2). The server holds the LLM keys; the
     // client just carries a bearer token + the device id it registered
@@ -100,6 +106,13 @@ public enum SharedKeys {
     // JSON-encoded [String] of Unicode glyphs; read lazily by the
     // keyboard extension when the emoji panel mounts (never on startup).
     public static let emojiRecents = "tc.emojiRecents"
+
+    // Live Tone (build-90 experiment) control keys — opt-in, user kill switch,
+    // remote-disable directive, and the user-declared host allowlist — are
+    // defined separately in LiveTonePrivacy.swift (`LiveTonePrivacyKeys`) so
+    // that self-contained control surface and its standalone verifier need no
+    // UIKit/networking imports. They share this `tc.` namespace and the
+    // `group.com.tonoit.shared` App Group suite.
 }
 
 public enum SharedStore {
@@ -109,16 +122,30 @@ public enum SharedStore {
     }
 }
 
+/// Tri-state entitlement (build 91 §7). Fail-closed: only `.entitled` presents
+/// Pro as authoritative. `.unknown` (backend unreachable/invalid) must never let
+/// a cached Bool stand in as authority — there is no offline Pro allowance.
+public enum EntitlementState: String {
+    case entitled
+    case notEntitled
+    case unknown
+}
+
 public struct TonePreferences {
     public var provider: LLMProvider
     public var apiKey: String?
     public var preferredVoice: String?
     public var axes: [RewriteAxis]
     public var proUnlocked: Bool
-    /// True when the user is currently in Apple's introductory 7-day free
+    /// True when the user is currently in Apple's introductory 14-day free
     /// trial (configured in App Store Connect). Mirrored from StoreKit
     /// transactions so the keyboard extension can show "X days left".
     public var inFreeTrial: Bool
+    /// Last backend entitlement verdict. `nil` = never recorded (legacy install
+    /// before build 91, or not yet reconciled). Per build 91 §7 a missing/
+    /// unavailable state fails closed — it is NEVER allowed to fall back to a
+    /// cached `proUnlocked` Bool as authority.
+    public var entitlementState: EntitlementState?
 
     public init() {
         let d = SharedStore.defaults
@@ -132,6 +159,21 @@ public struct TonePreferences {
         self.axes = stored.compactMap(RewriteAxis.init(rawValue:))
         self.proUnlocked = d.bool(forKey: SharedKeys.proUnlocked)
         self.inFreeTrial = d.bool(forKey: SharedKeys.inFreeTrial)
+        self.entitlementState = d.string(forKey: SharedKeys.entitlementState).flatMap(EntitlementState.init(rawValue:))
+    }
+
+    /// Freshness-aware Pro authorization for extensions and gated features — the
+    /// SOLE authority for presenting/gating Pro (build 91 §7). Only a fresh
+    /// backend `.entitled` verdict authorizes Pro. `.notEntitled`, `.unknown`,
+    /// AND `nil` (never reconciled / legacy) all fail closed. A cached
+    /// `proUnlocked` Bool is deliberately NOT consulted here: it is a
+    /// write-only compatibility mirror and can never authorize Pro on its own.
+    public var isProAuthoritative: Bool {
+        switch entitlementState {
+        case .entitled: return true
+        case .notEntitled, .unknown: return false
+        case nil: return false  // fail closed — no cached-Bool fallback
+        }
     }
 
     public func save() {
@@ -147,41 +189,34 @@ public struct TonePreferences {
         d.set(preferredVoice, forKey: SharedKeys.preferredVoice)
         d.set(axes.map(\.rawValue), forKey: SharedKeys.axes)
         d.set(proUnlocked, forKey: SharedKeys.proUnlocked)
-    }
-}
-
-public struct FreeTierGate {
-    public let dailyLimit: Int
-
-    public init(dailyLimit: Int = 10) {
-        self.dailyLimit = dailyLimit
-    }
-
-    public var usedToday: Int {
-        SharedStore.defaults.integer(forKey: SharedKeys.freeTierUsed)
-    }
-
-    public var dayStamp: String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = .current
-        return f.string(from: Date())
-    }
-
-    /// Returns true if the user can perform another rewrite today.
-    public func canAnalyze() -> Bool {
-        if TonePreferences().proUnlocked { return true }
-        let stored = SharedStore.defaults.string(forKey: SharedKeys.freeTierDay)
-        if stored != dayStamp {
-            SharedStore.defaults.set(0, forKey: SharedKeys.freeTierUsed)
-            SharedStore.defaults.set(dayStamp, forKey: SharedKeys.freeTierDay)
-            return true
+        if let entitlementState {
+            d.set(entitlementState.rawValue, forKey: SharedKeys.entitlementState)
+            d.set(Date().timeIntervalSince1970, forKey: SharedKeys.entitlementCheckedAt)
         }
-        return usedToday < dailyLimit
     }
 
-    public func recordUse() {
-        if TonePreferences().proUnlocked { return }
-        SharedStore.defaults.set(usedToday + 1, forKey: SharedKeys.freeTierUsed)
+    /// Record a fresh backend verdict from any surface (host app or keyboard
+    /// extension). `.notEntitled` immediately clears the shared Pro mirror;
+    /// `.unknown` leaves the mirror untouched but flips authorization closed via
+    /// `isProAuthoritative` (build 91 §7).
+    public static func recordEntitlement(_ state: EntitlementState, isPro: Bool) {
+        let d = SharedStore.defaults
+        d.set(state.rawValue, forKey: SharedKeys.entitlementState)
+        d.set(Date().timeIntervalSince1970, forKey: SharedKeys.entitlementCheckedAt)
+        switch state {
+        case .entitled:
+            d.set(true, forKey: SharedKeys.proUnlocked)
+        case .notEntitled:
+            d.set(false, forKey: SharedKeys.proUnlocked)
+            d.set(false, forKey: SharedKeys.inFreeTrial)
+        case .unknown:
+            break  // keep the last-known mirror; authorization already fails closed
+        }
     }
 }
+
+// NOTE: the former client-side `FreeTierGate` (a device-local "N free rewrites
+// per day" counter) has been removed. There is no free daily tier: rewrite
+// authorization is server-authoritative (the backend fails closed with HTTP 402
+// unless an active trial/paid subscription or durable grant exists). No client
+// self-grants a free allowance.

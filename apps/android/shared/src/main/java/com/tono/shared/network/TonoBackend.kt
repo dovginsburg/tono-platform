@@ -32,6 +32,7 @@ import kotlin.coroutines.resumeWithException
 
 @Serializable data class TonoMe(
     @SerialName("device_id")            val deviceId: String,
+    @SerialName("account_id")           val accountId: String,
     val plan: String,
     @SerialName("is_pro")               val isPro: Boolean,
     @SerialName("used_today")           val usedToday: Int,
@@ -84,7 +85,9 @@ object TonoBackend {
     // MARK: - Public API
 
     suspend fun registerIfNeeded(appVersion: String): TonoMe {
-        if (SecureStore.isRegistered()) {
+        val existingToken = SecureStore.get(KeychainKeys.API_TOKEN)?.takeIf { it.isNotBlank() }
+        val existingCredential = SecureStore.get(KeychainKeys.DEVICE_CREDENTIAL)?.takeIf { it.isNotBlank() }
+        if (existingToken != null && existingCredential != null) {
             runCatching { return me() }
         }
         val deviceId = SecureStore.get(KeychainKeys.DEVICE_ID)?.takeIf { it.isNotBlank() }
@@ -92,18 +95,27 @@ object TonoBackend {
 
         @Serializable data class Req(
             val device_id: String,
+            val device_credential: String? = null,
             val platform: String,
             val app_version: String,
         )
         @Serializable data class Resp(
             val device_id: String,
             val api_token: String,
+            val device_credential: String? = null,
             val plan: String,
             val is_pro: Boolean,
         )
-        val resp: Resp = post("/v1/register", Req(deviceId, "android", appVersion), authorize = false)
+        val resp: Resp = post(
+            "/v1/register",
+            Req(deviceId, existingCredential, "android", appVersion),
+            authorize = existingToken != null,
+        )
         SecureStore.set(KeychainKeys.DEVICE_ID, resp.device_id)
         SecureStore.set(KeychainKeys.API_TOKEN, resp.api_token)
+        resp.device_credential?.takeIf { it.isNotBlank() }?.let {
+            SecureStore.set(KeychainKeys.DEVICE_CREDENTIAL, it)
+        }
         return me()
     }
 
@@ -182,6 +194,7 @@ object TonoBackend {
 
     private fun cacheAccountState(me: TonoMe) {
         SharedStore.putBoolean(SharedKeys.PRO_UNLOCKED, me.isPro)
+        SharedStore.putString(SharedKeys.ACCOUNT_ID, me.accountId)
         SharedStore.putString(SharedKeys.REGISTERED_AT, System.currentTimeMillis().toString())
     }
 
@@ -249,6 +262,13 @@ object TonoBackend {
                     response.use { resp ->
                         val bodyStr = resp.body?.string() ?: ""
                         when {
+                            // 402 = the server-authoritative entitlement gate
+                            // (there is no free tier): an active trial or paid
+                            // subscription is required. Distinct from the 429
+                            // per-IP rate limit below.
+                            resp.code == 402 -> cont.resumeWithException(
+                                ToneEngineError.Backend("An active trial or subscription is required. Open Tono to continue.")
+                            )
                             resp.code == 429 -> {
                                 val used = runCatching {
                                     json.decodeFromString<ErrorBody>(bodyStr).error.usedToday ?: 0

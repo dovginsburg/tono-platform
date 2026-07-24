@@ -6,6 +6,7 @@
 // most recent changelog entries so the page is never blank.
 
 import type { Metadata } from 'next'
+import Link from 'next/link'
 
 export const metadata: Metadata = {
   title: 'blog — tono',
@@ -37,12 +38,12 @@ export default function BlogPage() {
   return (
     <main className="min-h-screen bg-tono-bg text-tono-text font-sans antialiased">
       <div className="max-w-3xl mx-auto px-6 py-16 md:py-24">
-        <a
+        <Link
           href="/"
           className="text-sm text-tono-text-soft hover:text-tono-text transition min-h-[44px] inline-flex items-center"
         >
           ← back
-        </a>
+        </Link>
 
         <span className="block mt-8 text-[11px] uppercase tracking-wider font-semibold text-tono-accent-light">
           blog
@@ -79,7 +80,7 @@ export default function BlogPage() {
         <p className="mt-12 text-[13px] text-tono-text-softer text-center">
           for the full changelog, see{' '}
           <a
-            href="https://github.com/dovginsburg/Tono-/commits/main"
+            href="https://github.com/dovginsburg/tono-platform/commits/main"
             className="underline hover:text-tono-text"
           >
             github

@@ -3,6 +3,5 @@ Initial release of Tono – your AI keyboard coach.
 Features:
 • Real-time tone analysis
 • Four rewrite options (Warmer, Clearer, Funnier, Safer)
-• 10 free rewrites daily
-• Pro subscription for unlimited use
+• 14-day free trial, then Pro for unlimited use
 • Style memory and weekly digest

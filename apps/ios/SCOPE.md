@@ -15,12 +15,12 @@
 - **Product:** a pre-send text-rewriting wedge, embedded in the iOS / Android keyboard (and later Slack, Teams, Outlook, macOS, iMessage). You draft a message → see 3–4 rewrites on different tone axes (warmer / clearer / funnier / safer) plus a risk badge → tap to insert.
 - **Beachhead:** neurodivergent adults navigating social nuance (ADHD, autism-spectrum). Highest pain-per-dollar, strongest organic community, low sales friction. **Launch here.**
 - **Parallel revenue track:** B2B manager-feedback use case on Slack/Teams/Outlook. Highest ARPU, longest sales cycle. Build second, ship via Dov's network.
-- **Pricing:** **$3/mo** consumer Pro · **$25/seat/mo** B2B · free tier with 10 rewrites/day · family plan $19/mo covers 5 · enterprise custom.
+- **Pricing:** **$3.99/mo or $39.99/yr** consumer Pro after an eligible 14-day trial · **$25/seat/mo** B2B · family plan $19/mo covers 5 · enterprise custom.
 - **MVP:** **8 weeks**, single iOS Custom Keyboard extension, backend = an Ezra/Hermes profile with a thin REST API. No greenfield infra.
 - **Run-rate target:** **$400K ARR within 12 months** on **< $80K cash burn** (mostly infra, Apple dev account, design, legal — LLM cost is <$0.001/rewrite, so gross margin is ~90%).
 - **Why this wins *now* and *here*:** Dov's existing investment in Hermes / Ezra is not just infra — it is **a working prototype of this product** with thousands of real group/chat messages of tone feedback already in its logs. The MVP backend is literally an Ezra profile.
 - **Recoupment:** Ezra's tone discipline (1-sentence ceiling, 7 prohibitions, gut check) becomes the rewrite-axis library. Memory architecture becomes the user-style profile. Multi-surface routing becomes multi-channel distribution. Live message corpus becomes fine-tuning data. Every other team building this from scratch is 6–9 months behind because they don't have the corpus.
-- **Biggest risks:** App Store Custom Keyboard policy + privacy backlash. Both manageable with Full-Access transparency and an on-device-only mode for the free tier.
+- **Biggest risks:** App Store Custom Keyboard policy + privacy backlash. Both manageable with Full-Access transparency and a clearly disclosed entitlement boundary.
 - **Open decisions for Dov:** see §10 — 6 questions, none blocking the green-light.
 
 **Recommendation:** green-light the iOS-keyboard MVP. Brand it separately from Ezra. Launch to ND communities (r/ADHD, TikTok ND creators, CHADD/ADDitude partners). Begin B2B design-partner conversations in parallel. Re-evaluate at 10K Pro users or 5 paying B2B teams, whichever comes first.
@@ -186,11 +186,11 @@ This is the recoupment path for the Hermes investment.
 
 | Model | Pros | Cons | Verdict |
 |---|---|---|---|
-| **B2C subscription** ($8–15/mo, free tier with 20 checks/day) | Low friction, virality-friendly, low CAC | Low ARPU, churn risk, LLM costs scale linearly | **Primary consumer model.** |
+| **B2C subscription** (14-day trial, then paid unlimited) | Low friction trial, predictable contract | Churn risk, LLM costs scale linearly | **Primary consumer model.** |
 | **B2B per-seat** ($25–40/user/mo) | High ARPU, sticky, predictable | Requires B2B sales, longer cycle | **Primary revenue model.** |
 | **One-time lifetime** ($99–199) | Maximizes top-of-funnel conversion, kills churn | Bad for variable LLM cost, bad for long-term revenue | **No.** Hurts unit economics. |
 | **API / per-message** (e.g. $0.02/rewrite) | Developer adoption, embeds in other tools | Devs are price-sensitive, supports competitors | **Defer to v2** once product-market fit is proven. |
-| **Usage tiers** (Free 20/day, Pro unlimited, Team per-seat) | Standard SaaS ladder | Complexity | **Recommended stack.** |
+| **Usage tiers** (14-day trial, Pro unlimited, Team per-seat) | Simple fail-closed contract | Requires store entitlement parity | **Recommended stack.** |
 | **Family plan** ($20/mo covers 5) | Family dynamics (parents coaching teen texting) is a real use case | Discount cuts ARPU | **Yes, in v2.** |
 | **Enterprise (Textio-style)** ($30K+/yr org-wide) | Highest LTV | Requires dedicated AE, procurement cycle 6–12 mo | **Year 2+, after B2B product-market fit.** |
 
@@ -198,8 +198,7 @@ This is the recoupment path for the Hermes investment.
 
 | Tier | Price | Includes |
 |---|---|---|
-| **Free** | $0 | 10 rewrites/day, 1 surface (iOS keyboard), all 4 rewrite axes |
-| **Personal Pro** | **$3/mo** or **$29/yr** | Unlimited rewrites, all surfaces (iOS, Android, macOS), style memory, conversation context, "risk level" badge |
+| **Personal Pro** | **$3.99/mo** or **$39.99/yr** after an eligible 14-day trial | Unlimited rewrites, all surfaces (iOS, Android, macOS), style memory, conversation context, "risk level" badge |
 | **Family** | $19/mo | Up to 5 seats, shared style profiles |
 | **Team** | **$25/user/mo** (annual) | Slack/Teams/Outlook integration, admin console, shared style guide, audit log |
 | **Enterprise** | Custom | SSO, compliance, custom models, dedicated support |
@@ -212,7 +211,7 @@ Assumptions: GPT-4o-mini / Claude Haiku at ~$0.30/1M input tokens, ~$1.20/1M out
 
 | User | Rewrites/day | Daily cost | Monthly cost | Price | Margin |
 |---|---|---|---|---|---|
-| Free user | 10 | $0.006 | $0.18 | $0 | -$0.18 (CAC payback via word-of-mouth) |
+| Trial user | Unlimited during 14 days | Usage-dependent | Bounded trial acquisition cost | $0 | Converts or loses access |
 | Pro user | 50 | $0.030 | $0.90 | $3 | **92% gross margin** |
 | Heavy Pro | 150 | $0.090 | $2.70 | $3 | 75% gross margin |
 | B2B seat | 80 | $0.048 | $1.44 | $25 | **94% gross margin** |
@@ -230,7 +229,7 @@ Ship a **single iOS Custom Keyboard extension** with:
 - [ ] Paste/type your message in the keyboard's secondary view.
 - [ ] Tap "Coach" → see 3 rewrites (warmer, clearer, safer) + risk badge.
 - [ ] One-tap to insert a chosen rewrite into the host app's text field.
-- [ ] Free tier: 10/day. Pro: unlimited via subscription.
+- [ ] Pro: unlimited via subscription after an eligibility-gated trial.
 - [ ] Basic style memory: remember last rewrite the user accepted and prefer that voice.
 - [ ] Receipts optional: how the recipient might read this (short sentence + 3 emoji).
 
@@ -347,7 +346,7 @@ The strongest argument for *this specific product, built by this specific team, 
 |---|---|---|
 | App Store rejects Custom Keyboard apps that send data off-device | High | Apple allows network calls with Full Access toggle; communicate clearly; opt-in to cloud vs. on-device. |
 | LLM cost spikes / provider outage | Medium | Multi-provider (OpenAI + Anthropic + open-weight fallback on-device for short rewrites). |
-| Privacy backlash ("AI reads my messages") | High | On-device-only mode for free tier; clear data policy; never train on user content without explicit opt-in. |
+| Privacy backlash ("AI reads my messages") | High | Clear data policy; never train on user content without explicit opt-in. |
 | Textio / Lavender move into the keyboard channel | Medium | First-mover + ND community moat. |
 | Recipient-modeling is the real product but legally fraught | Medium | Defer; ship without it for v1. |
 | Solo founder bandwidth | High | Use Ezra itself as the backend; minimum hires: 1 iOS dev for MVP. |

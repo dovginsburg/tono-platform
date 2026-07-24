@@ -202,13 +202,20 @@ function ActivePanel({ me }: { me: MeResponse | null }) {
           open the composer
           <ArrowIcon />
         </Link>
-        <a
-          href="mailto:hello@tonoit.com?subject=pro%20receipt"
+        <Link
+          href="/account"
           className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-[12px] bg-transparent border border-tono-border-strong text-tono-text hover:border-tono-accent font-semibold transition min-h-[44px] text-[14px]"
         >
-          email me a receipt
-        </a>
+          manage billing
+        </Link>
       </div>
+      <p className="text-[12px] text-tono-text-softer">
+        need a receipt or want to cancel?{' '}
+        <Link href="/account" className="text-tono-accent-light hover:underline">
+          go to your account
+        </Link>
+        .
+      </p>
     </div>
   )
 }
@@ -253,7 +260,7 @@ function PendingPanel({
       </div>
       {me && !me.is_pro ? (
         <p className="text-[13px] text-tono-text-softer">
-          current plan: {me.plan ?? 'free'}. we'll flip it the second stripe confirms.
+          current status: {me.is_pro ? 'pro' : 'pending entitlement'}. we'll flip it the second stripe confirms.
         </p>
       ) : null}
       <div className="flex flex-col sm:flex-row gap-3 justify-center pt-2">

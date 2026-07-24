@@ -55,6 +55,19 @@ def main() -> int:
         if not any(path == item["root"] or path.startswith(item["root"] + "/") for path in tree.splitlines()):
             failures.append(f"imported root absent: {item['component']} {item['root']}")
 
+    for verifier in (
+        "apps/ios/Scripts/verify_messages_extension.py",
+        "apps/ios/Scripts/verify_imessage_appintent_contract.py",
+    ):
+        check = subprocess.run(
+            ["python3", str(ROOT / verifier)],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if check.returncode:
+            failures.append(check.stdout.strip() or check.stderr.strip())
+
     if failures:
         print("\n".join(failures))
         return 1

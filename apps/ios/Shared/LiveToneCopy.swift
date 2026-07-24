@@ -1,0 +1,65 @@
+// LiveToneCopy.swift
+// Tono Live Tone v1 — contract-exact user-facing copy.
+//
+// Every visible string in Live Tone lives here so a single edit keeps the
+// shipping UI in lockstep with the binding Live Tone v1 Acceptance
+// Contract. The acceptance tests assert these literals verbatim —
+// paraphrasing breaks the contract.
+
+import Foundation
+
+public enum LiveToneCopy {
+
+    // MARK: - L1 — Notice chip body. Subtle tint, no banner.
+
+    public static let l1Chip = "This might land harsher than you mean."
+
+    // MARK: - L2 — Strong banner body above the keyboard.
+
+    public static let l2Banner =
+        "This could read as hurtful or threatening. Want a Safer version?"
+
+    // MARK: - L2 banner actions.
+
+    public static let l2RewriteLabel = "Rewrite"
+    public static let l2DismissLabel = "Dismiss"
+
+    // MARK: - Positive-opportunity microcopy (build 97).
+    //
+    // Exact wording from the binding "Tono Live Tone Positive Opportunity
+    // Version Contract — 2026-07-21". Each string describes the TEXT, never
+    // the person — no "you seem", "you sound", or "are you" constructions.
+    // The acceptance tests assert these literals verbatim.
+
+    /// O1 — hedge stack / confidence opportunity (flagship).
+    public static let opportunityHedge = "Reads more tentative than it may need to."
+
+    /// O2 — apology stack.
+    public static let opportunityApology = "Reads more apologetic than it may need to."
+
+    /// O3 — caps emphasis.
+    public static let opportunityCaps = "All caps can read as shouting."
+
+    /// Dismiss affordance on the amber opportunity chip. Light-touch —
+    /// the chip is a nudge, not a warning.
+    public static let opportunityDismissLabel = "Dismiss"
+
+    // MARK: - Settings row disclosure — exact wording per the contract.
+
+    public static let settingsDisclosure =
+        "Tono can flag messages that might land harshly. It never blocks or changes anything."
+
+    // MARK: - Accessibility identifiers — stable for QA / screenshot diffs.
+
+    public static let axBanner = "liveTone.v1.banner"
+    public static let axChip = "liveTone.v1.chip"
+    public static let axRewriteButton = "liveTone.v1.rewriteButton"
+    public static let axDismissButton = "liveTone.v1.dismissButton"
+    /// Stable accessibility id for the opportunity chip's dismiss
+    /// affordance. Used by Build97 visual regression tests to assert
+    /// the dismiss control is present exactly once per opportunity
+    /// warning.
+    public static let axOpportunityDismissButton = "liveTone.v1.opportunity.dismissButton"
+    /// Stable accessibility id for the opportunity chip body.
+    public static let axOpportunityChip = "liveTone.v1.opportunity.chip"
+}

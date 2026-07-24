@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<!--
+	  Live Tone privacy lane collects nothing. The app-wide App Store
+	  Connect nutrition label for the deliberate Coach backend round-trip
+	  is owned by the release/integration lane; see docs/PrivacyManifest.md.
+	-->
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<!-- 1C8F.1: read/write user defaults shared across the app's App Group. -->
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>1C8F.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryActiveKeyboards</string>
+			<!--
+			  3EC4.1: custom-keyboard app reading UITextInputMode.activeInputModes
+			  (OnboardingEntryPointsView) to detect whether the Tono keyboard is
+			  enabled. Not used for tracking; never sent off-device.
+			-->
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>3EC4.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

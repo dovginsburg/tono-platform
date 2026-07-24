@@ -3,16 +3,19 @@
 
 Two API surfaces share one FastAPI app:
 
-  PUBLIC (no auth, used by Playground / integration tests):
-    GET  /health
-    POST /v1/analyze              -> tone-analysis passthrough. No API key,
-                                    no rate limit; caller pays the cost.
+  PUBLIC (no auth):
+    GET  /health                  -> liveness + non-PII config disclosure
 
-  AUTHENTICATED (device bearer token, used by the keyboard + host app):
+  AUTHENTICATED (device bearer token; every rewrite route also requires an
+  active entitlement — the shared server gate fails closed with a distinct
+  402 before any provider call, and there is NO free daily tier):
     POST /v1/register             -> mint/refresh a bearer token
-    GET  /v1/me                   -> device plan + daily usage
+    GET  /v1/me                   -> device plan + usage
+    POST /v1/analyze              -> tone-analysis passthrough (back-compat).
+                                    Bearer token + entitlement gate; 401/402
+                                    fail-closed before any provider call.
     POST /api/analyze             -> rewrite draft, server holds the
-                                    LLM API key, daily + IP rate limits applied
+                                    LLM API key; entitlement gate + IP rate limit
     POST /v1/event/axis           -> log which rewrite axis the user tapped
     POST /v1/checkout             -> Stripe Checkout Session for Pro (web/B2B)
     POST /v1/portal               -> Stripe Billing Portal
@@ -48,7 +51,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import passkeys, payments, slack, social_auth
+from . import app_store, google_play, passkeys, payments, rate_limit, slack, social_auth, supabase_auth
+from .app_store import compute_me_fields
 from .analyze import (
     AnalyzeRequest,
     CANONICAL_COACH_AXES,
@@ -56,13 +60,23 @@ from .analyze import (
     RewriteSuggestion,
     ToneAnalysis,
     mock_analyze,
+    mock_variant_analyze,
     openai_analyze,
     anthropic_analyze,
     build_user_prompt,
     enforce_coach_contract,
+    # P0 BUILD-95 selected-variant contract: imported from the same
+    # module so the slack dispatch and tests can reuse the helpers.
+    VARIANT_ALLOWLIST,
+    VariantBlockedReason,
+    VariantRequest,
+    VariantResponse,
+    invoke_single_variant,
+    preflight_variant,
+    select_model_for_variant,
 )
-from .auth import CurrentUser, StoreDep, current_user
-from .store import AccountConflictError, Store, User, get_store
+from .auth import CurrentUser, OptionalCurrentUser, StoreDep, current_user
+from .store import AccountConflictError, DeviceRegistrationProofError, Store, User, get_store
 
 # Locales the LLM providers can respond in. Defines the BCP-47 code → display
 # name mapping for the /v1/locales endpoint AND for any client that wants to
@@ -150,6 +164,53 @@ def _analysis_cache_key(text: str, axes: list[str], voice: str | None, locale: s
 
 
 # ---------------------------------------------------------------------------
+
+
+# Privacy-safe phase timings (P0 t_76fd6364 / t_79f14548).
+#
+# Logs ONLY: phase name, request id (random per-request UUID), duration
+# in milliseconds. Never logs: request text, tokens, device id, account
+# id, IP, provider response body, user agent, or anything else that
+# could correlate to a specific user or message. The request id is
+# generated locally and is not shared with the provider.
+# ---------------------------------------------------------------------------
+
+# Phase-name constants — kept short so log lines stay one-liners.
+_PHASE_REQUEST_ACCEPTED = "request_accepted"
+_PHASE_PROVIDER_START = "provider_start"
+_PHASE_PROVIDER_END = "provider_end"
+_PHASE_VALIDATION_END = "validation_end"
+_PHASE_RESPONSE_SENT = "response_sent"
+
+# P0 BUILD-95: additional phase for the selected-variant endpoint. The
+# variant handler emits a ``preflight_end`` phase BEFORE ``provider_start``
+# so we can measure preflight latency (deterministic, zero provider calls)
+# separately from provider latency. Phase ordering for the new endpoint:
+#   request_accepted -> preflight_end -> provider_start -> provider_end -> response_sent
+_PHASE_PREFLIGHT_END = "preflight_end"
+
+
+def _new_request_id() -> str:
+    """Per-request UUID4. Not persisted; only used to correlate the
+    five phase-timing log lines emitted for each analyze request.
+    """
+    return uuid.uuid4().hex
+
+
+def _log_phase(request_id: str, phase: str, t_start: float) -> None:
+    """Emit a privacy-safe phase-timing log line.
+
+    Format: ``tono.phase request_id=<hex> phase=<phase> dt_ms=<int>``
+    No payload data, no identifiers other than the local request id.
+    """
+    dt_ms = int((time.time() - t_start) * 1000)
+    logger.info(
+        "tono.phase request_id=%s phase=%s dt_ms=%d",
+        request_id, phase, dt_ms,
+    )
+
+
+# ---------------------------------------------------------------------------
 # App-specific wire schemas (server.py only; shared models live in analyze.py)
 # ---------------------------------------------------------------------------
 
@@ -215,12 +276,56 @@ class CreateCouponRequest(BaseModel):
 
 @asynccontextmanager
 async def _lifespan(_: "FastAPI"):
-    get_store()  # opens + migrates the DB
+    store = get_store()  # opens + migrates the DB
+
+    # Operational account backfill (contract §1). Runs transactionally and
+    # idempotently on every startup BEFORE any purchase/register route is
+    # served, so no legacy device is left with a NULL entitlement principal.
+    try:
+        backfill = store.backfill_missing_accounts()
+        store.backfill_stripe_trial_ledger()
+        if backfill.get("backfilled"):
+            logger.info(
+                "account backfill: linked %s legacy device(s); %s remain null",
+                backfill["backfilled"], backfill["remaining_null"],
+            )
+    except Exception:  # never block startup on a backfill hiccup — it retries next boot
+        logger.exception("account backfill failed on startup; will retry next boot")
+
+    # Best-effort drain of pending Set-App-Account-Token operations recorded
+    # after tokenless legacy claims (contract §5/§9). Only runs when the App
+    # Store Server API is configured; a transient failure leaves the op retriable
+    # and NEVER erases an already-verified entitlement.
+    try:
+        sender = app_store.get_set_token_sender()
+        if sender is not None:
+            tally = app_store.reconcile_set_app_account_token(store, sender)
+            if tally.get("succeeded") or tally.get("failed"):
+                logger.info("set-app-account-token reconcile: %s", tally)
+    except Exception:
+        logger.exception("set-app-account-token reconcile failed on startup; will retry")
+
+    # Best-effort drain of pending Google Play acknowledge ops (contract §5).
+    # Only runs when the Play Developer API is configured; a transient failure
+    # leaves the op retriable and NEVER erases an already-verified entitlement.
+    try:
+        gverifier = google_play.get_reconcile_verifier()
+        if gverifier is not None:
+            gtally = google_play.reconcile_google_acknowledgements(
+                store, gverifier, google_play.get_google_play_config()
+            )
+            if any(gtally.values()):
+                logger.info("google-play acknowledge reconcile: %s", gtally)
+    except Exception:
+        logger.exception("google-play acknowledge reconcile failed on startup; will retry")
+
     logger.info(
-        "tono backend ready: provider=%s stripe=%s slack=%s",
+        "tono backend ready: provider=%s stripe=%s slack=%s apple=%s google=%s",
         os.environ.get("TONO_PROVIDER", "mock"),
         "configured" if os.environ.get("STRIPE_SECRET_KEY") else "off",
         "configured" if os.environ.get("SLACK_CLIENT_ID") else "off",
+        "configured" if os.environ.get("TONO_APPLE_ROOT_CA_PEM") else "off",
+        "configured" if os.environ.get("TONO_GOOGLE_SERVICE_ACCOUNT_JSON") else "off",
     )
     try:
         yield
@@ -242,8 +347,8 @@ app = FastAPI(
 # that call this API directly with no server-side proxy in front of them.
 # Native clients (iOS/Android/Slack) don't go through a browser so they're
 # unaffected either way. Comma-separated allowlist; "*" (default) is fine
-# for the public /v1/analyze passthrough but should be locked down to real
-# origins in production once apps/web has a deployed domain.
+# for local development but should be locked down to real origins in
+# production once apps/web has a deployed domain.
 _CORS_ORIGINS = [
     o.strip()
     for o in os.environ.get("CORS_ALLOWED_ORIGINS", "*").split(",")
@@ -312,7 +417,7 @@ _PRIVACY_HTML = """<!DOCTYPE html>
   <li><strong>Anonymous device ID</strong> — a random UUID generated on first launch. No name, email, or phone number.</li>
   <li><strong>Draft text (transient)</strong> — your message is sent to our server for analysis and immediately discarded. We never store message content.</li>
   <li><strong>Usage counters</strong> — how many rewrites you've run today, your plan tier. No content, no recipients.</li>
-  <li><strong>Subscription status</strong> — plan (free/pro) and renewal date, via StoreKit 2 (iOS) or Stripe (web).</li>
+  <li><strong>Subscription status</strong> — entitlement state and renewal date, via StoreKit 2 (iOS), Google Play, or Stripe (web).</li>
 </ul>
 
 <h2>What we do not collect</h2>
@@ -324,7 +429,7 @@ _PRIVACY_HTML = """<!DOCTYPE html>
 </ul>
 
 <h2>How your data is used</h2>
-<p>Device IDs are used solely to enforce the daily free-tier limit and track subscription status. Aggregate usage counts (how many rewrites per day) may be used to improve the product. No data is sold to or shared with third parties for advertising.</p>
+<p>Device IDs are used solely to associate your subscription entitlement with your device. Aggregate usage counts may be used to improve the product. No data is sold to or shared with third parties for advertising.</p>
 
 <h2>How Tono learns and improves</h2>
 <p>With your permission ("Help improve Tono" toggle in Settings, on by default), Tono records content-free outcome signals: which rewrite style you chose, whether you used the suggestion, and a rough message-length bucket (short / medium / long — never the actual length or any words). <strong>Your messages, your rewrites, and who you're messaging are never collected.</strong> These anonymous outcome signals accumulate across users and help us improve axis ordering and rewrite quality for everyone. You can opt out at any time in Settings → Preferences → Help improve Tono; opting out immediately stops any signal from leaving your device and does not affect your personal style memory.</p>
@@ -369,7 +474,8 @@ async def health() -> dict[str, Any]:
         "schema_revision": provenance["schema_revision"],
         "stripe_configured": bool(os.environ.get("STRIPE_SECRET_KEY")),
         "slack_configured": bool(os.environ.get("SLACK_CLIENT_ID")),
-        "free_daily_limit": int(os.environ.get("FREE_DAILY_LIMIT", "10")),
+        "apple_configured": bool(os.environ.get("TONO_APPLE_ROOT_CA_PEM")),
+        "google_play_configured": bool(os.environ.get("TONO_GOOGLE_SERVICE_ACCOUNT_JSON")),
     }
 
 
@@ -408,11 +514,26 @@ async def list_locales() -> dict[str, Any]:
 
 
 @app.post("/v1/analyze", response_model=ToneAnalysis)
-async def v1_analyze(req: AnalyzeRequest, request: Request) -> dict[str, Any]:
-    """Unauthenticated passthrough kept for backward compatibility with
-    the iOS Playground tab and integration tests. No billing is applied,
-    but a per-IP cap protects the shared provider credentials from abuse.
+async def v1_analyze(
+    req: AnalyzeRequest,
+    request: Request,
+    user: CurrentUser,
+) -> dict[str, Any]:
+    """Tone-analysis passthrough kept for backward compatibility with the
+    host-app Playground tab and integration tests. There is NO anonymous or
+    free rewrite path: the caller must present a valid bearer token
+    (``CurrentUser`` -> 401 otherwise) AND hold a server-authoritative rewrite
+    entitlement (the shared gate -> a DISTINCT 402 otherwise), both enforced
+    BEFORE the per-IP window and BEFORE any provider invocation. Mirrors the
+    gate on /api/analyze and /api/analyze/variant, so this route can never be
+    the free/anonymous rewrite bypass it once was.
     """
+    # Shared server-authoritative entitlement gate — the SAME chokepoint as
+    # /api/analyze and /api/analyze/variant. Fail closed with an honest 402
+    # (never the IP-rate 429) BEFORE the per-IP window and BEFORE any provider
+    # call. Registration / sign-in is a PRINCIPAL, not a grant.
+    _require_rewrite_entitlement(user)
+
     if not _check_ip_rate(_get_client_ip(request)):
         raise HTTPException(
             status_code=429,
@@ -421,6 +542,12 @@ async def v1_analyze(req: AnalyzeRequest, request: Request) -> dict[str, Any]:
         )
     provider = os.environ.get("TONO_PROVIDER", "mock")
     try:
+        if req.optional_variants is not None:
+            # Build 94 is always safer-first Sonnet in production. Mock remains
+            # available for deterministic offline tests; OpenAI is never used.
+            if provider == "mock":
+                return await mock_variant_analyze(req)
+            return await anthropic_analyze(req)
         if provider == "mock":
             return mock_analyze(req)
         if provider == "openai":
@@ -439,26 +566,69 @@ async def v1_analyze(req: AnalyzeRequest, request: Request) -> dict[str, Any]:
 
 
 class RegisterRequest(BaseModel):
-    device_id: Optional[str] = None
-    app_version: Optional[str] = None
-    platform: Optional[str] = None  # "ios" | "android" | "macos" | "windows" | "web" | "slack"
+    device_id: Optional[uuid.UUID] = None
+    device_credential: Optional[str] = Field(default=None, min_length=43, max_length=256)
+    app_version: Optional[str] = Field(default=None, max_length=64)
+    platform: Optional[Literal["ios", "android", "macos", "windows", "web", "slack"]] = None
 
 
 class RegisterResponse(BaseModel):
     device_id: str
     api_token: str
+    device_credential: Optional[str] = None
     plan: str
     is_pro: bool
+    # Server-issued immutable anonymous account UUID — the only entitlement
+    # principal, and what new purchases bind as appAccountToken (contract §1).
+    account_id: str
 
 
 @app.post("/v1/register", response_model=RegisterResponse)
-def register(body: RegisterRequest, store: StoreDep) -> RegisterResponse:
-    user = store.register_device(body.device_id)
+def register(body: RegisterRequest, request: Request, store: StoreDep) -> RegisterResponse:
+    ip = _get_client_ip(request)
+    allowed, _ = rate_limit.check_ip_rate(
+        "register", ip, rate_limit.RATE_SCOPES["register"]
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="registration rate limit exceeded",
+            headers={"Retry-After": "60"},
+        )
+
+    authorization = request.headers.get("Authorization", "")
+    scheme, _, supplied_token = authorization.partition(" ")
+    bearer_token = supplied_token if scheme.lower() == "bearer" else None
+    try:
+        registration = store.register_device(
+            str(body.device_id) if body.device_id else None,
+            device_credential=body.device_credential,
+            bearer_token=bearer_token,
+            legacy_grace_seconds=int(
+                os.environ.get("TONO_LEGACY_TOKEN_GRACE_SECONDS", "86400")
+            ),
+        )
+    except DeviceRegistrationProofError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="device registration requires recovery proof",
+        ) from exc
+
+    user = registration.user
+    if not user.account_id:
+        # Registration must always yield a canonical account (contract §1).
+        # This should be unreachable — surfacing it fails closed rather than
+        # returning a device with no entitlement principal.
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, "registration did not establish an account"
+        )
     return RegisterResponse(
         device_id=user.device_id,
         api_token=user.api_token,
-        plan=user.plan,
+        device_credential=registration.device_credential,
+        plan=user.plan_resolved,
         is_pro=user.is_pro,
+        account_id=user.account_id,
     )
 
 
@@ -470,32 +640,24 @@ class MeResponse(BaseModel):
     daily_limit: int  # -1 = unlimited
     subscription_status: Optional[str]
     subscription_renews_at: Optional[str]
-    account_id: Optional[str] = None
+    # Required non-null after migration — the canonical entitlement principal
+    # (contract §1). A null here is a contract violation.
+    account_id: str
 
 
 @app.get("/v1/me", response_model=MeResponse)
 def me(user: CurrentUser, store: StoreDep) -> MeResponse:
-    today = _today_utc()
-    # Once a device is linked to an account, the account is the source of
-    # truth for plan/subscription/daily usage — see User.is_pro /
-    # User.plan_resolved, and Store.consume_rewrite for why the counter
-    # itself lives on the account row once signed in (pooled across every
-    # device linked to it, not reset per device).
-    quota_source = user.account if user.account else user
-    used = quota_source.daily_count if quota_source.daily_day == today else 0
-    limit = -1 if user.is_pro else int(os.environ.get("FREE_DAILY_LIMIT", "10"))
-    subscription_status = user.account.subscription_status if user.account else user.subscription_status
-    subscription_renews_at = user.account.subscription_renews_at if user.account else user.subscription_renews_at
-    return MeResponse(
-        device_id=user.device_id,
-        plan=user.plan_resolved,
-        is_pro=user.is_pro,
-        used_today=used,
-        daily_limit=limit,
-        subscription_status=subscription_status,
-        subscription_renews_at=subscription_renews_at,
-        account_id=user.account_id,
-    )
+    # Defensive: a legacy device registered before the account-first contract
+    # may still carry a null account_id until migration runs. Backfill on read
+    # so /v1/me never returns a null principal (contract §1).
+    if not user.account_id:
+        reloaded = store.ensure_account(user.device_id)
+        if reloaded is not None:
+            user = reloaded
+    # Field resolution (identified-account routing, entitlement grants, pooled
+    # quota) lives in the shared entitlement projection so /v1/me and the App
+    # Store endpoint always agree.
+    return MeResponse(**compute_me_fields(user, store))
 
 
 # ---------------------------------------------------------------------------
@@ -539,12 +701,32 @@ def _resolve_provider_signin(
     account owns this identity — creating one on first use. `link=True`
     requires the device to already be signed in and refuses (409) to
     attach an identity that already belongs to someone else's account."""
-    if link and not user.account_id:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "sign in before linking another provider")
     try:
-        account = store.upsert_account_by_provider(
-            provider, sub, email, link_into_account_id=user.account_id if link else None
-        )
+        if link:
+            if not user.account_id:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST, "sign in before linking another provider"
+                )
+            account = store.upsert_account_by_provider(
+                provider, sub, email, link_into_account_id=user.account_id
+            )
+        else:
+            existing = store.get_account_by_provider(provider, sub)
+            if existing is not None:
+                # Plain sign-in: switch to (or reuse) the account that already
+                # owns this identity — never a conflict (existing behavior).
+                account = existing
+            elif user.account is not None and not user.account.is_identified:
+                # Brand-new identity while on an anonymous auto-account: upgrade
+                # that account IN PLACE so its UUID, history, and entitlement
+                # grants carry over (contract §1, hostile 4).
+                account = store.upsert_account_by_provider(
+                    provider, sub, email, link_into_account_id=user.account_id
+                )
+            else:
+                # Brand-new identity while already identified: mint a fresh
+                # account and switch to it.
+                account = store.upsert_account_by_provider(provider, sub, email)
     except AccountConflictError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
     store.link_device_to_account(user.device_id, account.id)
@@ -575,6 +757,146 @@ async def auth_google(
     return SignInResponse(account_id=account.id, plan=account.plan, is_pro=account.is_pro, email=account.email)
 
 
+# ---------------------------------------------------------------------------
+# Web account sign-in (Supabase). The website authenticates a person with
+# Supabase (Apple/Google/magic-link) and forwards the Supabase access token
+# here. We verify it cryptographically, then converge the browser onto the
+# ONE canonical account keyed by the Supabase user id — so the same person on
+# a second browser lands on the identical account_id. Unlike /v1/auth/apple,
+# the caller need not already hold a device bearer: a fresh browser has none,
+# so we register a random per-browser device (durable credential) and return
+# its bearer for the web app to store in an httpOnly cookie.
+# ---------------------------------------------------------------------------
+
+
+class WebSignInRequest(BaseModel):
+    access_token: str
+
+
+class WebSignInResponse(BaseModel):
+    device_id: str
+    api_token: str
+    device_credential: Optional[str] = None
+    account_id: str
+    plan: str
+    is_pro: bool
+    email: Optional[str] = None
+
+
+@app.post("/v1/auth/web", response_model=WebSignInResponse)
+async def auth_web(
+    body: WebSignInRequest,
+    user: OptionalCurrentUser,
+    store: StoreDep,
+    verifier: Annotated[
+        supabase_auth.SupabaseVerifier, Depends(supabase_auth.get_supabase_verifier)
+    ],
+) -> WebSignInResponse:
+    # Fail closed: an invalid/expired/wrong-audience token raises 401 inside
+    # the verifier before we touch any account state.
+    claims = await verifier(body.access_token)
+
+    # NEVER merge on an unverified email: Supabase dedupes identities onto one
+    # user by *verified* email, and account resolution keys on the immutable
+    # ``sub`` — but we still refuse to persist an unverified address as contact
+    # data, so it can't leak into email-based flows later.
+    email = claims.email if claims.email_verified else None
+
+    # A fresh browser carries no device bearer — mint a random per-browser
+    # device with a durable credential. A returning browser that presented a
+    # valid bearer reuses its device (so its anonymous account upgrades in
+    # place rather than orphaning).
+    device_credential: Optional[str] = None
+    if user is None:
+        registration = store.register_device()
+        user = registration.user
+        device_credential = registration.device_credential
+
+    # Reuse the exact provider-linking primitive Apple/Google use: same-subject
+    # convergence, anonymous-account upgrade-in-place, and 409-on-collision all
+    # come for free (link=False = plain sign-in).
+    account = _resolve_provider_signin(store, user, "supabase", claims.sub, email, link=False)
+
+    return WebSignInResponse(
+        device_id=user.device_id,
+        api_token=user.api_token,
+        device_credential=device_credential,
+        account_id=account.id,
+        plan=account.plan,
+        is_pro=account.is_pro,
+        email=account.email,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Account deletion. Authenticated; revokes every session/device and private
+# datum, and tombstones the account so append-only billing/provider audit
+# facts stay valid (see store.delete_account).
+# ---------------------------------------------------------------------------
+
+
+class DeleteAccountResponse(BaseModel):
+    deleted: bool
+    revoked_devices: int
+
+
+@app.delete("/v1/account", response_model=DeleteAccountResponse)
+def delete_account(user: CurrentUser, store: StoreDep) -> DeleteAccountResponse:
+    # ``CurrentUser`` is the revalidation gate: a caller must present a live
+    # bearer for a device linked to the account being deleted. The device's
+    # account_id — not any client-supplied id — is what we delete, so one
+    # account can never delete another.
+    if not user.account_id:
+        # Contract §1: every device has a canonical account. A null here means
+        # a legacy row; backfill so deletion has a principal to act on.
+        reloaded = store.ensure_account(user.device_id)
+        if reloaded is not None:
+            user = reloaded
+    if not user.account_id:
+        raise HTTPException(status.HTTP_409_CONFLICT, "no account to delete")
+    result = store.delete_account(user.account_id)
+    return DeleteAccountResponse(
+        deleted=bool(result.get("deleted")),
+        revoked_devices=int(result.get("revoked_devices", 0)),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Shared server-authoritative rewrite entitlement gate
+# ---------------------------------------------------------------------------
+# The ONE chokepoint every rewrite endpoint calls before invoking a provider.
+# There is NO free daily tier: a registered device is an entitlement PRINCIPAL,
+# not a grant. Only the server-side ``User.is_pro`` projection passes — an
+# active paid or trialing subscription, an active provider entitlement grant,
+# past_due auto-renew grace, or a valid durable founder coupon/grant. Everyone
+# else (fresh-registered, never-subscribed, canceled, expired) fails closed
+# here with a DISTINCT, honest HTTP 402 that is never overloaded onto the
+# IP-rate-limit 429 or the 401 auth failure, so clients can surface a truthful
+# "subscription required" message.
+
+# Shaped by ``http_exc_handler`` into
+# ``{"error": {"code": 402, "reason": "entitlement_required", "message": ...}}``.
+# ``reason`` is the stable machine key clients switch on (alongside the 402
+# status); we deliberately avoid a ``code`` key here so it can't collide with
+# the handler's HTTP-status ``code``.
+_ENTITLEMENT_REQUIRED_DETAIL: dict[str, str] = {
+    "reason": "entitlement_required",
+    "message": "An active Tono trial or subscription is required to rewrite.",
+}
+
+
+def _require_rewrite_entitlement(user: User) -> None:
+    """Fail closed unless ``user`` holds a server-authoritative rewrite
+    entitlement. Called before ANY provider invocation on every rewrite route
+    (grep-enforced by ``test_every_rewrite_route_calls_entitlement_gate``)."""
+    if user.is_pro:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+        detail=dict(_ENTITLEMENT_REQUIRED_DETAIL),
+    )
+
+
 @app.post("/api/analyze", response_model=ApiAnalyzeResponse)
 async def api_analyze(
     body: ApiAnalyzeRequest,
@@ -589,6 +911,11 @@ async def api_analyze(
         raise HTTPException(400, "text is required")
     if len(body.text) > _DRAFT_MAX_CHARS:
         raise HTTPException(400, f"text too long (max {_DRAFT_MAX_CHARS} chars)")
+
+    # Server-authoritative entitlement gate — fail closed BEFORE the per-IP
+    # window (and before any provider call) so a non-entitled caller always
+    # gets the honest 402 and never the misleading 429.
+    _require_rewrite_entitlement(user)
 
     # Per-IP sliding-window cap to block scripted abuse before it touches
     # any per-user counters or makes LLM calls.
@@ -631,10 +958,14 @@ async def api_analyze(
                 cached = None
         if cached:
             today = _today_utc()
-            # Pooled on the account once signed in — see consume_rewrite.
-            quota_source = user.account if user.account else user
+            # Pooled on the account once signed in (identified) — see
+            # record_rewrite; anonymous auto-accounts still count per-device.
+            identified = user.account is not None and user.account.is_identified
+            quota_source = user.account if identified else user
             snap_used = quota_source.daily_count if quota_source.daily_day == today else 0
-            snap_limit = -1 if user.is_pro else int(os.environ.get("FREE_DAILY_LIMIT", "10"))
+            # Past the entitlement gate every caller is unlimited (-1); there is
+            # no free daily tier to disclose.
+            snap_limit = -1
             store.log_usage(
                 user.device_id, "/api/analyze", 200, provider="cache",
                 drafts_chars=len(body.text),
@@ -643,20 +974,11 @@ async def api_analyze(
                 **cached, used_today=snap_used, daily_limit=snap_limit, plan=user.plan_resolved
             )
 
-    # Rate limit BEFORE we call the LLM so a bad actor can't burn $.
-    allowed, used, limit = store.consume_rewrite(user.device_id)
-    if not allowed:
-        store.log_usage(user.device_id, "/api/analyze", 429, drafts_chars=len(body.text))
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail={
-                "message": "daily free limit reached",
-                "used_today": used,
-                "daily_limit": limit,
-                "plan": user.plan,
-            },
-            headers={"Retry-After": "86400"},
-        )
+    # Entitlement was already enforced above (fail-closed 402). This is a
+    # NON-authorizing telemetry counter only: no free-tier denial, no 429
+    # overload. Every caller here is unlimited (daily_limit = -1).
+    used = store.record_rewrite(user.device_id)
+    limit = -1
 
     try:
         if provider == "mock":
@@ -707,6 +1029,138 @@ def log_axis_event(
     (which axes resonate most) and eventually for personalized axis ordering.
     """
     store.log_axis_event(user.device_id, body.axis, body.risk_level)
+
+
+# ---------------------------------------------------------------------------
+# P0 BUILD-95 — Selected-variant endpoint
+# ---------------------------------------------------------------------------
+#
+# One selected chip => one HTTP request => exactly one provider call =>
+# exactly one matching variant.
+#
+# Wire shape:
+#   POST /api/analyze/variant  (authenticated, same as /api/analyze)
+#   request  = {text, axis, risk_hint?, custom_prompt?, locale?}
+#   response = VariantResponse (strict ok|blocked envelope)
+#
+# Hard rules (cannot be softened without explicit controller approval):
+#   R1. Exactly one provider call per request. No prefetch, no fan-out,
+#       no hidden "Safer" generation.
+#   R2. Server picks the model (axis+risk_hint -> Sonnet/Haiku). Client
+#       never chooses model.
+#   R3. Deterministic safety preflight issues zero provider calls. Block
+#       reasons are short, closed-enum strings.
+#   R4. Malformed/unsafe model output fails closed: the strict envelope
+#       returns ``status="blocked", reason="provider_failed"|"validation_failed"``
+#       -- no fallback model, no streaming before parse. The only permitted
+#       retry is the single bounded funnier near-identical retry (R5).
+#   R5. An explicit Funnier tap never returns normalized/near-identical source
+#       text as success. The response-boundary guard issues at most one bounded
+#       retry, then returns the neutral ``status="blocked",
+#       reason="no_distinct_rewrite"`` state — never the draft as a rewrite.
+#   R6. Phase timings use the same privacy-safe shape as /api/analyze
+#       (request_id / phase / dt_ms). No payload, no device id, no token,
+#       no UA, no provider name in the phase line.
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/analyze/variant", response_model=VariantResponse)
+async def api_analyze_variant(
+    body: VariantRequest,
+    request: Request,
+    user: CurrentUser,
+    store: StoreDep,
+) -> VariantResponse:
+    """Selected-variant endpoint. One chip, one variant, one provider call.
+
+    Phase ordering:
+      request_accepted -> preflight_end -> provider_start -> provider_end -> response_sent
+
+    Note: ``response_sent`` fires on both ``ok`` and ``blocked`` paths so the
+    timing signal is consistent regardless of outcome.
+    """
+    request_id = _new_request_id()
+    t_request = time.time()
+    _log_phase(request_id, _PHASE_REQUEST_ACCEPTED, t_request)
+
+    # The selected-variant contract classifies empty drafts in deterministic
+    # preflight, not as a transport-level malformed request. This keeps the
+    # strict ok|blocked envelope intact and guarantees zero provider calls.
+    if len(body.text) > _DRAFT_MAX_CHARS:
+        raise HTTPException(400, f"text too long (max {_DRAFT_MAX_CHARS} chars)")
+
+    # Server-authoritative entitlement gate — the SAME shared chokepoint as
+    # /api/analyze. Fail closed with an honest 402 BEFORE the per-IP window,
+    # the deterministic preflight, and any provider call. This is the endpoint
+    # every primary iOS surface (keyboard/iMessage/Shortcut) uses; registration
+    # alone grants nothing, so a fresh/canceled/expired device rewrites nothing.
+    _require_rewrite_entitlement(user)
+
+    # Per-IP sliding-window cap (mirrors /api/analyze).
+    client_ip = _get_client_ip(request)
+    if not _check_ip_rate(client_ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="too many requests from this IP — try again in a minute",
+            headers={"Retry-After": "60"},
+        )
+
+    # R1 + R5: provider is server-picked. The client NEVER picks model
+    # and never picks provider. Server pulls ``TONO_PROVIDER``; the
+    # selected-variant endpoint does NOT honor any client-supplied
+    # provider field (none exists on VariantRequest, by design).
+    provider = os.environ.get("TONO_PROVIDER", "mock").lower()
+
+    # Deterministic safety preflight (zero provider calls).
+    block_reason = preflight_variant(body)
+    _log_phase(request_id, _PHASE_PREFLIGHT_END, t_request)
+    if block_reason is not None:
+        store.log_usage(
+            user.device_id, "/api/analyze/variant", 200,
+            provider=provider, drafts_chars=len(body.text or ""),
+        )
+        _log_phase(request_id, _PHASE_RESPONSE_SENT, t_request)
+        return VariantResponse(status="blocked", axis=body.axis, reason=block_reason)
+
+    # Server-side model routing (zero provider calls). The model name is
+    # passed into the provider function inside ``invoke_single_variant``.
+    _log_phase(request_id, _PHASE_PROVIDER_START, t_request)
+    response = await invoke_single_variant(body, provider)
+    _log_phase(request_id, _PHASE_PROVIDER_END, t_request)
+    _log_phase(request_id, _PHASE_RESPONSE_SENT, t_request)
+
+    # The strict envelope already classified the outcome. We log usage
+    # so the cost + axis + blocked/ok shape can be aggregated without PII.
+    store.log_usage(
+        user.device_id, "/api/analyze/variant", 200,
+        provider=provider, drafts_chars=len(body.text or ""),
+    )
+    return response
+
+
+# ---------------------------------------------------------------------------
+# P0 BUILD-95 — Server-side model routing diagnostics
+# ---------------------------------------------------------------------------
+# Read-only endpoint that surfaces the current routing decisions for the
+# allowlisted axes, used by hostile-matrix tests to lock the routing
+# contract without making a real provider call. NOT a model-selection
+# endpoint for the client; clients never see this route.
+@app.get("/internal/model-routing")
+def model_routing_diagnostics() -> dict[str, Any]:
+    """Return the resolved (tier, model) for each allowlisted axis under
+    each risk_hint value. Read-only; no provider calls; no PII.
+
+    Used by tests in ``test_coach_contract.py`` to assert the routing
+    contract: Safer/Custom/high-risk -> Sonnet; low-risk built-in non-Safer
+    -> Haiku.
+    """
+    out: dict[str, dict[str, dict[str, str]]] = {}
+    for axis in sorted(VARIANT_ALLOWLIST):
+        out[axis] = {}
+        for hint in ("low", "medium", "high", None):
+            tier, model = select_model_for_variant(axis, hint)
+            out[axis][str(hint)] = {"tier": tier, "model": model}
+    return {"routing": out}
 
 
 # ---------------------------------------------------------------------------
@@ -1154,6 +1608,8 @@ def admin_create_coupon(
 app.include_router(payments.router)
 app.include_router(slack.router)
 app.include_router(passkeys.router)
+app.include_router(app_store.router)
+app.include_router(google_play.router)
 
 
 # ---------------------------------------------------------------------------

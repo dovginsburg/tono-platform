@@ -41,6 +41,7 @@ const ITEMS: NavItem[] = [
   { label: 'Home', href: '/' },
   { label: 'App', href: '/app' },
   { label: 'Sign in', href: '/login' },
+  { label: 'Account', href: '/account' },
   { label: 'Pricing', href: '/pricing' },
   { label: 'About', href: '/about' },
   { label: 'Features', href: '/features' },

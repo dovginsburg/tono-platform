@@ -79,12 +79,21 @@ struct SpellingToken: Equatable {
     let caretOffset: Int
     let hasSensitivePrefix: Bool
     let followsSentenceBoundary: Bool
+    /// The host/editing session this token was observed in. Included in
+    /// equality so a debounced suggestion authorized in one host cannot apply
+    /// after a same-content switch to another (`SpellingMutationPlan` gates on
+    /// `liveToken == expected`).
+    let host: HostSessionIdentity
 
-    static func current(in context: String) -> SpellingToken? {
-        current(before: context, after: "")
+    static func current(in context: String, host: HostSessionIdentity = .unbound) -> SpellingToken? {
+        current(before: context, after: "", host: host)
     }
 
-    static func current(before: String, after: String) -> SpellingToken? {
+    static func current(
+        before: String,
+        after: String,
+        host: HostSessionIdentity = .unbound
+    ) -> SpellingToken? {
         var left: [Character] = []
         left.reserveCapacity(16)
         for character in before.reversed() {
@@ -116,7 +125,8 @@ struct SpellingToken: Equatable {
             text: text,
             caretOffset: leftText.count,
             hasSensitivePrefix: sensitive,
-            followsSentenceBoundary: sentenceBoundary
+            followsSentenceBoundary: sentenceBoundary,
+            host: host
         )
     }
 

@@ -28,18 +28,16 @@ type AnalyzeResponse = {
   subtext?: string;
   suggestions?: Rewrite[];
   flags?: string[];
-  // 429 shape
+  // Fail-closed / error envelopes: 402 entitlement_required, 429 rate limit.
+  error?: { code?: number; reason?: string; message?: string };
+  detail?: string;
   message?: string;
-  used_today?: number;
-  daily_limit?: number;
   plan?: string;
 };
 
-type Quota = {
-  used_today: number;
-  daily_limit: number;
+type Plan = {
   plan: string;
-  is_pro?: boolean;
+  is_pro: boolean;
 };
 
 const AXES: Axis[] = ['warmer', 'clearer', 'funnier', 'safer'];
@@ -64,29 +62,29 @@ export function RewriteEditor({
   const [perception, setPerception] = useState<{ risk_level?: string; subtext?: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [limit, setLimit] = useState<{ used: number; max: number } | null>(null);
+  const [plan, setPlan] = useState<Plan | null>(null);
   const [selected, setSelected] = useState<Axis | null>(null);
   const [copied, setCopied] = useState<Axis | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const loadQuota = useCallback(async () => {
+  // Under the no-free-tier contract there is no daily quota to display: an
+  // entitled caller has unlimited rewrites and a non-entitled caller fails
+  // closed. We surface only the plan (entitled vs. trial-required).
+  const loadPlan = useCallback(async () => {
     try {
       const res = await fetch('/api/me', { cache: 'no-store' });
       if (res.ok) {
-        const data: Quota = await res.json();
-        setLimit({
-          used: data.used_today,
-          max: data.daily_limit === -1 ? Infinity : data.daily_limit,
-        });
+        const data = await res.json();
+        setPlan({ plan: data.plan ?? 'anonymous', is_pro: !!data.is_pro });
       }
     } catch {
-      // Quota is decorative; don't surface errors.
+      // Plan badge is decorative; don't surface errors.
     }
   }, []);
 
   useEffect(() => {
-    loadQuota();
-  }, [loadQuota]);
+    loadPlan();
+  }, [loadPlan]);
 
   const rewrite = useCallback(async () => {
     if (!draft.trim() || loading) return;
@@ -102,19 +100,18 @@ export function RewriteEditor({
         body: JSON.stringify({ text: draft }),
       });
       const data: AnalyzeResponse = await res.json();
+      if (res.status === 402 || data.error?.reason === 'entitlement_required') {
+        // No free tier: rewrites require an active trial or subscription.
+        setError('an active trial or subscription is required to rewrite.');
+        return;
+      }
       if (res.status === 429) {
-        setError(
-          data.message
-            ? `${data.message}. ${data.used_today ?? '?'} of ${data.daily_limit ?? '?'} today.`
-            : 'daily limit reached'
-        );
-        if (typeof data.used_today === 'number' && typeof data.daily_limit === 'number') {
-          setLimit({ used: data.used_today, max: data.daily_limit });
-        }
+        // Honest per-IP rate limit — not a daily quota.
+        setError('too many requests — wait a minute and try again.');
         return;
       }
       if (!res.ok) {
-        setError(data?.message || `couldn't reach tono (${res.status})`);
+        setError(data?.error?.message || data?.message || `couldn't reach tono (${res.status})`);
         return;
       }
       // Map suggestions to our axis whitelist, in canonical order.
@@ -134,15 +131,12 @@ export function RewriteEditor({
         suggestions,
         perception: data.perception || '',
       });
-
-      // Refresh quota after a successful rewrite
-      loadQuota();
     } catch (e) {
       setError("couldn't reach tono. check your connection and try again.");
     } finally {
       setLoading(false);
     }
-  }, [draft, loading, loadQuota]);
+  }, [draft, loading]);
 
   // ⌘+Enter / Ctrl+Enter to rewrite
   useEffect(() => {
@@ -217,12 +211,17 @@ export function RewriteEditor({
             <Link href="/app/app/history" style={ghostBtn} title="history">
               history
             </Link>
-            <span style={quotaStyle} title={limit ? `${limit.used} of ${limit.max} free today` : ''}>
-              <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)' }} />
-              <span>
-                <strong>{limit ? limit.used : '–'}</strong> / {limit ? (limit.max === Infinity ? '∞' : limit.max) : '–'} today
+            {plan?.is_pro ? (
+              <span style={quotaStyle} title="unlimited rewrites">
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)' }} />
+                <span>unlimited</span>
               </span>
-            </span>
+            ) : (
+              <Link href="/pricing" style={quotaStyle} title="start a free trial to rewrite">
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)' }} />
+                <span>start free trial</span>
+              </Link>
+            )}
             <span style={avatarStyle} title={email}>
               {(email[0] || '?').toUpperCase()}
             </span>
@@ -408,7 +407,7 @@ export function RewriteEditor({
           <span>draft auto-saved</span>
           {!hasApiToken && (
             <span style={{ color: 'var(--warning, #F59E0B)' }}>
-              (anonymous — sign in for daily quota)
+              (rewrites need an active trial or subscription)
             </span>
           )}
         </div>

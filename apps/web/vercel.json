@@ -3,6 +3,9 @@
   "rewrites": [
     { "source": "/", "destination": "/app" },
     { "source": "/pricing", "destination": "/app/pricing" },
+    { "source": "/login", "destination": "/app/login" },
+    { "source": "/account", "destination": "/app/account" },
+    { "source": "/welcome-pro", "destination": "/app/welcome-pro" },
     { "source": "/checkout/success", "destination": "/app/checkout/success" },
     { "source": "/about", "destination": "/app/about" },
     { "source": "/contact", "destination": "/app/contact" },

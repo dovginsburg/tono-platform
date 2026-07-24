@@ -88,8 +88,21 @@ object PlayBillingManager : PurchasesUpdatedListener {
     }
 
     fun purchase(activity: Activity, productId: String) {
+        val accountId = SharedStore.getString(SharedKeys.ACCOUNT_ID)
+            ?.takeIf { it.isNotBlank() }
+        if (accountId == null) {
+            _state.value = _state.value.copy(
+                isLoading = false,
+                error = "Sign in to Tono before starting a purchase.",
+            )
+            refresh()
+            return
+        }
         val details = productDetails[productId]
-        val offer = details?.subscriptionOfferDetails?.firstOrNull()
+        val expectedBasePlan = BillingProducts.basePlanFor(productId)
+        val offer = details?.subscriptionOfferDetails?.firstOrNull {
+            it.basePlanId == expectedBasePlan && it.offerId == BillingProducts.TRIAL_OFFER
+        }
         if (details == null || offer == null) {
             _state.value = _state.value.copy(
                 error = "This subscription is not available from Google Play right now.",
@@ -106,6 +119,9 @@ object PlayBillingManager : PurchasesUpdatedListener {
             activity,
             BillingFlowParams.newBuilder()
                 .setProductDetailsParamsList(listOf(productParams))
+                // Canonical person binding, equivalent to StoreKit's
+                // appAccountToken. Never use the device ID as the principal.
+                .setObfuscatedAccountId(accountId)
                 .build(),
         )
         if (result.responseCode != BillingClient.BillingResponseCode.OK) {
@@ -295,7 +311,10 @@ object PlayBillingManager : PurchasesUpdatedListener {
 
     private fun toDisplayProduct(details: ProductDetails): PlayProduct? {
         val regularPhase = details.subscriptionOfferDetails
-            ?.firstOrNull()
+            ?.firstOrNull {
+                it.basePlanId == BillingProducts.basePlanFor(details.productId)
+                    && it.offerId == BillingProducts.TRIAL_OFFER
+            }
             ?.pricingPhases
             ?.pricingPhaseList
             ?.lastOrNull()

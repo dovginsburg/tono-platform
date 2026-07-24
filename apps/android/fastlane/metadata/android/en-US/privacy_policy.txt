@@ -10,7 +10,7 @@ Draft text — transient only
 When you tap Coach, the draft you're working on is sent to our server for analysis. It is processed, used to generate the rewrite suggestions, and then immediately discarded. We do not store your draft text. We do not log message content to disk. We do not retain copies for training, debugging, or any other purpose.
 
 Subscription status
-We store your plan (Free / Pro) and renewal date so the app can show you what you have access to. Payments are handled by Google Play Billing; we receive a tokenized subscription identifier, not your card details.
+We store your entitlement status and renewal date so the app can show you what you have access to. Payments are handled by Google Play Billing; we receive a tokenized subscription identifier, not your card details.
 
 Aggregate, content-free usage signals (only if you opt in)
 If you turn on "Help improve Tono" in Settings (on by default for new users, off by default for existing users until they re-confirm), we record only:
@@ -20,7 +20,7 @@ If you turn on "Help improve Tono" in Settings (on by default for new users, off
 We never record your draft, your rewrites, the recipient, the app you were typing in, or anything about who you were writing to. You can turn this off at any time in Settings; turning it off immediately stops any signal from leaving your device.
 
 Device identifier
-A device-scoped random ID is generated when you install Tono. It is used solely to enforce the free-tier daily Coach limit and to associate your subscription with your device. It is not linked to your name, email, phone number, advertising ID, or any other personal identifier. You can reset it by reinstalling the app.
+A device-scoped random ID is generated when you install Tono. It is used solely to associate your subscription entitlement with your device. It is not linked to your name, email, phone number, advertising ID, or any other personal identifier. You can reset it by reinstalling the app.
 
 WHAT WE NEVER COLLECT
 
@@ -33,7 +33,7 @@ WHAT WE NEVER COLLECT
 HOW WE USE WHAT WE COLLECT
 
   - To generate the four rewrite axes and the risk badge
-  - To enforce the free-tier daily Coach limit
+  - To confirm your subscription entitlement
   - To manage your subscription and billing status
   - To improve rewrite quality across users, only via the aggregate, content-free signals described above (opt-in only)
 

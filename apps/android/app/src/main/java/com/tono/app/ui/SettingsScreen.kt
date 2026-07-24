@@ -61,7 +61,7 @@ fun SettingsScreen(
         SettingsSection(title = "Account") {
             SettingsRow("Status", if (me != null) "Connected" else "Not connected")
             me?.let { u ->
-                SettingsRow("Plan", if (u.isPro) "Pro" else "Free")
+                SettingsRow("Plan", if (u.isPro) "Pro" else "Subscription required")
                 if (!u.isPro) {
                     SettingsRow("Today", "${u.usedToday} / ${u.dailyLimit} rewrites")
                 }
@@ -205,7 +205,7 @@ fun SettingsScreen(
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text(if (isPro) "Pro ✓" else "Free", fontWeight = FontWeight.SemiBold)
+                Text(if (isPro) "Pro ✓" else "Subscription required", fontWeight = FontWeight.SemiBold)
                 Text(
                     if (isPro) "Verified" else "Google Play",
                     color = Color.Gray,
@@ -221,7 +221,7 @@ fun SettingsScreen(
                 }
             } else {
                 Text(
-                    "Free: 10 coaching sessions/day. Play displays the current local price before purchase.",
+                    "14-day free trial, then Pro. Play displays the current local price before purchase.",
                     color = Color.Gray,
                     fontSize = 12.sp,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),

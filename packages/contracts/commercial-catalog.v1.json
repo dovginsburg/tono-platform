@@ -1,0 +1,99 @@
+{
+  "catalog_version": "1.0.0",
+  "title": "Tono commercial catalog",
+  "description": "Single versioned source of truth mapping every commercial store product (Stripe web, Apple App Store, Google Play) to the ONE canonical server entitlement. This file records identifiers and env-var NAMES only. It contains no secrets, no live price/product secret IDs (those arrive at runtime via the named environment variables), and it does not itself set or change any charge. Prices below are the already-approved display amounts, recorded for traceability; they are NOT the billing authority — the provider charges from the IDs/price objects referenced here.",
+  "invariants": [
+    "There is exactly ONE canonical paid entitlement ('pro'). Every provider product maps to it; there is no duplicate or per-provider plan.",
+    "A store/client purchase never directly grants access. Access is the server's deterministic projection over provider_purchases -> entitlement_grants (Apple/Stripe) or accounts.plan+status (Stripe/coupon). See apps/backend/store.py User.is_pro and _account_has_active_grant.",
+    "Approved prices are display/reference only. Do not change without commercial approval; changing them here does not change any charge (the provider price objects are authoritative).",
+    "Product identifiers are shared across Apple and Google Play by design (com.tonoit.pro.monthly / com.tonoit.pro.yearly); the canonical entitlement is provider-agnostic.",
+    "There is exactly ONE free-trial length ('trial.days'), and it is internally consistent (trial.period_iso8601 resolves to the same number of days). Apple StoreKit intro offers, Stripe Checkout trial_period_days, and Google Play free-trial offers must all equal it; source + tests pin them to this value. The provider consoles are the billing authority — this value is what they are synchronized to, not a substitute for the console configuration.",
+    "There is NO free daily tier. Access is unlimited only during an active trial or paid subscription (or a durable founder grant); expired/canceled/non-entitled callers fail closed. 'daily_limit = -1' means unlimited for an entitled caller; a non-entitled caller has no allowance."
+  ],
+  "canonical_entitlements": {
+    "pro": {
+      "id": "pro",
+      "display_name": "Tono Pro",
+      "grants": "Unlimited rewrites (daily_limit = -1).",
+      "server_projection": "apps/backend/store.py: User.is_pro — active entitlement_grants row (Apple IAP or Stripe provider projection) OR identified account plan=pro with subscription_status in (active,trialing,past_due) OR unexpired coupon_pro_expires_at."
+    }
+  },
+  "approved_prices": {
+    "note": "Display/reference only, USD. Not the charge authority.",
+    "currency": "USD",
+    "intervals": {
+      "month": "3.99",
+      "year": "39.99"
+    }
+  },
+  "trial": {
+    "days": 14,
+    "period_iso8601": "P2W",
+    "note": "Canonical free-trial length for EVERY provider and every surface. The single source of truth: Apple StoreKit intro offers (apps/ios/App/Tono.storekit + App Store Connect), Stripe Checkout trial_period_days (apps/backend/payments.py), and Google Play base-plan free-trial offers must all equal this. 'days' and 'period_iso8601' must agree (P2W == 14 days); the catalog validator enforces that invariant at load. The provider consoles remain the billing authority — changing this value requires commercial approval AND a synchronized console update (App Store Connect intro offer, Stripe Price trial, Play Console offer); editing it here does not itself change any live trial."
+  },
+  "providers": {
+    "stripe": {
+      "channel": "web",
+      "customer_binding": "Stripe Checkout session client_reference_id + subscription metadata (tono_account_id / tono_device_id). Anonymous web checkout is refused; the browser signs in first (POST /v1/auth/web).",
+      "server_product_marker": "stripe_pro",
+      "runtime_config_note": "Live Stripe Price IDs are supplied at runtime via the named environment variables below — only the VARIABLE NAMES are recorded here, never the values.",
+      "products": [
+        {
+          "interval": "month",
+          "entitlement": "pro",
+          "price_env_var": "STRIPE_PRICE_PRO_MONTHLY"
+        },
+        {
+          "interval": "year",
+          "entitlement": "pro",
+          "price_env_var": "STRIPE_PRICE_PRO_YEARLY"
+        }
+      ]
+    },
+    "app_store": {
+      "channel": "ios",
+      "status": "under-review",
+      "bundle_id": "com.tonoit.app",
+      "verification": "apps/backend/app_store.py — Apple SignedDataVerifier (x5c chain to configured Apple root), product/ownership re-checked server-side; canonical account UUID is the only entitlement principal.",
+      "products": [
+        {
+          "interval": "month",
+          "entitlement": "pro",
+          "product_id": "com.tonoit.pro.monthly"
+        },
+        {
+          "interval": "year",
+          "entitlement": "pro",
+          "product_id": "com.tonoit.pro.yearly"
+        }
+      ]
+    },
+    "google_play": {
+      "channel": "android",
+      "status": "closed-test",
+      "package_name": "com.tono.myapp",
+      "client_entitlement_note": "apps/android/.../billing/BillingContract.kt EntitlementDecision.isPro returns backendIsPro only — a client-side Play purchase never unlocks Pro.",
+      "server_verification": "implemented — apps/backend/google_play.py verifies subscription purchase tokens through the Google Play Developer API (androidpublisher purchases.subscriptionsv2.get), validates package/product/base-plan/state/acknowledgement/obfuscatedExternalAccountId, projects the canonical 'pro' entitlement via provider_purchases -> entitlement_grants (provider='google'), and ingests RTDN Pub/Sub push (OIDC-verified) re-querying the Developer API as authority. Verification is unavailable (503) until server credentials are configured, so a Play purchase still fails closed until the operator wires the environment below.",
+      "runtime_config_note": "Server credentials and push-auth parameters are supplied ONLY at runtime; no credential values are recorded here. TONO_GOOGLE_SERVICE_ACCOUNT_JSON supplies the Play Developer API service-account key. The non-secret package, subscription, base-plan, and offer identifiers default to the committed values below and may be overridden by TONO_GOOGLE_PACKAGE_NAME, TONO_GOOGLE_SUBSCRIPTION_IDS, and TONO_GOOGLE_BASE_PLAN_IDS. RTDN uses TONO_GOOGLE_PUBSUB_AUDIENCE + TONO_GOOGLE_PUBSUB_SA_EMAIL (preferred OIDC verification) or TONO_GOOGLE_PUBSUB_SHARED_TOKEN.",
+      "base_plan_env_var": "TONO_GOOGLE_BASE_PLAN_IDS",
+      "base_plan_note": "Approved non-secret Play identifiers are pinned here and selected at runtime via subscriptionOfferDetails. The server defaults to this allow-set and still fails closed for any other verified base plan.",
+      "trial_offer_id": "trial-14-days",
+      "products": [
+        {
+          "interval": "month",
+          "entitlement": "pro",
+          "subscription_id": "com.tonoit.pro.monthly",
+          "base_plan_id": "pro-monthly",
+          "offer_id": "trial-14-days"
+        },
+        {
+          "interval": "year",
+          "entitlement": "pro",
+          "subscription_id": "com.tonoit.pro.yearly",
+          "base_plan_id": "pro-yearly",
+          "offer_id": "trial-14-days"
+        }
+      ]
+    }
+  }
+}

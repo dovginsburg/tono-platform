@@ -1,23 +1,44 @@
-// KeyboardViewController.swift
-// Tono keyboard extension — build 86.
+// Build 98 — punctuation-key title refresh regression fix.
 //
-// Build 86 preserves build-85 typing/spelling behavior while hardening
-// caret-range candidate replacement and the four-axis Coach result contract.
+// Build 97 root cause: `makeCharButton(_:)` assigned EVERY character
+// the identifier `"TonoKB.letter.\(char)"`. For the period key this
+// produced `"TonoKB.letter."` (trailing dot, empty char component).
+// `applyShiftToKey` later parsed with
+// `id.split(separator: ".").last` — Swift's `String.split` defaults
+// to `omittingEmptySubsequences: true`, so the trailing empty
+// component is dropped and `.last` returned the literal substring
+// `"letter"`. `displayLetter("letter")` is identity (the lowercase
+// branch is a no-op on a non-`[a-zA-Z]` token), so the period
+// key's title got overwritten with the word `"letter"` on the
+// first shift refresh.
 //
-//   * Explicit navigation matrix: letters bottom `123`; numbers/symbols
-//     bottom `ABC`; numbers row-3 `#+=`; symbols row-3 `123`.
-//   * Responsive 10/9/7 Apple-parity geometry with full 44pt typing targets,
-//     an accessible semantic-violet Coach action, and no build-number label.
-//   * One delete in row 3; conventional mode/emoji/space/return bottom row;
-//     the globe is created only when `needsInputModeSwitchKey` requires it.
-//   * Lazy 8-column UICollectionView emoji grid with reusable cells, compact
-//     spacing, substantial category datasets, repeated insertion, and recents.
-//   * Monochrome SF Symbols category strip for Recents, Smileys, People,
-//     Animals, Food, Activities, Travel, Objects, Symbols, and Flags.
-//
-// Stable TonoKB.* accessibility identifiers remain available for automation.
+// Fix: split the identifier scheme by char class. Letter keys
+// keep `TonoKB.letter.<ch>` (collision-safe — `<ch>` is always a
+// single ASCII letter, no parser ambiguity). Non-letter keys use
+// `TonoKB.char.U+<XXXX>` (Unicode scalar hex, no `.` ambiguity).
+// `applyShiftToKey` operates ONLY on letter identifiers whose
+// parsed suffix is a single ASCII letter; non-letter keys are
+// skipped entirely, so their titles stay pinned to whatever
+// `displayLetter` produced at construction (already the right
+// glyph for numbers/symbols/punctuation). The raw char is also
+// pinned on the button itself (`KeyboardButton.displayChar`) so
+// any future refresh path reads the original character instead
+// of round-tripping through an identifier.
 
 import UIKit
+
+/// Reads the optional Objective-C document identity without invoking Swift's
+/// `UUID._unconditionallyBridgeFromObjectiveC` thunk. UIKit can legitimately
+/// return nil until the keyboard has connected to its host application.
+enum HostDocumentIdentifier {
+    private static let selector = NSSelectorFromString("documentIdentifier")
+
+    static func read(from proxy: UITextDocumentProxy) -> UUID? {
+        let object = proxy as AnyObject
+        guard object.responds(to: selector) else { return nil }
+        return object.value(forKey: "documentIdentifier") as? UUID
+    }
+}
 
 @objc(KeyboardViewController)
 public final class KeyboardViewController: UIInputViewController, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout, UIInputViewAudioFeedback {
@@ -62,14 +83,40 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             (letterKeyWidth(availableWidth: availableWidth) + rowSpacing) / 2
         }
 
-        static func row3InnerGap(availableWidth: CGFloat) -> CGFloat {
-            max(8, letterKeyWidth(availableWidth: availableWidth) * 0.34)
+        // Row 3 has no separate "inner gap" subview — the row stack's
+        // 8pt `row.spacing` already separates shift / letters / backspace.
+        // The two old `UIView()` spacers were pure dead gutters that ate
+        // the very width the spec calls for on z..m (Sherlock regression
+        // evidence, parent task t_eb68c50f).
+        static func row3InnerGap(availableWidth: CGFloat) -> CGFloat { 0 }
+
+        // Width each row-3 letter cap SHOULD occupy after the shift and
+        // backspace modifiers take their fixed portions. The renderer
+        // actually consumes this — see `makeRow3`'s middle-stack width
+        // constraint. This helper is the single source of truth for both
+        // SwiftUI (AppleFidelity) and UIKit (`KeyboardViewController`),
+        // so the visible-bounds regression test below cannot drift.
+        //
+        // Apple portrait measurements: shift ≈ 44pt, backspace ≈ 54pt,
+        // letterKeyWidth ≈ 30pt. The eight row spacings include the two
+        // visible neighbours of the middle stack plus the six between
+        // the seven letter caps.
+        static func row3LetterKeyWidth(availableWidth: CGFloat) -> CGFloat {
+            let usable = max(availableWidth - edgePadding * 2, 320)
+            let shiftAndBackspace = shiftKeyWidth + backspaceWidth
+            let spacings = rowSpacing * 8
+            return max((usable - shiftAndBackspace - spacings) / 7, 0)
         }
 
         // Bottom-row widths — match the visible iOS layout.
         static let modeToggleWidth: CGFloat = 46
-        static let emojiButtonWidth: CGFloat = 42
+        static let emojiButtonWidth: CGFloat = TonoKeyboardMetrics.ControlGeometry.emojiToggleWidth
         static let backspaceWidth: CGFloat = 54
+        // Apple-portrait shift key — narrower than the backspace but
+        // still clears the 44pt accessibility tap target. Sourced once
+        // here so the geometry helper and the button constraint agree
+        // (Sherlock regression evidence, parent task t_eb68c50f).
+        static let shiftKeyWidth: CGFloat = 44
         static let returnWidth: CGFloat = 72
 
         // Coach UX.
@@ -82,9 +129,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         static let deleteRepeatMinimumInterval: TimeInterval = 0.055
 
         // Emoji panel sizing.
-        static let emojiCellsPerRow: Int = 8
-        static let emojiCategoryTabHeight: CGFloat = 28
-        static let emojiPanelFooterHeight: CGFloat = 38
+        static let emojiCategoryTabHeight: CGFloat = TonoKeyboardMetrics.ControlGeometry.emojiCategoryTabHeight
+        static let emojiPanelFooterHeight: CGFloat = TonoKeyboardMetrics.ControlGeometry.emojiPanelFooterHeight
         static let emojiCellReuseIdentifier = "TonoEmojiCell"
 
         // Accessibility identifiers. Each is also written into the
@@ -145,7 +191,47 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             return registry
         }
 
+        /// Identifier scheme for a single-character alphabetic letter
+        /// keycap. The suffix is always exactly one ASCII letter in
+        /// `[a-z]` (lower-case rendered form), so the
+        /// `TonoKB.letter.<suffix>` parse in `applyShiftToKey` is
+        /// collision-safe — there is no ambiguity about where the
+        /// suffix starts.
         static func letterId(_ ch: String) -> String { "TonoKB.letter.\(ch)" }
+
+        /// Identifier scheme for any non-letter keycap
+        /// (punctuation, numbers, symbols, currency, whitespace).
+        /// The suffix is the character's Unicode scalar in `U+XXXX`
+        /// hex form, so the identifier can never end with a `.`
+        /// that would round-trip to the literal `letter` token
+        /// under `String.split(separator: ".").last` with
+        /// `omittingEmptySubsequences: true` (the build-97
+        /// shipping-defect shape — see file header).
+        static func nonLetterId(_ ch: String) -> String {
+            let scalars = ch.unicodeScalars
+            // Single scalar is the common case; multi-scalar chars
+            // (e.g. emoji) join all their hex codes with `_` so the
+            // suffix is unambiguous.
+            let hexes = scalars.map { String(format: "U+%04X", $0.value) }
+            return "TonoKB.char." + hexes.joined(separator: "_")
+        }
+
+        /// Returns the standard `TonoKB.*` identifier for the given
+        /// raw character. Letters use `TonoKB.letter.<ch>`; every
+        /// other char uses `TonoKB.char.U+<XXXX>` (or
+        /// `U+XXXX_U+YYYY` for multi-scalar). This is the single
+        /// source of truth — `makeCharButton`, `applyShiftToKey`,
+        /// and UI-automation consumers all read from here.
+        static func charId(for ch: String) -> String {
+            if ch.count == 1, let scalar = ch.unicodeScalars.first, scalar.isASCII {
+                let isLowercaseLetter = (scalar.value >= 0x61 && scalar.value <= 0x7A)
+                if isLowercaseLetter {
+                    return "TonoKB.letter.\(ch)"
+                }
+            }
+            return nonLetterId(ch)
+        }
+
         static func rewriteId(_ axis: String, _ index: Int) -> String { "TonoKB.rewrite.\(axis).\(index)" }
         static func emojiId(_ emoji: String) -> String {
             "TonoKB.emoji.\(emoji)"
@@ -162,11 +248,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     /// Letter-key shift state. Symbols/numbers ignore shift entirely.
-    enum ShiftState {
-        case lowercase
-        case oneShotUppercase
-        case capsLock
-    }
+    typealias ShiftState = TonoShiftStateMachine.State
 
     private struct HostConfiguration: Equatable {
         let keyboardType: Int
@@ -256,7 +338,52 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private var preferredHeightConstraint: NSLayoutConstraint?
 
     private var coachRewriteTarget: CoachRewriteTarget?
+    private var coachRequestGuard: CoachRequestLifecycleGuard?
+    private var coachVariantSettings = CoachVariantSettings()
+    private var toneChipsEnabled = false
+    private var selectedToneAxes: [String] = []
     private var coachRequestID: UUID?
+    private var coachTask: URLSessionDataTask?
+    private lazy var coachClient = TonoCoachClient(
+        endpoint: Const.backendURL.replacingOccurrences(of: "/v1/analyze", with: "/api/analyze/variant"),
+        timeout: Const.coachTimeout,
+        // Build 96: the bearer token comes from the app's shared Keychain
+        // access group. When it is absent the client makes zero network
+        // requests and surfaces a visible missing-token state.
+        tokenProvider: { SharedKeychain.get(KeychainKeys.apiToken) }
+    )
+
+    /// Monotonic host/editing-session serial. It advances at every lifecycle
+    /// boundary where the editing context may have changed (appear, disappear,
+    /// host-configuration change) so an authorization captured in one session
+    /// is not honored after a switch even when the visible text is identical.
+    private var hostSessionSerial = 0
+
+    /// Current host/editing-session identity: a privacy-safe host-configuration
+    /// signature (no bundle id, no message text) plus the session serial.
+    private var currentHostSession: HostSessionIdentity {
+        let signature: String
+        if let c = hostConfiguration {
+            signature = "\(c.keyboardType).\(c.returnKeyType).\(c.keyboardAppearance).\(c.autocapitalizationType).\(c.autocorrectionType).\(c.spellCheckingType)"
+        } else {
+            signature = ""
+        }
+        return HostSessionIdentityFactory.make(
+            documentIdentifier: HostDocumentIdentifier.read(from: textDocumentProxy),
+            traitSignature: signature,
+            session: hostSessionSerial
+        )
+    }
+
+    private func advanceHostSession() {
+        hostSessionSerial &+= 1
+        // Live Tone v1 — field / editing-session boundary. Per-draft
+        // suppression must reset here so a new field starts fresh.
+        // Pure observer call; never touches the keystroke path. Wired
+        // unconditionally (build 96) so the test build and the shipping
+        // build run the identical path.
+        liveToneManager?.fieldDidReset()
+    }
 
     private var keysStack: UIStackView?
     private var coachContainer: UIView?
@@ -265,11 +392,23 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private var coachErrorContainer: UIView?
     private var coachErrorLabel: UILabel?
     private var coachBusy: Bool = false
+    /// Identifies the request whose loading surface is currently installed in
+    /// the body container. A completion may replace only *its own* loading
+    /// surface, so a superseded request, an invalidated session, or a
+    /// duplicate delivery can never reattach to a surface it does not own.
+    private var coachLoadingRequestID: UUID?
+    /// Coach requests this controller has started. One tap starts exactly
+    /// one; a tap the busy gate refuses starts none. Debug seam for the 1:1
+    /// contract, mirroring `TonoCoachClient.providerCallCount` on the client
+    /// side. Production never reads it.
+    private(set) var coachRequestsStarted = 0
 
-    // Build 79 — layout, shift, emoji state.
+    // Build 93 — explicit Shift state plus monotonic document-mutation tracking.
     private var layoutMode: KeyboardLayoutMode = .letters
-    private var shiftState: ShiftState = .lowercase
-    private var shiftWasAutomatic = false
+    private var shiftMachine = TonoShiftStateMachine()
+    private var shiftState: ShiftState { shiftMachine.state }
+    private var documentMutationGeneration: UInt64 = 0
+    private var pendingDocumentMutation: TonoPendingDocumentMutation?
     private weak var shiftButton: UIButton?
     private weak var returnButton: UIButton?
     private var hostConfiguration: HostConfiguration?
@@ -284,6 +423,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private var emojiPanelView: UIView?
     private var emojiActiveCategory: EmojiCategory = .smileys
     private var emojiCollectionView: UICollectionView?
+    private weak var emojiCategoryStack: UIStackView?
     private var emojiVisibleGlyphs: [String] = []
     private let spellingService = SpellingCorrectionService()
     private var spellingDecision: SpellingDecision?
@@ -292,6 +432,19 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private weak var candidateStack: UIStackView?
     private weak var coachButton: TonoCoachButton?
     private var candidateValues: [String] = []
+
+    // Live Tone v1 — shipping release. Pure observer; never touches the
+    // keystroke path. The manager owns the debouncer, the session state
+    // machine, the preference reads, and the indicator view. Wired
+    // unconditionally (build 96): it was formerly gated behind
+    // `TONO_BUILD92_HOSTSESSION`, which is defined on the test target and
+    // therefore stripped Live Tone from every test build.
+    private var liveToneManager: LiveToneManager?
+    /// The most recent character we observed via the proxy. Used to
+    /// decide whether a sentence-ending punctuation should flush the
+    /// debounce immediately (500 ms typing-idle OR punctuation, whichever
+    /// fires first — binding Live Tone v1 contract).
+    private var liveToneLastCommittedCharacter: Character?
 
     // MARK: - Lifecycle
 
@@ -314,11 +467,14 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         updateHostConfiguration(rebuildIfNeeded: false)
         installKeyboardLayout()
         keysInstalled = true
+        installLiveTone()
+        #if !TONO_BUILD92_HOSTSESSION
         requestSupplementaryLexicon { [weak self] lexicon in
             let words = Set(lexicon.entries.lazy.flatMap { [$0.userInput, $0.documentText] })
             self?.spellingService.updateSupplementaryWords(words)
             self?.refreshSpellingSuggestions()
         }
+        #endif
         refreshSpellingSuggestions()
         NSLog("TONO_KB BUILD86 02: UIKit hierarchy installed")
     }
@@ -331,6 +487,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     public override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         NSLog("TONO_KB BUILD86 04: viewDidAppear")
+        advanceHostSession()
         refreshHostConfigurationIfNeeded()
         applyAutoCapitalizationIfNeeded()
         refreshSpellingSuggestions()
@@ -338,11 +495,68 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     public override func textDidChange(_ textInput: UITextInput?) {
         refreshHostConfigurationIfNeeded()
+        let liveBefore = textDocumentProxy.documentContextBeforeInput ?? ""
+        let liveAfter = textDocumentProxy.documentContextAfterInput ?? ""
+        let requestAction = coachRequestGuard?.action(
+            liveBefore: liveBefore,
+            liveAfter: liveAfter,
+            host: currentHostSession
+        )
+        if requestAction == .cancel {
+            advanceHostSession()
+            invalidateCoachWork(restoreKeyboard: true)
+        }
+        spellingService.cancel()
+        let liveContext = liveBefore
+        let pending = pendingDocumentMutation
+        let isExpectedLocalNotification = pending?.canExplain(
+            notificationContext: liveContext
+        ) == true
+        if !isExpectedLocalNotification {
+            documentMutationGeneration &+= 1
+            pendingDocumentMutation = nil
+        }
+        let generation = documentMutationGeneration
+        let effectiveContext: String
+        if isExpectedLocalNotification, let pending, pending.generation == generation {
+            effectiveContext = pending.contextAfter
+        } else {
+            effectiveContext = liveContext
+        }
+        // Live Tone v1 — passive observer. The keystroke path is untouched.
+        // We forward the post-mutation context plus the last committed
+        // character so the engine can decide whether to flush on
+        // sentence-ending punctuation. Wired unconditionally (build 96).
+        liveToneDidMutate(context: effectiveContext)
+        // Build 96 Live Tone deferred proxy read: UIKit may publish
+        // textDidChange before UITextDocumentProxy catches up (see
+        // comment above `applyDocumentMutation`). Without a deferred
+        // re-read the engine can repeatedly classify a stale/empty
+        // pre-mutation draft. Schedule a one-tick-late Live Tone drive
+        // that uses the freshly-catch-up live proxy as the post-
+        // mutation context. The engine's own debounce + stale-result
+        // discard mean the second drive is a safe no-op when nothing
+        // changed. Live Tone never touches the document, never opens
+        // the rewrite flow, never blocks the keystroke path.
+        let deferredGeneration = generation
         DispatchQueue.main.async { [weak self] in
-            self?.refreshHostConfigurationIfNeeded()
-            self?.applyAutoCapitalizationIfNeeded()
-            self?.validateAutocorrectionRecord()
-            self?.refreshSpellingSuggestions()
+            guard let self,
+                  self.documentMutationGeneration == deferredGeneration else { return }
+            let liveNow = self.textDocumentProxy.documentContextBeforeInput ?? ""
+            self.liveToneDidMutate(context: liveNow)
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.documentMutationGeneration == generation else { return }
+            self.refreshHostConfigurationIfNeeded()
+            self.applyAutoCapitalizationIfNeeded(
+                context: effectiveContext,
+                callbackGeneration: generation
+            )
+            self.validateAutocorrectionRecord()
+            self.refreshSpellingSuggestions()
+            if self.pendingDocumentMutation?.generation == generation {
+                self.pendingDocumentMutation = nil
+            }
         }
     }
 
@@ -352,9 +566,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         guard width > 0 else { return }
         let changed = lastLayoutWidth.map { abs($0 - width) > 0.5 } ?? true
         lastLayoutWidth = width
-        if coachResultsStack == nil {
-            preferredHeightConstraint?.constant = currentVisualMetrics.preferredContentHeight
-        }
+        preferredHeightConstraint?.constant = currentVisualMetrics.preferredContentHeight
         guard changed, keysInstalled, !isRebuildingLayout, coachContainer == nil else { return }
         if isEmojiPanelVisible { showEmojiPanel() } else { installKeyboardLayout() }
     }
@@ -382,16 +594,22 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     public override func viewWillDisappear(_ animated: Bool) {
+        advanceHostSession()
+        invalidateCoachWork(restoreKeyboard: false)
+        spellingService.cancel()
         cancelTransientInteractions()
         super.viewWillDisappear(animated)
     }
 
     public override func viewDidDisappear(_ animated: Bool) {
+        invalidateCoachWork(restoreKeyboard: false)
+        spellingService.cancel()
         cancelTransientInteractions()
         super.viewDidDisappear(animated)
     }
 
     deinit {
+        coachTask?.cancel()
         spellingService.cancel()
         cancelDeleteRepeat()
         dismissKeyPreview()
@@ -408,6 +626,22 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         dismissKeyPreview()
     }
 
+    private func invalidateCoachWork(restoreKeyboard: Bool, clearTarget: Bool = true) {
+        coachTask?.cancel()
+        coachTask = nil
+        coachRequestID = nil
+        coachLoadingRequestID = nil
+        if clearTarget {
+            coachRewriteTarget = nil
+            coachRequestGuard = nil
+        }
+        coachBusy = false
+        coachButton?.isEnabled = true
+        guard restoreKeyboard, coachContainer != nil, keysInstalled, !isRebuildingLayout else { return }
+        removeAllCoachSurfaces()
+        installKeyboardLayout()
+    }
+
     // MARK: - Minimal Coach bar
 
     private func buildTopBar() {
@@ -417,7 +651,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         view.addSubview(bar)
 
         let coach = TonoCoachButton(type: .custom)
-        coach.setTitle("Coach", for: .normal)
+        coach.setTitle("TONO", for: .normal)
         coach.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
         coach.layer.cornerRadius = Const.keyCornerRadius
         coach.layer.masksToBounds = true
@@ -437,7 +671,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         candidates.accessibilityIdentifier = Const.idCandidates
         bar.addSubview(candidates)
         for index in 0..<3 {
-            let button = UIButton(type: .system)
+            let button = TonoMinimumHitTargetButton(type: .system)
             button.tag = index
             button.titleLabel?.font = UIFontMetrics(forTextStyle: .caption1).scaledFont(
                 for: .systemFont(ofSize: 13, weight: .regular)
@@ -451,7 +685,12 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             button.addTarget(self, action: #selector(candidateTapped(_:)), for: .touchUpInside)
             candidates.addArrangedSubview(button)
         }
-        bar.accessibilityElements = candidates.arrangedSubviews + [coach]
+        // TONO is the leading anchor of the strip; the tone chips read to its
+        // right. Accessibility order matches the visual order.
+        bar.accessibilityElements = [coach] + candidates.arrangedSubviews
+        let approvedCoachWidth = ceil(coach.intrinsicContentSize.width)
+        coach.setContentHuggingPriority(.required, for: .horizontal)
+        coach.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         NSLayoutConstraint.activate([
             bar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -459,12 +698,15 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             bar.topAnchor.constraint(equalTo: view.topAnchor),
             bar.heightAnchor.constraint(equalToConstant: Const.baselineMetrics.topBarHeight),
 
-            coach.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
+            // TONO remains anchored to the leading edge in every state.
+            coach.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 8),
             coach.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
             coach.heightAnchor.constraint(equalToConstant: Const.baselineMetrics.coachControlHeight),
+            coach.widthAnchor.constraint(equalToConstant: approvedCoachWidth),
 
-            candidates.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 3),
-            candidates.trailingAnchor.constraint(equalTo: coach.leadingAnchor, constant: -5),
+            // The color-coded tone chips fill the trailing space after TONO.
+            candidates.leadingAnchor.constraint(equalTo: coach.trailingAnchor, constant: 5),
+            candidates.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -3),
             candidates.topAnchor.constraint(equalTo: bar.topAnchor, constant: 4),
             candidates.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -4),
         ])
@@ -543,6 +785,11 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         let next = currentHostConfiguration
         guard previous != next else { return }
         hostConfiguration = next
+        advanceHostSession()
+        if previous != nil {
+            invalidateCoachWork(restoreKeyboard: true)
+            spellingService.cancel()
+        }
         applyKeyboardAppearance(hostKeyboardAppearance)
 
         if previous?.keyboardType != next.keyboardType {
@@ -614,11 +861,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         isEmojiPanelVisible = false
 
         keysStack?.removeFromSuperview()
-        coachContainer?.removeFromSuperview()
-        coachContainer = nil
-        coachResultsStack = nil
-        coachErrorContainer = nil
-        coachErrorLabel = nil
+        removeAllCoachSurfaces()
         shiftButton = nil
         returnButton = nil
 
@@ -654,6 +897,19 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         stack.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight * 4 + Const.rowSpacing * 3).isActive = true
 
         self.keysStack = stack
+
+        // Build 96 Live Tone z-order fix: every layout rebuild appends a
+        // fresh full-edge keyboard stack after the indicator, demoting
+        // it in z-order so a published warning becomes invisible
+        // (parent Sherlock diagnosis t_08d08e43). Re-promote the
+        // indicator to the top of bodyContainer so the warning is
+        // actually drawn over the keyboard stack. The manager-owned
+        // indicator contract is preserved: we only re-order existing
+        // subviews, never re-create or relocate the indicator view.
+        if let indicator = liveToneManager?.indicator, indicator.superview === container {
+            container.bringSubviewToFront(indicator)
+        }
+
         NSLog("TONO_KB BUILD86 05: keyboard layout installed mode=\(modeName(layoutMode))")
     }
 
@@ -723,7 +979,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private func displayLetter(_ ch: String) -> String {
         switch layoutMode {
         case .letters:
-            return shiftState == .lowercase ? ch : ch.uppercased()
+            return shiftMachine.display(ch)
         case .numbers, .symbols:
             return ch
         }
@@ -806,14 +1062,14 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             }
         }
 
-        if layoutMode == .letters {
-            let innerGap = UIView()
-            innerGap.translatesAutoresizingMaskIntoConstraints = false
-            innerGap.widthAnchor.constraint(
-                equalToConstant: Const.row3InnerGap(availableWidth: currentKeyboardWidth)
-            ).isActive = true
-            row.addArrangedSubview(innerGap)
-        }
+        // Row 3 has no separate "inner gap" UIView subview. The row
+        // stack's 8pt `row.spacing` already separates shift / letters /
+        // backspace. The two old `UIView()` spacers here were pure dead
+        // gutters that ate the very width the spec calls for on z..m —
+        // Sherlock regression evidence, parent task t_eb68c50f. The
+        // middle stack's width is now anchored to
+        // `row3LetterKeyWidth * 7` so the letters actually consume the
+        // reclaimed space.
 
         let middle = UIStackView()
         middle.axis = .horizontal
@@ -823,16 +1079,15 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         for ch in row3BaseChars() {
             middle.addArrangedSubview(makeCharButton(ch))
         }
+        // Wire the middle stack to the helper's computed width so the
+        // letters actually get the reclaimed space (the failure mode in
+        // the 339775cf candidate — helper defined but never consumed by
+        // the UIKit row). The fillEqually distribution inside `middle`
+        // then tiles its width into seven equal keycaps.
+        middle.widthAnchor.constraint(
+            equalToConstant: Const.row3LetterKeyWidth(availableWidth: currentKeyboardWidth) * 7
+        ).isActive = true
         row.addArrangedSubview(middle)
-
-        if layoutMode == .letters {
-            let trailingInnerGap = UIView()
-            trailingInnerGap.translatesAutoresizingMaskIntoConstraints = false
-            trailingInnerGap.widthAnchor.constraint(
-                equalToConstant: Const.row3InnerGap(availableWidth: currentKeyboardWidth)
-            ).isActive = true
-            row.addArrangedSubview(trailingInnerGap)
-        }
 
         let backspace = makeSymbolControlButton(
             systemName: "delete.left",
@@ -862,7 +1117,16 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         b.layer.borderWidth = Const.keyBorderWidth
         b.layer.borderColor = keyboardKeyBorder().cgColor
         b.accessibilityLabel = char.uppercased()
-        b.accessibilityIdentifier = Const.letterId(char)
+        // Build 98 — collision-proof identifier scheme. Single ASCII
+        // lowercase letters stay on `TonoKB.letter.<ch>` (collision-
+        // safe parse). Everything else (numbers, punctuation,
+        // symbols, currency, multi-scalar) goes to `TonoKB.char.U+…`
+        // which has no `.` ambiguity and cannot round-trip through
+        // `id.split(separator: ".").last` to the literal `letter`.
+        b.accessibilityIdentifier = Const.charId(for: char)
+        // Build 98 — pin the raw character on the button itself so
+        // any refresh path reads from a non-parser-dependent store.
+        b.displayChar = char
         b.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight).isActive = true
         b.addTarget(self, action: #selector(characterTouchDown(_:)), for: .touchDown)
         b.addTarget(self, action: #selector(charTapped(_:)), for: .touchUpInside)
@@ -886,7 +1150,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         b.layer.borderColor = keyboardKeyBorder().cgColor
         b.accessibilityLabel = shiftAccessibilityLabel()
         b.accessibilityIdentifier = Const.idShift
-        b.widthAnchor.constraint(equalToConstant: Const.backspaceWidth).isActive = true
+        b.widthAnchor.constraint(equalToConstant: Const.shiftKeyWidth).isActive = true
         b.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight).isActive = true
         let singleTap = UITapGestureRecognizer(target: self, action: #selector(shiftSingleTapped))
         let doubleTap = UITapGestureRecognizer(target: self, action: #selector(shiftDoubleTapped))
@@ -999,7 +1263,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         let button = makeControlButton(
             title: character,
             action: #selector(quickCharacterTapped(_:)),
-            width: 32,
+            width: TonoKeyboardMetrics.ControlGeometry.quickCharacterWidth,
             bg: keyboardKeyBackground(.secondary),
             id: "quick.\(character)"
         )
@@ -1120,22 +1384,21 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     @objc private func charTapped(_ sender: UIButton) {
         guard let title = sender.title(for: .normal) else { return }
+        let beforeMutation = effectiveDocumentContextBeforeInput
+        let afterMutation: String
         if isSpellingBoundary(title) {
-            commitBoundary(title)
+            afterMutation = commitBoundary(title, contextBeforeInput: beforeMutation)
         } else {
             autocorrectionRecord = nil
             textDocumentProxy.insertText(title)
+            afterMutation = beforeMutation + title
         }
         playInputClick()
-        if layoutMode == .letters, shiftState == .oneShotUppercase {
-            shiftState = .lowercase
-            shiftWasAutomatic = false
-            updateShiftButtonAppearance()
-        }
-        DispatchQueue.main.async { [weak self] in
-            self?.applyAutoCapitalizationIfNeeded()
-            self?.refreshSpellingSuggestions()
-        }
+        recordDocumentMutation(
+            from: beforeMutation,
+            to: afterMutation,
+            consumingEligibleCapital: layoutMode == .letters ? title : nil
+        )
     }
 
     @objc private func characterTouchDown(_ sender: UIButton) {
@@ -1147,22 +1410,13 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     @objc private func shiftSingleTapped() {
-        shiftWasAutomatic = false
-        switch shiftState {
-        case .capsLock:
-            shiftState = .lowercase
-        case .lowercase:
-            shiftState = .oneShotUppercase
-        case .oneShotUppercase:
-            shiftState = .lowercase
-        }
+        shiftMachine.tapShift()
         relayoutLettersForShift()
         playInputClick()
     }
 
     @objc private func shiftDoubleTapped() {
-        shiftWasAutomatic = false
-        shiftState = shiftState == .capsLock ? .lowercase : .capsLock
+        shiftMachine.doubleTapShift()
         relayoutLettersForShift()
         playInputClick()
     }
@@ -1187,21 +1441,65 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         handleInputModeList(from: sender, with: event)
     }
 
-    private func applyAutoCapitalizationIfNeeded() {
-        guard shiftState != .capsLock else { return }
+    private var effectiveDocumentContextBeforeInput: String {
+        if let pending = pendingDocumentMutation,
+           pending.generation == documentMutationGeneration {
+            return pending.contextAfter
+        }
+        return textDocumentProxy.documentContextBeforeInput ?? ""
+    }
+
+    private func recordDocumentMutation(
+        from contextBefore: String,
+        to contextAfter: String,
+        consumingEligibleCapital text: String? = nil
+    ) {
+        documentMutationGeneration &+= 1
+        let generation = documentMutationGeneration
+        pendingDocumentMutation = TonoPendingDocumentMutation(
+            generation: generation,
+            contextBefore: contextBefore,
+            contextAfter: contextAfter
+        )
+
+        if let text { shiftMachine.consumeEligibleCapital(text) }
+        applyAutoCapitalizationIfNeeded(
+            context: contextAfter,
+            callbackGeneration: generation
+        )
+        relayoutLettersForShift()
+
+        // UIKit may publish textDidChange before UITextDocumentProxy catches up.
+        // A pending mutation is accepted only while the live proxy is either its
+        // known before- or after-context. Any third context is an external host
+        // mutation and advances the generation, invalidating stale callbacks.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.documentMutationGeneration == generation else { return }
+            self.refreshSpellingSuggestions()
+            if self.pendingDocumentMutation?.generation == generation {
+                self.pendingDocumentMutation = nil
+            }
+        }
+    }
+
+    private func applyAutoCapitalizationIfNeeded(
+        context: String? = nil,
+        callbackGeneration: UInt64? = nil
+    ) {
         guard layoutMode == .letters else { return }
-        if shiftState == .oneShotUppercase, !shiftWasAutomatic { return }
-        let before = textDocumentProxy.documentContextBeforeInput ?? ""
+        let generation = callbackGeneration ?? documentMutationGeneration
+        let before = context ?? effectiveDocumentContextBeforeInput
         let shouldCapitalize = automaticCapitalizationRecommended(
             policy: hostAutocapitalizationType,
             context: before
         )
-        let next: ShiftState = shouldCapitalize ? .oneShotUppercase : .lowercase
-        if shiftState != next {
-            shiftState = next
+        if shiftMachine.applyAutomaticCapitalization(
+            recommended: shouldCapitalize,
+            callbackGeneration: generation,
+            documentGeneration: documentMutationGeneration
+        ) {
             relayoutLettersForShift()
         }
-        shiftWasAutomatic = shouldCapitalize
     }
 
     private func automaticCapitalizationRecommended(
@@ -1260,11 +1558,39 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             (b as? KeyboardButton)?.normalBackgroundColor = shiftState == .capsLock
                 ? UIColor.systemBlue.withAlphaComponent(0.22)
                 : keyboardKeyBackground(.tertiary)
-        } else if let id = b.accessibilityIdentifier,
-                  id.hasPrefix("TonoKB.letter."),
-                  let raw = id.split(separator: ".").last {
-            b.setTitle(displayLetter(String(raw)), for: .normal)
+            return
         }
+        // Build 98 — letter-only refresh guard.
+        //
+        // Build 97's shipping defect: this branch matched
+        // `id.hasPrefix("TonoKB.letter.")` for EVERY char, then
+        // parsed with `id.split(separator: ".").last`. For the
+        // period key the identifier was `"TonoKB.letter."` and the
+        // split dropped the trailing empty component, returning
+        // the literal substring `"letter"` — which got rendered as
+        // the keycap title.
+        //
+        // Build 98 contract: the title refresh only fires for
+        // identifiers that parse to exactly one ASCII lowercase
+        // letter. Anything else (numbers, punctuation, symbols,
+        // multi-scalar) is a no-op here — its title is whatever
+        // `displayLetter` produced at construction time, which is
+        // already the correct glyph. We also fall back to the
+        // button's pinned `displayChar` if parsing succeeds, so a
+        // future identifier rename can't silently re-break the
+        // shift path.
+        guard let id = b.accessibilityIdentifier,
+              id.hasPrefix("TonoKB.letter."),
+              let raw = id
+                .split(separator: ".", omittingEmptySubsequences: false)
+                .last,
+              raw.count == 1,
+              let scalar = raw.unicodeScalars.first,
+              (scalar.value >= 0x61 && scalar.value <= 0x7A) else {
+            return
+        }
+        let ch = String(raw)
+        b.setTitle(displayLetter(ch), for: .normal)
     }
 
     private func updateShiftButtonAppearance() {
@@ -1307,7 +1633,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         }
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         let after = textDocumentProxy.documentContextAfterInput ?? ""
-        guard let token = SpellingToken.current(before: before, after: after) else {
+        guard let token = SpellingToken.current(before: before, after: after, host: currentHostSession) else {
             spellingService.cancel()
             spellingDecision = nil
             spellingToken = nil
@@ -1329,7 +1655,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             guard let self = self else { return }
             let live = SpellingToken.current(
                 before: self.textDocumentProxy.documentContextBeforeInput ?? "",
-                after: self.textDocumentProxy.documentContextAfterInput ?? ""
+                after: self.textDocumentProxy.documentContextAfterInput ?? "",
+                host: self.currentHostSession
             )
             guard live == token else { return }
             self.spellingDecision = decision
@@ -1353,6 +1680,12 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             let value = candidateValues[index]
             let isOriginal = index == 0
             button.isHidden = false
+            // Reset to the neutral candidate style; the tone-chip path repaints
+            // afterward so tone token colors never leak into spelling
+            // candidates.
+            button.backgroundColor = .secondarySystemBackground
+            button.setTitleColor(.label, for: .normal)
+            button.accessibilityValue = nil
             button.setTitle(value, for: .normal)
             button.accessibilityLabel = isOriginal ? "\(value), original" : value
             button.accessibilityHint = isOriginal
@@ -1366,16 +1699,22 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         guard candidateValues.indices.contains(sender.tag) else { return }
         let value = candidateValues[sender.tag]
         if let record = autocorrectionRecord, value == record.original {
-            guard restoreAutocorrection(record, keepBoundary: true) else { return }
+            let beforeMutation = effectiveDocumentContextBeforeInput
+            guard let afterMutation = restoreAutocorrection(
+                record,
+                keepBoundary: true,
+                contextBeforeInput: beforeMutation
+            ) else { return }
             playInputClick()
-            refreshSpellingSuggestions()
+            recordDocumentMutation(from: beforeMutation, to: afterMutation)
             return
         }
         guard let expected = spellingToken,
               let plan = SpellingMutationPlan.candidate(
                 liveToken: SpellingToken.current(
                     before: textDocumentProxy.documentContextBeforeInput ?? "",
-                    after: textDocumentProxy.documentContextAfterInput ?? ""
+                    after: textDocumentProxy.documentContextAfterInput ?? "",
+                    host: currentHostSession
                 ),
                 expected: expected,
                 replacement: value
@@ -1388,9 +1727,13 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         refreshSpellingSuggestions()
     }
 
-    private func commitBoundary(_ boundary: String) {
+    private func commitBoundary(
+        _ boundary: String,
+        contextBeforeInput: String
+    ) -> String {
         let live = SpellingToken.current(
-            in: textDocumentProxy.documentContextBeforeInput ?? ""
+            in: contextBeforeInput,
+            host: currentHostSession
         )
         let plan = SpellingMutationPlan.boundary(
             liveToken: live,
@@ -1398,11 +1741,13 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             decision: spellingDecision,
             boundary: boundary
         )
+        let appliedPlan: SpellingMutationPlan
         if plan.deleteCount > 0,
            let live = live,
            let replacement = spellingDecision?.automaticReplacement,
            spellingHostPolicy.allowsSuggestions {
             applySpellingMutation(plan)
+            appliedPlan = plan
             autocorrectionRecord = AutoCorrectionRecord(
                 original: live.text,
                 replacement: replacement,
@@ -1413,9 +1758,23 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             spellingToken = nil
             updateCandidateStrip(values: [live.text])
         } else {
+            let boundaryPlan = SpellingMutationPlan(deleteCount: 0, insertion: boundary)
             autocorrectionRecord = nil
-            applySpellingMutation(SpellingMutationPlan(deleteCount: 0, insertion: boundary))
+            applySpellingMutation(boundaryPlan)
+            appliedPlan = boundaryPlan
         }
+        return contextAfterApplying(appliedPlan, to: contextBeforeInput)
+    }
+
+    private func contextAfterApplying(
+        _ plan: SpellingMutationPlan,
+        to contextBeforeInput: String
+    ) -> String {
+        TonoDocumentContextMutation.applying(
+            deleteCount: plan.deleteCount,
+            insertion: plan.insertion,
+            to: contextBeforeInput
+        )
     }
 
     private func applySpellingMutation(_ plan: SpellingMutationPlan) {
@@ -1438,76 +1797,94 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         }
     }
 
-    private func restoreOriginalAfterBackspaceIfPossible() -> Bool {
-        guard let record = autocorrectionRecord else { return false }
-        return restoreAutocorrection(record, keepBoundary: false)
+    private func restoreOriginalAfterBackspaceIfPossible(
+        contextBeforeInput: String
+    ) -> String? {
+        guard let record = autocorrectionRecord else { return nil }
+        return restoreAutocorrection(
+            record,
+            keepBoundary: false,
+            contextBeforeInput: contextBeforeInput
+        )
     }
 
     private func restoreAutocorrection(
         _ record: AutoCorrectionRecord,
-        keepBoundary: Bool
-    ) -> Bool {
-        let context = textDocumentProxy.documentContextBeforeInput ?? ""
-        guard context.hasSuffix(record.correctedSuffix) else {
+        keepBoundary: Bool,
+        contextBeforeInput: String
+    ) -> String? {
+        guard contextBeforeInput.hasSuffix(record.correctedSuffix) else {
             autocorrectionRecord = nil
-            return false
+            return nil
         }
         for _ in record.correctedSuffix { textDocumentProxy.deleteBackward() }
-        textDocumentProxy.insertText(keepBoundary ? record.restoredText : record.original)
+        let restored = keepBoundary ? record.restoredText : record.original
+        textDocumentProxy.insertText(restored)
         autocorrectionRecord = nil
         spellingDecision = nil
         spellingToken = nil
         updateCandidateStrip(values: keepBoundary ? [] : [record.original])
-        return true
+        return TonoDocumentContextMutation.restoring(
+            correctedSuffix: record.correctedSuffix,
+            restoredText: restored,
+            in: contextBeforeInput
+        )
     }
 
     @objc private func spaceTapped() {
-        let contextSuffix = String(
-            (textDocumentProxy.documentContextBeforeInput ?? "").suffix(8)
-        )
-        if DoubleSpacePolicy.shouldTransform(
+        let beforeMutation = effectiveDocumentContextBeforeInput
+        let contextSuffix = String(beforeMutation.suffix(8))
+        let transformedDoubleSpace = DoubleSpacePolicy.shouldTransform(
             contextSuffix: contextSuffix,
             host: spellingHostPolicy,
             hasPendingAutocorrectionUndo: autocorrectionRecord != nil
-        ) {
+        )
+        let afterMutation: String
+        if transformedDoubleSpace {
             textDocumentProxy.deleteBackward()
             textDocumentProxy.insertText(". ")
             spellingService.cancel()
             spellingDecision = nil
             spellingToken = nil
             updateCandidateStrip(values: [])
+            afterMutation = String(beforeMutation.dropLast()) + ". "
         } else {
-            commitBoundary(" ")
+            afterMutation = commitBoundary(" ", contextBeforeInput: beforeMutation)
         }
         playInputClick()
-        DispatchQueue.main.async { [weak self] in
-            self?.applyAutoCapitalizationIfNeeded()
-            self?.refreshSpellingSuggestions()
-        }
+        recordDocumentMutation(from: beforeMutation, to: afterMutation)
     }
 
     @objc private func quickCharacterTapped(_ sender: UIButton) {
         guard let character = sender.title(for: .normal), !character.isEmpty else { return }
+        let beforeMutation = effectiveDocumentContextBeforeInput
+        let afterMutation: String
         if isSpellingBoundary(character) {
-            commitBoundary(character)
+            afterMutation = commitBoundary(character, contextBeforeInput: beforeMutation)
         } else {
             autocorrectionRecord = nil
             textDocumentProxy.insertText(character)
+            afterMutation = beforeMutation + character
         }
         playInputClick()
-        DispatchQueue.main.async { [weak self] in
-            self?.applyAutoCapitalizationIfNeeded()
-            self?.refreshSpellingSuggestions()
-        }
+        recordDocumentMutation(from: beforeMutation, to: afterMutation)
     }
 
     @objc private func backspaceTouchDown() {
         cancelDeleteRepeat()
-        if !restoreOriginalAfterBackspaceIfPossible() {
+        let beforeMutation = effectiveDocumentContextBeforeInput
+        let afterMutation: String
+        if let restored = restoreOriginalAfterBackspaceIfPossible(
+            contextBeforeInput: beforeMutation
+        ) {
+            afterMutation = restored
+        } else {
             autocorrectionRecord = nil
             textDocumentProxy.deleteBackward()
+            afterMutation = String(beforeMutation.dropLast())
         }
         playInputClick()
+        recordDocumentMutation(from: beforeMutation, to: afterMutation)
         deleteRepeatCount = 0
         let generation = deleteRepeatGeneration
         scheduleDeleteRepeat(after: Const.deleteRepeatInitialDelay, generation: generation)
@@ -1515,16 +1892,22 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     @objc private func backspaceTouchEnded() {
         cancelDeleteRepeat()
-        DispatchQueue.main.async { [weak self] in
-            self?.applyAutoCapitalizationIfNeeded()
-            self?.refreshSpellingSuggestions()
-        }
+        applyAutoCapitalizationIfNeeded(
+            context: effectiveDocumentContextBeforeInput,
+            callbackGeneration: documentMutationGeneration
+        )
+        refreshSpellingSuggestions()
     }
 
     private func scheduleDeleteRepeat(after delay: TimeInterval, generation: Int) {
         let item = DispatchWorkItem { [weak self] in
             guard let self = self, generation == self.deleteRepeatGeneration else { return }
+            let beforeMutation = self.effectiveDocumentContextBeforeInput
             self.textDocumentProxy.deleteBackward()
+            self.recordDocumentMutation(
+                from: beforeMutation,
+                to: String(beforeMutation.dropLast())
+            )
             self.playInputClick()
             self.deleteRepeatCount += 1
             let accelerated = Const.deleteRepeatInterval - Double(self.deleteRepeatCount) * 0.004
@@ -1543,12 +1926,10 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     @objc private func returnTapped() {
-        commitBoundary("\n")
+        let beforeMutation = effectiveDocumentContextBeforeInput
+        let afterMutation = commitBoundary("\n", contextBeforeInput: beforeMutation)
         playInputClick()
-        DispatchQueue.main.async { [weak self] in
-            self?.applyAutoCapitalizationIfNeeded()
-            self?.refreshSpellingSuggestions()
-        }
+        recordDocumentMutation(from: beforeMutation, to: afterMutation)
     }
 
     private func showKeyPreview(for button: UIButton) {
@@ -1612,15 +1993,12 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         emojiPanelView?.removeFromSuperview()
         emojiPanelView = nil
         emojiCollectionView = nil
+        emojiCategoryStack = nil
         preferredHeightConstraint?.constant = currentVisualMetrics.preferredContentHeight
 
         keysStack?.removeFromSuperview()
         keysStack = nil
-        coachContainer?.removeFromSuperview()
-        coachContainer = nil
-        coachResultsStack = nil
-        coachErrorContainer = nil
-        coachErrorLabel = nil
+        removeAllCoachSurfaces()
 
         let panel = UIView()
         panel.translatesAutoresizingMaskIntoConstraints = false
@@ -1634,19 +2012,29 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             panel.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
 
-        // Top: category tabs.
+        // Top: horizontally scrollable category tabs. Ten 44pt tabs cannot fit
+        // side-by-side on compact phones, so scrolling preserves honest hit
+        // targets rather than compressing them below the minimum.
+        let tabsScroll = UIScrollView()
+        tabsScroll.translatesAutoresizingMaskIntoConstraints = false
+        tabsScroll.showsHorizontalScrollIndicator = false
+        tabsScroll.alwaysBounceHorizontal = true
+        panel.addSubview(tabsScroll)
+
         let tabsRow = UIStackView()
         tabsRow.axis = .horizontal
         tabsRow.alignment = .fill
-        tabsRow.distribution = .fillEqually
+        tabsRow.distribution = .fill
         tabsRow.spacing = 0
         tabsRow.translatesAutoresizingMaskIntoConstraints = false
         tabsRow.accessibilityIdentifier = Const.idEmojiCategory
-        panel.addSubview(tabsRow)
+        tabsScroll.addSubview(tabsRow)
         for category in EmojiCategory.allCases {
             let tab = makeEmojiCategoryTab(category)
+            tab.widthAnchor.constraint(greaterThanOrEqualToConstant: TonoKeyboardMetrics.ControlGeometry.emojiCategoryTabWidth).isActive = true
             tabsRow.addArrangedSubview(tab)
         }
+        emojiCategoryStack = tabsRow
 
         // Body: dense, memory-safe reusable grid. Only visible cells exist.
         let flow = UICollectionViewFlowLayout()
@@ -1723,14 +2111,19 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         footer.addArrangedSubview(emojiReturn)
 
         NSLayoutConstraint.activate([
-            tabsRow.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
-            tabsRow.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
-            tabsRow.topAnchor.constraint(equalTo: panel.topAnchor),
-            tabsRow.heightAnchor.constraint(equalToConstant: Const.emojiCategoryTabHeight),
+            tabsScroll.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
+            tabsScroll.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
+            tabsScroll.topAnchor.constraint(equalTo: panel.topAnchor),
+            tabsScroll.heightAnchor.constraint(equalToConstant: Const.emojiCategoryTabHeight),
+            tabsRow.leadingAnchor.constraint(equalTo: tabsScroll.contentLayoutGuide.leadingAnchor),
+            tabsRow.trailingAnchor.constraint(equalTo: tabsScroll.contentLayoutGuide.trailingAnchor),
+            tabsRow.topAnchor.constraint(equalTo: tabsScroll.contentLayoutGuide.topAnchor),
+            tabsRow.bottomAnchor.constraint(equalTo: tabsScroll.contentLayoutGuide.bottomAnchor),
+            tabsRow.heightAnchor.constraint(equalTo: tabsScroll.frameLayoutGuide.heightAnchor),
 
             collection.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
             collection.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
-            collection.topAnchor.constraint(equalTo: tabsRow.bottomAnchor),
+            collection.topAnchor.constraint(equalTo: tabsScroll.bottomAnchor),
             collection.bottomAnchor.constraint(equalTo: footer.topAnchor),
 
             footer.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
@@ -1753,6 +2146,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         emojiPanelView?.removeFromSuperview()
         emojiPanelView = nil
         emojiCollectionView = nil
+        emojiCategoryStack = nil
         emojiVisibleGlyphs = []
         isEmojiPanelVisible = false
         installKeyboardLayout()
@@ -1760,7 +2154,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     private func makeEmojiCategoryTab(_ category: EmojiCategory) -> UIButton {
-        let b = UIButton(type: .system)
+        let b = TonoMinimumHitTargetButton(type: .system)
         b.setImage(UIImage(systemName: category.symbolName), for: .normal)
         b.imageView?.contentMode = .scaleAspectFit
         let isActive = (category == emojiActiveCategory)
@@ -1780,9 +2174,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     private func emojiCategoryTapped(_ category: EmojiCategory) {
-        guard let panel = emojiPanelView, let collection = emojiCollectionView else { return }
+        guard emojiPanelView != nil, let collection = emojiCollectionView else { return }
         emojiActiveCategory = category
-        if let tabsRow = panel.subviews.first(where: { $0.accessibilityIdentifier == Const.idEmojiCategory }) as? UIStackView {
+        if let tabsRow = emojiCategoryStack {
             for (idx, sub) in tabsRow.arrangedSubviews.enumerated() {
                 if let b = sub as? UIButton, let cat = EmojiCategory(rawValue: idx) {
                     let isActive = (cat == emojiActiveCategory)
@@ -1828,9 +2222,14 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     ) -> CGSize {
         let flow = collectionViewLayout as! UICollectionViewFlowLayout
         let horizontalInsets = flow.sectionInset.left + flow.sectionInset.right
-        let gaps = CGFloat(Const.emojiCellsPerRow - 1) * flow.minimumInteritemSpacing
-        let width = floor((collectionView.bounds.width - horizontalInsets - gaps) / CGFloat(Const.emojiCellsPerRow))
-        return CGSize(width: width, height: 34)
+        let columns = TonoKeyboardMetrics.ControlGeometry.emojiGridColumns(
+            availableWidth: collectionView.bounds.width,
+            insets: horizontalInsets,
+            spacing: flow.minimumInteritemSpacing
+        )
+        let gaps = CGFloat(columns - 1) * flow.minimumInteritemSpacing
+        let width = floor((collectionView.bounds.width - horizontalInsets - gaps) / CGFloat(columns))
+        return CGSize(width: width, height: TonoKeyboardMetrics.ControlGeometry.emojiResultCellHeight)
     }
 
     public func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
@@ -1871,20 +2270,94 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     @objc private func coachTapped() {
         guard !coachBusy else { return }
-        cancelTransientInteractions()
-        spellingService.cancel()
-        updateCandidateStrip(values: [])
-        if isEmojiPanelVisible { hideEmojiPanel() }
-        let proxy = textDocumentProxy
-        guard let target = CoachRewriteTarget.capture(
-            before: proxy.documentContextBeforeInput ?? "",
-            after: proxy.documentContextAfterInput ?? ""
-        ) else {
-            presentCoachEmptyState()
+        setToneChipsEnabled(!toneChipsEnabled)
+    }
+
+    private func setToneChipsEnabled(_ enabled: Bool) {
+        toneChipsEnabled = enabled
+        coachVariantSettings = CoachVariantSettingsStore().load()
+        // Safer is the fixed first token; exactly two configured optional
+        // tokens follow. No hidden generation — the optional tokens come
+        // straight from the persisted device selection, which the store
+        // guarantees is exactly two (build-97 contract: Safer + two,
+        // legacy 3→2 deterministically migrated). The keyboard chip
+        // strip therefore always renders Safer + exactly two user
+        // tones — never more, never less.
+        let configuredOptional = Array(coachVariantSettings.enabled.prefix(
+            CoachVariantSettings.maximumOptionalCount
+        ))
+        selectedToneAxes = ["safer"] + configuredOptional.map(\.rawValue)
+        if !enabled {
+            refreshSpellingSuggestions()
             return
         }
+        updateCandidateStrip(values: selectedToneAxes.map { $0.capitalized })
+        for (index, view) in (candidateStack?.arrangedSubviews ?? []).enumerated() {
+            guard let button = view as? UIButton else { continue }
+            button.removeTarget(self, action: #selector(candidateTapped(_:)), for: .touchUpInside)
+            button.addTarget(self, action: #selector(toneChipTapped(_:)), for: .touchUpInside)
+            if index < selectedToneAxes.count {
+                applyToneTokenStyle(to: button, axis: selectedToneAxes[index])
+            }
+        }
+    }
+
+    /// Paint a tone chip with its canonical tonoit.com semantic token — an
+    /// accent-tinted fill plus a contrast-safe label — so the three chips are
+    /// visibly color-coded. Falls back to the neutral candidate style for an
+    /// unknown axis rather than inventing a color.
+    private func applyToneTokenStyle(to button: UIButton, axis: String) {
+        button.accessibilityValue = axis
+        guard let token = TonoCoachPalette.axis(axis) else {
+            button.backgroundColor = .secondarySystemBackground
+            button.setTitleColor(.label, for: .normal)
+            return
+        }
+        button.backgroundColor = token.accent.withAlphaComponent(0.18)
+        button.setTitleColor(token.accessibleLabel, for: .normal)
+        button.accessibilityLabel = "\(token.label) tone"
+        button.accessibilityHint = "Rewrites your message in a \(token.label.lowercased()) tone"
+        button.accessibilityTraits = [.button]
+    }
+
+    @objc private func toneChipTapped(_ sender: UIButton) {
+        guard !coachBusy, selectedToneAxes.indices.contains(sender.tag) else { return }
+        cancelTransientInteractions()
+        spellingService.cancel()
+        let proxy = textDocumentProxy
+        beginCoachRewrite(
+            before: proxy.documentContextBeforeInput ?? "",
+            after: proxy.documentContextAfterInput ?? "",
+            axis: selectedToneAxes[sender.tag]
+        )
+    }
+
+    /// Bind the rewrite target and the lifecycle guard to `before`/`after`,
+    /// then issue exactly one request for `axis`. Returns the id of the
+    /// request that was started, or nil when there was nothing to rewrite.
+    ///
+    /// Internal, and taking the document context as parameters, so the XCTest
+    /// target can drive the real request lifecycle: a unit-test controller
+    /// has no connected host document, so a chip tap can never reach this
+    /// path. Every production caller passes the live proxy values.
+    @discardableResult
+    func beginCoachRewrite(before: String, after: String, axis: String) -> UUID? {
+        guard let target = CoachRewriteTarget.capture(
+            before: before,
+            after: after,
+            host: currentHostSession
+        ) else {
+            presentCoachEmptyState()
+            return nil
+        }
         coachRewriteTarget = target
-        runCoach(draft: target.draft)
+        coachRequestGuard = CoachRequestLifecycleGuard(
+            before: before,
+            after: after,
+            host: currentHostSession
+        )
+        runCoach(draft: target.draft, axis: axis)
+        return coachRequestID
     }
 
     private func presentCoachEmptyState() {
@@ -1919,48 +2392,47 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         }
     }
 
-    private func runCoach(draft: String) {
-        cancelTransientInteractions()
-        coachBusy = true
-        coachButton?.isEnabled = false
-        presentCoachLoading()
-        let client = TonoCoachClient(endpoint: Const.backendURL, timeout: Const.coachTimeout)
-        let requestID = UUID()
-        coachRequestID = requestID
-        NSLog("TONO_KB BUILD86 coach: begin POST /v1/analyze (len=\(draft.count))")
-        client.coach(draft: draft) { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self = self, self.coachRequestID == requestID else { return }
-                self.coachRequestID = nil
-                self.coachBusy = false
-                self.coachButton?.isEnabled = true
-                switch result {
-                case .success(let response):
-                    NSLog("TONO_KB BUILD86 coach: OK risk=\(response.riskLevel) suggestions=\(response.suggestions.count)")
-                    self.presentCoachResults(response)
-                case .failure(let err):
-                    NSLog("TONO_KB BUILD86 coach: FAIL \(err.userFacingMessage)")
-                    self.presentCoachError(err)
-                }
-            }
+    // MARK: - Coach surface ownership
+    //
+    // Loading, results, and error are three presentations of one logical
+    // surface: at most one of them may be parented in the body container at
+    // any instant. Build 98 removed only the panel the `coachContainer`
+    // reference happened to point at, so a rewrite issued from the results
+    // state left the stale results panel parented *underneath* the new
+    // loading panel — on device the previous rewrite stayed on screen behind
+    // the spinner, and every further rewrite added another orphan.
+
+    /// Accessibility identifiers of every coach presentation surface.
+    private static let coachSurfaceIdentifiers: Set<String> = [
+        Const.idCoachLoading,
+        Const.idCoachResults,
+        Const.idCoachError,
+    ]
+
+    /// Remove every coach surface currently parented in the body container —
+    /// not merely the one the tracked reference points at — and drop all
+    /// tracked coach view state. Idempotent.
+    private func removeAllCoachSurfaces() {
+        for surface in bodyContainer?.subviews ?? []
+        where Self.coachSurfaceIdentifiers.contains(surface.accessibilityIdentifier ?? "") {
+            surface.removeFromSuperview()
         }
+        coachContainer?.removeFromSuperview()
+        coachErrorContainer?.removeFromSuperview()
+        coachContainer = nil
+        coachStatusLabel = nil
+        coachResultsStack = nil
+        coachErrorContainer = nil
+        coachErrorLabel = nil
+        coachLoadingRequestID = nil
     }
 
-    private func presentCoachLoading() {
-        guard let container = bodyContainer else { return }
-        cancelTransientInteractions()
-        preferredHeightConstraint?.constant = currentVisualMetrics.preferredContentHeight
-        keysStack?.removeFromSuperview()
-        keysStack = nil
-        coachErrorContainer?.removeFromSuperview()
-        coachErrorContainer = nil
-        emojiPanelView?.removeFromSuperview()
-        emojiPanelView = nil
-        isEmojiPanelVisible = false
-
-        let panel = UIView()
-        panel.translatesAutoresizingMaskIntoConstraints = false
-        panel.accessibilityIdentifier = Const.idCoachLoading
+    /// Atomically install `panel` as the one and only coach surface: every
+    /// prior surface is torn down first, then the new panel is parented and
+    /// pinned. `requestID` is non-nil only for a loading surface, recording
+    /// which in-flight request owns it.
+    private func installCoachSurface(_ panel: UIView, in container: UIView, requestID: UUID? = nil) {
+        removeAllCoachSurfaces()
         container.addSubview(panel)
         NSLayoutConstraint.activate([
             panel.leadingAnchor.constraint(equalTo: container.leadingAnchor),
@@ -1968,6 +2440,130 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             panel.topAnchor.constraint(equalTo: container.topAnchor),
             panel.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
+        coachContainer = panel
+        coachLoadingRequestID = requestID
+    }
+
+    /// Decides whether a coach completion may take over the UI. Fail-closed:
+    /// honored only when the completion's request is still the active one
+    /// *and* the loading surface installed in the container is the one that
+    /// request installed. A superseded request, an invalidated session, or a
+    /// second delivery after the surface was already replaced is rejected.
+    enum CoachCompletionGate {
+        static func accepts(
+            completion requestID: UUID,
+            activeRequestID: UUID?,
+            loadingSurfaceRequestID: UUID?
+        ) -> Bool {
+            guard let activeRequestID, activeRequestID == requestID else { return false }
+            return loadingSurfaceRequestID == requestID
+        }
+    }
+
+    // Internal so the XCTest target can drive the real request path — the
+    // busy gate, the loading surface, and the 1:1 request contract — through
+    // the same entry point the tap handlers use. Not API surface outside the
+    // keyboard module.
+    func runCoach(draft: String, axis: String) {
+        invalidateCoachWork(restoreKeyboard: false, clearTarget: false)
+        cancelTransientInteractions()
+        coachBusy = true
+        coachRequestsStarted += 1
+        coachButton?.isEnabled = false
+        let requestID = UUID()
+        coachRequestID = requestID
+        presentCoachLoading(requestID: requestID)
+        NSLog("TONO_KB BUILD95 coach: begin selected variant axis=\(axis) len=\(draft.count)")
+        let customPrompt = axis == "custom" ? coachVariantSettings.customInstruction : nil
+        coachTask = coachClient.variant(draft: draft, axis: axis, customPrompt: customPrompt) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.completeCoach(
+                    requestID: requestID,
+                    liveBefore: self.textDocumentProxy.documentContextBeforeInput ?? "",
+                    liveAfter: self.textDocumentProxy.documentContextAfterInput ?? "",
+                    result: result
+                )
+            }
+        }
+    }
+
+    /// Hand one finished round trip to the UI, replacing the loading surface
+    /// that this request installed — and nothing else.
+    ///
+    /// Fail-closed in every ambiguous case: a superseded or cancelled
+    /// request, a completion whose loading surface has already been replaced
+    /// or torn down, and a draft that moved under the request are all
+    /// dropped without touching the surface.
+    ///
+    /// Internal, and taking the live document context as parameters, so the
+    /// XCTest target can drive the real delivery path: a unit-test controller
+    /// has no connected host document, so the guard could otherwise never be
+    /// exercised. Production passes the live proxy values, read at delivery.
+    func completeCoach(
+        requestID: UUID,
+        liveBefore: String,
+        liveAfter: String,
+        result: Result<TonoCoachClient.VariantResponse, TonoCoachClient.CoachError>
+    ) {
+        guard CoachCompletionGate.accepts(
+                completion: requestID,
+                activeRequestID: coachRequestID,
+                loadingSurfaceRequestID: coachLoadingRequestID
+              ),
+              let target = coachRewriteTarget,
+              target.isCurrent(
+                liveBefore: liveBefore,
+                liveAfter: liveAfter,
+                host: currentHostSession
+              ) else { return }
+        coachTask = nil
+        coachRequestID = nil
+        coachBusy = false
+        coachButton?.isEnabled = true
+        switch result {
+        case .success(let response):
+            let rewrite = TonoCoachClient.CoachRewrite(
+                axis: response.axis,
+                text: response.text,
+                rationale: response.rationale,
+                riskAfter: response.riskAfter
+            )
+            let atomic = TonoCoachClient.CoachResponse(
+                riskLevel: response.riskAfter ?? "medium",
+                perception: "",
+                subtext: "",
+                reason: nil,
+                suggestions: [rewrite],
+                flags: []
+            )
+            presentCoachResults(atomic, replacingLoadingFor: requestID)
+        case .failure(let error):
+            presentCoachError(error, replacingLoadingFor: requestID)
+        }
+    }
+
+    // Internal so the XCTest target can drive the real UIKit loading state
+    // through the same entry point the request path uses.
+    // This is not API surface outside the keyboard module.
+    func presentCoachLoading(requestID: UUID) {
+        // Record ownership before the container check so a controller without
+        // a body container still completes its request — and clears its busy
+        // state — exactly as it did before surfaces became request-owned.
+        coachLoadingRequestID = requestID
+        guard let container = bodyContainer else { return }
+        cancelTransientInteractions()
+        preferredHeightConstraint?.constant = currentVisualMetrics.preferredContentHeight
+        keysStack?.removeFromSuperview()
+        keysStack = nil
+        emojiPanelView?.removeFromSuperview()
+        emojiPanelView = nil
+        isEmojiPanelVisible = false
+
+        let panel = UIView()
+        panel.translatesAutoresizingMaskIntoConstraints = false
+        panel.accessibilityIdentifier = Const.idCoachLoading
+        installCoachSurface(panel, in: container, requestID: requestID)
 
         let label = UILabel()
         label.text = "Coaching…"
@@ -1989,29 +2585,45 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             spinner.topAnchor.constraint(equalTo: label.bottomAnchor, constant: 8),
         ])
 
-        coachContainer = panel
         coachStatusLabel = label
     }
 
-    private func presentCoachResults(_ response: TonoCoachClient.CoachResponse) {
+    /// Completion entry point: install the results surface only when
+    /// `requestID` still owns the loading surface that is installed. Returns
+    /// whether the surface was replaced, so a refused delivery — superseded,
+    /// duplicate, or invalidated — is observable rather than silent.
+    @discardableResult
+    func presentCoachResults(
+        _ response: TonoCoachClient.CoachResponse,
+        replacingLoadingFor requestID: UUID
+    ) -> Bool {
+        guard coachLoadingRequestID == requestID else { return false }
+        presentCoachResults(response)
+        return true
+    }
+
+    /// Failure counterpart of `presentCoachResults(_:replacingLoadingFor:)`.
+    @discardableResult
+    func presentCoachError(
+        _ err: TonoCoachClient.CoachError,
+        replacingLoadingFor requestID: UUID
+    ) -> Bool {
+        guard coachLoadingRequestID == requestID else { return false }
+        presentCoachError(err)
+        return true
+    }
+
+    // Internal so the XCTest target can exercise the real UIKit results state.
+    // This is not API surface outside the keyboard module.
+    func presentCoachResults(_ response: TonoCoachClient.CoachResponse) {
         guard let container = bodyContainer else { return }
         cancelTransientInteractions()
         preferredHeightConstraint?.constant = currentVisualMetrics.coachResultsContentHeight
-        coachContainer?.removeFromSuperview()
-        coachContainer = nil
-        coachStatusLabel = nil
-        coachResultsStack = nil
 
         let panel = UIView()
         panel.translatesAutoresizingMaskIntoConstraints = false
         panel.accessibilityIdentifier = Const.idCoachResults
-        container.addSubview(panel)
-        NSLayoutConstraint.activate([
-            panel.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            panel.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            panel.topAnchor.constraint(equalTo: container.topAnchor),
-            panel.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
+        installCoachSurface(panel, in: container)
 
         let title = UILabel()
         title.text = "Tono · \(response.riskDisplayName)"
@@ -2024,8 +2636,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         title.translatesAutoresizingMaskIntoConstraints = false
         title.accessibilityIdentifier = Const.idRiskBadge
         panel.addSubview(title)
+        let titleHeight = ceil(title.font.lineHeight)
 
-        let back = UIButton(type: .system)
+        let back = TonoMinimumHitTargetButton(type: .system)
         back.setTitle("Back", for: .normal)
         back.titleLabel?.font = .systemFont(ofSize: 14, weight: .semibold)
         back.translatesAutoresizingMaskIntoConstraints = false
@@ -2033,16 +2646,33 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         back.addTarget(self, action: #selector(backToKeysTapped), for: .touchUpInside)
         panel.addSubview(back)
 
+        let scroll = UIScrollView()
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.alwaysBounceVertical = false
+        scroll.showsVerticalScrollIndicator = true
+        scroll.accessibilityIdentifier = "\(Const.idRewrites).scroll"
+        panel.addSubview(scroll)
+
         let stack = UIStackView()
         stack.axis = .vertical
-        stack.distribution = .fillEqually
+        // Each card's required top-to-bottom label chain determines the exact
+        // content height. Do not also make the stack at least as tall as the
+        // viewport: when natural content is shorter than the viewport that
+        // inequality leaves every arranged-subview height underdetermined.
+        stack.distribution = .fill
         stack.alignment = .fill
         stack.spacing = 4
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.accessibilityIdentifier = Const.idRewrites
-        panel.addSubview(stack)
+        scroll.addSubview(stack)
 
-        let shown = Array(response.suggestions.prefix(4))
+        let suggestionsByAxis = Dictionary(
+            response.suggestions.map { ($0.axis.lowercased(), $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let shown = TonoCoachPalette.orderedAxes.compactMap {
+            suggestionsByAxis[$0.rawValue]
+        }
         if shown.isEmpty {
             let empty = UILabel()
             empty.text = "No rewrites available."
@@ -2061,40 +2691,49 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             title.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 12),
             title.topAnchor.constraint(equalTo: panel.topAnchor, constant: 4),
             title.trailingAnchor.constraint(lessThanOrEqualTo: back.leadingAnchor, constant: -8),
+            title.heightAnchor.constraint(equalToConstant: titleHeight),
 
             back.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -12),
-            back.centerYAnchor.constraint(equalTo: title.centerYAnchor),
-            back.heightAnchor.constraint(greaterThanOrEqualToConstant: 32),
+            back.topAnchor.constraint(equalTo: panel.topAnchor, constant: 4),
+            back.heightAnchor.constraint(equalToConstant: TonoKeyboardMetrics.ControlGeometry.coachBackControlHeight),
+            back.widthAnchor.constraint(greaterThanOrEqualToConstant: TonoKeyboardMetrics.ControlGeometry.coachBackControlWidth),
 
-            stack.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 8),
-            stack.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
+            scroll.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: back.bottomAnchor, constant: 4),
+            scroll.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
+
+            stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+            stack.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor),
         ])
 
-        coachContainer = panel
         coachResultsStack = stack
     }
 
     private func makeRewriteChip(suggestion: TonoCoachClient.CoachRewrite, index: Int) -> UIView {
         let chip = TonoCoachChoiceControl()
+        let style = coachAxisStyle(for: suggestion.axis)
         chip.layer.cornerRadius = Const.keyCornerRadius
-        chip.layer.borderWidth = Const.keyBorderWidth
-        chip.layer.borderColor = keyboardKeyBorder().cgColor
+        chip.layer.borderWidth = 2
+        chip.layer.borderColor = style.accent.cgColor
+        chip.semanticAccent = style.accent
         chip.translatesAutoresizingMaskIntoConstraints = false
         chip.accessibilityIdentifier = Const.rewriteId(suggestion.axis, index)
         chip.accessibilityLabel = "Tono rewrite \(suggestion.axis)"
 
-        let style = coachAxisStyle(for: suggestion.axis)
         let axis = UILabel()
         axis.text = "● \(style.label)"
         axis.font = UIFontMetrics(forTextStyle: .caption1).scaledFont(
             for: .systemFont(ofSize: 11, weight: .bold)
         )
         axis.adjustsFontForContentSizeCategory = true
-        axis.textColor = style.color
+        axis.textColor = style.labelColor
         axis.translatesAutoresizingMaskIntoConstraints = false
         chip.addSubview(axis)
+        let axisHeight = ceil(axis.font.lineHeight)
 
         let text = UILabel()
         text.text = suggestion.text
@@ -2102,10 +2741,11 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             for: .systemFont(ofSize: 14, weight: .regular)
         )
         text.adjustsFontForContentSizeCategory = true
-        text.textColor = TonoCoachPalette.foreground
+        text.textColor = .label
         text.numberOfLines = 2
         text.translatesAutoresizingMaskIntoConstraints = false
         chip.addSubview(text)
+        let textHeight = ceil(text.font.lineHeight * CGFloat(text.numberOfLines))
 
         NSLayoutConstraint.activate([
             chip.heightAnchor.constraint(greaterThanOrEqualToConstant: 48),
@@ -2113,37 +2753,58 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             axis.leadingAnchor.constraint(equalTo: chip.leadingAnchor, constant: 10),
             axis.topAnchor.constraint(equalTo: chip.topAnchor, constant: 6),
             axis.trailingAnchor.constraint(lessThanOrEqualTo: chip.trailingAnchor, constant: -10),
+            axis.heightAnchor.constraint(equalToConstant: axisHeight),
 
             text.leadingAnchor.constraint(equalTo: chip.leadingAnchor, constant: 10),
             text.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -10),
             text.topAnchor.constraint(equalTo: axis.bottomAnchor, constant: 2),
-            text.bottomAnchor.constraint(lessThanOrEqualTo: chip.bottomAnchor, constant: -6),
+            text.bottomAnchor.constraint(equalTo: chip.bottomAnchor, constant: -52),
+            text.heightAnchor.constraint(equalToConstant: textHeight),
         ])
 
         let rewriteText = suggestion.text
-        chip.addAction(UIAction { [weak self] _ in
+        let actions = UIStackView()
+        actions.axis = .horizontal
+        actions.distribution = .fillEqually
+        actions.spacing = 8
+        actions.translatesAutoresizingMaskIntoConstraints = false
+        chip.addSubview(actions)
+
+        let replace = TonoMinimumHitTargetButton(type: .system)
+        replace.setTitle("Replace", for: .normal)
+        replace.addAction(UIAction { [weak self] _ in
             self?.applyRewrite(rewriteText)
         }, for: .touchUpInside)
+        actions.addArrangedSubview(replace)
+
+        let dismiss = TonoMinimumHitTargetButton(type: .system)
+        dismiss.setTitle("Dismiss", for: .normal)
+        dismiss.addAction(UIAction { [weak self] _ in
+            self?.backToKeysTapped()
+        }, for: .touchUpInside)
+        actions.addArrangedSubview(dismiss)
+
+        NSLayoutConstraint.activate([
+            actions.leadingAnchor.constraint(equalTo: chip.leadingAnchor, constant: 10),
+            actions.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -10),
+            actions.bottomAnchor.constraint(equalTo: chip.bottomAnchor, constant: -4),
+            actions.heightAnchor.constraint(equalToConstant: 44),
+        ])
         return chip
     }
 
-    private func coachAxisStyle(for axis: String) -> (label: String, color: UIColor) {
-        switch axis {
-        case "warmer": return ("Warmer", TonoCoachPalette.foreground)
-        case "clearer": return ("Clearer", TonoCoachPalette.foreground)
-        case "funnier": return ("Funnier", TonoCoachPalette.foreground)
-        case "safer": return ("Safer", TonoCoachPalette.foreground)
-        default: return (axis.capitalized, TonoCoachPalette.foreground)
+    private func coachAxisStyle(
+        for axis: String
+    ) -> (label: String, labelColor: UIColor, accent: UIColor) {
+        guard let semantic = TonoCoachPalette.axis(axis) else {
+            return (axis.capitalized, .label, .separator)
         }
+        return (semantic.label, semantic.accessibleLabel, semantic.accent)
     }
 
     @objc private func backToKeysTapped() {
         cancelTransientInteractions()
-        coachContainer?.removeFromSuperview()
-        coachContainer = nil
-        coachResultsStack = nil
-        coachErrorContainer = nil
-        coachErrorLabel = nil
+        removeAllCoachSurfaces()
         installKeyboardLayout()
     }
 
@@ -2155,7 +2816,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
               let plan = target.mutationPlan(
             liveBefore: originalBefore,
             liveAfter: originalAfter,
-            replacement: rewrite
+            replacement: rewrite,
+            host: currentHostSession
         ) else {
             NSLog("TONO_KB BUILD86 rewrite: rejected stale or edited draft")
             presentCoachError(.staleDraft)
@@ -2187,30 +2849,23 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             proxy.adjustTextPosition(byCharacterOffset: plan.finalCursorOffset)
         }
         coachRewriteTarget = nil
+        coachRequestGuard = nil
         NSLog("TONO_KB BUILD86 rewrite: inserted len=\(rewrite.count) (deleted \(plan.deleteCount))")
     }
 
     // MARK: - Coach error
 
-    private func presentCoachError(_ err: TonoCoachClient.CoachError) {
+    // Internal so the XCTest target can exercise the real UIKit error state.
+    // This is not API surface outside the keyboard module.
+    func presentCoachError(_ err: TonoCoachClient.CoachError) {
         guard let container = bodyContainer else { return }
         cancelTransientInteractions()
         preferredHeightConstraint?.constant = currentVisualMetrics.preferredContentHeight
-        coachContainer?.removeFromSuperview()
-        coachContainer = nil
-        coachStatusLabel = nil
-        coachResultsStack = nil
 
         let panel = UIView()
         panel.translatesAutoresizingMaskIntoConstraints = false
         panel.accessibilityIdentifier = Const.idCoachError
-        container.addSubview(panel)
-        NSLayoutConstraint.activate([
-            panel.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            panel.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            panel.topAnchor.constraint(equalTo: container.topAnchor),
-            panel.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
+        installCoachSurface(panel, in: container)
 
         let title = UILabel()
         title.text = "Tono couldn’t reply"
@@ -2239,7 +2894,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         retry.addTarget(self, action: #selector(retryTapped), for: .touchUpInside)
         panel.addSubview(retry)
 
-        let back = UIButton(type: .system)
+        let back = TonoMinimumHitTargetButton(type: .system)
         back.setTitle("Back", for: .normal)
         back.titleLabel?.font = .systemFont(ofSize: 14, weight: .medium)
         back.translatesAutoresizingMaskIntoConstraints = false
@@ -2257,41 +2912,103 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
             retry.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 12),
             retry.topAnchor.constraint(equalTo: detail.bottomAnchor, constant: 12),
-            retry.heightAnchor.constraint(greaterThanOrEqualToConstant: 36),
+            retry.heightAnchor.constraint(greaterThanOrEqualToConstant: TonoKeyboardMetrics.ControlGeometry.coachBackControlHeight),
 
             back.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -12),
             back.centerYAnchor.constraint(equalTo: retry.centerYAnchor),
-            back.heightAnchor.constraint(greaterThanOrEqualToConstant: 36),
+            back.heightAnchor.constraint(greaterThanOrEqualToConstant: TonoKeyboardMetrics.ControlGeometry.coachBackControlHeight),
+            back.widthAnchor.constraint(greaterThanOrEqualToConstant: TonoKeyboardMetrics.ControlGeometry.coachBackControlWidth),
         ])
 
-        coachContainer = panel
         coachErrorContainer = panel
         coachErrorLabel = detail
     }
 
     @objc private func retryTapped() {
-        coachErrorContainer?.removeFromSuperview()
-        coachErrorContainer = nil
-        coachErrorLabel = nil
-        guard let target = CoachRewriteTarget.capture(
-            before: textDocumentProxy.documentContextBeforeInput ?? "",
-            after: textDocumentProxy.documentContextAfterInput ?? ""
-        ) else {
-            presentCoachEmptyState()
-            return
+        // Tear the error surface down before anything else: a retry that
+        // lands on the empty state must not leave the failed attempt behind.
+        removeAllCoachSurfaces()
+        let proxy = textDocumentProxy
+        beginCoachRewrite(
+            before: proxy.documentContextBeforeInput ?? "",
+            after: proxy.documentContextAfterInput ?? "",
+            axis: selectedToneAxes.first ?? "safer"
+        )
+    }
+
+    // MARK: - Live Tone v1 integration
+    //
+    // Wired unconditionally (build 96). Formerly gated behind
+    // `TONO_BUILD92_HOSTSESSION`, which the TonoTests target defines to
+    // activate the host/session suite — so the test build compiled a
+    // Live-Tone-stripped keyboard and the shipping integration had zero
+    // coverage. Decoupling the two makes the test build and the shipping
+    // build run the identical Live Tone path.
+
+    /// Construct + install the Live Tone manager. Called once from
+    /// `viewDidLoad` after the keyboard layout is in place. The manager
+    /// owns its own indicator view which is added as a passive
+    /// subview on top of the keyboard container so the warning never
+    /// blocks typing.
+    private func installLiveTone() {
+        let manager = LiveToneManager()
+        // Wire the [Rewrite] button to the existing Coach flow so the
+        // user-invoked rewrite surface stays a single tap away. The
+        // handler is the only path that opens the rewrite flow; Live
+        // Tone never opens it uninvited.
+        manager.setRewriteHandler { [weak self] in
+            self?.coachTapped()
         }
-        coachRewriteTarget = target
-        runCoach(draft: target.draft)
+        if let container = bodyContainer {
+            manager.indicator.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(manager.indicator)
+            NSLayoutConstraint.activate([
+                manager.indicator.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                manager.indicator.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+                manager.indicator.topAnchor.constraint(equalTo: container.topAnchor),
+                manager.indicator.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor)
+            ])
+        }
+        liveToneManager = manager
+    }
+
+    /// Observer hook called from `textDidChange(_:)`. Pure observer:
+    /// never modifies the document, never blocks the keystroke path,
+    /// never opens the rewrite flow. The manager debounces; punctuation
+    /// is detected from the post-mutation context's trailing character.
+    private func liveToneDidMutate(context: String) {
+        guard let manager = liveToneManager else { return }
+        let trailing = context.last
+        manager.observe(character: trailing ?? " ", draft: context)
+        liveToneLastCommittedCharacter = trailing
+    }
+
+    /// Test seam: drive the real shipping Live Tone observer path with a
+    /// synthetic post-mutation context and return the installed manager so an
+    /// integration test can read the engine + indicator it publishes to. This
+    /// mirrors exactly what `textDidChange(_:)` forwards; it is never invoked
+    /// in production.
+    func integrationDriveLiveTone(context: String) -> LiveToneManager? {
+        liveToneDidMutate(context: context)
+        return liveToneManager
     }
 }
 
 /// Shared keycap press treatment. It changes in the same event frame as
 /// UIButton's highlighted state and always restores on UIKit cancellation.
-private final class KeyboardButton: UIButton {
+private final class KeyboardButton: TonoMinimumHitTargetButton {
     var accessibilityActivationHandler: (() -> Bool)?
     var normalBackgroundColor: UIColor? {
         didSet { if !isHighlighted { backgroundColor = normalBackgroundColor } }
     }
+
+    /// Build 98 — pinned raw character. `makeCharButton` writes the
+    /// char here at construction time so any refresh path
+    /// (`applyShiftToKey`, future rebuild loops, UI-automation
+    /// probes) reads the actual character without having to
+    /// round-trip through an identifier parse. See file header for
+    /// the build-97 defect this replaces.
+    var displayChar: String?
 
     override init(frame: CGRect) {
         super.init(frame: frame)

@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase-client';
+import { buildAuthCallbackUrl } from '@/lib/auth-redirects';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 
@@ -11,7 +12,10 @@ const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 //   on localhost, callback URL is http://localhost:3000/app/auth/callback
 function buildRedirectTo(): string {
   if (typeof window === 'undefined') return '';
-  return `${window.location.origin}/app/auth/callback`;
+  return buildAuthCallbackUrl(window.location.origin, {
+    NODE_ENV: process.env.NODE_ENV,
+    NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL,
+  });
 }
 
 export default function LoginPage() {

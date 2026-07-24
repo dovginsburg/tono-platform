@@ -7,9 +7,15 @@ final class KeyboardVisualStyleTests: XCTestCase {
         let regular = TonoKeyboardMetrics.portrait(availableWidth: 402)
         let large = TonoKeyboardMetrics.portrait(availableWidth: 440)
 
-        XCTAssertEqual(compact.preferredContentHeight, 252)
-        XCTAssertEqual(regular.preferredContentHeight, 256)
-        XCTAssertEqual(large.preferredContentHeight, 264)
+        // Build 93 preserves build 92's approved 252/256/264pt typing
+        // geometry and permanently reserves the reviewed 36pt Coach-results
+        // expansion. Every Coach state therefore uses one stable height.
+        XCTAssertEqual(compact.preferredContentHeight, 288)
+        XCTAssertEqual(regular.preferredContentHeight, 292)
+        XCTAssertEqual(large.preferredContentHeight, 300)
+        XCTAssertEqual(compact.coachResultsContentHeight, 288)
+        XCTAssertEqual(regular.coachResultsContentHeight, 292)
+        XCTAssertEqual(large.coachResultsContentHeight, 300)
         XCTAssertGreaterThanOrEqual(compact.keyMinHeight, 44)
         XCTAssertGreaterThanOrEqual(regular.keyMinHeight, 44)
         XCTAssertGreaterThanOrEqual(large.keyMinHeight, 44)
@@ -111,6 +117,44 @@ final class KeyboardVisualStyleTests: XCTestCase {
         XCTAssertTrue(Self.sameColor(choice.backgroundColor, TonoCoachPalette.pressed))
         choice.isEnabled = false
         XCTAssertTrue(Self.sameColor(choice.backgroundColor, TonoCoachPalette.disabledBackground))
+    }
+
+    func testSemanticCoachAxisLabelsMeetAccessibleContrast() {
+        for style in [UIUserInterfaceStyle.light, .dark] {
+            let traits = UITraitCollection(userInterfaceStyle: style)
+            let background = UIColor.systemBackground.resolvedColor(with: traits)
+            for axis in TonoCoachPalette.Axis.allCases {
+                let label = axis.accessibleLabel.resolvedColor(with: traits)
+                XCTAssertGreaterThanOrEqual(
+                    Self.contrastRatio(foreground: label, background: background),
+                    4.5,
+                    "\(axis.rawValue) label must remain WCAG AA in \(style == .dark ? "dark" : "light") appearance"
+                )
+            }
+        }
+    }
+
+    func testSemanticCoachChoiceNeverFallsBackToPurpleAcrossControlStates() {
+        for axis in TonoCoachPalette.Axis.allCases {
+            let choice = TonoCoachChoiceControl(frame: .zero)
+            choice.semanticAccent = axis.accent
+
+            XCTAssertTrue(Self.sameColor(
+                choice.backgroundColor,
+                axis.accent.withAlphaComponent(0.12)
+            ))
+            choice.isHighlighted = true
+            XCTAssertTrue(Self.sameColor(
+                choice.backgroundColor,
+                axis.accent.withAlphaComponent(0.24)
+            ))
+            choice.isHighlighted = false
+            choice.isEnabled = false
+            XCTAssertTrue(Self.sameColor(
+                choice.backgroundColor,
+                axis.accent.withAlphaComponent(0.06)
+            ))
+        }
     }
 
     private static func contrastRatio(foreground: UIColor, background: UIColor) -> CGFloat {
