@@ -42,10 +42,9 @@ Fail-closed configuration (no secret ever reaches a client):
                                     versioned commercial catalog: com.tono.myapp)
   TONO_GOOGLE_SUBSCRIPTION_IDS      comma-separated allowed subscription ids
                                     (default from the catalog)
-  TONO_GOOGLE_BASE_PLAN_IDS         comma-separated allowed base-plan ids. The
-                                    exact console ids are NOT invented in-repo; a
-                                    purchase whose base plan is absent from this
-                                    set fails closed and never grants (contract §6).
+  TONO_GOOGLE_BASE_PLAN_IDS         comma-separated allowed base-plan ids
+                                    (defaults to pro-monthly,pro-yearly from the
+                                    versioned commercial catalog).
   RTDN push authentication (one of):
   TONO_GOOGLE_PUBSUB_AUDIENCE +     verify the Pub/Sub OIDC id-token audience and
   TONO_GOOGLE_PUBSUB_SA_EMAIL         signing service-account email (preferred).
@@ -173,12 +172,15 @@ class GooglePlayConfig:
 
 
 def get_google_play_config() -> GooglePlayConfig:
+    default_base_plans = ",".join(sorted(catalog.google_play_base_plan_ids()))
     return GooglePlayConfig(
         package_name=os.environ.get("TONO_GOOGLE_PACKAGE_NAME", _default_google_package_name()),
         subscription_ids=_csv_frozenset(
             os.environ.get("TONO_GOOGLE_SUBSCRIPTION_IDS", _default_google_subscription_ids())
         ),
-        base_plan_ids=_csv_frozenset(os.environ.get("TONO_GOOGLE_BASE_PLAN_IDS", "")),
+        base_plan_ids=_csv_frozenset(
+            os.environ.get("TONO_GOOGLE_BASE_PLAN_IDS", default_base_plans)
+        ),
     )
 
 

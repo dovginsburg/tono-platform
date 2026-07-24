@@ -99,7 +99,10 @@ object PlayBillingManager : PurchasesUpdatedListener {
             return
         }
         val details = productDetails[productId]
-        val offer = details?.subscriptionOfferDetails?.firstOrNull()
+        val expectedBasePlan = BillingProducts.basePlanFor(productId)
+        val offer = details?.subscriptionOfferDetails?.firstOrNull {
+            it.basePlanId == expectedBasePlan && it.offerId == BillingProducts.TRIAL_OFFER
+        }
         if (details == null || offer == null) {
             _state.value = _state.value.copy(
                 error = "This subscription is not available from Google Play right now.",
@@ -308,7 +311,10 @@ object PlayBillingManager : PurchasesUpdatedListener {
 
     private fun toDisplayProduct(details: ProductDetails): PlayProduct? {
         val regularPhase = details.subscriptionOfferDetails
-            ?.firstOrNull()
+            ?.firstOrNull {
+                it.basePlanId == BillingProducts.basePlanFor(details.productId)
+                    && it.offerId == BillingProducts.TRIAL_OFFER
+            }
             ?.pricingPhases
             ?.pricingPhaseList
             ?.lastOrNull()

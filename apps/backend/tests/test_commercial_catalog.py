@@ -106,22 +106,22 @@ def test_google_play_defaults_come_from_catalog():
     assert google_play._GOOGLE_PACKAGE_FALLBACK == "com.tono.myapp"
 
     # The assembled runtime config (no env override) uses the catalog values, and
-    # base plans are unconfigured by default -> cannot grant until set (§6).
+    # Approved non-secret base plans default from the catalog.
     config = google_play.get_google_play_config()
     assert config.subscription_ids == catalog_ids
     assert config.package_name == "com.tono.myapp"
-    assert config.base_plan_ids == frozenset()
+    assert config.base_plan_ids == frozenset({"pro-monthly", "pro-yearly"})
 
 
-def test_google_play_base_plan_env_var_recorded_not_invented():
-    """The catalog records the base-plan env-var NAME (config surface) but never
-    an invented console base-plan id (§6): both product base_plan_id stay null."""
+def test_google_play_base_plan_and_offer_ids_are_pinned():
+    """Approved non-secret Play identifiers are committed and cannot drift."""
     import backend.catalog as catalog
 
     assert catalog.google_play_base_plan_env_var() == "TONO_GOOGLE_BASE_PLAN_IDS"
-    data = catalog.load_catalog()
-    for product in data["providers"]["google_play"]["products"]:
-        assert product["base_plan_id"] is None
+    assert catalog.google_play_base_plan_ids() == frozenset(
+        {"pro-monthly", "pro-yearly"}
+    )
+    assert catalog.google_play_offer_ids() == frozenset({"trial-14-days"})
 
 
 def test_payments_price_env_fallback_matches_catalog():

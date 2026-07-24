@@ -36,12 +36,14 @@ from __future__ import annotations
 import collections
 import hashlib
 import hmac
+import json
 import logging
 import os
 import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Annotated, Any, Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
@@ -96,6 +98,34 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 logger = logging.getLogger("tono.server")
+
+_PROVENANCE_PATH = Path(__file__).with_name("build-provenance.json")
+
+
+def _build_provenance() -> dict[str, str]:
+    """Return the immutable source/contract/schema identity for this artifact."""
+    try:
+        payload = json.loads(_PROVENANCE_PATH.read_text())
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        payload = {}
+    return {
+        "canonical_sha": str(
+            payload.get("canonical_sha")
+            or os.environ.get("TONO_CANONICAL_SHA")
+            or os.environ.get("RAILWAY_GIT_COMMIT_SHA")
+            or "unknown"
+        ),
+        "contract_sha256": str(
+            payload.get("contract_sha256")
+            or os.environ.get("TONO_CONTRACT_SHA256")
+            or "unknown"
+        ),
+        "schema_revision": str(
+            payload.get("schema_revision")
+            or os.environ.get("TONO_SCHEMA_REVISION")
+            or "legacy-sqlite-unversioned"
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +416,7 @@ _PRIVACY_HTML = """<!DOCTYPE html>
   <li><strong>Anonymous device ID</strong> — a random UUID generated on first launch. No name, email, or phone number.</li>
   <li><strong>Draft text (transient)</strong> — your message is sent to our server for analysis and immediately discarded. We never store message content.</li>
   <li><strong>Usage counters</strong> — how many rewrites you've run today, your plan tier. No content, no recipients.</li>
-  <li><strong>Subscription status</strong> — plan (free/pro) and renewal date, via StoreKit 2 (iOS) or Stripe (web).</li>
+  <li><strong>Subscription status</strong> — entitlement state and renewal date, via StoreKit 2 (iOS), Google Play, or Stripe (web).</li>
 </ul>
 
 <h2>What we do not collect</h2>
@@ -432,20 +462,28 @@ async def privacy_policy() -> HTMLResponse:
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
+    provenance = _build_provenance()
     return {
         "status": "ok",
         "ts": int(time.time()),
         "id": str(uuid.uuid4())[:8],
         "version": "0.3.0",
-        "canonical_sha": os.environ.get("TONO_CANONICAL_SHA", "unknown"),
-        "schema_revision": os.environ.get(
-            "TONO_SCHEMA_REVISION", "legacy-sqlite-unversioned"
-        ),
+        "canonical_sha": provenance["canonical_sha"],
+        "contract_sha256": provenance["contract_sha256"],
+        "schema_revision": provenance["schema_revision"],
         "stripe_configured": bool(os.environ.get("STRIPE_SECRET_KEY")),
         "slack_configured": bool(os.environ.get("SLACK_CLIENT_ID")),
         "apple_configured": bool(os.environ.get("TONO_APPLE_ROOT_CA_PEM")),
         "google_play_configured": bool(os.environ.get("TONO_GOOGLE_SERVICE_ACCOUNT_JSON")),
     }
+
+
+@app.get("/build-provenance.json", include_in_schema=False)
+async def build_provenance() -> JSONResponse:
+    return JSONResponse(
+        content=_build_provenance(),
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
 
 
 @app.get("/v1/whoami")

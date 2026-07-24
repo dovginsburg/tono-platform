@@ -424,9 +424,9 @@ class Account:
         """True once this account carries a real sign-in identity (Apple/
         Google/email). An anonymous auto-account created at registration is
         NOT identified: build 91 gives every device a canonical account UUID
-        (the entitlement principal), but an anonymous account still bills and
-        pools its free-tier quota exactly like the pre-accounts device did —
-        the account only becomes the billing/quota source of truth once the
+        (the entitlement principal), but an anonymous account remains
+        non-entitled and fails closed — the account only becomes the billing
+        and entitlement source of truth once the
         person actually signs in. Passkey-only accounts always carry an email
         at registration, so the columns are a sufficient signal. A Supabase web
         sign-in is an identity too (verified Apple/Google via Supabase)."""
