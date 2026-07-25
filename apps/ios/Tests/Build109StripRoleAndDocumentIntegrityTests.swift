@@ -128,12 +128,72 @@ final class Build109StripRoleAndDocumentIntegrityTests: XCTestCase {
     /// Counts every request that reaches the URL loading system on
     /// `URLSession.shared`, and fails them all, so "local mode is local" is
     /// measured rather than assumed.
+    ///
+    /// ── Why this records TWO tallies (Build 110) ────────────────────────────
+    ///
+    /// `URLProtocol.registerClass` is process-global, and `TEST_HOST` is
+    /// `Tono.app`, so this observes the whole host process — not just the code
+    /// under test. The host app registers itself at launch (`TonoApp` →
+    /// `StoreKitManager.loadProductsAndEntitlements` →
+    /// `TonoBackend.registerIfNeeded` → `POST <backend>/v1/register`), and that
+    /// request is created only after `Product.products(for:)` resolves, whose
+    /// latency in a simulator with no StoreKit configuration is unbounded.
+    /// Whether it landed inside a test's counting window was therefore a race:
+    /// asserting a process-global total of zero failed ~40% of focused runs in
+    /// Build 109 while the product guarantee was never in doubt.
+    ///
+    /// So the measurement is split. `observedURLs` keeps everything, for
+    /// diagnostics. `attributedURLs` drops only requests the code under test is
+    /// structurally incapable of making — see `isHostAppStartupRegistration`.
+    /// Assertions read the attributed tally.
     final class CountingDeniedNetwork: URLProtocol {
-        nonisolated(unsafe) static var requestCount = 0
-        nonisolated(unsafe) static var requestedURLs: [String] = []
+
+        // `canInit` runs on the URL loading system's queue while tests read
+        // from the main thread, so both tallies are lock-guarded. Build 109
+        // mutated an unguarded `Int` and `[String]` across exactly that
+        // boundary; host-app traffic arriving mid-assertion made it a genuine
+        // data race, not merely a noisy count.
+        private static let lock = NSLock()
+        private nonisolated(unsafe) static var _observed: [String] = []
+        private nonisolated(unsafe) static var _attributed: [String] = []
+
+        /// Every request the process issued while this protocol was installed.
+        static var observedURLs: [String] { lock.withLock { _observed } }
+        /// The subset that the code under test could have originated.
+        static var attributedURLs: [String] { lock.withLock { _attributed } }
+        static var attributedCount: Int { lock.withLock { _attributed.count } }
+        static var observedCount: Int { lock.withLock { _observed.count } }
+
+        static func reset() {
+            lock.withLock { _observed = []; _attributed = [] }
+        }
+
+        /// The one confound this harness excludes: the host app's own launch
+        /// registration.
+        ///
+        /// Excluding it is safe only because the keyboard cannot produce it,
+        /// and that is proven here rather than assumed. `KeyboardViewController`
+        /// reaches the network through exactly one client, `TonoCoachClient`,
+        /// whose endpoint is `/api/analyze/variant`; the candidate lane
+        /// (`LocalIntelligence`, `SpellingCorrection`) has no network surface at
+        /// all. Both are pinned by `testLocalLaneFilesReachNoNetworkSurface`,
+        /// and the exclusion's narrowness is pinned at runtime by
+        /// `testLocalLaneAttributionCannotHideKeyboardTraffic`.
+        ///
+        /// Deliberately fail-closed: this matches one exact path and nothing
+        /// else, so a future confound does not quietly pass — it fails the test
+        /// and gets read by a human.
+        static func isHostAppStartupRegistration(_ request: URLRequest) -> Bool {
+            request.url?.path == "/v1/register"
+        }
+
         override class func canInit(with request: URLRequest) -> Bool {
-            requestCount += 1
-            requestedURLs.append(request.url?.absoluteString ?? "<nil>")
+            let url = request.url?.absoluteString ?? "<nil>"
+            let mine = !isHostAppStartupRegistration(request)
+            lock.withLock {
+                _observed.append(url)
+                if mine { _attributed.append(url) }
+            }
             return true
         }
         override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -523,8 +583,7 @@ final class Build109StripRoleAndDocumentIntegrityTests: XCTestCase {
     func testLocalLanePerformsZeroRequests() throws {
         URLProtocol.registerClass(CountingDeniedNetwork.self)
         defer { URLProtocol.unregisterClass(CountingDeniedNetwork.self) }
-        CountingDeniedNetwork.requestCount = 0
-        CountingDeniedNetwork.requestedURLs = []
+        CountingDeniedNetwork.reset()
 
         let controller = Self.makeController()
         let document = RecordingDocumentProxy(before: "I recieve")
@@ -537,14 +596,148 @@ final class Build109StripRoleAndDocumentIntegrityTests: XCTestCase {
 
         XCTAssertEqual(document.text, "I receive", "precondition: the local lane really did work")
         XCTAssertEqual(
-            CountingDeniedNetwork.requestCount, 0,
+            CountingDeniedNetwork.attributedCount, 0,
             """
             the local lane must reach the URL loading system zero times; \
-            observed: \(CountingDeniedNetwork.requestedURLs)
+            attributable: \(CountingDeniedNetwork.attributedURLs); \
+            everything observed in-process: \(CountingDeniedNetwork.observedURLs)
             """
         )
         XCTAssertEqual(controller.coachRequestsStarted, 0, "the local lane must start zero rewrites")
         XCTAssertNil(controller.activeCoachRequestIDForTesting, "no request may be left in flight")
+    }
+
+    /// Hostile regression for the Build 109 flake itself.
+    ///
+    /// The measurement above used to fail whenever the host app's launch
+    /// registration happened to land inside its window. Waiting for quiet would
+    /// only have made that rarer. This reproduces the collision *deliberately*,
+    /// on every run, and requires the local-lane verdict to survive it — so the
+    /// repair is proven rather than merely unobserved.
+    @MainActor
+    func testLocalLaneMeasurementSurvivesHostAppStartupRegistration() throws {
+        URLProtocol.registerClass(CountingDeniedNetwork.self)
+        defer { URLProtocol.unregisterClass(CountingDeniedNetwork.self) }
+        CountingDeniedNetwork.reset()
+
+        let controller = Self.makeController()
+        let document = RecordingDocumentProxy(before: "I recieve")
+        controller.documentProxyOverride = document
+        primeSpellingToken(on: controller)
+        controller.updateCandidateStrip(values: ["recieve", "receive"])
+
+        // The exact traffic that used to break this: the host app's launch
+        // registration, arriving mid-window. Nothing leaves the machine — the
+        // protocol above intercepts it and fails it immediately.
+        Self.issueAndAwait(Self.hostAppRegistrationURL, from: self)
+
+        Self.suggestionButtons(in: controller.view)[1].sendActions(for: .touchUpInside)
+        controller.view.layoutIfNeeded()
+
+        XCTAssertEqual(document.text, "I receive", "precondition: the local lane still worked")
+        XCTAssertTrue(
+            CountingDeniedNetwork.observedURLs.contains(Self.hostAppRegistrationURL),
+            """
+            precondition: the collision must be real. If this is absent the \
+            injected request never reached the URL loading system and the rest \
+            of this test proves nothing — the Build 109 assertion it replaces \
+            would have been failed by exactly this traffic.
+            """
+        )
+        XCTAssertEqual(
+            CountingDeniedNetwork.attributedCount, 0,
+            """
+            host-app launch registration must not be charged to the keyboard; \
+            attributable: \(CountingDeniedNetwork.attributedURLs)
+            """
+        )
+        XCTAssertEqual(controller.coachRequestsStarted, 0, "the local lane must still start zero rewrites")
+    }
+
+    /// The other half: the exclusion must be narrow enough that it cannot hide
+    /// a request the keyboard actually made. If this ever passes with a zero
+    /// attributed count, the zero above has become meaningless.
+    @MainActor
+    func testLocalLaneAttributionCannotHideKeyboardTraffic() throws {
+        URLProtocol.registerClass(CountingDeniedNetwork.self)
+        defer { URLProtocol.unregisterClass(CountingDeniedNetwork.self) }
+
+        // Asserted by identity, never by total: unrelated host-app traffic may
+        // share these windows, and a count-based assertion here would just be
+        // the Build 109 flake pointing the other way.
+
+        // The keyboard's one network surface — the same one-call variant
+        // endpoint `KeyboardViewController` builds for `TonoCoachClient`.
+        CountingDeniedNetwork.reset()
+        Self.issueAndAwait(Self.coachVariantURL, from: self)
+        XCTAssertTrue(
+            CountingDeniedNetwork.attributedURLs.contains(Self.coachVariantURL),
+            """
+            a Coach request must be charged to the keyboard, not filtered away; \
+            attributed: \(CountingDeniedNetwork.attributedURLs)
+            """
+        )
+
+        // Same host as the registration confound, different path: still counted.
+        CountingDeniedNetwork.reset()
+        let sameHostOtherPath = "http://127.0.0.1:8765/v1/analyze"
+        Self.issueAndAwait(sameHostOtherPath, from: self)
+        XCTAssertTrue(
+            CountingDeniedNetwork.attributedURLs.contains(sameHostOtherPath),
+            "the exclusion is by path, not by host — no host may become a blind spot"
+        )
+
+        // And the exclusion really is doing something, or the two assertions
+        // above would hold trivially.
+        CountingDeniedNetwork.reset()
+        Self.issueAndAwait(Self.hostAppRegistrationURL, from: self)
+        XCTAssertTrue(
+            CountingDeniedNetwork.observedURLs.contains(Self.hostAppRegistrationURL),
+            "the registration must be observed"
+        )
+        XCTAssertFalse(
+            CountingDeniedNetwork.attributedURLs.contains(Self.hostAppRegistrationURL),
+            "and must not be attributed to the keyboard"
+        )
+    }
+
+    /// The source-level half of the same guarantee: the exclusion above is only
+    /// sound while the lane under test has no way to issue `/v1/register`. The
+    /// candidate lane has no network surface at all, and the controller reaches
+    /// the network through exactly one client.
+    func testLocalLaneFilesReachNoNetworkSurface() throws {
+        for file in ["LocalIntelligence.swift", "SpellingCorrection.swift"] {
+            let source = Self.strippingComments(try Self.keyboardSource(file))
+            for token in ["URLSession", "URLRequest", "TonoBackend", "registerIfNeeded"] {
+                XCTAssertFalse(
+                    source.contains(token),
+                    "\(file) must have no network surface, found \(token)"
+                )
+            }
+        }
+
+        let controller = Self.strippingComments(try Self.keyboardSource("KeyboardViewController.swift"))
+        for token in ["registerIfNeeded", "TonoBackend", "URLSession.shared", "URLSession("] {
+            XCTAssertFalse(
+                controller.contains(token),
+                """
+                KeyboardViewController must reach the network only through \
+                TonoCoachClient, found \(token)
+                """
+            )
+        }
+        // `KeyboardRootView` is the one keyboard file that does call
+        // `registerIfNeeded`. It is dead code — nothing mounts it — and the
+        // controller must not be what changes that.
+        XCTAssertFalse(
+            controller.contains("KeyboardRootView"),
+            "the controller must not mount KeyboardRootView, which does register"
+        )
+        // The one-call variant path, pinned where the exclusion depends on it.
+        XCTAssertTrue(
+            controller.contains("/api/analyze/variant"),
+            "the Coach client must still be built for the one-call variant endpoint"
+        )
     }
 
     /// The on-device badge is a statement about where computation happened. It
@@ -722,14 +915,48 @@ final class Build109StripRoleAndDocumentIntegrityTests: XCTestCase {
     }
 
     private static func keyboardControllerSource() throws -> String {
+        try keyboardSource("KeyboardViewController.swift")
+    }
+
+    private static func keyboardSource(_ fileName: String) throws -> String {
         let here = URL(fileURLWithPath: #filePath)
         let root = here.deletingLastPathComponent().deletingLastPathComponent()
         return try String(
             contentsOf: root
                 .appendingPathComponent("KeyboardExtension")
-                .appendingPathComponent("KeyboardViewController.swift"),
+                .appendingPathComponent(fileName),
             encoding: .utf8
         )
+    }
+
+    // MARK: - Network-attribution fixtures
+
+    /// The host app's launch registration — the Build 109 flake's actual cause.
+    /// `TonoBackend` targets `127.0.0.1:8765` in DEBUG, which is what the
+    /// simulator logs show and what nothing is listening on.
+    private static let hostAppRegistrationURL = "http://127.0.0.1:8765/v1/register"
+
+    /// The keyboard's one network surface: `KeyboardViewController` builds its
+    /// `TonoCoachClient` endpoint by rewriting `Const.backendURL`'s
+    /// `/v1/analyze` to `/api/analyze/variant`. Pinned by
+    /// `testLocalLaneFilesReachNoNetworkSurface`.
+    private static let coachVariantURL = "https://api.tonoit.com/api/analyze/variant"
+
+    /// Push one request through the URL loading system and wait for it to
+    /// settle, so the tally is read after the observation rather than racing it.
+    ///
+    /// The request never leaves the machine: `CountingDeniedNetwork` is
+    /// registered by the caller, claims it in `canInit`, and fails it
+    /// immediately in `startLoading`.
+    private static func issueAndAwait(_ urlString: String, from test: XCTestCase) {
+        guard let url = URL(string: urlString) else {
+            return XCTFail("bad fixture URL \(urlString)")
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        let settled = test.expectation(description: "request settled: \(urlString)")
+        URLSession.shared.dataTask(with: request) { _, _, _ in settled.fulfill() }.resume()
+        test.wait(for: [settled], timeout: 10)
     }
 
     /// Strip comments so a source-level control tests the CODE, not the prose
