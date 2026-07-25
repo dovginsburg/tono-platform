@@ -280,9 +280,14 @@ check(spelling_parse.returncode == 0, "Spelling Swift parse failed:\n" + spellin
 
 # Build-85 spelling gates: public APIs, bounded state, async/stale safety,
 # host suppression, candidate UI, safe token-only mutations, and undo.
+# Build 106: `SystemSpellingChecker`, the `SpellingChecking` seam and the
+# ranking primitives moved to KeyboardExtension/LocalIntelligence.swift so the
+# HOST APP can run the same shipping checker in its on-device self-test. The
+# capabilities asserted here are unchanged; only the file they live in moved.
+local_intel = (root / "KeyboardExtension/LocalIntelligence.swift").read_text()
 for marker in ('UITextChecker()', 'rangeOfMisspelledWord', 'guesses(forWordRange:',
                'completions(', 'requestSupplementaryLexicon'):
-    check(marker in spelling + src, f"on-device public spelling API missing: {marker}")
+    check(marker in spelling + src + local_intel, f"on-device public spelling API missing: {marker}")
 check('DispatchQueue(label: "com.tonoit.keyboard.spelling", qos: .utility)' in spelling,
       "spelling work is not isolated from the key path")
 check('debounce: TimeInterval = 0.12' in spelling and 'pending?.cancel()' in spelling,
@@ -293,13 +298,26 @@ check('cacheLimit: Int = 64' in spelling and 'while cacheOrder.count > cacheLimi
       "spelling cache is not bounded")
 check('static let maximumLength = 48' in spelling and 'documentContextBeforeInput' not in spelling,
       "policy retains or accepts more than the current bounded token")
-check('supportedLanguage' in spelling and 'prefix == "en"' in spelling,
-      "English-only language gate missing")
+# Build 106 REPLACED the Build-85 English-only gate on purpose: `prefix == "en"`
+# disabled the whole local lane for every non-English keyboard even when iOS had
+# the dictionary installed, which is half of the "offline mode did not visibly
+# utilize local intelligence" rejection. The contract is now "resolve to an
+# INSTALLED dictionary", which is a strictly larger, still-bounded surface.
+check('supportedLanguage' in spelling
+      and 'SpellingLanguageResolver.resolve(' in spelling
+      and 'availableLanguages' in spelling,
+      "language resolution against installed dictionaries missing")
+check('UITextChecker.availableLanguages' in spelling,
+      "resolution must be measured against the dictionaries iOS actually publishes")
 for kind in ('.email', '.url', '.numeric', '.secureLike'):
     check(kind in spelling + src, f"host suppression missing: {kind}")
 check('autocorrectionType' in src and 'spellCheckingType' in src,
       "autocorrection/spell-checking host traits are not respected")
-check('requestSupplementaryLexicon' in src and 'updateSupplementaryWords' in src,
+# Build 106 renamed the flat word set to `LocalLexicon`, which additionally
+# carries the user's configured shortcut expansions as real candidates.
+check('requestSupplementaryLexicon' in src
+      and 'updateLexicon(' in src
+      and 'LocalLexicon(lexiconEntries:' in src,
       "supplementary lexicon is not requested and applied")
 check('bar.heightAnchor.constraint(equalToConstant: 26)' in src
       and 'candidates.distribution = .fillEqually' in src
@@ -329,7 +347,8 @@ for test_name in ('testTehStrongCorrectionAndOriginalCandidate', 'testRecieveUse
                   'testUndoRecordPreservesBoundary',
                   'testDoubleSpacePeriodRequiresOrdinaryPermittedFieldAndNoPendingUndo',
                   'testStaleGenerationIsRejectedDeterministically',
-                  'testSupportedAndUnsupportedLanguages', 'testRealUITextCheckerSmokeWhenEnglishIsAvailable'):
+                  'testResolvesToAnInstalledDictionaryRatherThanEnglishOnly',
+                  'testRealUITextCheckerSmokeWhenEnglishIsAvailable'):
     check(test_name in tests, f"spelling XCTest missing: {test_name}")
 check(project.count('SpellingCorrection.swift in Sources') == 4,
       "SpellingCorrection.swift must belong to keyboard and test targets")

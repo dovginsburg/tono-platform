@@ -28,9 +28,31 @@
 // line-fragment geometry, no knowledge of where the host visually wraps a long
 // line, and no way to set or extend a selection range. Everything here is
 // therefore computed from the TEXT the proxy hands us, never from host
-// geometry, and "line" below always means a LOGICAL line delimited by "\n".
-// Where that is not enough, the engine degrades to horizontal-only movement
-// rather than guessing — see `SpaceCursorDocument.supportsVerticalNavigation`.
+// geometry.
+//
+// ── Build 106: rows, not just logical lines ─────────────────────────────────
+// Build 105 defined "line" as a LOGICAL line delimited by "\n" and refused to
+// move vertically without one. It was rejected on device for exactly the case
+// that definition misses: a composer displaying TWO WRAPPED LINES of a single
+// long sentence contains no "\n", so an upward drag did nothing at all.
+//
+// Build 106 navigates ROWS. A row boundary comes from either
+//
+//   * an observed "\n"                    — exact, unchanged from Build 105; or
+//   * an estimated wrap point             — greedy word wrap at an estimated
+//                                           characters-per-row width supplied
+//                                           by `SpaceCursorWrapEstimator`.
+//
+// When no wrap width is available the row list collapses to the logical line
+// list and the engine behaves precisely as Build 105 did. Sticky-column
+// behaviour, reversal, clamping and the no-mutation guarantee are unchanged.
+//
+// This is an approximation and is documented as one. It is NOT Apple's line
+// breaking and there is no claim of parity with a first-party keyboard's
+// wrapped-line caret movement: Apple's own keyboard is inside the layout system
+// and can read the caret rect; a third-party extension cannot. The estimate is
+// biased to under-shoot so the failure mode is "moved a bit less than a full
+// visual line", never "did not move".
 //
 // The engine deliberately has no delete capability: `Effect` has no delete
 // case, so no gesture path can remove text. A quick tap is the ONLY way this
@@ -83,6 +105,68 @@ public struct SpaceCursorConfig: Equatable {
     public init() {}
 }
 
+/// Estimates how many characters fit on one *visual* row of the host field.
+///
+/// ── Why an estimate at all ──────────────────────────────────────────────────
+/// Build 105 defined a "line" as a LOGICAL line delimited by "\n", and refused
+/// vertical movement when the captured context had no newline. On device that
+/// produced the Build-105 rejection: a Messages composer showing TWO WRAPPED
+/// lines of one long sentence contains no "\n" at all, so `supportsVertical`
+/// was false and an upward drag did nothing. The founder saw a keyboard whose
+/// caret would not go up.
+///
+/// `UITextDocumentProxy` still exposes no caret rectangle, no line-fragment
+/// geometry, and no host font — that is not going to change, and nothing here
+/// pretends otherwise. What it does expose is the TEXT, and the extension knows
+/// its own width and the user's dynamic-type body metrics. That is enough for a
+/// bounded estimate of where the host must be wrapping, which is strictly
+/// better than refusing to move.
+///
+/// ── Which way to be wrong ───────────────────────────────────────────────────
+/// The estimate is deliberately biased LOW. Over-estimating the row width is
+/// the dangerous direction: a 50-character wrapped draft measured against a
+/// 60-character row collapses to one row and the caret goes inert again — the
+/// exact rejected behaviour. Under-estimating merely makes one vertical step
+/// travel less than a full visual line: the caret still visibly moves in the
+/// direction the finger went, which is what the user is asking for. So the
+/// fraction below is conservative and the result is floored, never rounded up.
+public enum SpaceCursorWrapEstimator {
+
+    /// Fraction of the keyboard's own width that a host text field is assumed
+    /// to give to text. Composer fields (Messages bubbles, Slack, WhatsApp) are
+    /// inset from the full width by avatars, send buttons and bubble padding;
+    /// 0.82 stays under all of them. Biased low on purpose — see above.
+    public static let hostFieldWidthFraction: Double = 0.82
+
+    /// Below this many characters per row the estimate is not credible (a very
+    /// narrow field, an enormous accessibility font), and the engine falls back
+    /// to logical-newline-only navigation rather than inventing rows.
+    public static let minimumCredibleWidth = 12
+
+    /// Ceiling, so a pathological font metric cannot produce a row width larger
+    /// than any real composer.
+    public static let maximumCredibleWidth = 160
+
+    /// - Parameters:
+    ///   - keyboardWidthPoints: the extension's own view width.
+    ///   - averageCharacterWidthPoints: measured advance of a representative
+    ///     glyph in the user's current body font.
+    /// - Returns: estimated characters per visual row, or nil when no credible
+    ///   estimate exists.
+    public static func charactersPerRow(
+        keyboardWidthPoints: Double,
+        averageCharacterWidthPoints: Double
+    ) -> Int? {
+        guard keyboardWidthPoints.isFinite, keyboardWidthPoints > 0,
+              averageCharacterWidthPoints.isFinite, averageCharacterWidthPoints > 0
+        else { return nil }
+        let usable = keyboardWidthPoints * hostFieldWidthFraction
+        let raw = Int((usable / averageCharacterWidthPoints).rounded(.down))
+        guard raw >= minimumCredibleWidth else { return nil }
+        return min(raw, maximumCredibleWidth)
+    }
+}
+
 /// An immutable snapshot of the text around the caret, captured from the proxy
 /// at the moment the trackpad engages.
 ///
@@ -98,61 +182,142 @@ public struct SpaceCursorDocument: Equatable {
     /// Grapheme index of the caret within `characters`.
     public let origin: Int
 
-    /// Start index of every logical line in `characters`.
-    private let lineStarts: [Int]
+    /// Start index of every logical line in `characters` (delimited by "\n").
+    /// Exact — observed, never estimated.
+    private let logicalLineStarts: [Int]
 
-    public init(before: String, after: String) {
+    /// Start index of every *navigable row*. Every logical-line start is a row
+    /// start; when a wrap width is available, long logical lines additionally
+    /// break into estimated rows. With no wrap width this is identical to
+    /// `logicalLineStarts`, i.e. exactly the Build-105 behaviour.
+    private let rowStarts: [Int]
+
+    /// Characters per estimated visual row, or nil when the document navigates
+    /// by explicit newlines only.
+    public let wrapWidth: Int?
+
+    public init(before: String, after: String, wrapWidth: Int? = nil) {
         let head = Array(before)
         let tail = Array(after)
         characters = head + tail
         origin = head.count
 
-        var starts = [0]
+        var logical = [0]
         for (i, ch) in characters.enumerated() where ch == "\n" {
-            starts.append(i + 1)
+            logical.append(i + 1)
         }
-        lineStarts = starts
+        logicalLineStarts = logical
+
+        let width = wrapWidth.flatMap { $0 >= 1 ? $0 : nil }
+        self.wrapWidth = width
+        guard let width else {
+            rowStarts = logical
+            return
+        }
+        var rows: [Int] = []
+        rows.reserveCapacity(logical.count)
+        for (i, lineStart) in logical.enumerated() {
+            let lineEnd = i + 1 < logical.count ? logical[i + 1] - 1 : characters.count
+            rows.append(contentsOf: Self.wrappedRowStarts(
+                in: characters,
+                from: lineStart,
+                to: lineEnd,
+                width: width
+            ))
+        }
+        rowStarts = rows
+    }
+
+    /// Greedy word wrap over `characters[start..<end]`, the algorithm every
+    /// mainstream text layout engine uses: fill until the row is full, break at
+    /// the last space if there is one, otherwise break mid-token. Returns the
+    /// start index of each resulting row, beginning with `start`.
+    ///
+    /// This reproduces the *shape* of host wrapping from the text alone. It is
+    /// not, and is not claimed to be, the host's own line breaking: no kerning,
+    /// no proportional advances, no hyphenation, no bidi reordering.
+    private static func wrappedRowStarts(
+        in characters: [Character],
+        from start: Int,
+        to end: Int,
+        width: Int
+    ) -> [Int] {
+        var rows = [start]
+        guard end > start else { return rows }
+        var rowStart = start
+        var lastBreak: Int?           // index just after the most recent space
+        var i = start
+        while i < end {
+            if characters[i] == " " { lastBreak = i + 1 }
+            if i - rowStart >= width {
+                let breakAt = (lastBreak.map { $0 > rowStart && $0 < end ? $0 : i }) ?? i
+                rows.append(breakAt)
+                rowStart = breakAt
+                lastBreak = nil
+                i = breakAt
+                continue
+            }
+            i += 1
+        }
+        return rows
     }
 
     /// Convenience for a proxy that returned nil for either side.
-    public init(before: String?, after: String?) {
-        self.init(before: before ?? "", after: after ?? "")
+    public init(before: String?, after: String?, wrapWidth: Int? = nil) {
+        self.init(before: before ?? "", after: after ?? "", wrapWidth: wrapWidth)
     }
 
     public var count: Int { characters.count }
 
-    /// True when the captured context actually contains a line break, i.e. the
-    /// only case in which vertical navigation has a defined meaning.
+    /// True when there is more than one row to move between — either a real
+    /// newline (exact) or an estimated wrap (bounded).
     ///
     /// A single-line field, a host that returns no context, or a host that
-    /// truncates context to the current line all report `false`, and the engine
-    /// then confines itself to horizontal movement rather than inventing
-    /// geometry it cannot observe.
-    public var supportsVerticalNavigation: Bool { lineStarts.count > 1 }
+    /// truncates context to a stretch shorter than one estimated row all still
+    /// report `false`, and the engine then confines itself to horizontal
+    /// movement rather than inventing geometry it cannot observe.
+    public var supportsVerticalNavigation: Bool { rowStarts.count > 1 }
 
-    public var lineCount: Int { lineStarts.count }
+    /// True when at least one row boundary came from the wrap estimate rather
+    /// than from an observed "\n". Callers use this to keep their claims
+    /// honest; the engine's behaviour is identical either way.
+    public var usesEstimatedRows: Bool { rowStarts.count > logicalLineStarts.count }
 
-    /// Index of the logical line containing `index`.
+    /// Number of navigable rows.
+    public var lineCount: Int { rowStarts.count }
+
+    /// Number of logical, newline-delimited lines. Always exact.
+    public var logicalLineCount: Int { logicalLineStarts.count }
+
+    /// Index of the row containing `index`.
     public func line(of index: Int) -> Int {
-        var lo = 0, hi = lineStarts.count - 1, result = 0
+        var lo = 0, hi = rowStarts.count - 1, result = 0
         while lo <= hi {
             let mid = (lo + hi) / 2
-            if lineStarts[mid] <= index { result = mid; lo = mid + 1 } else { hi = mid - 1 }
+            if rowStarts[mid] <= index { result = mid; lo = mid + 1 } else { hi = mid - 1 }
         }
         return result
     }
 
     public func start(ofLine line: Int) -> Int {
-        lineStarts[min(max(line, 0), lineStarts.count - 1)]
+        rowStarts[min(max(line, 0), rowStarts.count - 1)]
     }
 
-    /// Index one past the last character of `line`, excluding its newline.
+    /// Index one past the last character of `line`, excluding the "\n" or the
+    /// wrap space that separates it from the next row — so a caret parked at
+    /// the end of a row sits after the last visible character, never on top of
+    /// the separator.
     public func end(ofLine line: Int) -> Int {
-        let clamped = min(max(line, 0), lineStarts.count - 1)
-        if clamped + 1 < lineStarts.count {
-            return lineStarts[clamped + 1] - 1     // drop the "\n"
+        let clamped = min(max(line, 0), rowStarts.count - 1)
+        guard clamped + 1 < rowStarts.count else { return characters.count }
+        let nextStart = rowStarts[clamped + 1]
+        var end = nextStart
+        while end > rowStarts[clamped],
+              end - 1 < characters.count,
+              characters[end - 1] == "\n" || characters[end - 1] == " " {
+            end -= 1
         }
-        return characters.count
+        return end
     }
 
     /// Caret column within its logical line, in graphemes.
@@ -335,9 +500,9 @@ public struct SpaceCursorEngine: Equatable {
                 target = clamp(doc.origin + horizontal, in: doc)
                 nextSticky = doc.column(of: target)
             } else {
-                // Vertical picks the logical line; horizontal offsets the column
-                // within it. The sticky column is preserved so travelling across
-                // a short line and back lands where the user started.
+                // Vertical picks the row; horizontal offsets the column within
+                // it. The sticky column is preserved so travelling across a
+                // short row and back lands where the user started.
                 let originLine = doc.line(of: doc.origin)
                 let targetLine = min(max(originLine + vertical, 0), doc.lineCount - 1)
                 let desiredColumn = max(sticky + horizontal, 0)
@@ -455,9 +620,19 @@ public final class SpaceCursorSession {
     /// controller knows whether a resynchronise is warranted.
     public private(set) var didMoveCaret = false
 
-    public init(engine: SpaceCursorEngine = SpaceCursorEngine(), proxy: SpaceCursorTextProxy?) {
+    /// Supplies the current estimated characters-per-visual-row, re-read at
+    /// every takeover so a rotation or a dynamic-type change is picked up.
+    /// Returning nil restricts the session to explicit-newline navigation.
+    private let wrapWidthProvider: () -> Int?
+
+    public init(
+        engine: SpaceCursorEngine = SpaceCursorEngine(),
+        proxy: SpaceCursorTextProxy?,
+        wrapWidthProvider: @escaping () -> Int? = { nil }
+    ) {
         self.engine = engine
         self.proxy = proxy
+        self.wrapWidthProvider = wrapWidthProvider
     }
 
     public var isCursorActive: Bool { engine.isCursorActive }
@@ -476,7 +651,8 @@ public final class SpaceCursorSession {
     public func tick(at now: Date) -> SpaceCursorEngine.Effect {
         let document = SpaceCursorDocument(
             before: proxy?.documentContextBeforeInput,
-            after: proxy?.documentContextAfterInput
+            after: proxy?.documentContextAfterInput,
+            wrapWidth: wrapWidthProvider()
         )
         return engine.tick(at: now, document: document)
     }

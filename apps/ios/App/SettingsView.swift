@@ -4,6 +4,7 @@
 
 import SwiftUI
 import StoreKit
+import UIKit
 
 struct SettingsView: View {
     @Binding var prefs: TonePreferences
@@ -31,6 +32,8 @@ struct SettingsView: View {
     // build 101 — account deletion
     @State private var showDeleteAccountSheet: Bool = false
     @State private var accountDeleted:         Bool = false
+    // build 106 — on-device intelligence self-test result (nil until run)
+    @State private var localSelfTestResult: LocalIntelligenceSelfTest.Result?
 
     // Live Tone v1 control surface (shipping release). A value type over the
     // shared App Group store — writes are visible to the keyboard on its next
@@ -57,6 +60,7 @@ struct SettingsView: View {
                 recipientsSection
                 axesSection
                 liveToneSection
+                localIntelligenceSection
                 planSection
                 privacySection
                 accountManagementSection
@@ -572,6 +576,59 @@ struct SettingsView: View {
         Section("Privacy") {
             Text("Tono sends your draft to our backend, which calls the LLM. Drafts are not stored. Your bearer token is kept in the Keychain, never in plain UserDefaults.")
                 .font(.caption).foregroundColor(.secondary)
+        }
+    }
+
+    // MARK: - On-device intelligence (build 106)
+
+    /// Truthful, testable copy about what runs where, plus a self-test that
+    /// exercises the REAL shipping resolver, checker and ranker.
+    ///
+    /// Build 105 shipped no statement of this at all, which is why "offline
+    /// mode did not visibly utilize local intelligence" was a fair reading of
+    /// the product even where the local lane was working.
+    private var localIntelligenceSection: some View {
+        Section("On-device intelligence") {
+            Text(LocalIntelligenceCopy.offlineCapabilitySummary)
+                .font(.caption).foregroundColor(.secondary)
+            Text(LocalIntelligenceCopy.onlineRequirementSummary)
+                .font(.caption).foregroundColor(.secondary)
+            Text(LocalIntelligenceCopy.localModelDisclosure)
+                .font(.caption).foregroundColor(.secondary)
+                .accessibilityIdentifier("Tono.localModelDisclosure")
+
+            Button("Check on-device intelligence") {
+                localSelfTestResult = LocalIntelligenceSelfTest.run(
+                    language: Locale.current.identifier,
+                    availableLanguages: UITextChecker.availableLanguages,
+                    checker: SystemSpellingChecker(),
+                    lexicon: .empty
+                )
+            }
+            .accessibilityIdentifier("Tono.runLocalSelfTest")
+
+            if let result = localSelfTestResult {
+                Label {
+                    Text(result.summary).font(.caption)
+                } icon: {
+                    Image(systemName: result.isPass ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                        .foregroundColor(result.isPass ? .green : .orange)
+                }
+                .accessibilityIdentifier("Tono.localSelfTestResult")
+
+                if case .pass(let checks) = result {
+                    ForEach(checks, id: \.name) { check in
+                        Text("\(check.name): \(check.detail)")
+                            .font(.caption2).foregroundColor(.secondary)
+                    }
+                } else if case .fail(let checks) = result {
+                    ForEach(checks, id: \.name) { check in
+                        Text("\(check.passed ? "OK" : "FAILED") — \(check.name): \(check.detail)")
+                            .font(.caption2)
+                            .foregroundColor(check.passed ? .secondary : .orange)
+                    }
+                }
+            }
         }
     }
 

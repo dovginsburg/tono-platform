@@ -287,6 +287,11 @@ public final class TonoCoachClient {
         /// visible recovery state instead of silently failing or inventing a
         /// credential. Recover by opening the Tono app to sign in.
         case missingToken
+        /// Build 106: the device has no usable connection. Distinguished from
+        /// `.transport` so the keyboard can say the honest, actionable thing —
+        /// Coach needs internet, everything local keeps working — instead of
+        /// surfacing a raw URLError string.
+        case offline
 
         public var userFacingMessage: String {
             switch self {
@@ -294,6 +299,8 @@ public final class TonoCoachClient {
                 return "Internal error: invalid backend URL."
             case .missingToken:
                 return "Sign in to Tono to use Coach. Open the Tono app to continue."
+            case .offline:
+                return LocalIntelligenceCopy.coachRequiresInternet
             case .transport(let m):
                 return "Network error: \(m)"
             case .timeout:
@@ -307,6 +314,24 @@ public final class TonoCoachClient {
                 return "Could not read server response: \(m)"
             case .staleDraft:
                 return "The draft changed while Coach was working. Run Coach again."
+            }
+        }
+
+        /// The URLError codes that mean "no usable connection" rather than "the
+        /// server misbehaved". Kept explicit so the offline message is only
+        /// shown when it is actually true.
+        static func isOffline(_ error: URLError) -> Bool {
+            switch error.code {
+            case .notConnectedToInternet,
+                 .networkConnectionLost,
+                 .cannotConnectToHost,
+                 .cannotFindHost,
+                 .dataNotAllowed,
+                 .internationalRoamingOff,
+                 .secureConnectionFailed:
+                return true
+            default:
+                return false
             }
         }
     }
@@ -409,6 +434,10 @@ public final class TonoCoachClient {
                     DispatchQueue.main.async { completion(.failure(.timeout)) }
                     return
                 }
+                if CoachError.isOffline(urlErr) {
+                    DispatchQueue.main.async { completion(.failure(.offline)) }
+                    return
+                }
                 DispatchQueue.main.async { completion(.failure(.transport(urlErr.localizedDescription))) }
                 return
             }
@@ -486,9 +515,14 @@ public final class TonoCoachClient {
 
         let task = session.dataTask(with: req) { data, response, error in
             if let urlError = error as? URLError {
-                let mapped: CoachError = urlError.code == .timedOut
-                    ? .timeout
-                    : .transport(urlError.localizedDescription)
+                let mapped: CoachError
+                if urlError.code == .timedOut {
+                    mapped = .timeout
+                } else if CoachError.isOffline(urlError) {
+                    mapped = .offline
+                } else {
+                    mapped = .transport(urlError.localizedDescription)
+                }
                 DispatchQueue.main.async { completion(.failure(mapped)) }
                 return
             }

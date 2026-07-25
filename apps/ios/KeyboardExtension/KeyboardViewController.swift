@@ -74,6 +74,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         static let keyBorderWidth: CGFloat = 0.5
         static let referencePortraitWidth: CGFloat = 367.5
 
+        /// Diameter of the non-interactive on-device-intelligence dot.
+        static let localBadgeDiameter: CGFloat = 6
+
         static func letterKeyWidth(availableWidth: CGFloat) -> CGFloat {
             let usable = max(availableWidth - edgePadding * 2, 320)
             return (usable - rowSpacing * 9) / 10
@@ -167,6 +170,15 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         static let idEmojiRecents     = "TonoKB.emojiRecents"
         static let idEmojiFooter      = "TonoKB.emojiFooter"
 
+        // Build 106. `idCandidates` (above) is the spelling-suggestion row and
+        // keeps its historic identifier; `idToneChips` is the SEPARATE Coach
+        // row that used to share those same three buttons. Two identifiers
+        // means a physical inspector can confirm on-device which row it is
+        // actually touching — the Build-105 defect was invisible precisely
+        // because both roles wore one identifier.
+        static let idToneChips        = "TonoKB.toneChips"
+        /// Subtle on-device-intelligence indicator (see `LocalIntelligence`).
+        static let idLocalBadge       = "TonoKB.localBadge"
 
         /// Single-source-of-truth registry, returned by
         /// `allIdentifiers`. The lookup keeps the Swift optimiser
@@ -180,6 +192,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             idCoachBack, idCoachRetry, idCoachError,
             idCoachErrorDetail, idRiskBadge, idRewrites,
             idEmojiPanel, idEmojiCategory, idEmojiRecents, idEmojiFooter,
+            idToneChips, idLocalBadge,
         ]
 
         /// Returns every TonoKB.* identifier this file declares.
@@ -424,7 +437,13 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     // or remove text; the single insertion is `insertSpaceCommit()` on a
     // genuine quick tap. The activation timer is a generation-guarded work
     // item, mirroring backspace-repeat, so it can never fire stale.
-    private lazy var spaceCursorSession = SpaceCursorSession(proxy: SpaceCursorProxyAdapter(owner: self))
+    private lazy var spaceCursorSession = SpaceCursorSession(
+        proxy: SpaceCursorProxyAdapter(owner: self),
+        // Build 106: re-read at every takeover, so rotation and dynamic-type
+        // changes are picked up without rebuilding the session (which would
+        // reintroduce the Build-104 proxy-lifetime defect).
+        wrapWidthProvider: { [weak self] in self?.estimatedWrapWidth() }
+    )
     private var spaceCursorActivationWork: DispatchWorkItem?
     private var spaceCursorGeneration = 0
     private var spaceCursorOrigin: CGPoint = .zero
@@ -445,8 +464,22 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private var spellingToken: SpellingToken?
     private var autocorrectionRecord: AutoCorrectionRecord?
     private weak var candidateStack: UIStackView?
+    private weak var toneChipStack: UIStackView?
+    private weak var localBadge: UIView?
     private weak var coachButton: TonoCoachButton?
     private var candidateValues: [String] = []
+
+    /// Which role the top strip is presenting. Build 105 inferred this from
+    /// `toneChipsEnabled` *and* from whichever selector happened to be attached
+    /// to the shared buttons; the two could disagree, and did. Build 106 keeps
+    /// one authority and gates both handlers on it.
+    private var stripMode: TonoStripMode = .suggestions
+
+    /// Every strip dispatch this controller refused, keyed by reason. Debug
+    /// seam for the "a suggestion tap can never reach Coach" contract —
+    /// `roleMismatch` must stay at zero for the process lifetime. Privacy-safe:
+    /// counts only, never text.
+    private(set) var stripRefusals: [TonoStripRoutingPolicy.Reason: Int] = [:]
 
     // Live Tone v1 — shipping release. Pure observer; never touches the
     // keystroke path. The manager owns the debouncer, the session state
@@ -484,9 +517,17 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         keysInstalled = true
         installLiveTone()
         #if !TONO_BUILD92_HOSTSESSION
+        // Build 106: the user's own keyboard vocabulary now feeds BOTH lanes —
+        // it suppresses false corrections (as before) and contributes the
+        // shortcut expansions the user configured in Settings as real
+        // candidates. Build 105 collapsed both halves into one flat word set
+        // and used it only to bail out.
         requestSupplementaryLexicon { [weak self] lexicon in
-            let words = Set(lexicon.entries.lazy.flatMap { [$0.userInput, $0.documentText] })
-            self?.spellingService.updateSupplementaryWords(words)
+            self?.spellingService.updateLexicon(
+                LocalLexicon(lexiconEntries: lexicon.entries.map {
+                    (userInput: $0.userInput, documentText: $0.documentText)
+                })
+            )
             self?.refreshSpellingSuggestions()
         }
         #endif
@@ -637,6 +678,24 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         UIDevice.current.playInputClick()
     }
 
+    /// Estimated characters per visual row in the host field.
+    ///
+    /// Derived from the extension's own width and the user's body-font advance,
+    /// which are the only layout facts a keyboard extension can observe. The
+    /// host's real field width, font and line breaking are not readable through
+    /// any public API — see `SpaceCursorWrapEstimator` for why this is biased
+    /// low and what it does not claim.
+    private func estimatedWrapWidth() -> Int? {
+        let width = view.bounds.width
+        guard width > 0 else { return nil }
+        let font = UIFont.preferredFont(forTextStyle: .body)
+        let advance = ("n" as NSString).size(withAttributes: [.font: font]).width
+        return SpaceCursorWrapEstimator.charactersPerRow(
+            keyboardWidthPoints: Double(width),
+            averageCharacterWidthPoints: Double(advance)
+        )
+    }
+
     private func cancelTransientInteractions() {
         cancelDeleteRepeat()
         dismissKeyPreview()
@@ -679,37 +738,57 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coach.addTarget(self, action: #selector(coachTapped), for: .touchUpInside)
         bar.addSubview(coach)
 
-        let candidates = UIStackView()
-        candidates.axis = .horizontal
-        candidates.alignment = .fill
-        candidates.distribution = .fillEqually
-        candidates.spacing = 1
-        candidates.translatesAutoresizingMaskIntoConstraints = false
-        candidates.accessibilityIdentifier = Const.idCandidates
-        bar.addSubview(candidates)
-        for index in 0..<3 {
-            let button = TonoMinimumHitTargetButton(type: .system)
-            button.tag = index
-            button.titleLabel?.font = UIFontMetrics(forTextStyle: .caption1).scaledFont(
-                for: .systemFont(ofSize: 13, weight: .regular)
-            )
-            button.titleLabel?.adjustsFontForContentSizeCategory = true
-            button.titleLabel?.lineBreakMode = .byTruncatingTail
-            button.setTitleColor(.label, for: .normal)
-            button.backgroundColor = .secondarySystemBackground
-            button.layer.cornerRadius = 5
-            button.isHidden = true
-            button.addTarget(self, action: #selector(candidateTapped(_:)), for: .touchUpInside)
-            candidates.addArrangedSubview(button)
-        }
-        // TONO is the leading anchor of the strip; the tone chips read to its
+        // Build 106 — two physically distinct rows, one per role.
+        //
+        // These are separate view hierarchies with separate buttons and
+        // separate, permanently-bound selectors. Exactly one row is visible and
+        // hit-testable at a time (`applyStripMode`). No target/action table is
+        // mutated after this function returns, which is what makes the
+        // Build-105 "suggestion tap runs Coach" state unreachable rather than
+        // merely unlikely.
+        let candidates = makeStripStack(
+            role: .suggestion,
+            identifier: Const.idCandidates,
+            action: #selector(candidateTapped(_:)),
+            in: bar
+        )
+        let chips = makeStripStack(
+            role: .toneChip,
+            identifier: Const.idToneChips,
+            action: #selector(toneChipTapped(_:)),
+            in: bar
+        )
+
+        // Subtle, non-interactive "running on device" signal. Never a touch
+        // target, so it cannot participate in any hit-region collision.
+        let badge = UIView()
+        badge.translatesAutoresizingMaskIntoConstraints = false
+        badge.isUserInteractionEnabled = false
+        badge.backgroundColor = .systemGreen
+        badge.layer.cornerRadius = Const.localBadgeDiameter / 2
+        badge.accessibilityIdentifier = Const.idLocalBadge
+        badge.isAccessibilityElement = true
+        badge.accessibilityTraits = [.staticText]
+        badge.accessibilityLabel = LocalIntelligenceCopy.badgeAccessibilityLabel
+        badge.isHidden = true
+        bar.addSubview(badge)
+
+        // TONO is the leading anchor of the strip; the active row reads to its
         // right. Accessibility order matches the visual order.
-        bar.accessibilityElements = [coach] + candidates.arrangedSubviews
-        let approvedCoachWidth = ceil(coach.intrinsicContentSize.width)
+        bar.accessibilityElements = [coach, badge] + candidates.arrangedSubviews
+        // A Coach control narrower than the 44pt minimum touch target would
+        // have its hit rect expanded outward by `TonoMinimumHitTargetButton`,
+        // pushing it under the first suggestion. Flooring the width at the
+        // minimum keeps the expansion purely vertical, and
+        // `TonoStripGeometry.coachSeparation` covers the rest.
+        let approvedCoachWidth = max(
+            ceil(coach.intrinsicContentSize.width),
+            TonoKeyboardMetrics.ControlGeometry.minimumTouchTarget
+        )
         coach.setContentHuggingPriority(.required, for: .horizontal)
         coach.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        NSLayoutConstraint.activate([
+        var constraints: [NSLayoutConstraint] = [
             bar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             bar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             bar.topAnchor.constraint(equalTo: view.topAnchor),
@@ -721,16 +800,96 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             coach.heightAnchor.constraint(equalToConstant: Const.baselineMetrics.coachControlHeight),
             coach.widthAnchor.constraint(equalToConstant: approvedCoachWidth),
 
-            // The color-coded tone chips fill the trailing space after TONO.
-            candidates.leadingAnchor.constraint(equalTo: coach.trailingAnchor, constant: 5),
-            candidates.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -3),
-            candidates.topAnchor.constraint(equalTo: bar.topAnchor, constant: 4),
-            candidates.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -4),
-        ])
+            badge.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            badge.widthAnchor.constraint(equalToConstant: Const.localBadgeDiameter),
+            badge.heightAnchor.constraint(equalToConstant: Const.localBadgeDiameter),
+            badge.leadingAnchor.constraint(
+                equalTo: coach.trailingAnchor,
+                constant: TonoStripGeometry.coachSeparation
+            ),
+        ]
+        // Both rows occupy the identical frame; visibility, not geometry,
+        // selects between them.
+        for stack in [candidates, chips] {
+            constraints += [
+                stack.leadingAnchor.constraint(
+                    equalTo: badge.trailingAnchor,
+                    constant: TonoStripGeometry.coachSeparation
+                ),
+                stack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -3),
+                stack.topAnchor.constraint(equalTo: bar.topAnchor, constant: 4),
+                stack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -4),
+            ]
+        }
+        NSLayoutConstraint.activate(constraints)
 
         self.topBar = bar
         self.candidateStack = candidates
+        self.toneChipStack = chips
+        self.localBadge = badge
         self.coachButton = coach
+        applyStripMode(.suggestions)
+    }
+
+    /// Build one role's row. The selector is bound here, once, and never
+    /// removed — `TonoStripButton.stripRole` is `let`, so the pair
+    /// (button identity, action) is fixed for the button's lifetime.
+    private func makeStripStack(
+        role: TonoStripRole,
+        identifier: String,
+        action: Selector,
+        in bar: UIView
+    ) -> UIStackView {
+        let stack = UIStackView()
+        stack.axis = .horizontal
+        stack.alignment = .fill
+        stack.distribution = .fillEqually
+        stack.spacing = 1
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.accessibilityIdentifier = identifier
+        bar.addSubview(stack)
+        for index in 0..<3 {
+            let button = TonoStripButton(role: role, index: index)
+            button.titleLabel?.font = UIFontMetrics(forTextStyle: .caption1).scaledFont(
+                for: .systemFont(ofSize: 13, weight: .regular)
+            )
+            button.titleLabel?.adjustsFontForContentSizeCategory = true
+            button.titleLabel?.lineBreakMode = .byTruncatingTail
+            button.setTitleColor(.label, for: .normal)
+            button.backgroundColor = .secondarySystemBackground
+            button.layer.cornerRadius = 5
+            button.isHidden = true
+            button.addTarget(self, action: action, for: .touchUpInside)
+            stack.addArrangedSubview(button)
+        }
+        return stack
+    }
+
+    /// Make exactly one row live. The inactive row is hidden **and** has
+    /// interaction disabled, so it is excluded from hit testing twice over and
+    /// z-order between the two rows can never decide a tap.
+    private func applyStripMode(_ mode: TonoStripMode) {
+        stripMode = mode
+        let showSuggestions = mode == .suggestions
+        candidateStack?.isHidden = !showSuggestions
+        candidateStack?.isUserInteractionEnabled = showSuggestions
+        toneChipStack?.isHidden = showSuggestions
+        toneChipStack?.isUserInteractionEnabled = !showSuggestions
+        if let bar = topBar, let coach = coachButton, let badge = localBadge {
+            let active = showSuggestions ? candidateStack : toneChipStack
+            bar.accessibilityElements = [coach, badge] + (active?.arrangedSubviews ?? [])
+        }
+        updateLocalBadge()
+    }
+
+    /// Record and log a refused strip dispatch. Counts only — the refused
+    /// candidate text is never read, formatted or logged.
+    private func noteStripRefusal(_ reason: TonoStripRoutingPolicy.Reason) {
+        stripRefusals[reason, default: 0] += 1
+        if reason == .roleMismatch {
+            // Build-105 signature. Must never fire; loud if it ever does.
+            NSLog("TONO_KB BUILD106 ERR: strip role mismatch (count=%d)", stripRefusals[reason] ?? 0)
+        }
     }
 
     private func buildBodyContainer() {
@@ -1661,7 +1820,11 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             if autocorrectionRecord == nil { updateCandidateStrip(values: []) }
             return
         }
-        let request = SpellingRequest(token: token, host: spellingHostPolicy)
+        let request = SpellingRequest(
+            token: token,
+            host: spellingHostPolicy,
+            contextBefore: before
+        )
         guard request.host.allowsSuggestions else {
             spellingService.cancel()
             spellingDecision = nil
@@ -1686,7 +1849,14 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         }
     }
 
-    private func updateCandidateStrip(values: [String]) {
+    /// Render `values` onto the suggestion row.
+    ///
+    /// Internal, not private, so the XCTest target can drive the REAL strip:
+    /// a unit-test controller has no connected host document, so no spelling
+    /// pipeline can populate it, and the Build-105 defect lived precisely in
+    /// what happened to a populated strip after a Coach toggle. Production
+    /// callers are `refreshSpellingSuggestions` and the autocorrect paths.
+    func updateCandidateStrip(values: [String]) {
         guard let stack = candidateStack else { return }
         candidateValues = Array(values.prefix(3))
         for (index, view) in stack.arrangedSubviews.enumerated() {
@@ -1701,24 +1871,57 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             let value = candidateValues[index]
             let isOriginal = index == 0
             button.isHidden = false
-            // Reset to the neutral candidate style; the tone-chip path repaints
-            // afterward so tone token colors never leak into spelling
-            // candidates.
+            // Neutral candidate style. Build 106 paints tone tokens onto the
+            // separate chip row, so a tone color can no longer reach a spelling
+            // candidate even transiently.
             button.backgroundColor = .secondarySystemBackground
             button.setTitleColor(.label, for: .normal)
-            button.accessibilityValue = nil
             button.setTitle(value, for: .normal)
             button.accessibilityLabel = isOriginal ? "\(value), original" : value
             button.accessibilityHint = isOriginal
                 ? "Keeps or restores the original word"
                 : "Replaces the current word"
+            // Truthful provenance: every value on this row was produced on
+            // device. VoiceOver reads it; it is never sent anywhere.
+            button.accessibilityValue = LocalIntelligenceCopy.candidateProvenance
             button.accessibilityTraits = isOriginal ? [.button, .selected] : [.button]
         }
+        updateLocalBadge()
     }
 
+    /// Show the on-device indicator whenever the suggestion row is the live row
+    /// and is actually offering locally-computed values. It is a statement about
+    /// where the computation happened, not a network reachability light, so it
+    /// never lies about connectivity.
+    private func updateLocalBadge() {
+        localBadge?.isHidden = !(stripMode == .suggestions && !candidateValues.isEmpty)
+    }
+
+    /// Accept one spelling/autocorrect suggestion.
+    ///
+    /// This path is local-only by construction: it performs exactly one bounded
+    /// document mutation, updates local spelling state, plays the ordinary
+    /// input click, and returns. It contains no Coach call, no task creation
+    /// and no network I/O — and the routing gate above guarantees a tone chip
+    /// can never arrive here, nor a suggestion arrive at `toneChipTapped`.
     @objc private func candidateTapped(_ sender: UIButton) {
-        guard candidateValues.indices.contains(sender.tag) else { return }
-        let value = candidateValues[sender.tag]
+        guard let candidate = sender as? TonoStripButton else {
+            noteStripRefusal(.roleMismatch)
+            return
+        }
+        let decision = TonoStripRoutingPolicy.decide(
+            senderRole: candidate.stripRole,
+            handlerRole: .suggestion,
+            mode: stripMode,
+            index: candidate.stripIndex,
+            valueCount: candidateValues.count,
+            isBusy: false
+        )
+        guard case .perform(_, let index) = decision else {
+            if case .refuse(let reason) = decision { noteStripRefusal(reason) }
+            return
+        }
+        let value = candidateValues[index]
         if let record = autocorrectionRecord, value == record.original {
             let beforeMutation = effectiveDocumentContextBeforeInput
             guard let afterMutation = restoreAutocorrection(
@@ -2494,17 +2697,25 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         ))
         selectedToneAxes = ["safer"] + configuredOptional.map(\.rawValue)
         if !enabled {
+            // Build 106: switching back is a pure visibility change. Build 105
+            // repainted the shared buttons here but left them wired to
+            // `toneChipTapped`, which is exactly how a spelling tap started
+            // running Coach on device.
+            applyStripMode(.suggestions)
             refreshSpellingSuggestions()
             return
         }
-        updateCandidateStrip(values: selectedToneAxes.map { $0.capitalized })
-        for (index, view) in (candidateStack?.arrangedSubviews ?? []).enumerated() {
+        applyStripMode(.toneChips)
+        for (index, view) in (toneChipStack?.arrangedSubviews ?? []).enumerated() {
             guard let button = view as? UIButton else { continue }
-            button.removeTarget(self, action: #selector(candidateTapped(_:)), for: .touchUpInside)
-            button.addTarget(self, action: #selector(toneChipTapped(_:)), for: .touchUpInside)
-            if index < selectedToneAxes.count {
-                applyToneTokenStyle(to: button, axis: selectedToneAxes[index])
+            guard index < selectedToneAxes.count else {
+                button.setTitle(nil, for: .normal)
+                button.isHidden = true
+                continue
             }
+            button.isHidden = false
+            button.setTitle(selectedToneAxes[index].capitalized, for: .normal)
+            applyToneTokenStyle(to: button, axis: selectedToneAxes[index])
         }
     }
 
@@ -2527,14 +2738,29 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     @objc private func toneChipTapped(_ sender: UIButton) {
-        guard !coachBusy, selectedToneAxes.indices.contains(sender.tag) else { return }
+        guard let chip = sender as? TonoStripButton else {
+            noteStripRefusal(.roleMismatch)
+            return
+        }
+        let decision = TonoStripRoutingPolicy.decide(
+            senderRole: chip.stripRole,
+            handlerRole: .toneChip,
+            mode: stripMode,
+            index: chip.stripIndex,
+            valueCount: selectedToneAxes.count,
+            isBusy: coachBusy
+        )
+        guard case .perform(_, let index) = decision else {
+            if case .refuse(let reason) = decision { noteStripRefusal(reason) }
+            return
+        }
         cancelTransientInteractions()
         spellingService.cancel()
         let proxy = textDocumentProxy
         beginCoachRewrite(
             before: proxy.documentContextBeforeInput ?? "",
             after: proxy.documentContextAfterInput ?? "",
-            axis: selectedToneAxes[sender.tag]
+            axis: selectedToneAxes[index]
         )
     }
 

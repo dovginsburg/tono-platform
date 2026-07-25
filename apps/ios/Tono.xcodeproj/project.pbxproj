@@ -131,8 +131,16 @@
 		F9F9FEC515BC480346923B7B /* CrashReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4673C08A34AA91DC050C1D33 /* CrashReporter.swift */; };
 		FD235F56501E8926FED5616B /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA287EC754705B7065C31935 /* KeyboardViewController.swift */; };
 		850000000000000000000001 /* SpellingCorrection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 850000000000000000000004 /* SpellingCorrection.swift */; };
+		A60000000000000000000006 /* LocalIntelligence.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60000000000000000000004 /* LocalIntelligence.swift */; };
+		A70000000000000000000002 /* LocalIntelligence.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60000000000000000000004 /* LocalIntelligence.swift */; };
+		A60000000000000000000005 /* LocalIntelligence.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60000000000000000000004 /* LocalIntelligence.swift */; };
+		A60000000000000000000003 /* TonoStripRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60000000000000000000001 /* TonoStripRouting.swift */; };
+		A60000000000000000000002 /* TonoStripRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60000000000000000000001 /* TonoStripRouting.swift */; };
 		850000000000000000000002 /* SpellingCorrection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 850000000000000000000004 /* SpellingCorrection.swift */; };
 		850000000000000000000003 /* SpellingCorrectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 850000000000000000000005 /* SpellingCorrectionTests.swift */; };
+		A6000000000000000000000C /* Build106LocalIntelligenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6000000000000000000000B /* Build106LocalIntelligenceTests.swift */; };
+		A6000000000000000000000A /* Build106MultilineCursorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60000000000000000000009 /* Build106MultilineCursorTests.swift */; };
+		A60000000000000000000008 /* Build106SuggestionRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60000000000000000000007 /* Build106SuggestionRoutingTests.swift */; };
 		860000000000000000000001 /* CoachContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 860000000000000000000003 /* CoachContractTests.swift */; };
 		950000000000000000000001 /* Build95CoachContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 950000000000000000000002 /* Build95CoachContractTests.swift */; };
 		950000000000000000000011 /* Build95LifecycleClockTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 950000000000000000000012 /* Build95LifecycleClockTests.swift */; };
@@ -284,7 +292,12 @@
 		A834BA4FC850457268EEDDD3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		AA287EC754705B7065C31935 /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
 		850000000000000000000004 /* SpellingCorrection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpellingCorrection.swift; sourceTree = "<group>"; };
+		A60000000000000000000004 /* LocalIntelligence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalIntelligence.swift; sourceTree = "<group>"; };
+		A60000000000000000000001 /* TonoStripRouting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoStripRouting.swift; sourceTree = "<group>"; };
 		850000000000000000000005 /* SpellingCorrectionTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SpellingCorrectionTests.swift; sourceTree = "<group>"; };
+		A6000000000000000000000B /* Build106LocalIntelligenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build106LocalIntelligenceTests.swift; sourceTree = "<group>"; };
+		A60000000000000000000009 /* Build106MultilineCursorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build106MultilineCursorTests.swift; sourceTree = "<group>"; };
+		A60000000000000000000007 /* Build106SuggestionRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build106SuggestionRoutingTests.swift; sourceTree = "<group>"; };
 		860000000000000000000003 /* CoachContractTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CoachContractTests.swift; sourceTree = "<group>"; };
 		950000000000000000000002 /* Build95CoachContractTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build95CoachContractTests.swift; sourceTree = "<group>"; };
 		950000000000000000000012 /* Build95LifecycleClockTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build95LifecycleClockTests.swift; sourceTree = "<group>"; };
@@ -395,6 +408,9 @@
 				8D0000000000000000000005 /* Build97LiveTonePositiveOpportunityTests.swift */,
 				8D0000000000000000000006 /* Build97ShippingPathTests.swift */,
 				850000000000000000000005 /* SpellingCorrectionTests.swift */,
+				A6000000000000000000000B /* Build106LocalIntelligenceTests.swift */,
+				A60000000000000000000009 /* Build106MultilineCursorTests.swift */,
+				A60000000000000000000007 /* Build106SuggestionRoutingTests.swift */,
 				970000000000000000000010 /* Build97KeyboardGeometryTests.swift */,
 				970000000000000000000011 /* Build97BackspaceStateTests.swift */,
 				970000000000000000000012 /* Build97LayerNavigationTests.swift */,
@@ -519,6 +535,8 @@
 				AA287EC754705B7065C31935 /* KeyboardViewController.swift */,
 				870000000000000000000004 /* TonoKeyboardVisualStyle.swift */,
 				850000000000000000000004 /* SpellingCorrection.swift */,
+				A60000000000000000000004 /* LocalIntelligence.swift */,
+				A60000000000000000000001 /* TonoStripRouting.swift */,
 				6EE5759E683FD2ECA633D8FC /* TonoCoachClient.swift */,
 				8B0000000000000000000010 /* LiveToneEngine.swift */,
 				8B0000000000000000000011 /* LiveToneIndicatorView.swift */,
@@ -737,6 +755,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A60000000000000000000005 /* LocalIntelligence.swift in Sources */,
+				A60000000000000000000002 /* TonoStripRouting.swift in Sources */,
 				AC41C81596FDF580237DDAD9 /* AnthropicToneAnalyzer.swift in Sources */,
 				3E19380F8F3D0E3399CF3504 /* AppleRewriteBridge.swift in Sources */,
 				7550DEA84F0587C8385AAFF3 /* ContactsSync.swift in Sources */,
@@ -818,6 +838,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A6000000000000000000000C /* Build106LocalIntelligenceTests.swift in Sources */,
+				A6000000000000000000000A /* Build106MultilineCursorTests.swift in Sources */,
+				A60000000000000000000008 /* Build106SuggestionRoutingTests.swift in Sources */,
+				A60000000000000000000006 /* LocalIntelligence.swift in Sources */,
+				A60000000000000000000003 /* TonoStripRouting.swift in Sources */,
 				4A7F52C5EC4E98E266267D4E /* ContactsAccessTests.swift in Sources */,
 				850000000000000000000002 /* SpellingCorrection.swift in Sources */,
 				850000000000000000000003 /* SpellingCorrectionTests.swift in Sources */,
@@ -903,6 +928,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A70000000000000000000002 /* LocalIntelligence.swift in Sources */,
 				ACD65ABC66C16A8CF9A1228B /* AnthropicToneAnalyzer.swift in Sources */,
 				940000000000000000000003 /* CoachVariantSettings.swift in Sources */,
 				2F8A6B0E514C1D2F6A7B8C9D /* AppleRewriteBridge.swift in Sources */,

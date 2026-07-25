@@ -35,8 +35,15 @@ final class Build96ToneChipStripTests: XCTestCase {
         controller.view.setNeedsLayout()
         controller.view.layoutIfNeeded()
 
+        // Build 106: the chips moved off the shared "TonoKB.candidates" row onto
+        // their own "TonoKB.toneChips" row. Sharing one row between spelling
+        // candidates and Coach chips is what let a suggestion tap start a Coach
+        // rewrite on device (see Build106SuggestionRoutingTests). The Build-96
+        // contract asserted here — Safer plus exactly two configured tokens,
+        // each painted with its canonical accent, TONO anchored left — is
+        // unchanged; only the row it is asserted against moved.
         let strip = try XCTUnwrap(
-            Self.view("TonoKB.candidates", in: controller.view) as? UIStackView
+            Self.view("TonoKB.toneChips", in: controller.view) as? UIStackView
         )
         let chips = strip.arrangedSubviews
             .compactMap { $0 as? UIButton }
