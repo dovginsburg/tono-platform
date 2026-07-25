@@ -124,6 +124,11 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
         // Coach UX.
         static let coachTimeout: TimeInterval = 15
+        // Build 107: the user-visible deadline. If a request is still in
+        // flight ~10s after tap, the keyboard cancels it and shows a truthful
+        // retry/error state rather than an indefinitely shimmering skeleton.
+        // The 15s URLSession timeout above stays as a backstop.
+        static let coachVisibleDeadline: TimeInterval = 10
         static let backendURL = "https://api.tonoit.com/v1/analyze"
 
         // Delete fires once immediately, then repeats with a bounded ramp.
@@ -357,6 +362,13 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private var selectedToneAxes: [String] = []
     private var coachRequestID: UUID?
     private var coachTask: URLSessionDataTask?
+    /// Monotonic anchor for the active request, captured at tap. Drives the
+    /// privacy-safe lifecycle clocks; durations only, never message content.
+    private var coachClockTapTime: DispatchTime?
+    /// Fires ~10s after tap if the request is still in flight, replacing the
+    /// skeleton with a truthful retry/error state. Cancelled the instant a
+    /// real completion lands or the session is invalidated.
+    private var coachDeadline: DispatchWorkItem?
     private lazy var coachClient = TonoCoachClient(
         endpoint: Const.backendURL.replacingOccurrences(of: "/v1/analyze", with: "/api/analyze/variant"),
         timeout: Const.coachTimeout,
@@ -400,7 +412,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     private var keysStack: UIStackView?
     private var coachContainer: UIView?
-    private var coachStatusLabel: UILabel?
+    /// The result-shaped loading skeleton currently installed, if any. Build
+    /// 107 replaced the plain "Coaching…" label + spinner with this.
+    private var coachSkeleton: TonoCoachSkeletonView?
     private var coachResultsStack: UIStackView?
     private var coachErrorContainer: UIView?
     private var coachErrorLabel: UILabel?
@@ -415,6 +429,20 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     /// contract, mirroring `TonoCoachClient.providerCallCount` on the client
     /// side. Production never reads it.
     private(set) var coachRequestsStarted = 0
+
+    // Build 107 test seams (internal, read-only): the live request identity
+    // and busy state, so the XCTest target can drive the ~10s deadline path
+    // without reaching into private state or waiting the real interval.
+    // Production never reads these.
+    var activeCoachRequestIDForTesting: UUID? { coachRequestID }
+    var coachIsBusyForTesting: Bool { coachBusy }
+    /// The tone axes the chip row is currently backed by. Read-only seam so a
+    /// test can pin the Build-107 "turning Coach off clears the stale axes"
+    /// contract without reaching into private state.
+    var selectedToneAxesForTesting: [String] { selectedToneAxes }
+    /// Which role the strip believes it is presenting. Read-only seam for the
+    /// same contract.
+    var stripModeForTesting: TonoStripMode { stripMode }
 
     // Build 93 — explicit Shift state plus monotonic document-mutation tracking.
     private var layoutMode: KeyboardLayoutMode = .letters
@@ -707,6 +735,12 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachTask = nil
         coachRequestID = nil
         coachLoadingRequestID = nil
+        // Disarm the visible deadline and drop the clock anchor: a cancelled
+        // or superseded request must never leave a watchdog armed against a
+        // stale requestID, and must not leak its tap anchor into the next one.
+        coachDeadline?.cancel()
+        coachDeadline = nil
+        coachClockTapTime = nil
         if clearTarget {
             coachRewriteTarget = nil
             coachRequestGuard = nil
@@ -2684,6 +2718,28 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     private func setToneChipsEnabled(_ enabled: Bool) {
         toneChipsEnabled = enabled
+        if !enabled {
+            // Build 106 made switching back a pure visibility change: the two
+            // roles own separate, permanently-targeted rows, so — unlike
+            // Build 105 — no repaint can leave a suggestion button wired to
+            // `toneChipTapped`. That half needs no undo and gets none.
+            //
+            // Build 107 closes what Build 106 left behind. Turning Coach off
+            // used to fall through the axis assignment above, so the
+            // controller kept a populated `selectedToneAxes` and a fully
+            // painted, titled, VoiceOver-labelled chip row hidden behind the
+            // stack. The single `mode.activeRole == senderRole` check in
+            // `TonoStripRoutingPolicy` was then the only thing between that
+            // stale row and a network rewrite. Clearing the model and the row
+            // makes the refusal over-determined: a dispatch that somehow
+            // reached `toneChipTapped` with the mode check broken is still
+            // refused by `indexOutOfRange` against an empty `valueCount`.
+            selectedToneAxes = []
+            clearToneChipRow()
+            applyStripMode(.suggestions)
+            refreshSpellingSuggestions()
+            return
+        }
         coachVariantSettings = CoachVariantSettingsStore().load()
         // Safer is the fixed first token; exactly two configured optional
         // tokens follow. No hidden generation — the optional tokens come
@@ -2696,15 +2752,6 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             CoachVariantSettings.maximumOptionalCount
         ))
         selectedToneAxes = ["safer"] + configuredOptional.map(\.rawValue)
-        if !enabled {
-            // Build 106: switching back is a pure visibility change. Build 105
-            // repainted the shared buttons here but left them wired to
-            // `toneChipTapped`, which is exactly how a spelling tap started
-            // running Coach on device.
-            applyStripMode(.suggestions)
-            refreshSpellingSuggestions()
-            return
-        }
         applyStripMode(.toneChips)
         for (index, view) in (toneChipStack?.arrangedSubviews ?? []).enumerated() {
             guard let button = view as? UIButton else { continue }
@@ -2716,6 +2763,24 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             button.isHidden = false
             button.setTitle(selectedToneAxes[index].capitalized, for: .normal)
             applyToneTokenStyle(to: button, axis: selectedToneAxes[index])
+        }
+    }
+
+    /// Undo `applyToneTokenStyle` across the whole chip row: no title, no tone
+    /// accent, and no VoiceOver residue of the axis that was showing. Called
+    /// only when Coach is switched off, so the hidden row carries no stale tone
+    /// state that a later regression could surface or dispatch from.
+    private func clearToneChipRow() {
+        for view in toneChipStack?.arrangedSubviews ?? [] {
+            guard let button = view as? UIButton else { continue }
+            button.setTitle(nil, for: .normal)
+            button.isHidden = true
+            button.backgroundColor = .secondarySystemBackground
+            button.setTitleColor(.label, for: .normal)
+            button.accessibilityValue = nil
+            button.accessibilityLabel = nil
+            button.accessibilityHint = nil
+            button.accessibilityTraits = [.button]
         }
     }
 
@@ -2852,7 +2917,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachContainer?.removeFromSuperview()
         coachErrorContainer?.removeFromSuperview()
         coachContainer = nil
-        coachStatusLabel = nil
+        coachSkeleton = nil
         coachResultsStack = nil
         coachErrorContainer = nil
         coachErrorLabel = nil
@@ -2904,7 +2969,14 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachButton?.isEnabled = false
         let requestID = UUID()
         coachRequestID = requestID
-        presentCoachLoading(requestID: requestID)
+        // Clock: tap. Every downstream phase is measured against this anchor.
+        let tapTime = DispatchTime.now()
+        coachClockTapTime = tapTime
+        presentCoachLoading(requestID: requestID, axis: axis)
+        // Clock: loading committed. The skeleton is built synchronously above,
+        // before any network work, so this proves the result-shaped surface
+        // lands within ~100ms of the tap. Privacy-safe: axis + duration only.
+        NSLog("TONO_KB BUILD107 clock: phase=loading axis=\(axis) dt_ms=\(Self.coachElapsedMs(since: tapTime))")
         NSLog("TONO_KB BUILD95 coach: begin selected variant axis=\(axis) len=\(draft.count)")
         let customPrompt = axis == "custom" ? coachVariantSettings.customInstruction : nil
         coachTask = coachClient.variant(draft: draft, axis: axis, customPrompt: customPrompt) { [weak self] result in
@@ -2918,6 +2990,69 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
                 )
             }
         }
+        // Clock: request dispatched.
+        NSLog("TONO_KB BUILD107 clock: phase=request axis=\(axis) dt_ms=\(Self.coachElapsedMs(since: tapTime))")
+        // Arm the ~10s user-visible deadline (fail-closed; see below).
+        scheduleCoachDeadline(requestID: requestID, tapTime: tapTime, axis: axis)
+    }
+
+    /// Monotonic elapsed milliseconds since `start`. Privacy-safe: a duration,
+    /// never content.
+    private static func coachElapsedMs(since start: DispatchTime) -> Int {
+        Int((DispatchTime.now().uptimeNanoseconds &- start.uptimeNanoseconds) / 1_000_000)
+    }
+
+    /// Emit the terminal render clock. Privacy-safe: durations + the axis
+    /// token + outcome + the server-measured provider milliseconds. Never
+    /// logs draft text, credentials, or any identifier.
+    private func logCoachRenderClock(
+        tapTime: DispatchTime?, axis: String?, outcome: String, providerMs: Int?
+    ) {
+        guard let tapTime else { return }
+        let provider = providerMs.map(String.init) ?? "na"
+        NSLog(
+            "TONO_KB BUILD107 clock: phase=render axis=\(axis ?? "na") outcome=\(outcome) provider_ms=\(provider) dt_ms=\(Self.coachElapsedMs(since: tapTime))"
+        )
+    }
+
+    /// Arm the ~10s user-visible deadline. Fail-closed: it fires only when the
+    /// request is still the active one AND still owns the installed loading
+    /// surface — the same gate a completion passes — so it can never overwrite
+    /// a newer request's state or a result that already landed. On fire it
+    /// cancels the in-flight task (so no late response can reattach) and
+    /// installs the truthful timeout error, which offers Retry.
+    private func scheduleCoachDeadline(requestID: UUID, tapTime: DispatchTime, axis: String) {
+        let work = DispatchWorkItem { [weak self] in
+            self?.handleCoachDeadlineFired(requestID: requestID, tapTime: tapTime, axis: axis)
+        }
+        coachDeadline = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Const.coachVisibleDeadline, execute: work)
+    }
+
+    /// The visible-deadline body. Internal so the XCTest target can drive the
+    /// watchdog synchronously — waiting the real ~10s interval in a unit test
+    /// is untenable — through the same fail-closed path the timer fires.
+    ///
+    /// Fail-closed: honored only when the request is still active AND still
+    /// owns the installed loading surface. A superseded request, an
+    /// already-delivered result, or an invalidated session is dropped without
+    /// touching the surface. On fire it cancels the in-flight task so no late
+    /// response can reattach, then installs the truthful timeout error.
+    func handleCoachDeadlineFired(requestID: UUID, tapTime: DispatchTime, axis: String) {
+        guard CoachCompletionGate.accepts(
+                completion: requestID,
+                activeRequestID: coachRequestID,
+                loadingSurfaceRequestID: coachLoadingRequestID
+              ) else { return }
+        coachTask?.cancel()
+        coachTask = nil
+        coachRequestID = nil
+        coachBusy = false
+        coachButton?.isEnabled = true
+        coachDeadline = nil
+        NSLog("TONO_KB BUILD107 clock: phase=deadline axis=\(axis) dt_ms=\(Self.coachElapsedMs(since: tapTime))")
+        presentCoachError(.timeout, replacingLoadingFor: requestID)
+        coachClockTapTime = nil
     }
 
     /// Hand one finished round trip to the UI, replacing the loading surface
@@ -2949,10 +3084,19 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
                 liveAfter: liveAfter,
                 host: currentHostSession
               ) else { return }
+        // A real completion landed inside the deadline: disarm the watchdog
+        // so it can't fire and clobber the result the user is about to see.
+        coachDeadline?.cancel()
+        coachDeadline = nil
+        let tapTime = coachClockTapTime
         coachTask = nil
         coachRequestID = nil
         coachBusy = false
         coachButton?.isEnabled = true
+        // Clock: response received on the main thread.
+        if let tapTime {
+            NSLog("TONO_KB BUILD107 clock: phase=response dt_ms=\(Self.coachElapsedMs(since: tapTime))")
+        }
         switch result {
         case .success(let response):
             let rewrite = TonoCoachClient.CoachRewrite(
@@ -2970,22 +3114,43 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
                 flags: []
             )
             presentCoachResults(atomic, replacingLoadingFor: requestID)
+            // Clock: render committed (+ truthful server-measured provider ms).
+            logCoachRenderClock(
+                tapTime: tapTime, axis: response.axis, outcome: "ok",
+                providerMs: response.providerMs
+            )
         case .failure(let error):
             presentCoachError(error, replacingLoadingFor: requestID)
+            logCoachRenderClock(
+                tapTime: tapTime, axis: nil, outcome: "error", providerMs: nil
+            )
         }
+        coachClockTapTime = nil
     }
 
     // Internal so the XCTest target can drive the real UIKit loading state
     // through the same entry point the request path uses.
     // This is not API surface outside the keyboard module.
-    func presentCoachLoading(requestID: UUID) {
+    //
+    // Build 107: renders a result-shaped skeleton (title rule + Back
+    // placeholder + one accent-bordered rewrite card) instead of the plain
+    // "Coaching…" label + `UIActivityIndicatorView`. The whole hierarchy is
+    // built synchronously on the main thread; the shimmer is a GPU-driven
+    // gradient sweep. `axis` accents the card exactly like the real chip so
+    // the loading state previews the specific selected-tone answer. It is
+    // optional (default nil → neutral accent) so surface-lifecycle callers
+    // that only exercise ownership still compile unchanged.
+    func presentCoachLoading(requestID: UUID, axis: String? = nil) {
         // Record ownership before the container check so a controller without
         // a body container still completes its request — and clears its busy
         // state — exactly as it did before surfaces became request-owned.
         coachLoadingRequestID = requestID
         guard let container = bodyContainer else { return }
         cancelTransientInteractions()
-        preferredHeightConstraint?.constant = currentVisualMetrics.preferredContentHeight
+        // Reserve the SAME height the results surface uses so the
+        // loading→results transition never resizes the keyboard extension
+        // around the host field (stable geometry across the whole flow).
+        preferredHeightConstraint?.constant = currentVisualMetrics.coachResultsContentHeight
         keysStack?.removeFromSuperview()
         keysStack = nil
         emojiPanelView?.removeFromSuperview()
@@ -2997,27 +3162,17 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         panel.accessibilityIdentifier = Const.idCoachLoading
         installCoachSurface(panel, in: container, requestID: requestID)
 
-        let label = UILabel()
-        label.text = "Coaching…"
-        label.font = .systemFont(ofSize: 15, weight: .medium)
-        label.textColor = .secondaryLabel
-        label.textAlignment = .center
-        label.translatesAutoresizingMaskIntoConstraints = false
-        panel.addSubview(label)
-
-        let spinner = UIActivityIndicatorView(style: .medium)
-        spinner.translatesAutoresizingMaskIntoConstraints = false
-        spinner.startAnimating()
-        panel.addSubview(spinner)
-
+        let accent = TonoCoachPalette.axis(axis ?? "")?.accent ?? .separator
+        let skeleton = TonoCoachSkeletonView(accent: accent)
+        panel.addSubview(skeleton)
         NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: panel.centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: panel.centerYAnchor),
-            spinner.centerXAnchor.constraint(equalTo: panel.centerXAnchor),
-            spinner.topAnchor.constraint(equalTo: label.bottomAnchor, constant: 8),
+            skeleton.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
+            skeleton.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
+            skeleton.topAnchor.constraint(equalTo: panel.topAnchor),
+            skeleton.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
         ])
-
-        coachStatusLabel = label
+        skeleton.beginShimmer()
+        coachSkeleton = skeleton
     }
 
     /// Completion entry point: install the results surface only when

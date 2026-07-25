@@ -273,6 +273,13 @@ public final class TonoCoachClient {
         /// `decodeServerClocks` checks; when it does not, the absence
         /// itself is the truthful state.
         public let clocks: CoachClocks?
+        /// Build 107 server-measured provider clock: milliseconds the ONE
+        /// provider call took, as reported by the backend `provider_ms`
+        /// field. `nil` when the server did not emit it (older servers, or a
+        /// blocked envelope that issued zero provider calls). The keyboard
+        /// surfaces it as the truthful "provider" lifecycle clock; the
+        /// decoder never fabricates it.
+        public let providerMs: Int?
     }
 
     public enum CoachError: Error, Equatable {
@@ -657,8 +664,29 @@ public final class TonoCoachClient {
             text: text,
             rationale: dict["rationale"] as? String,
             riskAfter: dict["risk_after"] as? String,
-            clocks: resolvedClocks
+            clocks: resolvedClocks,
+            providerMs: decodeProviderMs(dict["provider_ms"])
         )
+    }
+
+    /// Leniently decode the server's `provider_ms` clock: a non-negative
+    /// integer millisecond count, or `nil` when absent or malformed. Unlike
+    /// the strict four-anchor `clocks` envelope this is a single advisory
+    /// telemetry value, so a bad shape degrades to `nil` rather than failing
+    /// the whole decode — the rewrite still renders.
+    private static func decodeProviderMs(_ raw: Any?) -> Int? {
+        guard let raw else { return nil }
+        let value: Int
+        if let i = raw as? Int {
+            value = i
+        } else if let n = raw as? NSNumber {
+            // Reject a bool bridged as NSNumber; accept integer millis only.
+            if String(cString: n.objCType) == "c" { return nil }
+            value = n.intValue
+        } else {
+            return nil
+        }
+        return value >= 0 ? value : nil
     }
 
     /// Strictly decode the server's `clocks` envelope into a `CoachClocks`.

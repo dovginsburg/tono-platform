@@ -375,3 +375,226 @@ extension UIColor {
         )
     }
 }
+
+// MARK: - Build 107 result-shaped loading skeleton
+//
+// Reconciled into the Build-106 lineage from commit 3a80fb0, which fixed the
+// physical Build-100 defect on a branch that never merged: the *active* UIKit
+// loading surface (`KeyboardViewController.presentCoachLoading`) rendered a
+// plain "Coaching…" label plus a `UIActivityIndicatorView`. A generic spinner
+// tells the user nothing about what is forming. Build 107 replaces it with a
+// result-shaped skeleton — a title rule, a Back placeholder, and one rewrite
+// card (axis pill, two text lines, an action row) — that mirrors the results
+// layout the user is about to receive, so the shape of the answer is visible
+// the instant the request begins. Pure UIKit, built synchronously on the main
+// thread in well under a frame; no spinner.
+//
+// The Build-106 request-ownership contract is untouched: this file renders
+// only. `coachLoadingRequestID` ownership, cancellation, stale-completion
+// rejection, the one-surface invariant and draft integrity all continue to
+// live in `KeyboardViewController` and are unchanged by the skeleton.
+
+/// One shimmering rounded placeholder block. The shimmer is a GPU-driven
+/// gradient sweep (a light band travelling left→right), the standard skeleton
+/// idiom. It self-manages against window attachment and honors Reduce Motion:
+/// when Reduce Motion is on, the block is a static placeholder (still
+/// result-shaped, just not animated).
+final class TonoShimmerBlock: UIView {
+    private let gradient = CAGradientLayer()
+    private static let animationKey = "tono.shimmer"
+
+    init(cornerRadius: CGFloat) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        isAccessibilityElement = false
+        layer.cornerRadius = cornerRadius
+        layer.masksToBounds = true
+        gradient.startPoint = CGPoint(x: 0, y: 0.5)
+        gradient.endPoint = CGPoint(x: 1, y: 0.5)
+        gradient.locations = [0.0, 0.5, 1.0]
+        layer.addSublayer(gradient)
+        applyColors()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        gradient.frame = bounds
+    }
+
+    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
+        super.traitCollectionDidChange(previous)
+        if previous?.userInterfaceStyle != traitCollection.userInterfaceStyle {
+            applyColors()
+        }
+    }
+
+    private func applyColors() {
+        // A lighter band sweeping over a neutral placeholder fill. Both are
+        // dynamic system grays, so the skeleton adapts to light/dark without
+        // hardcoded hues. cgColors do not auto-resolve, so we re-resolve on
+        // interface-style changes above.
+        let base = UIColor.systemGray5.resolvedColor(with: traitCollection)
+        let band = UIColor.systemGray3.resolvedColor(with: traitCollection)
+        backgroundColor = base
+        gradient.colors = [base.cgColor, band.cgColor, base.cgColor]
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil { stopShimmer() } else { beginShimmer() }
+    }
+
+    /// True while the sweep animation is attached. Test seam.
+    var isShimmering: Bool { gradient.animation(forKey: Self.animationKey) != nil }
+
+    /// Start the sweep unless Reduce Motion is on. Idempotent. The
+    /// reduce-motion flag is a parameter (defaulting to the live setting) so
+    /// both branches are unit-testable without mutating global accessibility
+    /// state.
+    func beginShimmer(reduceMotion: Bool = UIAccessibility.isReduceMotionEnabled) {
+        guard !reduceMotion else { stopShimmer(); return }
+        guard gradient.animation(forKey: Self.animationKey) == nil else { return }
+        let sweep = CABasicAnimation(keyPath: "locations")
+        sweep.fromValue = [-1.0, -0.5, 0.0]
+        sweep.toValue = [1.0, 1.5, 2.0]
+        sweep.duration = 1.1
+        sweep.repeatCount = .infinity
+        sweep.isRemovedOnCompletion = false
+        gradient.add(sweep, forKey: Self.animationKey)
+    }
+
+    func stopShimmer() {
+        gradient.removeAnimation(forKey: Self.animationKey)
+    }
+}
+
+/// Result-shaped Coach loading skeleton. Mirrors the geometry of the results
+/// surface (a title rule + Back placeholder on top, then one rewrite card with
+/// an axis pill, two text lines, and a two-button action row) so the loading
+/// state previews the shape of the answer. The card wears the selected axis
+/// accent, exactly like the real rewrite chip. A single VoiceOver element
+/// announces the loading state; every shimmer block is hidden from
+/// accessibility.
+final class TonoCoachSkeletonView: UIView {
+    static let identifier = "TonoKB.coachLoadingSkeleton"
+    static let cardIdentifier = "TonoKB.coachSkeletonCard"
+
+    /// Every placeholder block, so a test can assert the skeleton is
+    /// result-shaped (a card with an axis pill, two text lines, two actions —
+    /// not a lone spinner) and drive the shimmer.
+    private(set) var shimmerBlocks: [TonoShimmerBlock] = []
+    /// The accent-bordered rewrite-card placeholder.
+    let card = UIView()
+
+    init(accent: UIColor) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        accessibilityIdentifier = Self.identifier
+        // One VoiceOver element for the whole loading state.
+        isAccessibilityElement = true
+        accessibilityLabel = "Coaching your rewrite"
+        accessibilityTraits = [.updatesFrequently]
+        build(accent: accent)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    private func makeBlock(cornerRadius: CGFloat) -> TonoShimmerBlock {
+        let block = TonoShimmerBlock(cornerRadius: cornerRadius)
+        shimmerBlocks.append(block)
+        return block
+    }
+
+    private func build(accent: UIColor) {
+        // Header: a title rule (where "Tono · <risk>" renders) and a Back
+        // placeholder — the same top row the results surface presents.
+        let title = makeBlock(cornerRadius: 4)
+        addSubview(title)
+        let back = makeBlock(cornerRadius: 6)
+        addSubview(back)
+
+        // One rewrite card, accent-bordered like the real chip.
+        card.translatesAutoresizingMaskIntoConstraints = false
+        card.accessibilityIdentifier = Self.cardIdentifier
+        card.isAccessibilityElement = false
+        card.layer.cornerRadius = 5
+        card.layer.borderWidth = 2
+        card.layer.borderColor = accent.cgColor
+        card.backgroundColor = accent.withAlphaComponent(0.06)
+        addSubview(card)
+
+        let axisPill = makeBlock(cornerRadius: 6)     // "● Funnier"
+        card.addSubview(axisPill)
+        let line1 = makeBlock(cornerRadius: 4)        // rewrite line 1
+        card.addSubview(line1)
+        let line2 = makeBlock(cornerRadius: 4)        // rewrite line 2 (short)
+        card.addSubview(line2)
+        let actionLeft = makeBlock(cornerRadius: 5)   // Replace
+        card.addSubview(actionLeft)
+        let actionRight = makeBlock(cornerRadius: 5)  // Dismiss
+        card.addSubview(actionRight)
+
+        NSLayoutConstraint.activate([
+            title.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            title.widthAnchor.constraint(equalToConstant: 132),
+            title.heightAnchor.constraint(equalToConstant: 15),
+
+            back.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            back.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            back.widthAnchor.constraint(equalToConstant: 44),
+            back.heightAnchor.constraint(equalToConstant: 24),
+
+            card.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 10),
+            card.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            card.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            card.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+
+            axisPill.topAnchor.constraint(equalTo: card.topAnchor, constant: 10),
+            axisPill.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 10),
+            axisPill.widthAnchor.constraint(equalToConstant: 72),
+            axisPill.heightAnchor.constraint(equalToConstant: 12),
+
+            line1.topAnchor.constraint(equalTo: axisPill.bottomAnchor, constant: 12),
+            line1.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 10),
+            line1.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -10),
+            line1.heightAnchor.constraint(equalToConstant: 12),
+
+            line2.topAnchor.constraint(equalTo: line1.bottomAnchor, constant: 8),
+            line2.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 10),
+            line2.widthAnchor.constraint(equalTo: card.widthAnchor, multiplier: 0.6),
+            line2.heightAnchor.constraint(equalToConstant: 12),
+
+            actionLeft.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -8),
+            actionLeft.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 10),
+            actionLeft.heightAnchor.constraint(equalToConstant: 36),
+
+            actionRight.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -8),
+            actionRight.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -10),
+            actionRight.leadingAnchor.constraint(equalTo: actionLeft.trailingAnchor, constant: 8),
+            actionRight.widthAnchor.constraint(equalTo: actionLeft.widthAnchor),
+            actionRight.heightAnchor.constraint(equalToConstant: 36),
+        ])
+    }
+
+    /// Refresh the accent-bordered card color after an interface-style change.
+    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
+        super.traitCollectionDidChange(previous)
+        if previous?.userInterfaceStyle != traitCollection.userInterfaceStyle,
+           let accent = card.layer.borderColor.map({ UIColor(cgColor: $0) }) {
+            card.layer.borderColor = accent.resolvedColor(with: traitCollection).cgColor
+        }
+    }
+
+    /// Drive every block's shimmer. Called by the controller when the surface
+    /// is installed; blocks also self-start on window attachment.
+    func beginShimmer(reduceMotion: Bool = UIAccessibility.isReduceMotionEnabled) {
+        shimmerBlocks.forEach { $0.beginShimmer(reduceMotion: reduceMotion) }
+    }
+}
