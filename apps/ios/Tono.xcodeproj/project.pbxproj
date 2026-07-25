@@ -144,6 +144,11 @@
 		A71070000000000000000002 /* Build107CoachSkeletonTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71070000000000000000001 /* Build107CoachSkeletonTests.swift */; };
 		A71070000000000000000004 /* Build107ToneTargetResetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71070000000000000000003 /* Build107ToneTargetResetTests.swift */; };
 		A71090000000000000000002 /* Build109StripRoleAndDocumentIntegrityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71090000000000000000001 /* Build109StripRoleAndDocumentIntegrityTests.swift */; };
+		5ED0C7000000000000000002 /* SetupDoctor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ED0C7000000000000000001 /* SetupDoctor.swift */; };
+		5ED0C7000000000000000003 /* SetupDoctor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ED0C7000000000000000001 /* SetupDoctor.swift */; };
+		5ED0C7000000000000000004 /* SetupDoctor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ED0C7000000000000000001 /* SetupDoctor.swift */; };
+		5ED0C7000000000000000006 /* SetupDoctorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ED0C7000000000000000005 /* SetupDoctorView.swift */; };
+		5ED0C7000000000000000008 /* SetupDoctorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ED0C7000000000000000007 /* SetupDoctorTests.swift */; };
 		860000000000000000000001 /* CoachContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 860000000000000000000003 /* CoachContractTests.swift */; };
 		950000000000000000000001 /* Build95CoachContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 950000000000000000000002 /* Build95CoachContractTests.swift */; };
 		950000000000000000000011 /* Build95LifecycleClockTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 950000000000000000000012 /* Build95LifecycleClockTests.swift */; };
@@ -304,6 +309,9 @@
 		A71070000000000000000001 /* Build107CoachSkeletonTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build107CoachSkeletonTests.swift; sourceTree = "<group>"; };
 		A71070000000000000000003 /* Build107ToneTargetResetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build107ToneTargetResetTests.swift; sourceTree = "<group>"; };
 		A71090000000000000000001 /* Build109StripRoleAndDocumentIntegrityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build109StripRoleAndDocumentIntegrityTests.swift; sourceTree = "<group>"; };
+		5ED0C7000000000000000001 /* SetupDoctor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupDoctor.swift; sourceTree = "<group>"; };
+		5ED0C7000000000000000005 /* SetupDoctorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupDoctorView.swift; sourceTree = "<group>"; };
+		5ED0C7000000000000000007 /* SetupDoctorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupDoctorTests.swift; sourceTree = "<group>"; };
 		860000000000000000000003 /* CoachContractTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CoachContractTests.swift; sourceTree = "<group>"; };
 		950000000000000000000002 /* Build95CoachContractTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build95CoachContractTests.swift; sourceTree = "<group>"; };
 		950000000000000000000012 /* Build95LifecycleClockTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build95LifecycleClockTests.swift; sourceTree = "<group>"; };
@@ -420,6 +428,7 @@
 				A71070000000000000000001 /* Build107CoachSkeletonTests.swift */,
 				A71070000000000000000003 /* Build107ToneTargetResetTests.swift */,
 				A71090000000000000000001 /* Build109StripRoleAndDocumentIntegrityTests.swift */,
+				5ED0C7000000000000000007 /* SetupDoctorTests.swift */,
 				970000000000000000000010 /* Build97KeyboardGeometryTests.swift */,
 				970000000000000000000011 /* Build97BackspaceStateTests.swift */,
 				970000000000000000000012 /* Build97LayerNavigationTests.swift */,
@@ -474,6 +483,7 @@
 				58D322318012F6E3758FBE16 /* RecipientMemory.swift */,
 				424F033D1993931EF9CFEF4D /* SharedKeychain.swift */,
 				772DD67FA1CD9CF09D426AF5 /* SharedUserDefaults.swift */,
+				5ED0C7000000000000000001 /* SetupDoctor.swift */,
 				4F9B5C7A9E2C7B6A5D1E0F32 /* OnDeviceAppleRewrite.swift */,
 				2A8C2F1D3B4E5F6A7C8D9E0F /* OnDeviceAppleRewriteTests.swift */,
 				A8341350101744023555C179 /* StoreKitManager.swift */,
@@ -513,6 +523,7 @@
 				600B6DD9AC9FC36C6BB8ED14 /* OnboardingCalibrationView.swift */,
 				217A3D33DCC3DE654CA907C5 /* PlaygroundView.swift */,
 				822A94BEAD307E044D2E1547 /* SettingsView.swift */,
+				5ED0C7000000000000000005 /* SetupDoctorView.swift */,
 				B92542DA54DA284DBFA670F3 /* Tono.entitlements */,
 				3BEE71892FA8D9333320C272 /* Tono.storekit */,
 				DF0A4C99BE251A2D39F2EAC6 /* TonoApp.swift */,
@@ -790,6 +801,7 @@
 				C2C9DD7206A65B1579A5190A /* RecipientMemory.swift in Sources */,
 				6A419FF921198D93A073AB0E /* SharedKeychain.swift in Sources */,
 				A4FDDCB7F7C0264C39FF6732 /* SharedUserDefaults.swift in Sources */,
+				5ED0C7000000000000000003 /* SetupDoctor.swift in Sources */,
 				8A0000000000000000000011 /* LiveToneClassifier.swift in Sources */,
 				8A0000000000000000000012 /* LiveToneSession.swift in Sources */,
 				8A0000000000000000000013 /* LiveTonePrivacy.swift in Sources */,
@@ -853,6 +865,8 @@
 				A71070000000000000000002 /* Build107CoachSkeletonTests.swift in Sources */,
 				A71070000000000000000004 /* Build107ToneTargetResetTests.swift in Sources */,
 				A71090000000000000000002 /* Build109StripRoleAndDocumentIntegrityTests.swift in Sources */,
+				5ED0C7000000000000000004 /* SetupDoctor.swift in Sources */,
+				5ED0C7000000000000000008 /* SetupDoctorTests.swift in Sources */,
 				A60000000000000000000006 /* LocalIntelligence.swift in Sources */,
 				A60000000000000000000003 /* TonoStripRouting.swift in Sources */,
 				4A7F52C5EC4E98E266267D4E /* ContactsAccessTests.swift in Sources */,
@@ -976,6 +990,8 @@
 				C89EABB2DBA692A1FF5AC255 /* SettingsView.swift in Sources */,
 				BD9E5A023D82845158A938D9 /* SharedKeychain.swift in Sources */,
 				C9B979F056F3D84FB316577F /* SharedUserDefaults.swift in Sources */,
+				5ED0C7000000000000000002 /* SetupDoctor.swift in Sources */,
+				5ED0C7000000000000000006 /* SetupDoctorView.swift in Sources */,
 				01B5DA16281CE5533AAA9E35 /* StoreKitManager.swift in Sources */,
 				B4D2FE13BAC21B8C41C5185C /* StyleMemory.swift in Sources */,
 				7F047DD75ED87391C5FF4865 /* ToneEngine.swift in Sources */,

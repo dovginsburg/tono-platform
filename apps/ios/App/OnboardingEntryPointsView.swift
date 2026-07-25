@@ -35,6 +35,7 @@ struct OnboardingEntryPointsView: View {
     @State private var shareExtDone = false
     @AppStorage("tono.onboarding.awaitingSettingsReturn") private var awaitingSettingsReturn = false
     @State private var showSettingsGuidance = false
+    @State private var showSetupDoctor = false
     @State private var keyboardCheckMessage: String?
     @State private var scrollTarget: Int?
     // Email identity (added 2026-07-03)
@@ -63,6 +64,14 @@ struct OnboardingEntryPointsView: View {
                                         .font(.footnote)
                                         .foregroundColor(.secondary)
                                 }
+                                // Preferred path: the Doctor can actually check
+                                // the keyboard, so it beats self-declaring done.
+                                Button("Open Setup Doctor") {
+                                    showSetupDoctor = true
+                                }
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                .foregroundColor(.purple)
+                                .accessibilityHint("Walks through adding the keyboard and confirms when it’s working.")
                                 Button("Verify Setup Manually") {
                                     completeKeyboardStep()
                                 }
@@ -147,6 +156,14 @@ struct OnboardingEntryPointsView: View {
                     },
                     onCancel: { showEmailSheet = false }
                 )
+            }
+            .sheet(isPresented: $showSetupDoctor) {
+                SetupDoctorSheet {
+                    showSetupDoctor = false
+                    // The Doctor may have produced the very check-in this tile
+                    // is waiting on, so re-read rather than assume.
+                    refreshKeyboardStatus(afterSettings: false)
+                }
             }
             .alert("Return to Tono after enabling the keyboard", isPresented: $showSettingsGuidance) {
                 Button("Not now", role: .cancel) {}

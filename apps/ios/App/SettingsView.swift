@@ -53,6 +53,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                setupSection
                 backendSection
                 voiceSection
                 memorySection
@@ -108,6 +109,21 @@ struct SettingsView: View {
     }
 
     // MARK: - Sections
+
+    /// Entry point for the Setup Doctor. Kept as a push inside the existing
+    /// Settings navigation stack rather than a new tab — setup is a thing you
+    /// finish once, not a destination worth permanent chrome.
+    @ViewBuilder
+    private var setupSection: some View {
+        Section("Setup") {
+            NavigationLink {
+                SetupDoctorView()
+            } label: {
+                Label("Setup Doctor", systemImage: "stethoscope")
+            }
+            .accessibilityHint("Checks whether the Tono keyboard is added, has Full Access, and is working.")
+        }
+    }
 
     @ViewBuilder
     private var backendSection: some View {

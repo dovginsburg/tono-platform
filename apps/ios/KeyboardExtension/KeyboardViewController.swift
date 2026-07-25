@@ -608,10 +608,39 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     public override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         NSLog("TONO_KB BUILD86 04: viewDidAppear")
+        recordSetupHeartbeat()
         advanceHostSession()
         refreshHostConfigurationIfNeeded()
         applyAutoCapitalizationIfNeeded()
         refreshSpellingSuggestions()
+    }
+
+    // MARK: - Setup Doctor heartbeat
+
+    /// Leaves a content-free liveness record in the App Group so the host app's
+    /// Setup Doctor can tell the user the truth about their setup.
+    ///
+    /// This exists because iOS gives the containing app no way to see any of it:
+    /// it cannot read whether its keyboard is enabled, and `hasFullAccess` is
+    /// readable *only* here, on `UIInputViewController`. Without this record the
+    /// app can do nothing but guess, so the Doctor would either nag a
+    /// correctly-configured user or show a green tick it cannot back up.
+    ///
+    /// PRIVACY (binding — see the contract note in `Shared/SetupDoctor.swift`):
+    /// the record carries a schema number, a timestamp, and `hasFullAccess`.
+    /// Nothing else. No typed text, no document context, no recipient, no host
+    /// app identity, no counters. Deliberately written where no document proxy
+    /// value is in scope, so there is nothing to accidentally include.
+    private func recordSetupHeartbeat() {
+        KeyboardHeartbeatStore().record(hasFullAccess: hasFullAccess, now: Date())
+        // Repairs a documented-but-never-honoured contract: `keyboardLoaded` is
+        // described in SharedUserDefaults.swift as "written by the keyboard
+        // extension on first load", and the onboarding flow reads it, but no
+        // write ever existed — so that check could never pass. It is a sticky
+        // "has ever loaded" marker; the Setup Doctor deliberately does NOT use
+        // it for any completed state, because a stale true is exactly the false
+        // success the timestamped heartbeat above exists to avoid.
+        SharedStore.defaults.set(true, forKey: SharedKeys.keyboardLoaded)
     }
 
     public override func textDidChange(_ textInput: UITextInput?) {
