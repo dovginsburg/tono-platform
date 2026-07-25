@@ -1,92 +1,207 @@
 // SpaceCursorEngine.swift
 // Apple-fidelity space-key hold/drag cursor mode.
 //
-// Apple's space bar doubles as a trackpad:
-//   * A quick tap inserts exactly one space.
-//   * Holding the space bar past a short delay turns the whole keyboard
-//     into a caret trackpad; the tap that would have been a space is
-//     swallowed (zero spaces inserted).
-//   * While in trackpad mode, horizontal finger travel moves the insertion
-//     point left/right. Vertical travel is ignored. The caret snaps one
-//     character at a time, so a partial-character drag accumulates until it
-//     crosses the per-character threshold. The caret can never scrub past
-//     the text available on either side of the starting position.
+// Build 103 was rejected on device: the caret moved "one character at a time
+// like backspacing" and could not travel freely in two dimensions. Both were
+// real defects in the previous engine, not perception:
 //
-// This is a pure value type — exactly like `BackspaceRepeatEngine`, it runs
-// no timers and touches no UIKit. The host view controller feeds it touch
-// phases plus the wall-clock time (`press`/`tick`/`drag`/`end`/`cancel`) and
-// applies the returned `Effect`s to the `UITextDocumentProxy`. Because the
-// whole session is modelled here, every behaviour (tap vs. hold, left/right,
-// sub-character accumulation, context bounds, vertical-jitter tolerance,
-// no post-takeover space, clean teardown) is deterministically unit-testable
-// with a fixed base `Date` advanced by `addingTimeInterval` — no sleeps.
+//   * horizontal travel was quantised at a FIXED 10 points per character, so a
+//     long drag moved as slowly as a short one — there was no acceleration, and
+//     crossing a sentence meant dragging most of the way across the keyboard;
+//   * vertical travel was DISCARDED by contract ("vertical travel is ignored"),
+//     so the caret could never change line;
+//   * the reachable range was frozen at press time, so a stale bound could
+//     stop the caret short.
+//
+// This engine replaces that contract. It is still a pure value type — no
+// timers, no UIKit, no I/O — so every behaviour below is deterministically
+// unit-testable with a fixed base `Date` advanced by `addingTimeInterval`.
+//
+// ── What the public keyboard API actually permits ───────────────────────────
+// `UITextDocumentProxy` gives a keyboard extension exactly three relevant
+// powers: read `documentContextBeforeInput` / `documentContextAfterInput` /
+// `selectedText`, and move the caret with
+// `adjustTextPosition(byCharacterOffset:)` — documented as "Adjusts the
+// position of the cursor by the number of characters in the given offset."
+//
+// There is NO public API to read the host's layout: no caret rectangle, no
+// line-fragment geometry, no knowledge of where the host visually wraps a long
+// line, and no way to set or extend a selection range. Everything here is
+// therefore computed from the TEXT the proxy hands us, never from host
+// geometry, and "line" below always means a LOGICAL line delimited by "\n".
+// Where that is not enough, the engine degrades to horizontal-only movement
+// rather than guessing — see `SpaceCursorDocument.supportsVerticalNavigation`.
+//
+// The engine deliberately has no delete capability: `Effect` has no delete
+// case, so no gesture path can remove text. A quick tap is the ONLY way this
+// file can cause an insertion, and it inserts exactly one space.
 
 import Foundation
 
-/// Tunable geometry / timing for `SpaceCursorEngine`. Defaults approximate
-/// Apple's iOS space-cursor feel.
+/// Tunable geometry / timing. Defaults approximate Apple's space-cursor feel.
 public struct SpaceCursorConfig: Equatable {
+
     /// How long the space bar must be held before it becomes a trackpad.
     /// Shorter than this and the release is treated as a plain space tap.
     public var activationDelay: TimeInterval = 0.30
 
-    /// Horizontal points the finger must travel to advance the caret by one
-    /// character. Larger values require a longer drag per character (calmer);
-    /// smaller values move the caret sooner. Must be > 0.
-    public var pointsPerCharacter: Double = 10.0
-
     /// Pre-activation movement (points, either axis) beyond which a release is
-    /// no longer considered a tap. Keeps an aborted swipe from typing a space
-    /// while still tolerating the small wobble of a genuine tap.
+    /// no longer a tap. Keeps an aborted swipe from typing a space while still
+    /// tolerating the wobble of a genuine tap.
     public var tapCancelSlop: Double = 12.0
+
+    // ── Horizontal acceleration ──────────────────────────────────────────
+    // Travel maps to characters on an accelerating curve so that small drags
+    // stay precise (one character at a time, for fixing a typo) while long
+    // drags cover a sentence or a paragraph without dragging off-screen.
+
+    /// Points per character inside the precision zone — the fine, 1:1 rate.
+    public var finePointsPerCharacter: Double = 8.0
+
+    /// How far the finger may travel before acceleration begins. Inside this
+    /// zone movement is strictly linear at `finePointsPerCharacter`.
+    public var precisionZonePoints: Double = 24.0
+
+    /// Acceleration scale. Past the precision zone each additional point is
+    /// worth progressively more: the multiplier grows as `1 + extra / scale`.
+    /// SMALLER = more aggressive. Must be > 0.
+    public var accelerationScalePoints: Double = 120.0
+
+    /// Hard ceiling on characters travelled in one gesture, per axis-direction.
+    /// Guards against an absurd delta if a host reports a pathological context.
+    public var maximumCharactersPerGesture: Int = 20_000
+
+    // ── Vertical / multiline ─────────────────────────────────────────────
+
+    /// Vertical travel (points) that must be exceeded before ANY line change.
+    /// Keeps a horizontal drag with normal hand-tremor on its own line.
+    public var verticalDeadZonePoints: Double = 16.0
+
+    /// Points of further travel per additional line, once past the dead zone.
+    public var pointsPerLine: Double = 24.0
 
     public init() {}
 }
 
-/// Pure, timer-free state machine for one space-key touch session.
+/// An immutable snapshot of the text around the caret, captured from the proxy
+/// at the moment the trackpad engages.
 ///
-///     var engine = SpaceCursorEngine()
-///     engine.press(at: now, availableLeft: before.count, availableRight: after.count)
-///     // ...activation timer fires:
-///     engine.tick(at: now)                 // -> .enteredCursorMode
-///     engine.drag(translationX: dx, translationY: dy, at: now)  // -> .moveCaret(±n)
-///     engine.end(at: now)                  // -> .endedCursorMode (no space)
+/// All indices are in **grapheme clusters** (Swift `Character`), so an emoji,
+/// a flag, a skin-toned emoji, or a combining sequence counts as ONE position —
+/// the caret can never be parked inside one. The UTF-16 distance the host needs
+/// is derived separately by `utf16Distance(from:to:)`.
+public struct SpaceCursorDocument: Equatable {
+
+    /// Caret-adjacent text, before + after concatenated.
+    public let characters: [Character]
+
+    /// Grapheme index of the caret within `characters`.
+    public let origin: Int
+
+    /// Start index of every logical line in `characters`.
+    private let lineStarts: [Int]
+
+    public init(before: String, after: String) {
+        let head = Array(before)
+        let tail = Array(after)
+        characters = head + tail
+        origin = head.count
+
+        var starts = [0]
+        for (i, ch) in characters.enumerated() where ch == "\n" {
+            starts.append(i + 1)
+        }
+        lineStarts = starts
+    }
+
+    /// Convenience for a proxy that returned nil for either side.
+    public init(before: String?, after: String?) {
+        self.init(before: before ?? "", after: after ?? "")
+    }
+
+    public var count: Int { characters.count }
+
+    /// True when the captured context actually contains a line break, i.e. the
+    /// only case in which vertical navigation has a defined meaning.
+    ///
+    /// A single-line field, a host that returns no context, or a host that
+    /// truncates context to the current line all report `false`, and the engine
+    /// then confines itself to horizontal movement rather than inventing
+    /// geometry it cannot observe.
+    public var supportsVerticalNavigation: Bool { lineStarts.count > 1 }
+
+    public var lineCount: Int { lineStarts.count }
+
+    /// Index of the logical line containing `index`.
+    public func line(of index: Int) -> Int {
+        var lo = 0, hi = lineStarts.count - 1, result = 0
+        while lo <= hi {
+            let mid = (lo + hi) / 2
+            if lineStarts[mid] <= index { result = mid; lo = mid + 1 } else { hi = mid - 1 }
+        }
+        return result
+    }
+
+    public func start(ofLine line: Int) -> Int {
+        lineStarts[min(max(line, 0), lineStarts.count - 1)]
+    }
+
+    /// Index one past the last character of `line`, excluding its newline.
+    public func end(ofLine line: Int) -> Int {
+        let clamped = min(max(line, 0), lineStarts.count - 1)
+        if clamped + 1 < lineStarts.count {
+            return lineStarts[clamped + 1] - 1     // drop the "\n"
+        }
+        return characters.count
+    }
+
+    /// Caret column within its logical line, in graphemes.
+    public func column(of index: Int) -> Int { index - start(ofLine: line(of: index)) }
+
+    /// Signed UTF-16 distance between two grapheme indices — the unit the host's
+    /// NSString-backed text storage counts in. Moving across a non-BMP emoji is
+    /// therefore ±2, not ±1, which is what keeps the caret off the middle of a
+    /// surrogate pair.
+    public func utf16Distance(from: Int, to: Int) -> Int {
+        guard from != to else { return 0 }
+        let lower = min(from, to), upper = max(from, to)
+        let span = characters[lower..<upper].reduce(0) { $0 + $1.utf16.count }
+        return to > from ? span : -span
+    }
+
+    /// The text this document was built from, for cheap staleness checks.
+    public func joined() -> String { String(characters) }
+}
+
+/// Pure, timer-free state machine for one space-key touch session.
 public struct SpaceCursorEngine: Equatable {
 
     public enum Phase: Equatable {
         case idle
-        /// Finger down, not yet a recognized hold. `movedBeyondSlop` latches
-        /// once the finger has travelled far enough that a release should no
-        /// longer type a space.
-        case pressed(
-            pressedAt: Date,
-            movedBeyondSlop: Bool,
-            availableLeft: Int,
-            availableRight: Int
-        )
-        /// Trackpad mode. `appliedOffset` is the signed number of characters
-        /// the caret has already been moved from the start position; the
-        /// bounds are captured from the document at press time.
-        case cursor(
-            appliedOffset: Int,
-            availableLeft: Int,
-            availableRight: Int
-        )
+        /// Finger down, not yet a recognised hold. `movedBeyondSlop` latches
+        /// once travel means a release should no longer type a space.
+        case pressed(pressedAt: Date, movedBeyondSlop: Bool)
+        /// Trackpad live. `caret` is where the engine believes the caret sits
+        /// within `document`; `stickyColumn` survives vertical moves so running
+        /// up and down a ragged paragraph returns to the same column.
+        case cursor(document: SpaceCursorDocument, caret: Int, stickyColumn: Int)
     }
 
-    /// Side effects the host must apply. Every mutation returns exactly one.
+    /// Side effects the host must apply. There is deliberately **no delete
+    /// case** — this engine cannot express text removal.
     public enum Effect: Equatable {
-        /// Nothing to do this event.
         case none
         /// A plain tap: insert exactly one space.
         case insertSpace
-        /// The hold was recognized: enter trackpad mode, insert zero spaces.
+        /// The hold was recognised: enter trackpad mode, insert zero spaces.
         case enteredCursorMode
-        /// Move the caret by this signed character offset (<0 left, >0 right).
-        /// Already clamped to the captured context bounds; never zero.
-        case moveCaret(offset: Int)
-        /// Trackpad mode finished (release or cancel). The host should
-        /// resynchronize context and invalidate any caret-dependent async work.
+        /// Move the caret. `graphemes` is the user-visible distance (for tests
+        /// and assertions); `utf16` is what `adjustTextPosition(byCharacterOffset:)`
+        /// should be called with. Both are already clamped to the captured
+        /// context and are never zero.
+        case moveCaret(graphemes: Int, utf16: Int)
+        /// Trackpad finished (release or cancel). The host should resynchronise
+        /// context and invalidate caret-dependent async work.
         case endedCursorMode
     }
 
@@ -99,100 +214,176 @@ public struct SpaceCursorEngine: Equatable {
 
     // MARK: - Queries
 
-    /// True once the hold has been recognized and the trackpad is live.
     public var isCursorActive: Bool {
         if case .cursor = phase { return true }
         return false
     }
 
-    /// True for any live touch session (pressed or cursor).
     public var isTracking: Bool { phase != .idle }
 
-    /// Characters the caret has moved from its start position, or nil when not
-    /// in trackpad mode. Exposed for tests / debug assertions.
-    public var appliedOffset: Int? {
-        if case .cursor(let applied, _, _) = phase { return applied }
+    /// Caret position within the captured document, or nil outside cursor mode.
+    public var caretIndex: Int? {
+        if case .cursor(_, let caret, _) = phase { return caret }
         return nil
+    }
+
+    /// Signed grapheme offset from where the trackpad engaged.
+    public var appliedOffset: Int? {
+        if case .cursor(let doc, let caret, _) = phase { return caret - doc.origin }
+        return nil
+    }
+
+    public var document: SpaceCursorDocument? {
+        if case .cursor(let doc, _, _) = phase { return doc }
+        return nil
+    }
+
+    // MARK: - Curves
+
+    /// Characters of horizontal travel for a cumulative translation.
+    ///
+    /// Linear and fine inside the precision zone, then accelerating, so a
+    /// 24pt nudge moves 3 characters while a 300pt sweep moves well over a
+    /// hundred. Purely a function of CUMULATIVE translation, so dragging back
+    /// retraces exactly — there is no hysteresis and no ratchet.
+    public func horizontalCharacters(forTranslation translation: Double) -> Int {
+        guard translation != 0, translation.isFinite else { return 0 }
+        let magnitude = abs(translation)
+        let fine = max(config.finePointsPerCharacter, 0.0001)
+        let zone = max(config.precisionZonePoints, 0)
+
+        let characters: Double
+        if magnitude <= zone {
+            characters = magnitude / fine
+        } else {
+            let base = zone / fine
+            let extra = magnitude - zone
+            let scale = max(config.accelerationScalePoints, 0.0001)
+            characters = base + (extra / fine) * (1.0 + extra / scale)
+        }
+
+        let capped = min(characters, Double(config.maximumCharactersPerGesture))
+        let magnitudeSteps = Int(capped.rounded(.towardZero))
+        return translation < 0 ? -magnitudeSteps : magnitudeSteps
+    }
+
+    /// Logical lines of vertical travel for a cumulative translation. Zero
+    /// inside the dead zone; crossing it is a deliberate line change.
+    public func verticalLines(forTranslation translation: Double) -> Int {
+        guard translation != 0, translation.isFinite else { return 0 }
+        let magnitude = abs(translation)
+        guard magnitude > config.verticalDeadZonePoints else { return 0 }
+        let extra = magnitude - config.verticalDeadZonePoints
+        let per = max(config.pointsPerLine, 0.0001)
+        let lines = 1 + Int((extra / per).rounded(.towardZero))
+        let capped = min(lines, config.maximumCharactersPerGesture)
+        return translation < 0 ? -capped : capped
     }
 
     // MARK: - Transitions
 
-    /// Begin a touch on the space key. `availableLeft` / `availableRight` are
-    /// the number of characters currently before / after the caret; they bound
-    /// how far the trackpad may later scrub in each direction. Negative inputs
-    /// are floored at zero.
-    public mutating func press(at now: Date, availableLeft: Int, availableRight: Int) {
-        phase = .pressed(
-            pressedAt: now,
-            movedBeyondSlop: false,
-            availableLeft: max(0, availableLeft),
-            availableRight: max(0, availableRight)
-        )
+    /// Begin a touch on the space key.
+    public mutating func press(at now: Date) {
+        phase = .pressed(pressedAt: now, movedBeyondSlop: false)
     }
 
     /// Drive the activation clock. Returns `.enteredCursorMode` exactly once,
     /// on the first tick at or after `activationDelay` while still pressed.
-    /// A no-op in every other phase.
-    public mutating func tick(at now: Date) -> Effect {
-        guard case .pressed(let pressedAt, _, let left, let right) = phase else {
-            return .none
-        }
-        guard now.timeIntervalSince(pressedAt) >= config.activationDelay else {
-            return .none
-        }
-        phase = .cursor(appliedOffset: 0, availableLeft: left, availableRight: right)
+    /// `document` is the caret context captured at that instant.
+    public mutating func tick(at now: Date, document: SpaceCursorDocument) -> Effect {
+        guard case .pressed(let pressedAt, _) = phase else { return .none }
+        guard now.timeIntervalSince(pressedAt) >= config.activationDelay else { return .none }
+        phase = .cursor(
+            document: document,
+            caret: document.origin,
+            stickyColumn: document.column(of: document.origin)
+        )
         return .enteredCursorMode
     }
 
-    /// Report cumulative finger translation from the drag origin. Before
-    /// activation this only latches the tap-cancel slop. In trackpad mode it
-    /// maps horizontal travel to a bounded, whole-character caret delta;
-    /// vertical travel is ignored so a shaky drag never nudges the caret.
+    /// Report cumulative finger translation from the drag origin.
+    ///
+    /// Before activation this only latches the tap-cancel slop. In trackpad
+    /// mode it maps travel to a target caret position, clamped to the captured
+    /// context, and returns the delta needed to get there.
     public mutating func drag(translationX: Double, translationY: Double, at now: Date) -> Effect {
         switch phase {
         case .idle:
             return .none
 
-        case .pressed(let pressedAt, let moved, let left, let right):
+        case .pressed(let pressedAt, let moved):
             let beyond = moved
                 || abs(translationX) > config.tapCancelSlop
                 || abs(translationY) > config.tapCancelSlop
             if beyond != moved {
-                phase = .pressed(
-                    pressedAt: pressedAt,
-                    movedBeyondSlop: beyond,
-                    availableLeft: left,
-                    availableRight: right
-                )
+                phase = .pressed(pressedAt: pressedAt, movedBeyondSlop: beyond)
             }
             return .none
 
-        case .cursor(let applied, let left, let right):
-            // Horizontal only. Truncating toward zero gives sub-character
-            // accumulation: the caret does not step until a full
-            // `pointsPerCharacter` of travel has built up in one direction.
-            let step = config.pointsPerCharacter
-            let raw = step > 0 ? translationX / step : 0
-            let requested = Int(raw.rounded(.towardZero))
-            let desired = min(max(requested, -left), right)
-            let delta = desired - applied
-            guard delta != 0 else { return .none }
-            phase = .cursor(appliedOffset: desired, availableLeft: left, availableRight: right)
-            return .moveCaret(offset: delta)
+        case .cursor(let doc, let caret, let sticky):
+            let horizontal = horizontalCharacters(forTranslation: translationX)
+            let vertical = doc.supportsVerticalNavigation
+                ? verticalLines(forTranslation: translationY)
+                : 0
+
+            let target: Int
+            var nextSticky = sticky
+
+            if vertical == 0 {
+                // Pure horizontal: flow freely, crossing line breaks like Apple's
+                // does. Always measured from the ORIGIN, so reversal retraces.
+                target = clamp(doc.origin + horizontal, in: doc)
+                nextSticky = doc.column(of: target)
+            } else {
+                // Vertical picks the logical line; horizontal offsets the column
+                // within it. The sticky column is preserved so travelling across
+                // a short line and back lands where the user started.
+                let originLine = doc.line(of: doc.origin)
+                let targetLine = min(max(originLine + vertical, 0), doc.lineCount - 1)
+                let desiredColumn = max(sticky + horizontal, 0)
+                let lineStart = doc.start(ofLine: targetLine)
+                let lineEnd = doc.end(ofLine: targetLine)
+                target = clamp(lineStart + min(desiredColumn, lineEnd - lineStart), in: doc)
+                nextSticky = desiredColumn
+            }
+
+            guard target != caret else {
+                if nextSticky != sticky {
+                    phase = .cursor(document: doc, caret: caret, stickyColumn: nextSticky)
+                }
+                return .none
+            }
+
+            phase = .cursor(document: doc, caret: target, stickyColumn: nextSticky)
+            return .moveCaret(
+                graphemes: target - caret,
+                utf16: doc.utf16Distance(from: caret, to: target)
+            )
         }
     }
 
-    /// End the touch (finger lifted). From a pre-activation press this is a tap
-    /// — `.insertSpace` unless the finger had wandered or the hold somehow
-    /// already crossed the activation delay. From trackpad mode it is
-    /// `.endedCursorMode` and never inserts a space (no delayed-tap leakage).
+    /// Adopt an externally observed caret position — used when the host is
+    /// confirmed to still hold the captured text but reported a different
+    /// caret than we predicted (a host that clamps or partially honours
+    /// movement). Keeps subsequent deltas measured from reality instead of
+    /// compounding a divergence. Ignored outside cursor mode.
+    public mutating func reconcile(observedCaret: Int) {
+        guard case .cursor(let doc, let caret, let sticky) = phase else { return }
+        let clamped = clamp(observedCaret, in: doc)
+        guard clamped != caret else { return }
+        phase = .cursor(document: doc, caret: clamped, stickyColumn: sticky)
+    }
+
+    /// End the touch. A pre-activation release is a tap (`.insertSpace`) unless
+    /// the finger wandered or the hold already crossed the activation delay.
+    /// From trackpad mode it is `.endedCursorMode` and NEVER inserts a space.
     public mutating func end(at now: Date) -> Effect {
         let current = phase
         phase = .idle
         switch current {
         case .idle:
             return .none
-        case .pressed(let pressedAt, let moved, _, _):
+        case .pressed(let pressedAt, let moved):
             let heldToActivation = now.timeIntervalSince(pressedAt) >= config.activationDelay
             return (moved || heldToActivation) ? .none : .insertSpace
         case .cursor:
@@ -201,11 +392,105 @@ public struct SpaceCursorEngine: Equatable {
     }
 
     /// Abort the touch (system cancellation, touch-outside, lifecycle
-    /// teardown). Never inserts a space. Reports `.endedCursorMode` when a live
-    /// trackpad is torn down so the host can still resynchronize context.
+    /// teardown). Never inserts a space.
     public mutating func cancel() -> Effect {
         let wasCursor = isCursorActive
         phase = .idle
         return wasCursor ? .endedCursorMode : .none
+    }
+
+    private func clamp(_ index: Int, in doc: SpaceCursorDocument) -> Int {
+        min(max(index, 0), doc.count)
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Proxy seam
+// ───────────────────────────────────────────────────────────────────────────
+
+/// The exact subset of `UITextDocumentProxy` the space cursor touches.
+///
+/// Declared here, UIKit-free, so the whole insert/move path can be exercised
+/// against a recording double in tests — which is how "cursor mode never
+/// deletes" is proven rather than asserted. Note there is intentionally no
+/// `deleteBackward` requirement: a conforming double cannot even be asked to
+/// delete through this seam.
+public protocol SpaceCursorTextProxy: AnyObject {
+    var documentContextBeforeInput: String? { get }
+    var documentContextAfterInput: String? { get }
+    func adjustTextPosition(byCharacterOffset offset: Int)
+}
+
+/// Drives one space-key gesture against a proxy: captures context at takeover,
+/// applies caret movement, and self-corrects when the host disagrees.
+///
+/// The controller keeps ownership of what a TAP means (the double-space "…. "
+/// transform, spelling commit, mutation bookkeeping), so this type never
+/// inserts anything — it returns `.insertSpace` and lets the controller commit.
+public final class SpaceCursorSession {
+
+    public private(set) var engine: SpaceCursorEngine
+    private weak var proxy: SpaceCursorTextProxy?
+
+    /// True once this session has actually repositioned the caret, so the
+    /// controller knows whether a resynchronise is warranted.
+    public private(set) var didMoveCaret = false
+
+    public init(engine: SpaceCursorEngine = SpaceCursorEngine(), proxy: SpaceCursorTextProxy?) {
+        self.engine = engine
+        self.proxy = proxy
+    }
+
+    public var isCursorActive: Bool { engine.isCursorActive }
+    public var isTracking: Bool { engine.isTracking }
+    public var config: SpaceCursorConfig {
+        get { engine.config }
+        set { engine.config = newValue }
+    }
+
+    public func press(at now: Date) {
+        didMoveCaret = false
+        engine.press(at: now)
+    }
+
+    /// Capture context from the proxy and attempt takeover.
+    public func tick(at now: Date) -> SpaceCursorEngine.Effect {
+        let document = SpaceCursorDocument(
+            before: proxy?.documentContextBeforeInput,
+            after: proxy?.documentContextAfterInput
+        )
+        return engine.tick(at: now, document: document)
+    }
+
+    public func drag(translationX: Double, translationY: Double, at now: Date) -> SpaceCursorEngine.Effect {
+        let effect = engine.drag(translationX: translationX, translationY: translationY, at: now)
+        if case .moveCaret(_, let utf16) = effect {
+            proxy?.adjustTextPosition(byCharacterOffset: utf16)
+            didMoveCaret = true
+            reconcileWithHost()
+        }
+        return effect
+    }
+
+    public func end(at now: Date) -> SpaceCursorEngine.Effect { engine.end(at: now) }
+
+    public func cancel() -> SpaceCursorEngine.Effect {
+        let effect = engine.cancel()
+        didMoveCaret = false
+        return effect
+    }
+
+    public func clearMovementFlag() { didMoveCaret = false }
+
+    /// Re-read the caret position, but adopt it ONLY when the surrounding text
+    /// is byte-for-byte the text we captured. If the host truncates context,
+    /// returns nothing, or the document changed under us, the observation is
+    /// not comparable and is discarded rather than corrupting the model.
+    private func reconcileWithHost() {
+        guard let proxy, let document = engine.document else { return }
+        let before = proxy.documentContextBeforeInput ?? ""
+        let after = proxy.documentContextAfterInput ?? ""
+        guard before + after == document.joined() else { return }
+        engine.reconcile(observedCaret: Array(before).count)
     }
 }

@@ -1,16 +1,17 @@
 // verify_space_cursor_focused.swift
-// Standalone red/green verifier for the Apple-fidelity space hold/drag cursor
-// engine. Pure Swift on macOS — no iOS Simulator, no Xcode, no UIKit, no
-// XCTest.
+// Standalone red/green verifier for the Build-104 space hold/drag cursor.
 //
+// Pure Swift on macOS — no iOS Simulator, no Xcode, no UIKit, no XCTest.
 // Compiles the REAL production source (SpaceCursorEngine.swift) alongside this
-// runner, so it exercises the shipping logic directly. The engine is a pure
-// value type driven by a fixed base `Date` advanced with `addingTimeInterval`,
-// so every case is deterministic — no sleeps, no timers.
+// runner, so it exercises shipping logic directly.
 //
-// The XCTest class `Tests/SpaceCursorGestureTests.swift` proves the same
-// coverage against the proper TonoTests target; this macOS spine proves the
-// coverage is wired right and is runnable without a simulator.
+// WHY THIS FILE WAS REWRITTEN
+// Build 103 was rejected on a physical device: the caret "moved one character
+// at a time like backspacing" and could not travel up/down. The previous
+// version of this verifier asserted exactly that behaviour — a fixed 10pt per
+// character, and a `testVerticalJitterIgnored` case — so it stayed green while
+// the product was wrong. Those assertions are deleted. What follows pins the
+// corrected contract and FAILS against the build-103 engine.
 //
 // Usage (from apps/ios):
 //   swiftc -o /tmp/space_cursor \
@@ -30,293 +31,425 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
     checks += 1
     if !condition() {
         failures += 1
-        FileHandle.standardError.write(Data("FAIL: \(message)\n".utf8))
+        FileHandle.standardError.write("FAIL: \(message)\n".data(using: .utf8)!)
     }
 }
 
-let t0 = Date(timeIntervalSinceReferenceDate: 1_000_000)
-func at(_ seconds: TimeInterval) -> Date { t0.addingTimeInterval(seconds) }
+// NOTE: a large epoch (1.7e9) has ~4e-7 double resolution, so base+0.30 minus
+// base can land just BELOW 0.30 and miss the activation guard. Use a small base
+// so sub-second deltas are exact.
+let base = Date(timeIntervalSinceReferenceDate: 1_000_000)
+func at(_ dt: TimeInterval) -> Date { base.addingTimeInterval(dt) }
 
-/// Fresh engine with default config (activationDelay 0.30, pointsPerCharacter
-/// 10, tapCancelSlop 12) plus a caret with generous context on both sides.
-func activated(left: Int = 20, right: Int = 20) -> SpaceCursorEngine {
+/// Engine already in cursor mode over `before|after`.
+func activated(before: String, after: String) -> SpaceCursorEngine {
     var e = SpaceCursorEngine()
-    e.press(at: at(0), availableLeft: left, availableRight: right)
-    let effect = e.tick(at: at(0.30))
-    precondition(effect == .enteredCursorMode)
+    e.press(at: at(0))
+    _ = e.tick(at: at(0.30), document: SpaceCursorDocument(before: before, after: after))
     return e
 }
 
-// MARK: - Tap once
+func graphemes(_ effect: SpaceCursorEngine.Effect) -> Int? {
+    if case .moveCaret(let g, _) = effect { return g }
+    return nil
+}
+func utf16Delta(_ effect: SpaceCursorEngine.Effect) -> Int? {
+    if case .moveCaret(_, let u) = effect { return u }
+    return nil
+}
 
-func testTapOnceInsertsExactlyOneSpace() {
-    tests += 1
+// MARK: - A recording proxy that behaves like a host text field
+
+/// Simulates a host: applies UTF-16 caret offsets to real text and records every
+/// call. Because `SpaceCursorTextProxy` has NO insert or delete member, this
+/// double cannot even be asked to mutate text — which is the point.
+final class RecordingProxy: SpaceCursorTextProxy {
+    private(set) var text: [Character]
+    private(set) var caret: Int              // grapheme index
+    private(set) var adjustCalls: [Int] = []
+    private let original: [Character]
+    /// Models a stubborn host that only honours part of a requested move.
+    var clampsMovementTo: Int?
+    /// Models a host that exposes no context (secure field, or nothing shared).
+    var reportsNilContext = false
+
+    init(before: String, after: String) {
+        text = Array(before + after)
+        original = text
+        caret = Array(before).count
+    }
+
+    var documentContextBeforeInput: String? {
+        reportsNilContext ? nil : String(text[0..<caret])
+    }
+    var documentContextAfterInput: String? {
+        reportsNilContext ? nil : String(text[caret...])
+    }
+
+    func adjustTextPosition(byCharacterOffset offset: Int) {
+        adjustCalls.append(offset)
+        var applied = offset
+        if let cap = clampsMovementTo { applied = max(-cap, min(cap, offset)) }
+        // Walk graphemes consuming UTF-16 units, the way a host's NSString does.
+        var idx = caret
+        var remaining = abs(applied)
+        let step = applied < 0 ? -1 : 1
+        while remaining > 0 {
+            let next = idx + step
+            guard next >= 0, next <= text.count else { break }
+            let ch = step > 0 ? text[idx] : text[next]
+            remaining -= ch.utf16.count
+            idx = next
+        }
+        caret = max(0, min(idx, text.count))
+    }
+
+    /// True only if the document text itself ever differed from what we started
+    /// with. Nothing in the seam can cause this; the assertion is the proof.
+    var textEverChanged: Bool { text != original }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 1. Cursor mode must NEVER delete or insert
+// ───────────────────────────────────────────────────────────────────────────
+
+func verify_no_text_mutation_is_even_expressible() {
+    let all: [SpaceCursorEngine.Effect] = [
+        .none, .insertSpace, .enteredCursorMode,
+        .moveCaret(graphemes: 1, utf16: 1), .endedCursorMode,
+    ]
+    var sawInsert = 0
+    for e in all {
+        switch e {
+        case .none, .enteredCursorMode, .endedCursorMode, .moveCaret: break
+        case .insertSpace: sawInsert += 1
+        }
+    }
+    check(sawInsert == 1, "exactly one effect can cause an insertion")
+    check(all.count == 5, "effect surface is exactly 5 cases — no delete case exists")
+}
+
+func verify_a_full_drag_session_mutates_zero_text() {
+    let proxy = RecordingProxy(before: "Hello world, this is a sentence.", after: " And more after.")
+    let session = SpaceCursorSession(proxy: proxy)
+    session.press(at: at(0))
+    _ = session.tick(at: at(0.30))
+    for dx in stride(from: -200.0, through: 200.0, by: 17.0) {
+        _ = session.drag(translationX: dx, translationY: 0, at: at(0.4))
+    }
+    let effect = session.end(at: at(1.0))
+    check(effect == .endedCursorMode, "drag session ends in cursor mode, not a space")
+    check(!proxy.textEverChanged, "no text was changed by a cursor drag")
+    check(proxy.text == Array("Hello world, this is a sentence. And more after."),
+          "document text is byte-identical after a long drag")
+    check(!proxy.adjustCalls.isEmpty, "the drag did move the caret")
+}
+
+func verify_quick_tap_inserts_exactly_one_space_and_never_enters_cursor_mode() {
     var e = SpaceCursorEngine()
-    e.press(at: at(0), availableLeft: 5, availableRight: 5)
-    check(e.isTracking, "press should begin tracking")
-    let effect = e.end(at: at(0.05))
-    check(effect == .insertSpace, "a quick tap must insert exactly one space")
-    check(e.phase == .idle, "engine must be idle after a tap")
-    check(!e.isTracking, "engine must not be tracking after a tap")
+    e.press(at: at(0))
+    check(e.end(at: at(0.05)) == .insertSpace, "fast tap ⇒ insertSpace")
+    check(!e.isCursorActive, "tap never activates the trackpad")
+
+    var f = SpaceCursorEngine()
+    f.press(at: at(0))
+    _ = f.drag(translationX: 30, translationY: 0, at: at(0.05))
+    check(f.end(at: at(0.1)) == .none, "aborted swipe types nothing")
+
+    var g = SpaceCursorEngine()
+    g.press(at: at(0))
+    _ = g.tick(at: at(0.30), document: SpaceCursorDocument(before: "ab", after: "cd"))
+    check(g.end(at: at(0.9)) == .endedCursorMode, "hold+release ⇒ no delayed space")
 }
 
-func testTapToleratesSmallWobble() {
-    tests += 1
+// ───────────────────────────────────────────────────────────────────────────
+// 2. Accelerated horizontal movement — NOT one-at-a-time
+// ───────────────────────────────────────────────────────────────────────────
+
+func verify_long_drags_accelerate_far_past_the_rejected_fixed_rate() {
+    let e = SpaceCursorEngine()
+    let short = e.horizontalCharacters(forTranslation: 16)
+    let long = e.horizontalCharacters(forTranslation: 300)
+    check(short == 2, "16pt ⇒ 2 chars (precise near origin), got \(short)")
+    check(long >= 80, "300pt must cross a sentence, got \(long) (build-103 gave 30)")
+    check(long > 300 / 10, "300pt must beat the rejected fixed 10pt/char rate")
+
+    var last = -1
+    for pt in stride(from: 0.0, through: 400.0, by: 8.0) {
+        let n = e.horizontalCharacters(forTranslation: pt)
+        check(n >= last, "curve is monotonic at \(pt)pt")
+        last = n
+        check(e.horizontalCharacters(forTranslation: -pt) == -n, "curve is symmetric at \(pt)pt")
+    }
+}
+
+func verify_precision_preserved_for_small_corrections() {
+    let e = SpaceCursorEngine()
+    check(e.horizontalCharacters(forTranslation: 4) == 0, "sub-threshold nudge does not move")
+    check(e.horizontalCharacters(forTranslation: 8) == 1, "8pt ⇒ exactly 1 char")
+    check(e.horizontalCharacters(forTranslation: 24) == 3, "24pt (zone edge) ⇒ 3 chars")
+}
+
+func verify_reversal_retraces_exactly_no_ratchet_no_stale_bound() {
+    var e = activated(before: String(repeating: "a", count: 400),
+                      after: String(repeating: "b", count: 400))
+    let out = e.drag(translationX: 300, translationY: 0, at: at(0.4))
+    let forward = graphemes(out) ?? 0
+    check(forward > 30, "long right drag moves far, got \(forward)")
+    _ = e.drag(translationX: 0, translationY: 0, at: at(0.5))
+    check(e.appliedOffset == 0, "returning to origin restores caret exactly")
+    _ = e.drag(translationX: -300, translationY: 0, at: at(0.6))
+    check(e.appliedOffset == -forward, "left drag mirrors right drag")
+}
+
+func verify_caret_clamps_at_both_ends_without_sticking() {
+    var e = activated(before: "abc", after: "de")
+    _ = e.drag(translationX: 5000, translationY: 0, at: at(0.4))
+    check(e.caretIndex == 5, "clamps to end of context")
+    _ = e.drag(translationX: -5000, translationY: 0, at: at(0.5))
+    check(e.caretIndex == 0, "clamps to start of context")
+    _ = e.drag(translationX: 0, translationY: 0, at: at(0.6))
+    check(e.caretIndex == 3, "returns to origin after both clamps — bound is not stale")
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 3. Two-dimensional / multiline navigation
+// ───────────────────────────────────────────────────────────────────────────
+
+func verify_vertical_drag_changes_logical_line_when_newlines_are_present() {
+    var e = activated(before: "first line\nsec", after: "ond line\nthird line")
+    let doc = e.document!
+    check(doc.supportsVerticalNavigation, "newline context supports vertical navigation")
+    check(doc.lineCount == 3, "three logical lines")
+    check(doc.line(of: doc.origin) == 1, "caret starts on line 1")
+
+    let up = e.drag(translationX: 0, translationY: -40, at: at(0.4))
+    check(up != .none, "upward drag past the dead zone moves the caret")
+    check(e.document!.line(of: e.caretIndex!) == 0, "moved to line 0")
+    check(e.document!.column(of: e.caretIndex!) == 3, "column preserved going up")
+
+    _ = e.drag(translationX: 0, translationY: 40, at: at(0.5))
+    check(e.document!.line(of: e.caretIndex!) == 2, "downward drag reaches line 2")
+    check(e.document!.column(of: e.caretIndex!) == 3, "sticky column preserved going down")
+}
+
+func verify_vertical_dead_zone_keeps_horizontal_drags_on_their_line() {
+    // Sub-dead-zone vertical travel must contribute NOTHING. Compare a drag with
+    // 12pt of hand tremor against the identical drag with none: same caret.
+    // (Note the caret legitimately crosses a line break here — a pure horizontal
+    // drag flows freely across "\n", which is what Apple's trackpad does. The
+    // invariant under test is that the tremor changed nothing, not that the
+    // caret stayed on its line.)
+    var tremor = activated(before: "alpha\nbra", after: "vo\ncharlie")
+    var clean = activated(before: "alpha\nbra", after: "vo\ncharlie")
+    _ = tremor.drag(translationX: 60, translationY: 12, at: at(0.4))   // 12pt < 16pt dead zone
+    _ = clean.drag(translationX: 60, translationY: 0, at: at(0.4))
+    check(tremor.caretIndex == clean.caretIndex,
+          "12pt of tremor is ignored: \(String(describing: tremor.caretIndex)) vs \(String(describing: clean.caretIndex))")
+    // And crossing the dead zone DOES change line, so the zone is a threshold,
+    // not a permanent lock.
+    var crossed = activated(before: "alpha\nbra", after: "vo\ncharlie")
+    _ = crossed.drag(translationX: 0, translationY: -30, at: at(0.4))
+    check(crossed.document!.line(of: crossed.caretIndex!) == 0, "30pt up crosses to line 0")
+}
+
+func verify_sticky_column_survives_a_short_intervening_line() {
+    var e = activated(before: "0123456789abc", after: "\nxy\n0123456789ABC")
+    let startCol = e.document!.column(of: e.caretIndex!)
+    check(startCol == 13, "starting column 13, got \(startCol)")
+    // 30pt ⇒ exactly one line down (1 + floor((30-16)/24) = 1).
+    _ = e.drag(translationX: 0, translationY: 30, at: at(0.4))
+    check(e.document!.line(of: e.caretIndex!) == 1, "on the short line")
+    check(e.document!.column(of: e.caretIndex!) == 2, "clamped to short line end")
+    // 60pt ⇒ two lines down from the ORIGIN line (cumulative, not incremental).
+    _ = e.drag(translationX: 0, translationY: 60, at: at(0.5))
+    check(e.document!.line(of: e.caretIndex!) == 2, "reached the long line")
+    check(e.document!.column(of: e.caretIndex!) == 13, "sticky column restored on the long line")
+}
+
+func verify_single_line_context_degrades_to_horizontal_only_never_invents_geometry() {
+    var e = activated(before: "just one single line of text", after: " continues here")
+    check(!e.document!.supportsVerticalNavigation, "no newline ⇒ vertical unsupported")
+    let before = e.caretIndex!
+    _ = e.drag(translationX: 0, translationY: -200, at: at(0.4))
+    check(e.caretIndex == before, "huge vertical drag does nothing on a single-line field")
+    _ = e.drag(translationX: 80, translationY: -200, at: at(0.5))
+    check(e.caretIndex! > before, "horizontal still works while vertical is unsupported")
+}
+
+func verify_empty_nil_context_is_safe() {
+    var e = activated(before: "", after: "")
+    check(e.document!.count == 0, "empty document")
+    check(!e.document!.supportsVerticalNavigation, "empty context has no vertical")
+    _ = e.drag(translationX: 500, translationY: 500, at: at(0.4))
+    check(e.caretIndex == 0, "caret pinned at 0 with no text")
+    check(e.end(at: at(0.6)) == .endedCursorMode, "still ends cleanly")
+
+    let proxy = RecordingProxy(before: "abc", after: "def")
+    proxy.reportsNilContext = true
+    let s = SpaceCursorSession(proxy: proxy)
+    s.press(at: at(0))
+    _ = s.tick(at: at(0.30))
+    _ = s.drag(translationX: 300, translationY: 0, at: at(0.4))
+    check(!proxy.textEverChanged, "nil-context host is never mutated")
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 4. Unicode correctness — graphemes vs UTF-16
+// ───────────────────────────────────────────────────────────────────────────
+
+func verify_non_BMP_emoji_cost_2_UTF_16_units_but_1_caret_step() {
+    var e = activated(before: "a😀b", after: "")
+    let doc = e.document!
+    check(doc.count == 3, "emoji is ONE grapheme")
+    check(doc.utf16Distance(from: 0, to: 3) == 4, "a(1)+😀(2)+b(1) = 4 UTF-16 units")
+    _ = e.drag(translationX: -8, translationY: 0, at: at(0.4))
+    check(e.caretIndex == 2, "one step left lands between 😀 and b")
+}
+
+func verify_composed_families_flags_skin_tones_and_combining_marks_are_single_steps() {
+    let cases: [(String, Int)] = [
+        ("👨‍👩‍👧‍👦", 1),
+        ("🇺🇸", 1),
+        ("👍🏽", 1),
+        ("é", 1),
+    ]
+    for (text, expected) in cases {
+        let doc = SpaceCursorDocument(before: text, after: "")
+        check(doc.count == expected, "\(text) is \(expected) grapheme(s), got \(doc.count)")
+        var e = activated(before: text, after: "")
+        _ = e.drag(translationX: -5000, translationY: 0, at: at(0.4))
+        check(e.caretIndex == 0, "\(text): clamps to 0")
+        _ = e.drag(translationX: 5000, translationY: 0, at: at(0.5))
+        check(e.caretIndex == doc.count, "\(text): clamps to end")
+    }
+}
+
+func verify_UTF_16_delta_always_matches_the_grapheme_span_the_host_must_cross() {
+    var e = activated(before: "😀😀😀", after: "😀😀😀")
+    let out = e.drag(translationX: 24, translationY: 0, at: at(0.4))
+    let g = graphemes(out) ?? 0
+    let u = utf16Delta(out) ?? 0
+    check(g == 3, "3 graphemes, got \(g)")
+    check(u == 6, "6 UTF-16 units for 3 non-BMP emoji, got \(u)")
+}
+
+func verify_RTL_and_bidi_text_move_logically_without_corruption() {
+    var e = activated(before: "مرحبا ", after: "بالعالم")
+    let doc = e.document!
+    check(doc.count == 13, "13 logical graphemes, got \(doc.count)")
+    _ = e.drag(translationX: 40, translationY: 0, at: at(0.4))
+    check(e.caretIndex! > doc.origin, "logical forward movement works in RTL")
+    _ = e.drag(translationX: 0, translationY: 0, at: at(0.5))
+    check(e.caretIndex == doc.origin, "reversal exact in RTL")
+
+    var m = activated(before: "abc مرحبا ", after: "xyz")
+    _ = m.drag(translationX: 5000, translationY: 0, at: at(0.4))
+    check(m.caretIndex == m.document!.count, "mixed bidi clamps to end without corruption")
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 5. Session robustness
+// ───────────────────────────────────────────────────────────────────────────
+
+func verify_cancellation_never_inserts_and_reports_teardown() {
+    var e = activated(before: "abc", after: "def")
+    _ = e.drag(translationX: 40, translationY: 0, at: at(0.4))
+    check(e.cancel() == .endedCursorMode, "cancel from cursor ⇒ endedCursorMode")
+    check(!e.isTracking, "idle after cancel")
+
+    var p = SpaceCursorEngine()
+    p.press(at: at(0))
+    check(p.cancel() == .none, "cancel before activation inserts nothing")
+}
+
+func verify_idle_transitions_are_inert() {
     var e = SpaceCursorEngine()
-    e.press(at: at(0), availableLeft: 5, availableRight: 5)
-    // Within the 12pt tap-cancel slop: still a tap.
-    _ = e.drag(translationX: 3, translationY: -4, at: at(0.02))
-    check(e.end(at: at(0.06)) == .insertSpace, "small wobble within slop is still a tap")
+    check(e.drag(translationX: 50, translationY: 50, at: at(0)) == .none, "drag while idle")
+    check(e.tick(at: at(0), document: SpaceCursorDocument(before: "a", after: "b")) == .none, "tick while idle")
+    check(e.end(at: at(0)) == .none, "end while idle")
+    check(e.cancel() == .none, "cancel while idle")
 }
 
-func testSwipeBeyondSlopBeforeActivationIsNotASpace() {
-    tests += 1
-    var e = SpaceCursorEngine()
-    e.press(at: at(0), availableLeft: 5, availableRight: 5)
-    _ = e.drag(translationX: 40, translationY: 0, at: at(0.05)) // beyond 12pt slop
-    check(e.end(at: at(0.10)) == .none, "an aborted pre-activation swipe must not type a space")
-    check(e.phase == .idle, "engine idle after aborted swipe")
+func verify_tap_still_works_immediately_after_a_cursor_session() {
+    var e = activated(before: "abcdef", after: "ghij")
+    _ = e.drag(translationX: 40, translationY: 0, at: at(0.4))
+    check(e.end(at: at(0.6)) == .endedCursorMode, "session ends")
+    e.press(at: at(1.0))
+    check(e.end(at: at(1.05)) == .insertSpace, "next quick tap is a normal space")
 }
 
-// MARK: - Hold, no drag
-
-func testHoldNoDragEntersCursorAndInsertsZeroSpaces() {
-    tests += 1
-    var e = SpaceCursorEngine()
-    e.press(at: at(0), availableLeft: 5, availableRight: 5)
-    check(e.tick(at: at(0.30)) == .enteredCursorMode, "hold past the delay enters cursor mode")
-    check(e.isCursorActive, "cursor must be active after activation")
-    let effect = e.end(at: at(0.5))
-    check(effect == .endedCursorMode, "ending a no-drag hold reports endedCursorMode, not a space")
-    check(effect != .insertSpace, "a hold must never insert a space")
-    check(e.phase == .idle, "engine idle after a hold session")
+func verify_host_that_clamps_movement_is_reconciled_not_compounded() {
+    let proxy = RecordingProxy(before: String(repeating: "x", count: 50),
+                               after: String(repeating: "y", count: 50))
+    proxy.clampsMovementTo = 3
+    let s = SpaceCursorSession(proxy: proxy)
+    s.press(at: at(0))
+    _ = s.tick(at: at(0.30))
+    _ = s.drag(translationX: 200, translationY: 0, at: at(0.4))
+    check(proxy.caret == 53, "host clamped to +3, got \(proxy.caret)")
+    check(s.engine.caretIndex == 53,
+          "engine adopted the host's actual caret, got \(String(describing: s.engine.caretIndex))")
+    check(!proxy.textEverChanged, "clamping host still never had text changed")
 }
 
-func testActivationFiresExactlyOnceAtDelay() {
-    tests += 1
-    var e = SpaceCursorEngine()
-    e.press(at: at(0), availableLeft: 5, availableRight: 5)
-    check(e.tick(at: at(0.10)) == .none, "no activation before the delay")
-    check(e.tick(at: at(0.299)) == .none, "no activation just before the delay")
-    check(!e.isCursorActive, "not active before the delay")
-    check(e.tick(at: at(0.30)) == .enteredCursorMode, "activation at the delay threshold")
-    check(e.tick(at: at(0.40)) == .none, "activation fires only once")
+func verify_rapid_reversal_storm_never_corrupts_or_mutates() {
+    let proxy = RecordingProxy(before: String(repeating: "ab😀", count: 60),
+                               after: String(repeating: "cd🇺🇸", count: 60))
+    let s = SpaceCursorSession(proxy: proxy)
+    s.press(at: at(0))
+    _ = s.tick(at: at(0.30))
+    var t = 0.4
+    for _ in 0..<40 {
+        _ = s.drag(translationX: 250, translationY: 0, at: at(t)); t += 0.01
+        _ = s.drag(translationX: -250, translationY: 0, at: at(t)); t += 0.01
+    }
+    _ = s.drag(translationX: 0, translationY: 0, at: at(t))
+    check(!proxy.textEverChanged, "reversal storm mutates nothing")
+    check(s.engine.appliedOffset == 0,
+          "storm returns exactly to origin, got \(String(describing: s.engine.appliedOffset))")
 }
 
-func testHeldPastDelayButNeverTickedIsNotASpace() {
-    tests += 1
-    // Belt-and-suspenders: if the release is processed before the activation
-    // work item, a hold longer than the delay must still not type a space.
-    var e = SpaceCursorEngine()
-    e.press(at: at(0), availableLeft: 5, availableRight: 5)
-    check(e.end(at: at(0.40)) == .none, "a >delay hold with no tick must not insert a space")
-}
-
-// MARK: - Left / right drag
-
-func testRightDragMovesCaretRight() {
-    tests += 1
-    var e = activated()
-    let effect = e.drag(translationX: 25, translationY: 0, at: at(0.35)) // 2 chars
-    check(effect == .moveCaret(offset: 2), "25pt right ⇒ +2 chars")
-    check(e.appliedOffset == 2, "applied offset tracks the caret")
-}
-
-func testLeftDragMovesCaretLeft() {
-    tests += 1
-    var e = activated()
-    let effect = e.drag(translationX: -14, translationY: 0, at: at(0.35)) // -1 char
-    check(effect == .moveCaret(offset: -1), "14pt left ⇒ -1 char")
-    check(e.appliedOffset == -1, "applied offset tracks the caret")
-}
-
-// MARK: - Repeated drag accumulation
-
-func testRepeatedDragAccumulates() {
-    tests += 1
-    var e = activated(left: 20, right: 20)
-    check(e.drag(translationX: 11, translationY: 0, at: at(0.31)) == .moveCaret(offset: 1), "→ offset 1")
-    check(e.drag(translationX: 23, translationY: 0, at: at(0.32)) == .moveCaret(offset: 1), "→ offset 2 (delta +1)")
-    check(e.drag(translationX: 35, translationY: 0, at: at(0.33)) == .moveCaret(offset: 1), "→ offset 3 (delta +1)")
-    check(e.appliedOffset == 3, "cumulative right drag accumulates to 3")
-    // Reverse direction: cumulative translation 12 ⇒ desired 1 ⇒ delta -2.
-    check(e.drag(translationX: 12, translationY: 0, at: at(0.34)) == .moveCaret(offset: -2), "reverse ⇒ delta -2")
-    check(e.appliedOffset == 1, "reversed back to offset 1")
-}
-
-func testSubCharacterAccumulation() {
-    tests += 1
-    var e = activated(left: 20, right: 20)
-    check(e.drag(translationX: 9, translationY: 0, at: at(0.31)) == .none, "9pt < one char ⇒ no move")
-    check(e.appliedOffset == 0, "sub-threshold drag does not move the caret")
-    check(e.drag(translationX: 10, translationY: 0, at: at(0.32)) == .moveCaret(offset: 1), "crossing 10pt ⇒ +1")
-    check(e.drag(translationX: 19, translationY: 0, at: at(0.33)) == .none, "still within the same char ⇒ no move")
-    check(e.drag(translationX: 20, translationY: 0, at: at(0.34)) == .moveCaret(offset: 1), "crossing 20pt ⇒ +1")
-    check(e.appliedOffset == 2, "accumulated two whole-character steps")
-}
-
-func testCustomPointsPerCharacter() {
-    tests += 1
-    var cfg = SpaceCursorConfig()
-    cfg.pointsPerCharacter = 20
-    var e = SpaceCursorEngine(config: cfg)
-    e.press(at: at(0), availableLeft: 10, availableRight: 10)
-    _ = e.tick(at: at(0.30))
-    check(e.drag(translationX: 19, translationY: 0, at: at(0.31)) == .none, "19pt < 20pt/char ⇒ no move")
-    check(e.drag(translationX: 20, translationY: 0, at: at(0.32)) == .moveCaret(offset: 1), "20pt ⇒ +1 char")
-}
-
-// MARK: - Vertical jitter
-
-func testVerticalJitterIgnored() {
-    tests += 1
-    var e = activated()
-    check(e.drag(translationX: 0, translationY: 50, at: at(0.31)) == .none, "pure vertical ⇒ no move")
-    check(e.drag(translationX: 0, translationY: -80, at: at(0.32)) == .none, "pure vertical ⇒ no move")
-    check(e.appliedOffset == 0, "vertical jitter never nudges the caret")
-    check(e.drag(translationX: 22, translationY: 100, at: at(0.33)) == .moveCaret(offset: 2),
-          "horizontal maps by X only, ignoring large vertical")
-}
-
-// MARK: - Context bounds
-
-func testBeyondContextClampsToBounds() {
-    tests += 1
-    var e = SpaceCursorEngine()
-    e.press(at: at(0), availableLeft: 3, availableRight: 2)
-    _ = e.tick(at: at(0.30))
-    check(e.drag(translationX: 1000, translationY: 0, at: at(0.31)) == .moveCaret(offset: 2),
-          "far right clamps to +availableRight (2)")
-    check(e.appliedOffset == 2, "clamped at right bound")
-    check(e.drag(translationX: -1000, translationY: 0, at: at(0.32)) == .moveCaret(offset: -5),
-          "far left clamps to -availableLeft (-3): delta from +2 is -5")
-    check(e.appliedOffset == -3, "clamped at left bound")
-    check(e.drag(translationX: -2000, translationY: 0, at: at(0.33)) == .none,
-          "already at the left bound ⇒ no further move")
-}
-
-func testZeroContextNeverMoves() {
-    tests += 1
-    var e = SpaceCursorEngine()
-    e.press(at: at(0), availableLeft: 0, availableRight: 0)
-    _ = e.tick(at: at(0.30))
-    check(e.drag(translationX: 100, translationY: 0, at: at(0.31)) == .none, "no right context ⇒ no move")
-    check(e.drag(translationX: -100, translationY: 0, at: at(0.32)) == .none, "no left context ⇒ no move")
-    check(e.appliedOffset == 0, "empty document keeps the caret put")
-}
-
-func testNegativeContextIsFlooredAtZero() {
-    tests += 1
-    var e = SpaceCursorEngine()
-    e.press(at: at(0), availableLeft: -5, availableRight: -9)
-    _ = e.tick(at: at(0.30))
-    check(e.drag(translationX: 100, translationY: 0, at: at(0.31)) == .none, "negative bounds floored to 0")
-}
-
-// MARK: - Cancel
-
-func testCancelBeforeActivationInsertsNoSpace() {
-    tests += 1
-    var e = SpaceCursorEngine()
-    e.press(at: at(0), availableLeft: 5, availableRight: 5)
-    check(e.cancel() == .none, "cancel before activation inserts no space")
-    check(e.phase == .idle, "cancel resets to idle")
-    check(e.tick(at: at(1)) == .none, "no activation after cancel")
-}
-
-func testCancelAfterActivationEndsCursorNoSpace() {
-    tests += 1
-    var e = activated()
-    _ = e.drag(translationX: 30, translationY: 0, at: at(0.35)) // moved
-    let effect = e.cancel()
-    check(effect == .endedCursorMode, "cancel from cursor reports endedCursorMode for resync")
-    check(effect != .insertSpace, "cancel never inserts a space")
-    check(e.phase == .idle, "cancel resets to idle")
-}
-
-// MARK: - No post-takeover space / no leak
-
-func testNoPostTakeoverSpace() {
-    tests += 1
-    var e = activated()
-    _ = e.drag(translationX: 20, translationY: 0, at: at(0.35))
-    let effect = e.end(at: at(0.6))
-    check(effect == .endedCursorMode, "ending a drag reports endedCursorMode")
-    check(effect != .insertSpace, "no delayed-tap leakage after takeover")
-}
-
-// MARK: - Teardown leaves no residue
-
-func testIdleAfterEndAndCancel() {
-    tests += 1
-    var a = activated()
-    _ = a.drag(translationX: 15, translationY: 0, at: at(0.35))
-    _ = a.end(at: at(0.6))
-    check(a.phase == .idle && !a.isTracking, "idle after end")
-
-    var b = activated()
-    _ = b.cancel()
-    check(b.phase == .idle && !b.isTracking, "idle after cancel")
-}
-
-func testTapWorksAfterCursorSession() {
-    tests += 1
-    var e = SpaceCursorEngine()
-    e.press(at: at(0), availableLeft: 5, availableRight: 5)
-    _ = e.tick(at: at(0.30))
-    _ = e.drag(translationX: 30, translationY: 0, at: at(0.35))
-    check(e.end(at: at(0.6)) == .endedCursorMode, "cursor session ends cleanly")
-    check(e.phase == .idle, "engine returns to idle")
-    // A brand-new touch must behave as a fresh tap.
-    e.press(at: at(1.0), availableLeft: 8, availableRight: 0)
-    check(e.end(at: at(1.05)) == .insertSpace, "a tap after a cursor session still inserts a space")
-}
-
-// MARK: - Idle no-ops (mode/host switch land here after reset)
-
-func testIdleTransitionsAreNoOps() {
-    tests += 1
-    var e = SpaceCursorEngine()
-    check(e.drag(translationX: 10, translationY: 0, at: at(0)) == .none, "drag while idle is a no-op")
-    check(e.tick(at: at(0)) == .none, "tick while idle is a no-op")
-    check(e.end(at: at(0)) == .none, "end while idle is a no-op")
-    check(e.cancel() == .none, "cancel while idle is a no-op")
-    check(e.phase == .idle, "stays idle")
+func verify_very_long_field_traverses_quickly_and_stays_in_bounds() {
+    let long = String(repeating: "lorem ipsum dolor sit amet ", count: 200)
+    var e = activated(before: long, after: long)
+    _ = e.drag(translationX: 600, translationY: 0, at: at(0.4))
+    let moved = e.appliedOffset ?? 0
+    check(moved > 200, "600pt sweep crosses >200 chars in a long field, got \(moved)")
+    check(e.caretIndex! <= e.document!.count, "never exceeds bounds")
 }
 
 // MARK: - Runner
 
-let allTests: [(String, () -> Void)] = [
-    ("tapOnceInsertsExactlyOneSpace", testTapOnceInsertsExactlyOneSpace),
-    ("tapToleratesSmallWobble", testTapToleratesSmallWobble),
-    ("swipeBeyondSlopBeforeActivationIsNotASpace", testSwipeBeyondSlopBeforeActivationIsNotASpace),
-    ("holdNoDragEntersCursorAndInsertsZeroSpaces", testHoldNoDragEntersCursorAndInsertsZeroSpaces),
-    ("activationFiresExactlyOnceAtDelay", testActivationFiresExactlyOnceAtDelay),
-    ("heldPastDelayButNeverTickedIsNotASpace", testHeldPastDelayButNeverTickedIsNotASpace),
-    ("rightDragMovesCaretRight", testRightDragMovesCaretRight),
-    ("leftDragMovesCaretLeft", testLeftDragMovesCaretLeft),
-    ("repeatedDragAccumulates", testRepeatedDragAccumulates),
-    ("subCharacterAccumulation", testSubCharacterAccumulation),
-    ("customPointsPerCharacter", testCustomPointsPerCharacter),
-    ("verticalJitterIgnored", testVerticalJitterIgnored),
-    ("beyondContextClampsToBounds", testBeyondContextClampsToBounds),
-    ("zeroContextNeverMoves", testZeroContextNeverMoves),
-    ("negativeContextIsFlooredAtZero", testNegativeContextIsFlooredAtZero),
-    ("cancelBeforeActivationInsertsNoSpace", testCancelBeforeActivationInsertsNoSpace),
-    ("cancelAfterActivationEndsCursorNoSpace", testCancelAfterActivationEndsCursorNoSpace),
-    ("noPostTakeoverSpace", testNoPostTakeoverSpace),
-    ("idleAfterEndAndCancel", testIdleAfterEndAndCancel),
-    ("tapWorksAfterCursorSession", testTapWorksAfterCursorSession),
-    ("idleTransitionsAreNoOps", testIdleTransitionsAreNoOps),
+let allSuites: [(String, () -> Void)] = [
+    ("no text mutation is even expressible", verify_no_text_mutation_is_even_expressible),
+    ("a full drag session mutates zero text", verify_a_full_drag_session_mutates_zero_text),
+    ("quick tap inserts exactly one space and never enters cursor mode", verify_quick_tap_inserts_exactly_one_space_and_never_enters_cursor_mode),
+    ("long drags accelerate far past the rejected fixed rate", verify_long_drags_accelerate_far_past_the_rejected_fixed_rate),
+    ("precision preserved for small corrections", verify_precision_preserved_for_small_corrections),
+    ("reversal retraces exactly — no ratchet, no stale bound", verify_reversal_retraces_exactly_no_ratchet_no_stale_bound),
+    ("caret clamps at both ends without sticking", verify_caret_clamps_at_both_ends_without_sticking),
+    ("vertical drag changes logical line when newlines are present", verify_vertical_drag_changes_logical_line_when_newlines_are_present),
+    ("vertical dead zone keeps horizontal drags on their line", verify_vertical_dead_zone_keeps_horizontal_drags_on_their_line),
+    ("sticky column survives a short intervening line", verify_sticky_column_survives_a_short_intervening_line),
+    ("single-line context degrades to horizontal only — never invents geometry", verify_single_line_context_degrades_to_horizontal_only_never_invents_geometry),
+    ("empty / nil context is safe", verify_empty_nil_context_is_safe),
+    ("non-BMP emoji cost 2 UTF-16 units but 1 caret step", verify_non_BMP_emoji_cost_2_UTF_16_units_but_1_caret_step),
+    ("composed families, flags, skin tones and combining marks are single steps", verify_composed_families_flags_skin_tones_and_combining_marks_are_single_steps),
+    ("UTF-16 delta always matches the grapheme span the host must cross", verify_UTF_16_delta_always_matches_the_grapheme_span_the_host_must_cross),
+    ("RTL and bidi text move logically without corruption", verify_RTL_and_bidi_text_move_logically_without_corruption),
+    ("cancellation never inserts and reports teardown", verify_cancellation_never_inserts_and_reports_teardown),
+    ("idle transitions are inert", verify_idle_transitions_are_inert),
+    ("tap still works immediately after a cursor session", verify_tap_still_works_immediately_after_a_cursor_session),
+    ("host that clamps movement is reconciled, not compounded", verify_host_that_clamps_movement_is_reconciled_not_compounded),
+    ("rapid reversal storm never corrupts or mutates", verify_rapid_reversal_storm_never_corrupts_or_mutates),
+    ("very long field traverses quickly and stays in bounds", verify_very_long_field_traverses_quickly_and_stays_in_bounds),
 ]
 
 @main
 enum SpaceCursorFocusedVerifier {
     static func main() {
-        for (name, fn) in allTests {
-            fn()
-            _ = name
-        }
+        for (name, fn) in allSuites { tests += 1; fn(); _ = name }
         if failures == 0 {
             print("PASS: \(checks) checks across \(tests) tests")
             exit(0)

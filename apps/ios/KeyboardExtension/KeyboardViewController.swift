@@ -417,17 +417,20 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private var deleteRepeatWorkItem: DispatchWorkItem?
     private var deleteRepeatGeneration = 0
     private var deleteRepeatCount = 0
-    // Apple-fidelity space hold/drag caret trackpad. The engine is a pure
-    // value type (`SpaceCursorEngine`); the controller only feeds it touch
-    // phases + wall-clock time and applies the effects to the proxy. The
-    // activation timer is a single generation-guarded work item, mirroring
-    // the backspace-repeat scheduling, so it can never fire stale.
-    private var spaceCursorEngine = SpaceCursorEngine()
+    // Apple-fidelity space hold/drag caret trackpad. `SpaceCursorSession` owns
+    // the pure engine plus the ONLY proxy operation this feature may perform —
+    // `adjustTextPosition(byCharacterOffset:)`. Its `SpaceCursorTextProxy`
+    // protocol has no insert or delete member, so no gesture path here can add
+    // or remove text; the single insertion is `insertSpaceCommit()` on a
+    // genuine quick tap. The activation timer is a generation-guarded work
+    // item, mirroring backspace-repeat, so it can never fire stale.
+    private lazy var spaceCursorSession = SpaceCursorSession(proxy: SpaceCursorProxyAdapter(owner: self))
     private var spaceCursorActivationWork: DispatchWorkItem?
     private var spaceCursorGeneration = 0
     private var spaceCursorOrigin: CGPoint = .zero
     private var spaceCursorLastLocation: CGPoint = .zero
-    private var spaceCursorDidMoveCaret = false
+    private var spaceCursorAffordanceActive = false
+    private var spaceCursorRestoreTitle: String?
     private weak var spaceButton: UIButton?
     private weak var previewOwner: UIButton?
     private var keyPreview: UIView?
@@ -1913,34 +1916,33 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             beginSpaceCursorSession(now: now, location: location, button: recognizer.view as? UIButton)
         case .changed:
             spaceCursorLastLocation = location
+            // The session owns the proxy call. The ONLY proxy operation it can
+            // perform is `adjustTextPosition(byCharacterOffset:)` — its protocol
+            // has no delete or insert member — so a drag physically cannot
+            // remove or add text.
             let dx = Double(location.x - spaceCursorOrigin.x)
             let dy = Double(location.y - spaceCursorOrigin.y)
-            let effect = spaceCursorEngine.drag(translationX: dx, translationY: dy, at: now)
-            if case .moveCaret(let offset) = effect {
-                textDocumentProxy.adjustTextPosition(byCharacterOffset: offset)
-                spaceCursorDidMoveCaret = true
-            }
+            _ = spaceCursorSession.drag(translationX: dx, translationY: dy, at: now)
+            updateSpaceCursorAffordance()
         case .ended:
-            concludeSpaceCursorSession(effect: spaceCursorEngine.end(at: now))
+            concludeSpaceCursorSession(effect: spaceCursorSession.end(at: now))
         case .cancelled, .failed:
-            concludeSpaceCursorSession(effect: spaceCursorEngine.cancel())
+            concludeSpaceCursorSession(effect: spaceCursorSession.cancel())
         default:
             break
         }
     }
 
     private func beginSpaceCursorSession(now: Date, location: CGPoint, button: UIButton?) {
-        // Capture the caret's surrounding context once, at press. These lengths
-        // bound how far the trackpad may scrub in each direction.
-        let before = textDocumentProxy.documentContextBeforeInput ?? ""
-        let after = textDocumentProxy.documentContextAfterInput ?? ""
+        // Context is captured by the session at TAKEOVER, not here: capturing at
+        // press froze a stale bound that could stop the caret short mid-drag
+        // (one of the build-103 device rejections).
         spaceCursorOrigin = location
         spaceCursorLastLocation = location
-        spaceCursorDidMoveCaret = false
         if let button { spaceButton = button }
         spaceButton?.isHighlighted = true
-        spaceCursorEngine.press(at: now, availableLeft: before.count, availableRight: after.count)
-        scheduleSpaceCursorActivation(after: spaceCursorEngine.config.activationDelay)
+        spaceCursorSession.press(at: now)
+        scheduleSpaceCursorActivation(after: spaceCursorSession.config.activationDelay)
     }
 
     private func scheduleSpaceCursorActivation(after delay: TimeInterval) {
@@ -1948,17 +1950,44 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         let generation = spaceCursorGeneration
         let work = DispatchWorkItem { [weak self] in
             guard let self, generation == self.spaceCursorGeneration else { return }
-            let effect = self.spaceCursorEngine.tick(at: Date())
+            let effect = self.spaceCursorSession.tick(at: Date())
             if case .enteredCursorMode = effect {
                 // Trackpad engaged. Re-base the drag origin to the finger's
                 // current position so scrubbing starts from here, and freeze
                 // the (now stale) candidate strip for the duration of the drag.
                 self.spaceCursorOrigin = self.spaceCursorLastLocation
-                self.spaceButton?.isHighlighted = true
+                self.updateSpaceCursorAffordance()
             }
         }
         spaceCursorActivationWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    /// Communicate trackpad mode without covering any system control.
+    ///
+    /// Deliberately restrained: the space key dims and its title is replaced by
+    /// a caret glyph, and the candidate strip announces the mode for VoiceOver.
+    /// Nothing is overlaid on the globe/dictation row, no popup is shown, and
+    /// the keyboard's height never changes — an overlay there would hide the
+    /// system keyboard-switch control.
+    private func updateSpaceCursorAffordance() {
+        let active = spaceCursorSession.isCursorActive
+        guard active != spaceCursorAffordanceActive else { return }
+        spaceCursorAffordanceActive = active
+        guard let space = spaceButton else { return }
+        if active {
+            spaceCursorRestoreTitle = space.title(for: .normal)
+            space.setTitle("⌷", for: .normal)
+            space.accessibilityLabel = "Cursor trackpad active. Drag to move the insertion point."
+            space.accessibilityHint = "Slide left or right to move by characters, up or down to change line."
+            UIAccessibility.post(notification: .announcement, argument: "Cursor mode")
+        } else {
+            space.setTitle(spaceCursorRestoreTitle ?? "space", for: .normal)
+            space.accessibilityLabel = "Space"
+            space.accessibilityHint = nil
+            spaceCursorRestoreTitle = nil
+        }
+        space.isHighlighted = active
     }
 
     private func cancelSpaceCursorActivation() {
@@ -1969,15 +1998,20 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     private func concludeSpaceCursorSession(effect: SpaceCursorEngine.Effect) {
         cancelSpaceCursorActivation()
+        let moved = spaceCursorSession.didMoveCaret
+        updateSpaceCursorAffordance()
         spaceButton?.isHighlighted = false
         switch effect {
         case .insertSpace:
+            // The ONLY insertion this whole gesture family can produce, and only
+            // from a genuine quick tap that never entered cursor mode.
             insertSpaceCommit()
         case .endedCursorMode:
-            resynchronizeAfterCaretMove()
+            if moved { resynchronizeAfterCaretMove() }
         case .none, .enteredCursorMode, .moveCaret:
             break
         }
+        spaceCursorSession.clearMovementFlag()
     }
 
     /// Tear down any in-flight space-cursor session without inserting a space.
@@ -1985,15 +2019,17 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     /// host-field switch, view disappearance) via `cancelTransientInteractions`.
     private func resetSpaceCursorSession() {
         cancelSpaceCursorActivation()
-        let wasCursor = spaceCursorEngine.isCursorActive
-        if spaceCursorEngine.isTracking {
-            _ = spaceCursorEngine.cancel()
+        let wasCursor = spaceCursorSession.isCursorActive
+        let moved = spaceCursorSession.didMoveCaret
+        if spaceCursorSession.isTracking {
+            _ = spaceCursorSession.cancel()
         }
+        updateSpaceCursorAffordance()
         spaceButton?.isHighlighted = false
-        if wasCursor && spaceCursorDidMoveCaret {
+        if wasCursor && moved {
             resynchronizeAfterCaretMove()
         }
-        spaceCursorDidMoveCaret = false
+        spaceCursorSession.clearMovementFlag()
     }
 
     /// After the caret is repositioned by the trackpad, the previous keystroke
@@ -2001,12 +2037,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     /// prediction, the Coach request/authorization guard, and any in-flight
     /// deferred document callbacks — then resynchronize UI to the new caret.
     private func resynchronizeAfterCaretMove() {
-        guard spaceCursorDidMoveCaret else {
-            // Nothing moved (e.g. hold with no drag): keep suggestions as-is.
-            spaceCursorDidMoveCaret = false
-            return
-        }
-        spaceCursorDidMoveCaret = false
+        // Callers gate on `spaceCursorSession.didMoveCaret`; a hold with no drag
+        // never reaches here, so suggestions survive an aborted takeover.
         // New editing position ⇒ new host/editing session. This also drops any
         // Coach authorization captured for the old caret and resets per-field
         // Live Tone state (pure observer).
@@ -3254,5 +3286,41 @@ private final class EmojiCollectionCell: UICollectionViewCell {
         glyphLabel.text = emoji
         accessibilityLabel = "Emoji \(emoji)"
         accessibilityIdentifier = identifier
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Space-cursor proxy adapter
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Bridges the live `UITextDocumentProxy` to the UIKit-free
+/// `SpaceCursorTextProxy` seam that `SpaceCursorSession` drives.
+///
+/// This adapter is the ENTIRE surface the space cursor has on the host
+/// document. It exposes two read-only context properties and exactly one
+/// mutating call — `adjustTextPosition(byCharacterOffset:)`. There is no
+/// `insertText`, no `deleteBackward`, and no way to reach them from here, which
+/// is what makes "cursor mode never deletes" a structural property rather than
+/// a convention someone could regress.
+///
+/// The owner reference is weak: the session outlives individual gestures but
+/// must never keep the input view controller alive.
+final class SpaceCursorProxyAdapter: SpaceCursorTextProxy {
+    private weak var owner: UIInputViewController?
+
+    init(owner: UIInputViewController) {
+        self.owner = owner
+    }
+
+    var documentContextBeforeInput: String? {
+        owner?.textDocumentProxy.documentContextBeforeInput
+    }
+
+    var documentContextAfterInput: String? {
+        owner?.textDocumentProxy.documentContextAfterInput
+    }
+
+    func adjustTextPosition(byCharacterOffset offset: Int) {
+        owner?.textDocumentProxy.adjustTextPosition(byCharacterOffset: offset)
     }
 }
