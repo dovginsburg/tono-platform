@@ -1,9 +1,12 @@
 package com.tono.ime
 
+import android.content.Context
 import android.inputmethodservice.InputMethodService
+import android.os.Build
 import android.text.InputType
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.lifecycle.*
@@ -95,7 +98,7 @@ class TonoImeService : InputMethodService(),
                     onInsertText     = ::insertFullText,
                     onDeleteBackward = { currentInputConnection?.deleteSurroundingText(1, 0) },
                     onInsertSpace    = { currentInputConnection?.commitText(" ", 1) },
-                    onSwitchIme      = { switchToNextInputMethod(false) },
+                    onSwitchIme      = ::switchToNextIme,
                 )
             }
         }
@@ -127,5 +130,29 @@ class TonoImeService : InputMethodService(),
         // Select all existing text and replace with the rewrite
         ic.performContextMenuAction(android.R.id.selectAll)
         ic.commitText(text, 1)
+    }
+
+    /// Hand off to the next input method (the globe key).
+    ///
+    /// `InputMethodService.switchToNextInputMethod` only exists from API 28, but
+    /// this module ships `minSdk = 26`. Calling it unguarded threw
+    /// `NoSuchMethodError` and killed the keyboard process on Android 8.0/8.1 —
+    /// the user tapped the globe and the keyboard vanished mid-sentence, with no
+    /// way back except reopening the field. Lint caught it as a `NewApi` error.
+    ///
+    /// Below API 28 we use the `InputMethodManager` overload (API 16+,
+    /// deprecated in 28 precisely because the service method replaced it),
+    /// which needs the IME window token. If the token is unavailable the switch
+    /// is a no-op rather than a crash — a globe tap that does nothing is far
+    /// better than a keyboard that disappears.
+    private fun switchToNextIme() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            switchToNextInputMethod(false)
+            return
+        }
+        val token = window?.window?.attributes?.token ?: return
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager ?: return
+        @Suppress("DEPRECATION")
+        imm.switchToNextInputMethod(token, false)
     }
 }

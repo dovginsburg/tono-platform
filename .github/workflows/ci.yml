@@ -95,7 +95,10 @@ jobs:
       - uses: android-actions/setup-android@v3
       - uses: gradle/actions/setup-gradle@v4
       - run: python3 scripts/ci/prepare_provenance.py
-      - run: ./gradlew testDebugUnitTest assembleDebug --stacktrace
+      # lintDebug is part of the gate: it is what caught the NewApi error where
+      # TonoImeService called switchToNextInputMethod (API 28) against minSdk 26,
+      # which crashed the keyboard on Android 8.x at the globe key.
+      - run: ./gradlew testDebugUnitTest lintDebug assembleDebug --stacktrace
         working-directory: apps/android
       - name: Verify APK embeds canonical SHA
         run: unzip -p apps/android/app/build/outputs/apk/debug/app-debug.apk assets/build-provenance.json | grep -F "$GITHUB_SHA"

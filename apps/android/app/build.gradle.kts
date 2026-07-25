@@ -21,7 +21,7 @@ android {
         minSdk = 26
         targetSdk = 35
         // Bump on every build (parity with iOS MARKETING_VERSION fix on b3184ea)
-        versionCode = 13
+        versionCode = 15
         versionName = "1.1"
     }
 

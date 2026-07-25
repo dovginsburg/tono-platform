@@ -15,7 +15,18 @@ ROOT = Path(__file__).resolve().parents[1]
 PROJECT = ROOT / "Tono.xcodeproj/project.pbxproj"
 ICONSET = ROOT / "TonoMessagesExtension/Assets.xcassets/iMessage App Icon.stickersiconset"
 EXPECTED_MARKETING_VERSION = "1.1"
-EXPECTED_BUILD_VERSION = "101"
+
+
+def _expected_build_from_guard() -> str:
+    """Single authority: Scripts/bump-build.sh EXPECTED_BUILD (see that file)."""
+    for line in (ROOT / "Scripts" / "bump-build.sh").read_text().splitlines():
+        line = line.strip()
+        if line.startswith("EXPECTED_BUILD="):
+            return line.split("=", 1)[1].strip().strip("\"'")
+    raise SystemExit("verify_messages_extension: bump-build.sh has no EXPECTED_BUILD")
+
+
+EXPECTED_BUILD_VERSION = _expected_build_from_guard()
 EXPECTED_BUNDLE_ID = "com.tonoit.app.messages"
 EXPECTED_TEAM = "4938S9TTBM"
 EXPECTED_APP_GROUP = "group.com.tonoit.shared"

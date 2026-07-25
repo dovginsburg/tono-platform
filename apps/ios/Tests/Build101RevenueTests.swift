@@ -323,30 +323,42 @@ final class Build101RevenueTests: XCTestCase {
 
     // MARK: - 9. Build number guard (all four plists declare 101)
 
-    func testAllShippedBundlesDeclareVersion101() throws {
+    /// Every shipped bundle must declare the reviewed build number. The number
+    /// is read from Scripts/bump-build.sh — the single release authority — so a
+    /// version bump never has to edit this test (a recurring source of an
+    /// all-red iOS suite on unrelated changes).
+    func testAllShippedBundlesDeclareTheReviewedBuildNumber() throws {
         let plists = [
             "App/Info.plist",
             "KeyboardExtension/Info.plist",
             "ShareExtension/Info.plist",
             "TonoMessagesExtension/Info.plist",
         ]
-        let root = sourceRoot()
+        let script   = try Self.readSource("Scripts/bump-build.sh")
+        let expected = try XCTUnwrap(
+            Self.shellAssignment("EXPECTED_BUILD", in: script),
+            "Scripts/bump-build.sh must pin EXPECTED_BUILD — it is the release authority"
+        )
         for relative in plists {
             let plist = try Self.readPlist(relative)
             let actual = plist["CFBundleVersion"] as? String
             XCTAssertEqual(
-                actual, "101",
-                "\(relative) declares CFBundleVersion \(actual ?? "nil"); build 101 requires 101 in every shipped bundle"
+                actual, expected,
+                "\(relative) declares CFBundleVersion \(actual ?? "nil"); every shipped bundle must match the reviewed build \(expected)"
             )
         }
     }
 
-    func testBumpBuildScriptPinsExpectedBuildTo101() throws {
+    func testBumpBuildScriptPinsAReviewedBuildNumber() throws {
         let script = try Self.readSource("Scripts/bump-build.sh")
         let value  = Self.shellAssignment("EXPECTED_BUILD", in: script)
-        XCTAssertEqual(
-            value, "101",
-            "Scripts/bump-build.sh must pin EXPECTED_BUILD=101 so the archive guard matches the shipped plists"
+        let pinned = try XCTUnwrap(
+            value, "Scripts/bump-build.sh must pin EXPECTED_BUILD so the archive guard matches the shipped plists"
+        )
+        XCTAssertFalse(pinned.isEmpty, "EXPECTED_BUILD must not be empty")
+        XCTAssertTrue(
+            pinned.allSatisfy(\.isNumber),
+            "EXPECTED_BUILD must be a plain integer build number, got \(pinned)"
         )
     }
 
