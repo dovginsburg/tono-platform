@@ -171,24 +171,46 @@ Highest-value adversarial targets (all newly changed):
 
 ---
 
-## 6. Build-90 gate — resolved honestly (i.e. **not** resolved)
+## 6. Build-90 gate — CLOSED 2026-07-25 by owner attestation
 
-**Still fail-closed. Deliberately.** Full staged owner action, both evidence forms,
-exact required fields, verification commands, and rollback:
-`docs/operations/OWNER-ACTION-build90-recovery-gate.md`.
+**Closed via Form B over an attested EMPTY population.** Dov Ginsburg attested
+that no one has paid for Tono through Stripe, App Store, or Google Play, so no
+charged build-90 user exists and no historical entitlement restoration is
+required. Recorded in `apps/ios/AppStore/build91_release_readiness.json`;
+full record, corroborating evidence, and limits:
+`docs/operations/BUILD90-OWNER-ATTESTATION-2026-07-25.md`.
 
-Why this session could not clear it: it is a decision about real users and real
-money, and the gate rejects incomplete forms by design. Evidence form (a) needs an
-App Store Connect observation; ASC **private keys exist** on this machine but **no
-issuer ID** is available anywhere (env, repo, fastlane), so a read-only ASC query
-was impossible. No guess was attempted and nothing was fabricated.
+Corroboration captured read-only this session — **consistent with, not a
+substitute for, the attestation**: production `/health` shows
+`apple_configured=false` and `google_play_configured=false`, and `app_store.py`
+returns 503 when unconfigured, so **no App Store or Play purchase was ever
+verified or granted by the backend**. The catalog records iOS as `under-review`
+and Android as `closed-test` — neither publicly released. `stripe_configured` **is**
+true, so the Stripe leg was live and was **not** independently checked; that fact
+rests solely on the owner's attestation.
+
+Deliberately NOT claimed: Form A (`checkout_disabled`) stays `supplied: false` —
+no App Store Connect observation was made (ASC keys exist on this machine but no
+issuer ID does). No provider report was queried. `bounded_window_days = 90` was
+**not** stated by the owner; the gate requires a positive integer and the attested
+population is empty, so it is a safety net binding no known user.
+
+✅ **Executable verification was run** against this artifact before the closing
+commit, with `TONO_BUILD90_RECOVERY_EVIDENCE` confirmed unset so the verdict comes
+from the committed artifact:
+`build90-recovery-gate: READY (evidence via artifact)` (exit 0) and
+`build91-entitlement-contract: PASS` (exit 0) — matching the attestation record's
+predicted output exactly. QA should re-run both as an independent reproduction
+before any store upload.
 
 ---
 
 ## 7. Protected gates — BLOCKED, with exact prerequisites
 
-### 7.1 Build-90 charged-before-upgrade — **owner decision**
-Prerequisite: one complete evidence form (§6). Verify: both gate scripts exit 0.
+### 7.1 Build-90 charged-before-upgrade — ✅ **CLOSED** (owner attestation, §6)
+Both gate scripts executed and pass (READY / PASS, exit 0). Remaining action:
+independent QA reproduction of that run. Re-open only if a provider report ever
+contradicts the attestation.
 
 ### 7.2 Exact-SHA staging preview — **blocked on two prerequisites**
 1. **Workflow requires the SHA be an ancestor of `origin/main`**
@@ -262,8 +284,19 @@ acceptance against the real origin.
 | **Recipient-visible** | ❌ production still serves `4605b31f` | §4 |
 | **Device-verified** | ❌ no physical device run | §7.5 |
 
-**Next irreducible owner action:** resolve §6 (build-90), then §7.2's Preview
-environment, then decide §7.4's build-number bump. Nothing downstream can proceed
-honestly before those.
+**Artifact freshness note:** the sealed backend image and web artifact were built
+at commit `a219f98a`. The build-90 closure successor changes only a readiness JSON
+and documentation — no runtime code, dependency, or build input — so the artifact
+*contents* are unaffected, but the `TONO_CANONICAL_SHA` provenance label is not.
+Rebuild both at the final HEAD before any deploy so provenance binds exactly.
+
+**Next irreducible owner actions, in order:**
+1. ✅ ~~build-90 gate~~ — **closed 2026-07-25** by owner attestation (§6), with both
+   gate scripts executed and passing. Owed only: independent QA reproduction.
+2. Create a **Preview-scoped Vercel environment** pointing at non-production
+   infrastructure (§7.2).
+3. Set the **Render backend env** so Apple/Play verification works and
+   `canonical_sha` binds (§7.3).
+4. Decide the **build-number bump** for fresh store artifacts (§7.4).
 
 Not self-approved. No release performed.

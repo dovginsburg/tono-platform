@@ -1,7 +1,25 @@
 # Owner action — build-90 charged-before-upgrade gate
 
-**Status: BLOCKED, fail-closed. One decision by Dov unblocks it. Nothing in this
-file has been filled in, approved, or inferred by the release session.**
+> **CLOSED 2026-07-25 — superseded by
+> [`BUILD90-OWNER-ATTESTATION-2026-07-25.md`](BUILD90-OWNER-ATTESTATION-2026-07-25.md).**
+>
+> Dov Ginsburg attested that no one has paid for Tono through Stripe, App Store,
+> or Google Play, so no charged build-90 user exists and no historical
+> entitlement restoration is required. Closed via **Option B / Form B** below,
+> over an attested **empty** population. Form A (`checkout_disabled`) remains
+> `supplied: false` — no App Store Connect observation was made.
+>
+> The gate's executable verification **was run** against this artifact before the
+> closing commit, with `TONO_BUILD90_RECOVERY_EVIDENCE` unset:
+> `build90-recovery-gate: READY (evidence via artifact)` (exit 0) and
+> `build91-entitlement-contract: PASS` (exit 0). QA should re-run both in §5 as
+> an independent reproduction before any store upload.
+>
+> The rest of this document is retained as the original staged decision brief.
+
+**Original status (now superseded): BLOCKED, fail-closed. One decision by Dov
+unblocks it. Nothing in this file has been filled in, approved, or inferred by
+the release session.**
 
 Candidate: the single linear successor to `5d3fdd7e385391d004e758be6ca759e4ff819916` (see handoff for the exact HEAD).
 Gate: `apps/ios/Scripts/build90_recovery_gate.py`, wired into
