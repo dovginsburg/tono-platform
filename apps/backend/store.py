@@ -427,7 +427,15 @@ def _plan_grants_pro(plan: str, subscription_status: Optional[str], coupon_pro_e
             exp = dt.datetime.fromisoformat(coupon_pro_expires_at)
             if exp > dt.datetime.now(dt.timezone.utc):
                 return True
-        except ValueError:
+        except (ValueError, TypeError):
+            # ValueError: unparseable expiry. TypeError: a *parseable* but
+            # timezone-naive expiry — comparing naive to the aware ``now``
+            # raises. The in-repo redemption writer always emits aware ISO, but
+            # rows can also arrive from non-canonical writers (dict-sourced
+            # rows via ``_row_to_user``/``_row_to_account``, account-link
+            # copying, migrations, manual grants), so a naive value is
+            # reachable. Both cases must deny cleanly here rather than escape
+            # as a 500 — the gate owes callers the honest 402.
             pass
     return False
 
