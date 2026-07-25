@@ -315,18 +315,32 @@ def create_checkout_session(
         line_items=[{"price": price_id, "quantity": 1}],
         success_url=success_url,
         cancel_url=cancel_url,
-        # Hosted Checkout in subscription mode. The ``payment_method_types``
-        # list intentionally ONLY contains ``card`` because the
-        # ``apple_pay`` / ``google_pay`` values are not valid
-        # ``payment_method_types`` for subscription Checkout (Stripe
-        # returns ``Invalid payment_method_types[i]: must be one of
-        # card, cashapp, link, ...``). Wallet buttons are surfaced
-        # separately via the **Dashboard → Settings → Payment methods
-        # → Wallets** toggles — when Apple Pay / Google Pay are enabled
-        # there, the hosted Checkout page renders them automatically in
-        # the express-checkout row when the buyer's browser supports
-        # them. This matches how Stripe-hosted Checkout Pages work.
-        payment_method_types=["card"],
+        # UNIFIED WEB CHECKOUT — card + Apple Pay + Google Pay.
+        #
+        # ``payment_method_types`` is deliberately NOT set. Passing it (this
+        # previously pinned ``["card"]``) opts the session OUT of Stripe's
+        # automatic payment methods and freezes the accepted set in code.
+        # Omitting it means Stripe applies the dashboard-configured automatic
+        # payment methods and filters them per request by eligibility —
+        # currency, amount, customer country, and the buyer's browser/device.
+        #
+        # Wallet model, stated exactly because it is easy to get wrong:
+        #   * Apple Pay on the WEB is a Stripe wallet rendered on the hosted
+        #     Checkout page. It is NOT StoreKit. It settles through Stripe and
+        #     lands on the same ``checkout.session.completed`` /
+        #     ``customer.subscription.*`` webhooks as any card.
+        #   * Google Pay on the WEB is likewise a Stripe wallet. It is NOT
+        #     Google Play Billing. Play Billing is Android-native only and must
+        #     never be presented as a website payment method.
+        #   * Both wallets are card-backed, so a browser/device that cannot
+        #     offer them simply falls back to the card form — there is no
+        #     separate code path, and no wallet-only dead end.
+        #
+        # Enablement is provider-side (Stripe Dashboard → Payment methods).
+        # Stripe-hosted Checkout runs on checkout.stripe.com, so Apple Pay needs
+        # no merchant domain registration here; registering a payment method
+        # domain only becomes necessary if the flow moves to an embedded
+        # Payment/Express Checkout Element on tonoit.com.
         subscription_data={"metadata": metadata},
         metadata=metadata,
     )
