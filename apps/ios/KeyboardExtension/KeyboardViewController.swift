@@ -358,7 +358,24 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private var coachRewriteTarget: CoachRewriteTarget?
     private var coachRequestGuard: CoachRequestLifecycleGuard?
     private var coachVariantSettings = CoachVariantSettings()
-    private var toneChipsEnabled = false
+    /// Whether Coach tone chips are the live role — DERIVED, never stored.
+    ///
+    /// Build 109 removes the last stored mirror of the strip's role. Until now
+    /// this was a separate `Bool` assigned at the top of `setToneChipsEnabled`,
+    /// running in parallel with `stripMode`. The two happened to agree, because
+    /// `applyStripMode` had exactly three call sites — but nothing enforced it,
+    /// and `coachTapped` toggled against the *flag* while every dispatch gate in
+    /// `TonoStripRoutingPolicy` decided against the *mode*. Any future path that
+    /// set the mode without also setting the flag would desynchronise them, and
+    /// the visible symptom is that TONO stops responding: with the flag stale at
+    /// `true` while the strip shows suggestions, one tap computes
+    /// `setToneChipsEnabled(false)` and turns Coach off again instead of on.
+    ///
+    /// A second boolean that can disagree with what the strip is actually
+    /// showing is the shape of the original Build-105 defect. Deriving it makes
+    /// disagreement unrepresentable rather than merely unlikely, and `stripMode`
+    /// becomes the single authority for both the toggle and the dispatch gate.
+    private var toneChipsEnabled: Bool { stripMode == .toneChips }
     private var selectedToneAxes: [String] = []
     private var coachRequestID: UUID?
     private var coachTask: URLSessionDataTask?
@@ -394,7 +411,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             signature = ""
         }
         return HostSessionIdentityFactory.make(
-            documentIdentifier: HostDocumentIdentifier.read(from: textDocumentProxy),
+            documentIdentifier: HostDocumentIdentifier.read(from: documentProxy),
             traitSignature: signature,
             session: hostSessionSerial
         )
@@ -443,6 +460,26 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     /// Which role the strip believes it is presenting. Read-only seam for the
     /// same contract.
     var stripModeForTesting: TonoStripMode { stripMode }
+
+    /// The host document. EVERY read and every mutation in this controller goes
+    /// through this one accessor rather than touching `textDocumentProxy`
+    /// directly, so a test can substitute a recording document.
+    ///
+    /// Why this exists (Build 109). A unit-test `UIInputViewController` has no
+    /// connected host: its proxy reports nil context and silently discards
+    /// `insertText` / `deleteBackward`. That left the POSITIVE half of the
+    /// founder findings untestable. Every strip test could assert only that
+    /// Coach was *not* invoked — never that the tap actually accepted the word,
+    /// and never that a caret move left the text alone. A build in which
+    /// `candidateTapped` did nothing whatsoever passed the entire suite, so the
+    /// "suggestion taps stay local" guarantee rested on a measurement that could
+    /// be true for the wrong reason.
+    ///
+    /// Production behaviour is unchanged: the override is nil on every shipping
+    /// path, so this resolves to the real proxy. The class is `final`, so this
+    /// is an injection point rather than an override point.
+    var documentProxyOverride: UITextDocumentProxy?
+    var documentProxy: UITextDocumentProxy { documentProxyOverride ?? textDocumentProxy }
 
     // Build 93 — explicit Shift state plus monotonic document-mutation tracking.
     private var layoutMode: KeyboardLayoutMode = .letters
@@ -579,8 +616,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     public override func textDidChange(_ textInput: UITextInput?) {
         refreshHostConfigurationIfNeeded()
-        let liveBefore = textDocumentProxy.documentContextBeforeInput ?? ""
-        let liveAfter = textDocumentProxy.documentContextAfterInput ?? ""
+        let liveBefore = documentProxy.documentContextBeforeInput ?? ""
+        let liveAfter = documentProxy.documentContextAfterInput ?? ""
         let requestAction = coachRequestGuard?.action(
             liveBefore: liveBefore,
             liveAfter: liveAfter,
@@ -626,7 +663,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         DispatchQueue.main.async { [weak self] in
             guard let self,
                   self.documentMutationGeneration == deferredGeneration else { return }
-            let liveNow = self.textDocumentProxy.documentContextBeforeInput ?? ""
+            let liveNow = self.documentProxy.documentContextBeforeInput ?? ""
             self.liveToneDidMutate(context: liveNow)
         }
         DispatchQueue.main.async { [weak self] in
@@ -950,27 +987,27 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     // MARK: - Host-field traits
 
     private var hostKeyboardType: UIKeyboardType {
-        textDocumentProxy.keyboardType ?? .default
+        documentProxy.keyboardType ?? .default
     }
 
     private var hostReturnKeyType: UIReturnKeyType {
-        textDocumentProxy.returnKeyType ?? .default
+        documentProxy.returnKeyType ?? .default
     }
 
     private var hostKeyboardAppearance: UIKeyboardAppearance {
-        textDocumentProxy.keyboardAppearance ?? .default
+        documentProxy.keyboardAppearance ?? .default
     }
 
     private var hostAutocapitalizationType: UITextAutocapitalizationType {
-        textDocumentProxy.autocapitalizationType ?? .sentences
+        documentProxy.autocapitalizationType ?? .sentences
     }
 
     private var hostAutocorrectionType: UITextAutocorrectionType {
-        textDocumentProxy.autocorrectionType ?? .default
+        documentProxy.autocorrectionType ?? .default
     }
 
     private var hostSpellCheckingType: UITextSpellCheckingType {
-        textDocumentProxy.spellCheckingType ?? .default
+        documentProxy.spellCheckingType ?? .default
     }
 
     private var currentHostConfiguration: HostConfiguration {
@@ -1604,7 +1641,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             afterMutation = commitBoundary(title, contextBeforeInput: beforeMutation)
         } else {
             autocorrectionRecord = nil
-            textDocumentProxy.insertText(title)
+            documentProxy.insertText(title)
             afterMutation = beforeMutation + title
         }
         playInputClick()
@@ -1660,7 +1697,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
            pending.generation == documentMutationGeneration {
             return pending.contextAfter
         }
-        return textDocumentProxy.documentContextBeforeInput ?? ""
+        return documentProxy.documentContextBeforeInput ?? ""
     }
 
     private func recordDocumentMutation(
@@ -1845,8 +1882,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             spellingService.cancel()
             return
         }
-        let before = textDocumentProxy.documentContextBeforeInput ?? ""
-        let after = textDocumentProxy.documentContextAfterInput ?? ""
+        let before = documentProxy.documentContextBeforeInput ?? ""
+        let after = documentProxy.documentContextAfterInput ?? ""
         guard let token = SpellingToken.current(before: before, after: after, host: currentHostSession) else {
             spellingService.cancel()
             spellingDecision = nil
@@ -1872,8 +1909,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         spellingService.schedule(request) { [weak self] _, decision in
             guard let self = self else { return }
             let live = SpellingToken.current(
-                before: self.textDocumentProxy.documentContextBeforeInput ?? "",
-                after: self.textDocumentProxy.documentContextAfterInput ?? "",
+                before: self.documentProxy.documentContextBeforeInput ?? "",
+                after: self.documentProxy.documentContextAfterInput ?? "",
                 host: self.currentHostSession
             )
             guard live == token else { return }
@@ -1970,8 +2007,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         guard let expected = spellingToken,
               let plan = SpellingMutationPlan.candidate(
                 liveToken: SpellingToken.current(
-                    before: textDocumentProxy.documentContextBeforeInput ?? "",
-                    after: textDocumentProxy.documentContextAfterInput ?? "",
+                    before: documentProxy.documentContextBeforeInput ?? "",
+                    after: documentProxy.documentContextAfterInput ?? "",
                     host: currentHostSession
                 ),
                 expected: expected,
@@ -2037,10 +2074,10 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     private func applySpellingMutation(_ plan: SpellingMutationPlan) {
         if plan.cursorAdvance > 0 {
-            textDocumentProxy.adjustTextPosition(byCharacterOffset: plan.cursorAdvance)
+            documentProxy.adjustTextPosition(byCharacterOffset: plan.cursorAdvance)
         }
-        for _ in 0..<plan.deleteCount { textDocumentProxy.deleteBackward() }
-        textDocumentProxy.insertText(plan.insertion)
+        for _ in 0..<plan.deleteCount { documentProxy.deleteBackward() }
+        documentProxy.insertText(plan.insertion)
     }
 
     private func isSpellingBoundary(_ text: String) -> Bool {
@@ -2049,7 +2086,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     private func validateAutocorrectionRecord() {
         guard let record = autocorrectionRecord else { return }
-        let context = textDocumentProxy.documentContextBeforeInput ?? ""
+        let context = documentProxy.documentContextBeforeInput ?? ""
         if !context.hasSuffix(record.correctedSuffix) {
             autocorrectionRecord = nil
         }
@@ -2075,9 +2112,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             autocorrectionRecord = nil
             return nil
         }
-        for _ in record.correctedSuffix { textDocumentProxy.deleteBackward() }
+        for _ in record.correctedSuffix { documentProxy.deleteBackward() }
         let restored = keepBoundary ? record.restoredText : record.original
-        textDocumentProxy.insertText(restored)
+        documentProxy.insertText(restored)
         autocorrectionRecord = nil
         spellingDecision = nil
         spellingToken = nil
@@ -2111,8 +2148,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         )
         let afterMutation: String
         if transformedDoubleSpace {
-            textDocumentProxy.deleteBackward()
-            textDocumentProxy.insertText(". ")
+            documentProxy.deleteBackward()
+            documentProxy.insertText(". ")
             spellingService.cancel()
             spellingDecision = nil
             spellingToken = nil
@@ -2304,7 +2341,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             afterMutation = commitBoundary(character, contextBeforeInput: beforeMutation)
         } else {
             autocorrectionRecord = nil
-            textDocumentProxy.insertText(character)
+            documentProxy.insertText(character)
             afterMutation = beforeMutation + character
         }
         playInputClick()
@@ -2321,7 +2358,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             afterMutation = restored
         } else {
             autocorrectionRecord = nil
-            textDocumentProxy.deleteBackward()
+            documentProxy.deleteBackward()
             afterMutation = String(beforeMutation.dropLast())
         }
         playInputClick()
@@ -2344,7 +2381,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         let item = DispatchWorkItem { [weak self] in
             guard let self = self, generation == self.deleteRepeatGeneration else { return }
             let beforeMutation = self.effectiveDocumentContextBeforeInput
-            self.textDocumentProxy.deleteBackward()
+            self.documentProxy.deleteBackward()
             self.recordDocumentMutation(
                 from: beforeMutation,
                 to: String(beforeMutation.dropLast())
@@ -2682,7 +2719,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     private func insertEmoji(_ emoji: String) {
         guard !emoji.isEmpty else { return }
-        textDocumentProxy.insertText(emoji)
+        documentProxy.insertText(emoji)
         playInputClick()
         var list = EmojiCategory.glyphsForRecents()
         list.removeAll { $0 == emoji }
@@ -2717,7 +2754,10 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     private func setToneChipsEnabled(_ enabled: Bool) {
-        toneChipsEnabled = enabled
+        // No flag assignment here by design: `applyStripMode` below is the one
+        // authority, and `toneChipsEnabled` reads back out of it. Both branches
+        // call it unconditionally, so the role can never be left behind by an
+        // early return further down.
         if !enabled {
             // Build 106 made switching back a pure visibility change: the two
             // roles own separate, permanently-targeted rows, so — unlike
@@ -2821,7 +2861,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         }
         cancelTransientInteractions()
         spellingService.cancel()
-        let proxy = textDocumentProxy
+        let proxy = documentProxy
         beginCoachRewrite(
             before: proxy.documentContextBeforeInput ?? "",
             after: proxy.documentContextAfterInput ?? "",
@@ -2984,8 +3024,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
                 guard let self = self else { return }
                 self.completeCoach(
                     requestID: requestID,
-                    liveBefore: self.textDocumentProxy.documentContextBeforeInput ?? "",
-                    liveAfter: self.textDocumentProxy.documentContextAfterInput ?? "",
+                    liveBefore: self.documentProxy.documentContextBeforeInput ?? "",
+                    liveAfter: self.documentProxy.documentContextAfterInput ?? "",
                     result: result
                 )
             }
@@ -3391,12 +3431,26 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     @objc private func backToKeysTapped() {
         cancelTransientInteractions()
+        // Build 109. Back is the user-facing teardown of the whole Coach
+        // interaction, not merely a view removal, and it is reachable while a
+        // rewrite is still in flight (the results panel is shown for the
+        // PREVIOUS request while a new one runs, and Retry re-enters from the
+        // error surface). Removing the surfaces without invalidating the work
+        // left `coachBusy` latched true forever: `coachTapped` guards on
+        // `!coachBusy`, so TONO went permanently dead for the rest of the
+        // session — and the abandoned `coachTask` and its ~10s deadline stayed
+        // armed against a surface that no longer exists.
+        //
+        // `restoreKeyboard: false` because this function reinstalls the layout
+        // itself immediately below; letting `invalidateCoachWork` do it as well
+        // would install it twice.
+        invalidateCoachWork(restoreKeyboard: false)
         removeAllCoachSurfaces()
         installKeyboardLayout()
     }
 
     private func applyRewrite(_ rewrite: String) {
-        let proxy = textDocumentProxy
+        let proxy = documentProxy
         let originalBefore = proxy.documentContextBeforeInput ?? ""
         let originalAfter = proxy.documentContextAfterInput ?? ""
         guard let target = coachRewriteTarget,
@@ -3515,7 +3569,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         // Tear the error surface down before anything else: a retry that
         // lands on the empty state must not leave the failed attempt behind.
         removeAllCoachSurfaces()
-        let proxy = textDocumentProxy
+        let proxy = documentProxy
         beginCoachRewrite(
             before: proxy.documentContextBeforeInput ?? "",
             after: proxy.documentContextAfterInput ?? "",
@@ -3687,21 +3741,26 @@ private final class EmojiCollectionCell: UICollectionViewCell {
 /// The owner reference is weak: the session outlives individual gestures but
 /// must never keep the input view controller alive.
 final class SpaceCursorProxyAdapter: SpaceCursorTextProxy {
-    private weak var owner: UIInputViewController?
+    /// Typed as `KeyboardViewController`, not `UIInputViewController`, so the
+    /// caret path reads and moves through the same `documentProxy` seam as every
+    /// other document access. Without this the space-cursor path would bypass
+    /// the seam and "a wrapped caret move never mutates text" could not be
+    /// observed in a test.
+    private weak var owner: KeyboardViewController?
 
-    init(owner: UIInputViewController) {
+    init(owner: KeyboardViewController) {
         self.owner = owner
     }
 
     var documentContextBeforeInput: String? {
-        owner?.textDocumentProxy.documentContextBeforeInput
+        owner?.documentProxy.documentContextBeforeInput
     }
 
     var documentContextAfterInput: String? {
-        owner?.textDocumentProxy.documentContextAfterInput
+        owner?.documentProxy.documentContextAfterInput
     }
 
     func adjustTextPosition(byCharacterOffset offset: Int) {
-        owner?.textDocumentProxy.adjustTextPosition(byCharacterOffset: offset)
+        owner?.documentProxy.adjustTextPosition(byCharacterOffset: offset)
     }
 }

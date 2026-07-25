@@ -82,7 +82,15 @@ final class CoachSpellingHostSessionContractTests: XCTestCase {
 
     func testControllerUsesDocumentIdentifierAndInvalidatesOnTextChangeAndDisappearance() throws {
         let source = try Self.source("KeyboardExtension/KeyboardViewController.swift")
-        XCTAssertTrue(source.contains("HostDocumentIdentifier.read(from: textDocumentProxy)"))
+        // Build 109 routes every document access through the `documentProxy`
+        // accessor (a test injection point over `textDocumentProxy`); the
+        // contract pinned here — that host identity is read from the live
+        // proxy — is unchanged.
+        XCTAssertTrue(source.contains("HostDocumentIdentifier.read(from: documentProxy)"))
+        XCTAssertTrue(
+            source.contains("var documentProxy: UITextDocumentProxy { documentProxyOverride ?? textDocumentProxy }"),
+            "the accessor must still resolve to the real proxy whenever no test override is installed"
+        )
         XCTAssertTrue(source.contains("public override func textDidChange"))
         XCTAssertTrue(source.contains("if requestAction == .cancel"))
         XCTAssertTrue(source.contains("advanceHostSession()"))

@@ -143,6 +143,7 @@
 		A60000000000000000000008 /* Build106SuggestionRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60000000000000000000007 /* Build106SuggestionRoutingTests.swift */; };
 		A71070000000000000000002 /* Build107CoachSkeletonTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71070000000000000000001 /* Build107CoachSkeletonTests.swift */; };
 		A71070000000000000000004 /* Build107ToneTargetResetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71070000000000000000003 /* Build107ToneTargetResetTests.swift */; };
+		A71090000000000000000002 /* Build109StripRoleAndDocumentIntegrityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71090000000000000000001 /* Build109StripRoleAndDocumentIntegrityTests.swift */; };
 		860000000000000000000001 /* CoachContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 860000000000000000000003 /* CoachContractTests.swift */; };
 		950000000000000000000001 /* Build95CoachContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 950000000000000000000002 /* Build95CoachContractTests.swift */; };
 		950000000000000000000011 /* Build95LifecycleClockTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 950000000000000000000012 /* Build95LifecycleClockTests.swift */; };
@@ -302,6 +303,7 @@
 		A60000000000000000000007 /* Build106SuggestionRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build106SuggestionRoutingTests.swift; sourceTree = "<group>"; };
 		A71070000000000000000001 /* Build107CoachSkeletonTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build107CoachSkeletonTests.swift; sourceTree = "<group>"; };
 		A71070000000000000000003 /* Build107ToneTargetResetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build107ToneTargetResetTests.swift; sourceTree = "<group>"; };
+		A71090000000000000000001 /* Build109StripRoleAndDocumentIntegrityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build109StripRoleAndDocumentIntegrityTests.swift; sourceTree = "<group>"; };
 		860000000000000000000003 /* CoachContractTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CoachContractTests.swift; sourceTree = "<group>"; };
 		950000000000000000000002 /* Build95CoachContractTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build95CoachContractTests.swift; sourceTree = "<group>"; };
 		950000000000000000000012 /* Build95LifecycleClockTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build95LifecycleClockTests.swift; sourceTree = "<group>"; };
@@ -417,6 +419,7 @@
 				A60000000000000000000007 /* Build106SuggestionRoutingTests.swift */,
 				A71070000000000000000001 /* Build107CoachSkeletonTests.swift */,
 				A71070000000000000000003 /* Build107ToneTargetResetTests.swift */,
+				A71090000000000000000001 /* Build109StripRoleAndDocumentIntegrityTests.swift */,
 				970000000000000000000010 /* Build97KeyboardGeometryTests.swift */,
 				970000000000000000000011 /* Build97BackspaceStateTests.swift */,
 				970000000000000000000012 /* Build97LayerNavigationTests.swift */,
@@ -849,6 +852,7 @@
 				A60000000000000000000008 /* Build106SuggestionRoutingTests.swift in Sources */,
 				A71070000000000000000002 /* Build107CoachSkeletonTests.swift in Sources */,
 				A71070000000000000000004 /* Build107ToneTargetResetTests.swift in Sources */,
+				A71090000000000000000002 /* Build109StripRoleAndDocumentIntegrityTests.swift in Sources */,
 				A60000000000000000000006 /* LocalIntelligence.swift in Sources */,
 				A60000000000000000000003 /* TonoStripRouting.swift in Sources */,
 				4A7F52C5EC4E98E266267D4E /* ContactsAccessTests.swift in Sources */,
