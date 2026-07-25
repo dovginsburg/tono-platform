@@ -430,7 +430,26 @@ public protocol SpaceCursorTextProxy: AnyObject {
 public final class SpaceCursorSession {
 
     public private(set) var engine: SpaceCursorEngine
-    private weak var proxy: SpaceCursorTextProxy?
+
+    /// OWNED, NOT OBSERVED — do not make this `weak`.
+    ///
+    /// The session is the proxy's only owner. Callers construct the adapter as
+    /// a temporary argument (`SpaceCursorSession(proxy: Adapter(owner: self))`),
+    /// so a `weak` store here deallocates it before `init` even returns: every
+    /// context read yields nil, the engine captures an empty document, `clamp`
+    /// collapses to zero and the caret can never move — while the affordance
+    /// still engages, because `tick` transitions regardless of content. That is
+    /// precisely the Build-104 defect, and it is invisible to any test that
+    /// holds the proxy alive in a local `let`.
+    ///
+    /// This creates no retain cycle: the conforming adapter holds its owning
+    /// controller `weak` (see `SpaceCursorProxyAdapter`), so the chain is
+    /// controller → session → adapter ⇢(weak) controller. The session must
+    /// therefore never outlive the controller that owns it.
+    ///
+    /// Guarded by `Scripts/verify_space_cursor_lifetime.sh` and by
+    /// `testTemporaryProxyOwnershipSurvivesInjectionScope`.
+    private let proxy: SpaceCursorTextProxy?
 
     /// True once this session has actually repositioned the caret, so the
     /// controller knows whether a resynchronise is warranted.

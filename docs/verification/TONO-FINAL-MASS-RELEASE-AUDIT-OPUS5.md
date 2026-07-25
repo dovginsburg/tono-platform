@@ -1,5 +1,32 @@
 # Tono — Final Mass-Release Candidate Audit (Opus 5)
 
+> **SCOPE NOTICE — added 2026-07-25. This document is NOT evidence for iOS Build 104 or Build 105.**
+>
+> It audits commit `1464d03d9523c56b25f4ae148031e26b1337f7ed`, where the shipping
+> iOS build number was **101** (see §4). Its space-cursor findings describe the
+> *earlier* engine — the one carrying **20 XCTest cases and a 67-check verifier**
+> — and it cites engine blob `79870a19da77`, which is the **pre-Build-104
+> baseline** blob, not the Build-104 engine (`7888ff231b9e`).
+>
+> Reproduce:
+> ```
+> git rev-parse e21410b:apps/ios/KeyboardExtension/AppleFidelity/SpaceCursorEngine.swift
+> #   -> 79870a19da77bbe107c9d665e752dade88ec2733   (baseline — cited at §2 below)
+> git rev-parse af6c3f3:apps/ios/KeyboardExtension/AppleFidelity/SpaceCursorEngine.swift
+> #   -> 7888ff231b9e61aed31024407d781b270284bb2a   (Build 104 candidate)
+> ```
+>
+> Build 104 (`af6c3f3`) was independently reviewed and **rejected**: the space
+> cursor was inert on device because `SpaceCursorSession` held its text proxy
+> `weak` while the controller passed the adapter as a temporary. Nothing in this
+> document covers that defect or its remediation. Current space-cursor evidence
+> lives in `apps/ios/Tests/SpaceCursorGestureTests.swift`,
+> `apps/ios/Scripts/verify_space_cursor_focused.swift` and
+> `apps/ios/Scripts/verify_space_cursor_lifetime.sh`.
+>
+> The audit below is accurate **for the commit it names**. It is preserved
+> unedited; only this notice was added.
+
 **Auditor/builder:** one Claude Opus 5 session (`claude-opus-5`, 315/315 assistant turns — see §11)
 **Date:** 2026-07-24
 **Baseline:** `1464d03d9523c56b25f4ae148031e26b1337f7ed` (tree `ac2a20dc…`, sole parent `1d3a36fd…`) — proven clean before any edit

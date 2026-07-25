@@ -369,4 +369,191 @@ final class SpaceCursorGestureTests: XCTestCase {
         s.clearMovementFlag()
         XCTAssertFalse(s.didMoveCaret)
     }
+
+    // MARK: - 6. Proxy ownership — the seam Build 104 shipped inert
+    //
+    // Build 104 was rejected because `SpaceCursorSession` stored its proxy
+    // `weak` while `KeyboardViewController` passed the adapter as a TEMPORARY
+    // argument. ARC freed the adapter before the lazy initialiser returned, so
+    // on device the trackpad affordance engaged and the caret never moved.
+    //
+    // Every test above — and every check in the standalone verifier — held its
+    // proxy alive in a local `let`, so all 336 cases and all 184 checks stayed
+    // green against a feature that was disconnected from the app. The doubles
+    // below exist to close exactly that gap:
+    //
+    //   * the HOST is owned by the test, so it outlives the adapter and can be
+    //     interrogated after the adapter is gone. `RecordingProxy` structurally
+    //     cannot detect this defect, because it dies with the object it records.
+    //   * the ADAPTER holds its owner weakly and is injected as a temporary,
+    //     mirroring the production construction rather than a test convenience.
+
+    /// Counts deallocations without static mutable state (test-parallel safe).
+    final class DeinitLedger { var count = 0 }
+
+    /// Stands in for the host text field reached via `textDocumentProxy`.
+    /// Owned by the test, never by the adapter.
+    final class HostTextField {
+        private(set) var text: [Character]
+        private(set) var caret: Int
+        private(set) var adjustCalls: [Int] = []
+        private let original: [Character]
+
+        init(before: String, after: String) {
+            text = Array(before + after)
+            original = text
+            caret = Array(before).count
+        }
+        var contextBefore: String { String(text[0..<caret]) }
+        var contextAfter: String { String(text[caret...]) }
+        var textEverChanged: Bool { text != original }
+
+        func adjustTextPosition(byCharacterOffset offset: Int) {
+            adjustCalls.append(offset)
+            var idx = caret
+            var remaining = abs(offset)
+            let step = offset < 0 ? -1 : 1
+            while remaining > 0 {
+                let next = idx + step
+                guard next >= 0, next <= text.count else { break }
+                remaining -= (step > 0 ? text[idx] : text[next]).utf16.count
+                idx = next
+            }
+            caret = max(0, min(idx, text.count))
+        }
+    }
+
+    /// Stands in for the `UIInputViewController` that owns the keyboard.
+    final class OwnerController {
+        let field: HostTextField
+        init(field: HostTextField) { self.field = field }
+    }
+
+    /// Structural twin of the production `SpaceCursorProxyAdapter`: it holds its
+    /// owner WEAKLY, so the session is the only thing that can keep it alive.
+    final class TemporaryProxyAdapter: SpaceCursorTextProxy {
+        private weak var owner: OwnerController?
+        private let ledger: DeinitLedger
+
+        init(owner: OwnerController, ledger: DeinitLedger) {
+            self.owner = owner
+            self.ledger = ledger
+        }
+        deinit { ledger.count += 1 }
+
+        var documentContextBeforeInput: String? { owner?.field.contextBefore }
+        var documentContextAfterInput: String? { owner?.field.contextAfter }
+        func adjustTextPosition(byCharacterOffset offset: Int) {
+            owner?.field.adjustTextPosition(byCharacterOffset: offset)
+        }
+    }
+
+    /// Mirrors `KeyboardViewController.swift:427` exactly: the adapter is built
+    /// as a temporary ARGUMENT and only the session is returned, so no local
+    /// binding in the caller can prop it up. If the session stores its proxy
+    /// weakly, the adapter is dead before this function returns.
+    private func makeSessionTheWayTheControllerDoes(
+        owner: OwnerController, ledger: DeinitLedger
+    ) -> SpaceCursorSession {
+        SpaceCursorSession(proxy: TemporaryProxyAdapter(owner: owner, ledger: ledger))
+    }
+
+    private func longSentence() -> (HostTextField, OwnerController) {
+        let field = HostTextField(
+            before: "The quick brown fox jumps over the lazy dog while the river runs on.",
+            after: " And there is still more text after the caret."
+        )
+        return (field, OwnerController(field: field))
+    }
+
+    /// The adapter must survive the scope it was injected in.
+    func testTemporaryProxyOwnershipSurvivesInjectionScope() {
+        let ledger = DeinitLedger()
+        let (_, owner) = longSentence()
+        let session = makeSessionTheWayTheControllerDoes(owner: owner, ledger: ledger)
+
+        XCTAssertEqual(ledger.count, 0,
+                       "session must own its proxy; the adapter was deallocated as a temporary")
+
+        session.press(at: at(0))
+        _ = session.tick(at: at(0.30))
+        XCTAssertGreaterThan(session.engine.document?.count ?? 0, 0,
+                             "takeover captured an EMPTY document — the proxy is nil in production")
+        XCTAssertGreaterThan(session.engine.document?.origin ?? 0, 0,
+                             "caret origin was not captured from the host")
+    }
+
+    /// The decisive assertion: the HOST received `adjustTextPosition`.
+    /// "No text was mutated" is vacuously true when the proxy is nil, so it can
+    /// never stand in for this.
+    func testTemporaryProxyDragActuallyReachesTheHost() {
+        let ledger = DeinitLedger()
+        let (field, owner) = longSentence()
+        let session = makeSessionTheWayTheControllerDoes(owner: owner, ledger: ledger)
+
+        session.press(at: at(0))
+        XCTAssertEqual(session.tick(at: at(0.30)), .enteredCursorMode)
+
+        let caretBefore = field.caret
+        var moveEffects = 0
+        for dx in stride(from: 20.0, through: 300.0, by: 20.0) {
+            if case .moveCaret = session.drag(translationX: dx, translationY: 0, at: at(0.4)) {
+                moveEffects += 1
+            }
+        }
+
+        XCTAssertGreaterThan(moveEffects, 0, "a 300pt sweep emitted no .moveCaret effect")
+        XCTAssertTrue(session.didMoveCaret, "session reports no caret movement")
+        XCTAssertFalse(field.adjustCalls.isEmpty,
+                       "the HOST was never told to move the caret — the caret cannot have moved")
+        XCTAssertGreaterThan(field.caret, caretBefore, "host caret did not advance")
+        XCTAssertFalse(field.textEverChanged, "a cursor drag must still never change text")
+        XCTAssertEqual(ledger.count, 0, "adapter must stay alive for the whole gesture")
+    }
+
+    /// Entering cursor mode is NOT evidence the feature works. The engine
+    /// transitions regardless of document content, so an engaged affordance
+    /// with zero movement is precisely the Build-104 failure signature.
+    func testAffordanceWithoutMovementIsTreatedAsFailure() {
+        let ledger = DeinitLedger()
+        let (field, owner) = longSentence()
+        let session = makeSessionTheWayTheControllerDoes(owner: owner, ledger: ledger)
+
+        session.press(at: at(0))
+        let takeover = session.tick(at: at(0.30))
+        XCTAssertEqual(takeover, .enteredCursorMode)
+        XCTAssertTrue(session.isCursorActive)
+
+        _ = session.drag(translationX: 120, translationY: 0, at: at(0.4))
+
+        // The affordance alone must never be accepted as proof of life.
+        XCTAssertFalse(
+            session.isCursorActive && field.adjustCalls.isEmpty,
+            "cursor mode engaged but the host received zero caret calls — inert space cursor"
+        )
+    }
+
+    /// Owning the proxy must not create a retain cycle: the adapter holds its
+    /// owner weakly, so controller → session → adapter ⇢(weak) controller.
+    func testSessionOwnsButDoesNotLeakItsProxy() {
+        let ledger = DeinitLedger()
+        weak var weakOwner: OwnerController?
+        weak var weakSession: SpaceCursorSession?
+
+        do {
+            let (field, owner) = longSentence()
+            weakOwner = owner
+            let session = makeSessionTheWayTheControllerDoes(owner: owner, ledger: ledger)
+            weakSession = session
+            session.press(at: at(0))
+            _ = session.tick(at: at(0.30))
+            _ = session.drag(translationX: 200, translationY: 0, at: at(0.4))
+            XCTAssertFalse(field.adjustCalls.isEmpty)
+            XCTAssertEqual(ledger.count, 0, "adapter alive while the session is alive")
+        }
+
+        XCTAssertEqual(ledger.count, 1, "adapter must deallocate once its session dies")
+        XCTAssertNil(weakSession, "session leaked — its proxy is retaining it")
+        XCTAssertNil(weakOwner, "owner leaked — the adapter is not holding it weakly")
+    }
 }
