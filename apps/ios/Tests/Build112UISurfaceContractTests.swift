@@ -915,19 +915,19 @@ final class Build112UISurfaceContractTests: XCTestCase {
 
     // MARK: - Release identity
 
-    func testAllFourShippedBundlesAreBuild112AtVersion11() throws {
+    func testAllFourShippedBundlesAreBuild113AtVersion11() throws {
         let root = Self.sourceRoot()
         let guardScript = try Self.source("Scripts/bump-build.sh")
         XCTAssertTrue(
-            guardScript.contains("EXPECTED_BUILD=\"112\""),
-            "the single build guard authority must pin 112"
+            guardScript.contains("EXPECTED_BUILD=\"113\""),
+            "the single build guard authority must pin 113"
         )
         for relative in Self.shippedPlists {
             let data = try Data(contentsOf: root.appendingPathComponent(relative))
             let plist = try PropertyListSerialization.propertyList(
                 from: data, options: [], format: nil
             ) as? [String: Any]
-            XCTAssertEqual(plist?["CFBundleVersion"] as? String, "112", "\(relative) must declare build 112")
+            XCTAssertEqual(plist?["CFBundleVersion"] as? String, "113", "\(relative) must declare build 113")
             XCTAssertEqual(
                 plist?["CFBundleShortVersionString"] as? String, "1.1",
                 "\(relative) must stay at marketing version 1.1"

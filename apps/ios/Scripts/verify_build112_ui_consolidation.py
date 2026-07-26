@@ -248,7 +248,7 @@ SHIPPED_PLISTS = [
     "TonoMessagesExtension/Info.plist",
 ]
 
-EXPECTED_BUILD = "112"
+EXPECTED_BUILD = "113"
 EXPECTED_VERSION = "1.1"
 
 EXPECTED_TABS = ["Coach", "This Week", "Settings"]
