@@ -71,6 +71,7 @@ from .analyze import (
     VariantBlockedReason,
     VariantRequest,
     VariantResponse,
+    aclose_provider_client,
     invoke_single_variant,
     preflight_variant,
     select_model_for_variant,
@@ -372,6 +373,14 @@ async def _lifespan(_: "FastAPI"):
     try:
         yield
     finally:
+        # Drain the pooled provider keep-alive connections on a graceful stop
+        # so shutdown closes them instead of dropping sockets. Best-effort:
+        # a transport hiccup here must never mask a real shutdown error or
+        # prevent the store from being closed.
+        try:
+            await aclose_provider_client()
+        except Exception:
+            logger.exception("provider client close failed during shutdown")
         get_store().close()
 
 
