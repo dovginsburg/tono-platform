@@ -45,6 +45,146 @@ final class Build112UISurfaceContractTests: XCTestCase {
         "App/OnboardingCalibrationView.swift",
         // Supplies the paywall's user-visible failure copy.
         "Shared/StoreKitManager.swift",
+        // Supplies every surface's failure copy.
+        "Shared/ConsumerErrorCopy.swift",
+    ]
+
+    // MARK: - Build 112 repair: the whole-surface raw-error contract
+    //
+    // The first version of this contract claimed whole-surface coverage and
+    // did not have it. It judged string LITERALS, which is silent about
+    // `errorMessage = error.localizedDescription` — there is no literal in
+    // that line to judge. Five shipped surfaces passed it while putting raw
+    // failures on screen: This Week, the paywall, the keyboard strip, Share,
+    // and Messages.
+    //
+    // What follows judges EXPRESSIONS, and derives the surface list from the
+    // Xcode project instead of trusting the one written above.
+
+    /// Files that put pixels in front of a user, plus the two that supply the
+    /// copy those pixels show. Proved complete by
+    /// `testEveryShippedSurfaceThatRendersUIIsUnderContract`.
+    private static let renderingSurfaces = [
+        "App/CoachView.swift",
+        "App/DigestView.swift",
+        "App/HomeView.swift",
+        "App/MemoryView.swift",
+        "App/OnboardingCalibrationView.swift",
+        "App/OnboardingEntryPointsView.swift",
+        "App/RecipientsManagerView.swift",
+        "App/SettingsView.swift",
+        "App/SetupDoctorView.swift",
+        "App/TonoApp.swift",
+        "KeyboardExtension/KeyboardRootView.swift",
+        "KeyboardExtension/KeyboardViewController.swift",
+        "KeyboardExtension/LiveToneIndicatorView.swift",
+        "KeyboardExtension/TonoKeyboardVisualStyle.swift",
+        "ShareExtension/ShareRootView.swift",
+        "ShareExtension/ShareViewController.swift",
+        "Shared/ContactsSync.swift",
+        "Shared/ConsumerErrorCopy.swift",
+        "Shared/StoreKitManager.swift",
+        "TonoMessagesExtension/MessagesViewController.swift",
+    ]
+
+    /// How a source is recognised as a consumer surface. Deliberately
+    /// generous: a false positive costs one line above, a false negative is
+    /// the hole this contract exists to close.
+    /// Matched as whole identifiers: `validatedCustomText(` contains "Text("
+    /// and `normalizedLabel(` contains "Label(", and neither renders anything.
+    private static let surfaceMarkers = [
+        #":\s*View\s*\{"#,
+        #":\s*(?:UIViewController|UIInputViewController|MSMessagesAppViewController"#
+            + #"|UIView|UILabel|UIButton|UIStackView|ViewModifier)\b"#,
+        #"\bUIHostingController\b"#,
+        #"\bText\("#,
+        #"\bLabel\("#,
+    ]
+
+    /// Expressions that turn a raw failure into something a user can read.
+    /// None may appear anywhere in a consumer surface.
+    private static let rawErrorExpressions: [(pattern: String, why: String)] = [
+        (#"\.localizedDescription\b"#, "renders a failure's own description"),
+        (#"\.errorDescription\b"#, "renders a failure's own description"),
+        (#"\bString\(describing:"#, "renders a value's debug description"),
+        (#"\bString\(reflecting:"#, "renders a value's debug description"),
+        (#"\.debugDescription\b"#, "renders a debug description"),
+        (#"\.userInfo\b"#, "renders a failure's underlying detail"),
+        (
+            #"\\\(\s*(?:error|err|e|failure|nsError|urlError|underlyingError)\b"#,
+            "interpolates a raw failure into consumer copy"
+        ),
+        (#"\bstatusCode\b"#, "puts a status code on a consumer surface"),
+        (#"\bresponseBody\b"#, "puts a response body on a consumer surface"),
+        (#"\bhttpResponse\b"#, "puts response detail on a consumer surface"),
+    ]
+
+    /// State rendered to the user when a request fails.
+    private static let failureStateSinks = [
+        #"\berrorMessage\s*=\s*(.+)"#,
+        #"\bpurchaseError\s*=\s*(.+)"#,
+        #"\bmode\s*=\s*\.error\((.*)\)"#,
+        #"\bcompletion\((.*)\)"#,
+    ]
+
+    /// The only functions allowed to produce a failure sentence. Each maps a
+    /// failure's CASE — never its message payload — onto an action.
+    private static let approvedErrorMappers = [
+        "ConsumerErrorCopy.message(", "prettyError(", "requestErrorMessage(",
+        "verificationErrorMessage(", "userFacingMessage",
+    ]
+
+    private static let errorIdentifiers = [
+        "error", "err", "e", "failure", "nsError", "urlError", "underlyingError",
+    ]
+
+    private static let shippedTargets = ["Tono", "TonoKeyboard", "TonoShare", "TonoMessagesExtension"]
+
+    /// The mapper is the one file allowed to author failure copy, so its copy
+    /// is pinned exactly. A sentence not on this list is one nobody reviewed.
+    private static let consumerErrorSentences: Set<String> = [
+        " ",
+        "This email is already on \\(current) devices (max \\(max)). Contact support if you need more.",
+        "Couldn't coach this draft.",
+        "Couldn't read this message.",
+        "Couldn't load your weekly summary.",
+        "Purchase couldn't be completed.",
+        "Restore couldn't be completed.",
+        "Couldn't add the rewrite to your message.",
+        "Try again.",
+        "Check your connection and try again.",
+        "Open Tono and sign in again.",
+        "Open Tono once to finish setting up, then try again.",
+        "An active trial or subscription is required. Open Tono to continue.",
+        "Wait a minute and try again.",
+        "Sign in with your email first so your subscription follows you if you reinstall.",
+        "Try again, and contact support@tonoit.com if it keeps happening.",
+    ]
+
+    /// The four sentences the repair brief names verbatim — proof the mapper
+    /// keeps actions distinct instead of flattening every failure into one
+    /// apology.
+    private static let requiredActionSentences: [(action: String, headline: String, nextStep: String)] = [
+        ("weeklySummary", "Couldn't load your weekly summary.", "Try again."),
+        ("purchase", "Purchase couldn't be completed.", "Try again."),
+        ("restore", "Restore couldn't be completed.", "Try again."),
+        ("coachDraft", "Couldn't coach this draft.", "Check your connection and try again."),
+    ]
+
+    /// Calls whose string arguments a user reads.
+    private static let renderCalls = [
+        "Text(", "Label(", "Button(", "TextField(", "SecureField(", "Toggle(",
+        "Picker(", "Section(", "NavigationLink(", "ProgressView(", "Stepper(",
+        "Menu(", "Link(", "Alert(", "TextEditor(",
+        ".navigationTitle(", ".accessibilityLabel(", ".accessibilityHint(",
+        ".accessibilityValue(", ".alert(", ".confirmationDialog(", ".help(",
+        ".searchable(", ".setTitle(",
+        "mode = .error(", "ErrorView(", "completion(",
+    ]
+
+    private static let renderAssignments = [
+        ".accessibilityLabel =", ".accessibilityHint =", ".accessibilityValue =",
+        ".text =", ".title =", ".placeholder =",
     ]
 
     private static let productionDirectories = [
@@ -308,6 +448,214 @@ final class Build112UISurfaceContractTests: XCTestCase {
         XCTAssertTrue(
             manager.contains("Recipient profiles stay on this device."),
             "the recipient manager must carry the same on-device claim"
+        )
+    }
+
+    // MARK: - Build 112 repair: no raw failure reaches a surface
+
+    /// The surface list is derived from the project, not trusted. A new
+    /// screen cannot ship unjudged.
+    ///
+    /// Membership is read as "appears in some target's Sources phase", which
+    /// is a superset of the shipped targets — over-inclusion only ever adds
+    /// files to the contract, so a shipped surface cannot slip through.
+    func testEveryShippedSurfaceThatRendersUIIsUnderContract() throws {
+        let root = Self.sourceRoot()
+        let project = try Self.source("Tono.xcodeproj/project.pbxproj")
+        let declared = Set(Self.renderingSurfaces)
+        var unjudged: [String] = []
+
+        for directory in Self.productionDirectories {
+            for file in Self.swiftFiles(under: root.appendingPathComponent(directory)) {
+                guard project.contains("/* \(file.lastPathComponent) in Sources */") else { continue }
+                // `#filePath` and `FileManager` can disagree about symlinked
+                // roots (`/tmp` vs `/private/tmp`), so both sides are resolved
+                // before the prefix is stripped.
+                let resolvedRoot = root.resolvingSymlinksInPath().path
+                let relative = file.resolvingSymlinksInPath().path
+                    .replacingOccurrences(of: resolvedRoot + "/", with: "")
+                let source = SwiftSource.stripComments((try? String(contentsOf: file, encoding: .utf8)) ?? "")
+                guard Self.surfaceMarkers.contains(where: { !SwiftSource.matches($0, in: source).isEmpty })
+                else { continue }
+                if !declared.contains(relative) { unjudged.append(relative) }
+            }
+        }
+        XCTAssertEqual(
+            unjudged, [],
+            "these shipped sources render UI but are not under the raw-error contract"
+        )
+        for relative in Self.renderingSurfaces {
+            XCTAssertTrue(
+                FileManager.default.fileExists(atPath: root.appendingPathComponent(relative).path),
+                "\(relative) is under contract but missing from disk"
+            )
+        }
+    }
+
+    /// The assertion the first Build 112 contract lacked. It judges
+    /// expressions, so `errorMessage = error.localizedDescription` fails with
+    /// no string literal involved.
+    func testNoConsumerSurfaceTurnsARawFailureIntoText() throws {
+        for relative in Self.renderingSurfaces {
+            let source = SwiftSource.stripComments(try Self.source(relative))
+            for (pattern, why) in Self.rawErrorExpressions {
+                let hits = SwiftSource.matches(pattern, in: source)
+                XCTAssertEqual(
+                    hits, [],
+                    "\(relative) \(why): \(hits.prefix(4))"
+                )
+            }
+        }
+    }
+
+    /// The raw-expression ban says a failure cannot be *formatted* onto a
+    /// surface. This says it cannot be *assigned* to one either — together
+    /// they leave no path from an `Error` to a screen that skips the mapper.
+    func testRenderedFailureStateIsFixedCopyOrAMappedFailure() throws {
+        for relative in Self.renderingSurfaces {
+            let source = SwiftSource.stripComments(try Self.source(relative))
+            var offenders: [String] = []
+            for sink in Self.failureStateSinks {
+                for assigned in SwiftSource.captures(sink, in: source) {
+                    let rhs = assigned.trimmingCharacters(in: .whitespaces)
+                    if rhs.isEmpty || rhs.hasPrefix("nil") || rhs.hasPrefix("\"") || rhs.hasPrefix("#") {
+                        continue
+                    }
+                    if Self.approvedErrorMappers.contains(where: { rhs.contains($0) }) { continue }
+                    if Self.errorIdentifiers.contains(where: { SwiftSource.startsWithWord($0, rhs) }) {
+                        offenders.append(String(rhs.prefix(70)))
+                    }
+                }
+            }
+            XCTAssertEqual(
+                offenders, [],
+                "\(relative) assigns a raw failure into rendered state"
+            )
+        }
+    }
+
+    /// The one file allowed to author failure copy is pinned exactly, must
+    /// classify by case rather than by payload, and must ship everywhere.
+    func testTheFailureMapperIsPinnedClassifiesByCaseAndShipsEverywhere() throws {
+        let source = SwiftSource.stripComments(try Self.source("Shared/ConsumerErrorCopy.swift"))
+
+        let unreviewed = Set(SwiftSource.rawStringLiterals(in: source))
+            .subtracting(Self.consumerErrorSentences)
+            .sorted()
+        XCTAssertEqual(
+            unreviewed, [],
+            "the failure mapper may only author sentences this contract reviewed"
+        )
+
+        for (action, headline, nextStep) in Self.requiredActionSentences {
+            XCTAssertTrue(
+                source.contains(headline) && source.contains(nextStep),
+                "the mapper must keep \(action) distinct: “\(headline) \(nextStep)”"
+            )
+        }
+
+        let classify = try XCTUnwrap(
+            SwiftSource.body(
+                ofDeclaration: "private static func classify(_ error: Error) -> Recovery",
+                in: source
+            ),
+            "the mapper must classify failures in one place"
+        )
+        XCTAssertFalse(
+            classify.contains("localizedDescription") || classify.contains("String(describing:"),
+            "the mapper must classify a failure by case, never by its message payload"
+        )
+        for family in ["TonoBackendError", "ToneEngineError", "StoreKitManager.StoreError", "URLError"] {
+            XCTAssertTrue(classify.contains(family), "the mapper must classify \(family)")
+        }
+
+        let project = try Self.source("Tono.xcodeproj/project.pbxproj")
+        XCTAssertEqual(
+            project.components(separatedBy: "/* ConsumerErrorCopy.swift in Sources */").count - 1,
+            Self.shippedTargets.count * 2,
+            "the mapper needs one build file and one Sources entry per shipped target"
+        )
+        XCTAssertEqual(
+            project.components(separatedBy: "/* ConsumerErrorCopy.swift */ = {isa = PBXFileReference;").count - 1,
+            1,
+            "the mapper must have exactly one file reference"
+        )
+    }
+
+    /// Consumer vocabulary, judged on what is rendered rather than on a whole
+    /// file. `testNoConsumerStringNamesImplementationDetail…` keeps judging
+    /// every literal in `App/` and the copy files; this adds the surfaces
+    /// that also build requests, where a host name is the request rather than
+    /// something a user reads.
+    func testRenderedCopyNamesNoImplementationDetail() throws {
+        for relative in Self.renderingSurfaces {
+            let raw = try Self.source(relative)
+            for debug in [false, true] {
+                let mode = debug ? "DEBUG" : "Release"
+                let source = try SwiftSource.preprocess(raw, debug: debug)
+                for literal in SwiftSource.renderedLiterals(in: source, calls: Self.renderCalls, assignments: Self.renderAssignments) {
+                    let haystack = SwiftSource.withoutInterpolation(literal).lowercased()
+                    for term in Self.forbiddenTerms {
+                        XCTAssertFalse(
+                            haystack.contains(term),
+                            "\(mode) \(relative) renders “\(term)”: \(literal)"
+                        )
+                    }
+                    for word in Self.forbiddenWords {
+                        XCTAssertFalse(
+                            SwiftSource.containsWord(word, in: haystack),
+                            "\(mode) \(relative) renders the word “\(word)”: \(literal)"
+                        )
+                    }
+                    for phrase in Self.forbiddenPhrases {
+                        XCTAssertFalse(
+                            haystack.contains(phrase),
+                            "\(mode) \(relative) renders implementation rather than an action: \(literal)"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /// Build 112's full test run trapped in `CFRelease` because the main
+    /// queue re-read `pendingTimer` while the engine's serial queue was
+    /// writing it. The fix is structural: the main queue only ever sees a
+    /// captured instance, and the timer is invalidated on the run loop it was
+    /// added to.
+    func testLiveToneDebounceTimerLifecycleIsQueueConfined() throws {
+        let engine = try Self.source("KeyboardExtension/LiveToneEngine.swift")
+        let stripped = SwiftSource.stripComments(engine)
+        let schedule = try XCTUnwrap(
+            SwiftSource.body(
+                ofDeclaration: "private func scheduleTimer(draft: String, boundHash: Int)",
+                in: stripped
+            ),
+            "the engine must schedule the debounce in one place"
+        )
+        let cancel = try XCTUnwrap(
+            SwiftSource.body(ofDeclaration: "private func cancelTimer()", in: stripped),
+            "the engine must cancel the debounce in one place"
+        )
+        XCTAssertFalse(
+            schedule.contains("self.pendingTimer"),
+            "the main queue must never re-read the engine's queue-confined timer"
+        )
+        XCTAssertTrue(
+            schedule.contains("RunLoop.main.add(timer, forMode: .common)"),
+            "the debounce timer must stay installed on the main run loop"
+        )
+        XCTAssertTrue(
+            cancel.contains("DispatchQueue.main.async") && cancel.contains("timer.invalidate()"),
+            "a timer must be invalidated on the run loop it was added to"
+        )
+        XCTAssertFalse(
+            stripped.contains("deinit"),
+            "deinit runs on an arbitrary thread and must not touch queue-confined timer state"
+        )
+        XCTAssertTrue(
+            engine.contains("public static let debounceInterval: TimeInterval = 0.500"),
+            "the 500 ms debounce window must be unchanged"
         )
     }
 
@@ -603,6 +951,165 @@ enum SwiftSource {
             remainder = rest[end...]
         }
         return labels
+    }
+
+    // MARK: - Build 112 repair: expression-level lexing
+
+    /// Every match of `pattern`, as text. Used to judge expressions rather
+    /// than literals — the leak this contract missed had no literal in it.
+    static func matches(_ pattern: String, in source: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let text = source as NSString
+        return regex
+            .matches(in: source, range: NSRange(location: 0, length: text.length))
+            .map { text.substring(with: $0.range) }
+    }
+
+    /// The first capture group of every match — the right-hand side of an
+    /// assignment into rendered state.
+    static func captures(_ pattern: String, in source: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let text = source as NSString
+        return regex
+            .matches(in: source, range: NSRange(location: 0, length: text.length))
+            .compactMap { match in
+                guard match.numberOfRanges > 1, match.range(at: 1).location != NSNotFound else { return nil }
+                return text.substring(with: match.range(at: 1))
+            }
+    }
+
+    /// True when `expression` begins with `word` as a whole identifier, so
+    /// `error.localizedDescription` is caught and `errorCopy` is not.
+    static func startsWithWord(_ word: String, _ expression: String) -> Bool {
+        guard expression.hasPrefix(word) else { return false }
+        let next = expression.dropFirst(word.count).first
+        guard let next else { return true }
+        return !next.isLetter && !next.isNumber && next != "_"
+    }
+
+    /// The argument list of the call whose `(` is at `open`.
+    private static func balancedCall(in source: String, from open: String.Index) -> String {
+        var depth = 0
+        var index = open
+        while index < source.endIndex {
+            if source[index] == "(" { depth += 1 }
+            if source[index] == ")" {
+                depth -= 1
+                if depth == 0 { return String(source[open...index]) }
+            }
+            index = source.index(after: index)
+        }
+        return String(source[open...])
+    }
+
+    /// Like `stringLiterals`, but escapes keep their backslash so `\(…)` is
+    /// still recognisable as an interpolation rather than a bare `(…)`.
+    /// `stringLiterals` unescapes, which is right for judging prose and wrong
+    /// for telling code apart from copy.
+    static func rawStringLiterals(in source: String) -> [String] {
+        var literals: [String] = []
+        var current = ""
+        var inLine = false
+        var inBlock = false
+        var index = source.startIndex
+        func matches(_ needle: String, at i: String.Index) -> Bool {
+            guard let end = source.index(i, offsetBy: needle.count, limitedBy: source.endIndex) else {
+                return false
+            }
+            return source[i..<end] == needle
+        }
+        while index < source.endIndex {
+            let character = source[index]
+            if inBlock {
+                if matches("\"\"\"", at: index) {
+                    literals.append(current)
+                    current = ""
+                    inBlock = false
+                    index = source.index(index, offsetBy: 3)
+                    continue
+                }
+                current.append(character)
+                index = source.index(after: index)
+            } else if inLine {
+                if character == "\\", source.index(after: index) < source.endIndex {
+                    current.append(character)
+                    current.append(source[source.index(after: index)])
+                    index = source.index(index, offsetBy: 2)
+                    continue
+                }
+                if character == "\"" || character == "\n" {
+                    literals.append(current)
+                    current = ""
+                    inLine = false
+                    index = source.index(after: index)
+                    continue
+                }
+                current.append(character)
+                index = source.index(after: index)
+            } else if matches("\"\"\"", at: index) {
+                inBlock = true
+                index = source.index(index, offsetBy: 3)
+            } else if character == "\"" {
+                inLine = true
+                index = source.index(after: index)
+            } else {
+                index = source.index(after: index)
+            }
+        }
+        return literals
+    }
+
+    /// String literals a user actually reads. A keyboard legitimately names
+    /// the request it builds; that is not copy. Only arguments of rendering
+    /// calls and assignments to rendered UIKit properties are judged.
+    static func renderedLiterals(in source: String, calls: [String], assignments: [String]) -> [String] {
+        let stripped = stripComments(source)
+        var literals: [String] = []
+        for call in calls {
+            var searchStart = stripped.startIndex
+            while let found = stripped.range(of: call, range: searchStart..<stripped.endIndex) {
+                let openParen = stripped.index(before: found.upperBound)
+                literals += rawStringLiterals(in: balancedCall(in: stripped, from: openParen))
+                searchStart = found.upperBound
+            }
+        }
+        for assignment in assignments {
+            var searchStart = stripped.startIndex
+            while let found = stripped.range(of: assignment, range: searchStart..<stripped.endIndex) {
+                let lineEnd = stripped.range(of: "\n", range: found.upperBound..<stripped.endIndex)?.lowerBound
+                    ?? stripped.endIndex
+                literals += rawStringLiterals(in: String(stripped[found.lowerBound..<lineEnd]))
+                searchStart = found.upperBound
+            }
+        }
+        return literals
+    }
+
+    /// Drops `\(…)` segments — those are code, not copy. Raw failures
+    /// reaching copy through interpolation are caught structurally by
+    /// `testNoConsumerSurfaceTurnsARawFailureIntoText`, which is strictly
+    /// stronger than matching vocabulary against an expression.
+    static func withoutInterpolation(_ literal: String) -> String {
+        var output = ""
+        var depth = 0
+        var index = literal.startIndex
+        while index < literal.endIndex {
+            let next = literal.index(after: index)
+            if depth == 0, literal[index] == "\\", next < literal.endIndex, literal[next] == "(" {
+                depth = 1
+                index = literal.index(index, offsetBy: 2)
+                continue
+            }
+            if depth > 0 {
+                if literal[index] == "(" { depth += 1 }
+                if literal[index] == ")" { depth -= 1 }
+                index = next
+                continue
+            }
+            output.append(literal[index])
+            index = next
+        }
+        return output
     }
 
     static func containsWord(_ word: String, in haystack: String) -> Bool {

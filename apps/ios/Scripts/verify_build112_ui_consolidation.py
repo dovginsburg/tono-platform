@@ -48,6 +48,155 @@ CONSUMER_SURFACES = [
 # lives outside App/.
 SUPPORTING_COPY = [
     "Shared/StoreKitManager.swift",
+    "Shared/ConsumerErrorCopy.swift",
+]
+
+# ── Build 112 repair: whole-surface raw-error contract ──────────────────
+#
+# The first Build 112 contract claimed whole-surface coverage and did not
+# have it. It banned implementation VOCABULARY inside string literals, which
+# says nothing about `errorMessage = error.localizedDescription` — there is
+# no literal there to judge. Five shipped surfaces passed it while routing
+# raw failures onto the screen: This Week, the paywall, the keyboard strip,
+# Share, and Messages.
+#
+# Everything below judges EXPRESSIONS, not vocabulary, and derives the list
+# of surfaces from the Xcode project rather than trusting a hand-written one.
+
+# Every native target whose product ships to a user.
+SHIPPED_TARGETS = ["Tono", "TonoKeyboard", "TonoShare", "TonoMessagesExtension"]
+
+# Files that put pixels in front of a user, plus the two files that supply
+# the copy those pixels show. `discover_consumer_surfaces` proves this list
+# is complete against the Xcode project, so a new screen cannot ship
+# unjudged.
+RENDERING_SURFACES = [
+    "App/CoachView.swift",
+    "App/DigestView.swift",
+    "App/HomeView.swift",
+    "App/MemoryView.swift",
+    "App/OnboardingCalibrationView.swift",
+    "App/OnboardingEntryPointsView.swift",
+    "App/RecipientsManagerView.swift",
+    "App/SettingsView.swift",
+    "App/SetupDoctorView.swift",
+    "App/TonoApp.swift",
+    "KeyboardExtension/KeyboardRootView.swift",
+    "KeyboardExtension/KeyboardViewController.swift",
+    "KeyboardExtension/LiveToneIndicatorView.swift",
+    "KeyboardExtension/TonoKeyboardVisualStyle.swift",
+    "ShareExtension/ShareRootView.swift",
+    "ShareExtension/ShareViewController.swift",
+    "Shared/ContactsSync.swift",
+    "Shared/ConsumerErrorCopy.swift",
+    "Shared/StoreKitManager.swift",
+    "TonoMessagesExtension/MessagesViewController.swift",
+]
+
+# How a shipped source is recognised as a consumer surface. Deliberately
+# generous: a false positive costs one line in RENDERING_SURFACES, a false
+# negative is exactly the hole this contract exists to close.
+SURFACE_MARKERS = [
+    r":\s*View\s*\{",
+    r":\s*(?:UIViewController|UIInputViewController|MSMessagesAppViewController"
+    r"|UIView|UILabel|UIButton|UIStackView|ViewModifier)\b",
+    r"\bUIHostingController\b",
+    r"\bText\(",
+    r"\bLabel\(",
+]
+
+# Expressions that turn a raw failure into something a user can read. None
+# of them may appear anywhere in a consumer surface — not in a catch block,
+# not in a log line that a later edit might render, not at all.
+RAW_ERROR_EXPRESSIONS = [
+    (r"\.localizedDescription\b", "renders a failure's own description"),
+    (r"\.errorDescription\b", "renders a failure's own description"),
+    (r"\bString\(describing:", "renders a value's debug description"),
+    (r"\bString\(reflecting:", "renders a value's debug description"),
+    (r"\.debugDescription\b", "renders a debug description"),
+    (r"\.userInfo\b", "renders a failure's underlying detail"),
+    (
+        r"\\\(\s*(?:error|err|e|failure|nsError|urlError|underlyingError)\b",
+        "interpolates a raw failure into consumer copy",
+    ),
+    (r"\bstatusCode\b", "puts a status code on a consumer surface"),
+    (r"\bresponseBody\b", "puts a response body on a consumer surface"),
+    (r"\bhttpResponse\b", "puts response detail on a consumer surface"),
+]
+
+# State that is rendered to the user when a request fails. Anything assigned
+# here must be fixed copy or the output of an approved mapper.
+FAILURE_STATE_SINKS = [
+    r"\berrorMessage\s*=\s*(?P<rhs>[^\n]+)",
+    r"\bpurchaseError\s*=\s*(?P<rhs>[^\n]+)",
+    r"\bmode\s*=\s*\.error\((?P<rhs>[^\n]*)\)",
+    r"\bcompletion\((?P<rhs>[^\n]*)\)",
+]
+
+# The only functions allowed to produce a failure sentence. Each one maps a
+# failure's CASE — never its message payload — onto an action.
+APPROVED_ERROR_MAPPERS = [
+    "ConsumerErrorCopy.message(",
+    "prettyError(",
+    "requestErrorMessage(",
+    "verificationErrorMessage(",
+    "userFacingMessage",
+]
+
+# Identifiers that name a failure. Assigning one straight into rendered
+# state is the leak, whatever it is later formatted with.
+ERROR_IDENTIFIERS = ["error", "err", "e", "failure", "nsError", "urlError", "underlyingError"]
+
+# The mapper is the one file allowed to author failure copy, so its copy is
+# pinned exactly. A sentence that is not on this list is a sentence nobody
+# reviewed.
+CONSUMER_ERROR_COPY = "Shared/ConsumerErrorCopy.swift"
+
+CONSUMER_ERROR_SENTENCES = {
+    " ",
+    "This email is already on \\(current) devices (max \\(max)). Contact support if you need more.",
+    "Couldn't coach this draft.",
+    "Couldn't read this message.",
+    "Couldn't load your weekly summary.",
+    "Purchase couldn't be completed.",
+    "Restore couldn't be completed.",
+    "Couldn't add the rewrite to your message.",
+    "Try again.",
+    "Check your connection and try again.",
+    "Open Tono and sign in again.",
+    "Open Tono once to finish setting up, then try again.",
+    "An active trial or subscription is required. Open Tono to continue.",
+    "Wait a minute and try again.",
+    "Sign in with your email first so your subscription follows you if you reinstall.",
+    "Try again, and contact support@tonoit.com if it keeps happening.",
+}
+
+# The four sentences the repair brief names verbatim. They are the proof the
+# mapper preserves the distinction between actions instead of flattening
+# every failure into one apology.
+REQUIRED_ACTION_SENTENCES = [
+    ("weeklySummary", "Couldn't load your weekly summary.", "Try again."),
+    ("purchase", "Purchase couldn't be completed.", "Try again."),
+    ("restore", "Restore couldn't be completed.", "Try again."),
+    ("coachDraft", "Couldn't coach this draft.", "Check your connection and try again."),
+]
+
+# Calls whose string arguments are read by a user. Used to judge consumer
+# vocabulary on surfaces whose non-rendered strings legitimately name a
+# request (the keyboard builds one).
+RENDER_CALLS = [
+    "Text(", "Label(", "Button(", "TextField(", "SecureField(", "Toggle(",
+    "Picker(", "Section(", "NavigationLink(", "ProgressView(", "Stepper(",
+    "Menu(", "Link(", "Alert(", "TextEditor(",
+    ".navigationTitle(", ".accessibilityLabel(", ".accessibilityHint(",
+    ".accessibilityValue(", ".alert(", ".confirmationDialog(", ".help(",
+    ".searchable(", ".setTitle(",
+    "mode = .error(", "ErrorView(", "completion(",
+]
+
+RENDER_ASSIGNMENTS = [
+    ".accessibilityLabel =", ".accessibilityHint =", ".accessibilityValue =",
+    ".text =", ".title =", ".placeholder =",
 ]
 
 # Directories whose Swift sources ship in a target. Used for the "no Playground
@@ -487,6 +636,270 @@ def scan_keyboard_consumer_copy(contract: Contract) -> None:
     )
 
 
+def balanced_call(source: str, open_paren: int) -> str:
+    """The argument list of the call whose `(` is at `open_paren`."""
+    depth = 0
+    for index in range(open_paren, len(source)):
+        if source[index] == "(":
+            depth += 1
+        elif source[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return source[open_paren : index + 1]
+    return source[open_paren:]
+
+
+def rendered_literals(source: str) -> list[str]:
+    """String literals that a user actually reads.
+
+    A keyboard legitimately names a request it builds; that is not copy. Only
+    arguments of rendering calls and assignments to rendered UIKit properties
+    are judged as consumer vocabulary.
+    """
+    source = strip_comments(source)
+    literals: list[str] = []
+    for call in RENDER_CALLS:
+        start = 0
+        while True:
+            found = source.find(call, start)
+            if found < 0:
+                break
+            literals += string_literals(balanced_call(source, found + len(call) - 1))
+            start = found + len(call)
+    for assignment in RENDER_ASSIGNMENTS:
+        start = 0
+        while True:
+            found = source.find(assignment, start)
+            if found < 0:
+                break
+            end = source.find("\n", found)
+            literals += string_literals(source[found : end if end > 0 else len(source)])
+            start = found + len(assignment)
+    return literals
+
+
+def without_interpolation(literal: str) -> str:
+    """Drop `\\(…)` segments — those are code, not copy.
+
+    Raw failures reaching copy through interpolation are caught structurally
+    by `scan_no_raw_error_reaches_a_surface`, which is strictly stronger than
+    matching vocabulary against an expression.
+    """
+    return re.sub(r"\\\([^()]*(?:\([^()]*\)[^()]*)*\)", "", literal)
+
+
+def discover_consumer_surfaces(contract: Contract) -> None:
+    """The surface list is derived from the project, not trusted.
+
+    Build 112's first contract asserted whole-surface coverage over a
+    hand-written list that omitted the keyboard, Share, and Messages. This
+    reads the Sources phase of every shipped target and fails if any file
+    that renders UI is missing from `RENDERING_SURFACES`.
+    """
+    project = contract.read("Tono.xcodeproj/project.pbxproj")
+    shipped: set[str] = set()
+    for target in SHIPPED_TARGETS:
+        shipped |= pbx_source_files(project, target)
+
+    declared = set(RENDERING_SURFACES)
+    discovered: list[str] = []
+    for directory in PRODUCTION_DIRS:
+        for swift in sorted((ROOT / directory).rglob("*.swift")):
+            if swift.name not in shipped:
+                continue
+            source = strip_comments(swift.read_text())
+            if any(re.search(marker, source) for marker in SURFACE_MARKERS):
+                discovered.append(str(swift.relative_to(ROOT)))
+
+    missing = sorted(set(discovered) - declared)
+    contract.check(
+        not missing,
+        f"every shipped source that renders UI is under contract (unjudged: {missing})",
+    )
+    absent = sorted(relative for relative in declared if not (ROOT / relative).exists())
+    contract.check(not absent, f"every contracted surface exists on disk {absent}")
+
+
+def scan_no_raw_error_reaches_a_surface(contract: Contract) -> None:
+    """No consumer surface may contain a raw-failure expression at all.
+
+    This is the assertion the first Build 112 contract lacked. It judges
+    expressions, so `errorMessage = error.localizedDescription` fails without
+    any string literal being involved.
+    """
+    for relative in RENDERING_SURFACES:
+        path = ROOT / relative
+        if not path.exists():
+            contract.check(False, f"{relative} exists")
+            continue
+        source = strip_comments(path.read_text())
+        offenders: list[str] = []
+        for pattern, why in RAW_ERROR_EXPRESSIONS:
+            for match in re.finditer(pattern, source):
+                line = source.count("\n", 0, match.start()) + 1
+                offenders.append(f"line {line}: {match.group(0)!r} {why}")
+        contract.check(
+            not offenders,
+            f"{relative} never turns a raw failure into consumer text"
+            + ("" if not offenders else f" — {offenders[:4]}"),
+        )
+
+
+def scan_failure_state_is_mapped(contract: Contract) -> None:
+    """Rendered failure state is fixed copy or an approved mapper's output.
+
+    The raw-expression ban says a failure cannot be *formatted* onto a
+    surface. This says it cannot be *assigned* to one either — the two
+    together leave no path from an `Error` to a screen that skips the mapper.
+    """
+    error_head = re.compile(rf"^\s*(?:{'|'.join(ERROR_IDENTIFIERS)})\b")
+    for relative in RENDERING_SURFACES:
+        path = ROOT / relative
+        if not path.exists():
+            continue
+        source = strip_comments(path.read_text())
+        offenders: list[str] = []
+        for sink in FAILURE_STATE_SINKS:
+            for match in re.finditer(sink, source):
+                rhs = match.group("rhs").strip()
+                if not rhs or rhs.startswith(("nil", '"', "#")):
+                    continue
+                if any(mapper in rhs for mapper in APPROVED_ERROR_MAPPERS):
+                    continue
+                if error_head.match(rhs):
+                    line = source.count("\n", 0, match.start()) + 1
+                    offenders.append(f"line {line}: {rhs[:70]!r}")
+        contract.check(
+            not offenders,
+            f"{relative} shows only fixed copy or mapped failures"
+            + ("" if not offenders else f" — {offenders[:4]}"),
+        )
+
+
+def scan_consumer_error_mapper(contract: Contract) -> None:
+    """The one file allowed to author failure copy is pinned exactly."""
+    path = ROOT / CONSUMER_ERROR_COPY
+    if not contract.check(path.exists(), f"{CONSUMER_ERROR_COPY} exists"):
+        return
+    source = strip_comments(path.read_text())
+
+    unknown = sorted(set(string_literals(source)) - CONSUMER_ERROR_SENTENCES)
+    contract.check(
+        not unknown,
+        f"the failure mapper authors only reviewed sentences (unreviewed: {unknown[:4]})",
+    )
+
+    for action, headline, next_step in REQUIRED_ACTION_SENTENCES:
+        contract.check(
+            headline in source and next_step in source,
+            f"the mapper keeps {action} distinct: {headline!r} + {next_step!r}",
+        )
+
+    # Case shape only. A mapper that reads the payload is a mapper that will
+    # print a status line the first time a transport puts one there.
+    body = body_of(source, "private static func classify(_ error: Error) -> Recovery")
+    contract.check(
+        "localizedDescription" not in body and "String(describing:" not in body,
+        "the mapper classifies a failure by case, never by its message",
+    )
+    for family in ["TonoBackendError", "ToneEngineError", "StoreKitManager.StoreError", "URLError"]:
+        contract.check(family in body, f"the mapper classifies {family}")
+
+    project = contract.read("Tono.xcodeproj/project.pbxproj")
+    missing = [
+        target
+        for target in SHIPPED_TARGETS
+        if "ConsumerErrorCopy.swift" not in pbx_source_files(project, target)
+    ]
+    contract.check(
+        not missing,
+        f"the failure mapper compiles into every shipped target (missing from {missing})",
+    )
+    build_files = re.findall(
+        r"^\s*([A-F0-9]{24}) /\* ConsumerErrorCopy\.swift in Sources \*/ = "
+        r"\{isa = PBXBuildFile; fileRef = ([A-F0-9]{24}) ",
+        project,
+        re.MULTILINE,
+    )
+    file_refs = re.findall(
+        r"^\s*([A-F0-9]{24}) /\* ConsumerErrorCopy\.swift \*/ = \{isa = PBXFileReference;",
+        project,
+        re.MULTILINE,
+    )
+    contract.check(
+        len(file_refs) == 1
+        and len(build_files) == len(SHIPPED_TARGETS)
+        and all(ref == file_refs[0] for _, ref in build_files),
+        "the failure mapper has exactly one file reference and one build file per shipped target",
+    )
+
+
+def scan_rendered_copy(contract: Contract) -> None:
+    """Consumer vocabulary, judged on what is rendered rather than on a file.
+
+    The whole-file scan stays in force for `App/` and the copy files. This
+    adds the surfaces that also build requests — a keyboard names a host and
+    a status code because that is the request, not the copy.
+    """
+    for relative in RENDERING_SURFACES:
+        path = ROOT / relative
+        if not path.exists():
+            continue
+        raw = path.read_text()
+        offenders: list[str] = []
+        for debug in (False, True):
+            mode = "DEBUG" if debug else "Release"
+            for literal in rendered_literals(preprocess(raw, debug=debug)):
+                haystack = without_interpolation(literal).lower()
+                for term in FORBIDDEN_TERMS:
+                    if term in haystack:
+                        offenders.append(f"[{mode}] {term!r} in {literal!r}")
+                for word in FORBIDDEN_WORDS:
+                    if re.search(rf"\b{re.escape(word)}\b", haystack):
+                        offenders.append(f"[{mode}] word {word!r} in {literal!r}")
+                for phrase in FORBIDDEN_PHRASES:
+                    if phrase in haystack:
+                        offenders.append(f"[{mode}] phrase {phrase!r} in {literal!r}")
+        contract.check(
+            not offenders,
+            f"{relative} renders no implementation detail"
+            + ("" if not offenders else f" — {offenders[:4]}"),
+        )
+
+
+def scan_live_tone_timer_confinement(contract: Contract) -> None:
+    """The debounce timer's lifecycle stays on one queue each.
+
+    Build 112's full test run trapped in `CFRelease` because the main queue
+    re-read `pendingTimer` while the engine's serial queue was writing it.
+    The fix is structural: the main queue only ever sees a captured instance.
+    """
+    engine = contract.read("KeyboardExtension/LiveToneEngine.swift")
+    schedule = body_of(strip_comments(engine), "private func scheduleTimer(draft: String, boundHash: Int)")
+    cancel = body_of(strip_comments(engine), "private func cancelTimer()")
+
+    contract.check(
+        "self.pendingTimer" not in schedule,
+        "the debounce scheduler never re-reads pendingTimer from the main queue",
+    )
+    contract.check(
+        "RunLoop.main.add(timer, forMode: .common)" in schedule,
+        "the debounce timer is still installed on the main run loop",
+    )
+    contract.check(
+        "DispatchQueue.main.async" in cancel and "timer.invalidate()" in cancel,
+        "the debounce timer is invalidated on the run loop it was added to",
+    )
+    contract.check(
+        "deinit" not in strip_comments(engine),
+        "the engine does not touch queue-confined timer state from deinit",
+    )
+    contract.check(
+        "public static let debounceInterval: TimeInterval = 0.500" in engine,
+        "the 500 ms debounce window is unchanged",
+    )
+
+
 def scan_build111_preservation(contract: Contract) -> None:
     engine = contract.read("KeyboardExtension/AppleFidelity/SpaceCursorEngine.swift")
     for symbol, value in [
@@ -554,6 +967,12 @@ def main() -> int:
     scan_settings_surface(contract)
     scan_consumer_copy(contract)
     scan_keyboard_consumer_copy(contract)
+    discover_consumer_surfaces(contract)
+    scan_no_raw_error_reaches_a_surface(contract)
+    scan_failure_state_is_mapped(contract)
+    scan_consumer_error_mapper(contract)
+    scan_rendered_copy(contract)
+    scan_live_tone_timer_confinement(contract)
     scan_build111_preservation(contract)
     scan_release_identity(contract)
 

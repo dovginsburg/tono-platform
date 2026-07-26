@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		CE0000000000000000000010 /* ConsumerErrorCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE0000000000000000000001 /* ConsumerErrorCopy.swift */; };
+		CE0000000000000000000011 /* ConsumerErrorCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE0000000000000000000001 /* ConsumerErrorCopy.swift */; };
+		CE0000000000000000000012 /* ConsumerErrorCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE0000000000000000000001 /* ConsumerErrorCopy.swift */; };
+		CE0000000000000000000013 /* ConsumerErrorCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE0000000000000000000001 /* ConsumerErrorCopy.swift */; };
 		01B5DA16281CE5533AAA9E35 /* StoreKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8341350101744023555C179 /* StoreKitManager.swift */; };
 		038D31802AAA9BAC17E903DD /* TonoBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80AB8E621E4EDC9A59A7258D /* TonoBackend.swift */; };
 		064C6BE46F8BF7A326369F1B /* OpenAIToneAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F77E6FE218D103FFC22A1D7C /* OpenAIToneAnalyzer.swift */; };
@@ -287,6 +291,7 @@
 		772DD67FA1CD9CF09D426AF5 /* SharedUserDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedUserDefaults.swift; sourceTree = "<group>"; };
 		78AA6203719949C25622DA78 /* StyleMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StyleMemory.swift; sourceTree = "<group>"; };
 		7FCE9DA4E023C12BADC4BC12 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		CE0000000000000000000001 /* ConsumerErrorCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsumerErrorCopy.swift; sourceTree = "<group>"; };
 		80AB8E621E4EDC9A59A7258D /* TonoBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoBackend.swift; sourceTree = "<group>"; };
 		822A94BEAD307E044D2E1547 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		B1115E770000000000000001 /* RecipientsManagerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipientsManagerView.swift; sourceTree = "<group>"; };
@@ -495,6 +500,7 @@
 				5ED0C7000000000000000001 /* SetupDoctor.swift */,
 				4F9B5C7A9E2C7B6A5D1E0F32 /* OnDeviceAppleRewrite.swift */,
 				2A8C2F1D3B4E5F6A7C8D9E0F /* OnDeviceAppleRewriteTests.swift */,
+				CE0000000000000000000001 /* ConsumerErrorCopy.swift */,
 				A8341350101744023555C179 /* StoreKitManager.swift */,
 				78AA6203719949C25622DA78 /* StyleMemory.swift */,
 				4F4E27FA018027D2D4B0C8AD /* ToneEngine.swift */,
@@ -784,6 +790,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CE0000000000000000000011 /* ConsumerErrorCopy.swift in Sources */,
 				A60000000000000000000005 /* LocalIntelligence.swift in Sources */,
 				A60000000000000000000002 /* TonoStripRouting.swift in Sources */,
 				AC41C81596FDF580237DDAD9 /* AnthropicToneAnalyzer.swift in Sources */,
@@ -839,6 +846,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CE0000000000000000000012 /* ConsumerErrorCopy.swift in Sources */,
 				A950D38EBA2B8E065632F65A /* ShareRootView.swift in Sources */,
 				44FC072890D0B17F577A883D /* ShareViewController.swift in Sources */,
 				6E859BC8FB332A3E2B18687C /* AnthropicToneAnalyzer.swift in Sources */,
@@ -937,6 +945,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CE0000000000000000000013 /* ConsumerErrorCopy.swift in Sources */,
 				3C85BFB4E498791114E7670D /* AnthropicToneAnalyzer.swift in Sources */,
 				0D6E4F8C3F2A9B0D4E5F6A7B /* AppleRewriteBridge.swift in Sources */,
 				3781BE8282934F1F04FC4365 /* ContactsSync.swift in Sources */,
@@ -966,6 +975,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CE0000000000000000000010 /* ConsumerErrorCopy.swift in Sources */,
 				A70000000000000000000002 /* LocalIntelligence.swift in Sources */,
 				ACD65ABC66C16A8CF9A1228B /* AnthropicToneAnalyzer.swift in Sources */,
 				940000000000000000000003 /* CoachVariantSettings.swift in Sources */,

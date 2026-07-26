@@ -87,7 +87,9 @@ struct ShareAnalysisView: View {
                 }
             } catch {
                 await MainActor.run {
-                    errorMessage = error.localizedDescription
+                    // Build 112: the streamed failure's text is a status line,
+                    // not guidance. Show the action instead.
+                    errorMessage = ConsumerErrorCopy.message(for: error, action: .coachDraft)
                     isLoading = false
                 }
             }

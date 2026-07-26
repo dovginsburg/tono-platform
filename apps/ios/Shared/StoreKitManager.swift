@@ -83,7 +83,9 @@ public final class StoreKitManager: ObservableObject {
         // (PaywallView) must gate the buy tap on isIdentifiedAccount and route
         // to sign-in first; this guard is a belt-and-suspenders fail-loud check.
         guard isIdentifiedAccount else {
-            purchaseError = StoreError.needsIdentifiedAccount.errorDescription
+            purchaseError = ConsumerErrorCopy.message(
+                for: StoreError.needsIdentifiedAccount, action: .purchase
+            )
             return
         }
         isLoading = true
@@ -116,7 +118,9 @@ public final class StoreKitManager: ObservableObject {
                 purchaseError = "Purchase did not complete. Please try again."
             }
         } catch {
-            purchaseError = error.localizedDescription
+            // Build 112: a purchase failure carried the transport's own text
+            // straight onto the paywall. The user gets the action instead.
+            purchaseError = ConsumerErrorCopy.message(for: error, action: .purchase)
         }
         isLoading = false
     }
@@ -128,7 +132,7 @@ public final class StoreKitManager: ObservableObject {
             try await AppStore.sync()
             await updateProState()
         } catch {
-            purchaseError = "Restore failed: \(error.localizedDescription)"
+            purchaseError = ConsumerErrorCopy.message(for: error, action: .restore)
         }
         isLoading = false
     }

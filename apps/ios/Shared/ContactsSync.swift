@@ -307,9 +307,11 @@ public struct ContactsAccessView: View {
         }
 
         if model.isWorking { ProgressView().accessibilityLabel("Working") }
-        if let error = model.errorMessage {
-            Text(error).font(.footnote).foregroundColor(.red)
-                .accessibilityLabel("Contacts error: \(error)")
+        // `errorMessage` is already fixed consumer copy — it is named for what
+        // it is here so no raw failure can ever be interpolated in its place.
+        if let message = model.errorMessage {
+            Text(message).font(.footnote).foregroundColor(.red)
+                .accessibilityLabel("Contacts problem: \(message)")
         }
     }
 }

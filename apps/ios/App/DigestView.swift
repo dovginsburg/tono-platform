@@ -192,7 +192,9 @@ struct DigestView: View {
         do {
             digest = try await TonoBackend.shared.weeklyDigest()
         } catch {
-            errorMessage = error.localizedDescription
+            // Build 112: the failure's own text names transports and status
+            // codes. This Week shows what the user can do instead.
+            errorMessage = ConsumerErrorCopy.message(for: error, action: .weeklySummary)
         }
         isLoading = false
     }
