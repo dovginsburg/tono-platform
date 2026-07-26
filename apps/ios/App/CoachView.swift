@@ -458,9 +458,15 @@ struct CoachView: View {
         case .network:
             return "Couldn't connect. Check your connection and try again."
         case .http(let code, _):
+            // 402 is the server-authoritative entitlement gate; 429 is the
+            // per-IP rate limit. Build 113: these two were folded into one
+            // branch, so a subscriber who simply went too fast was told to buy
+            // a subscription they already have. Untrue copy on the flagship
+            // Coach surface, and it contradicts TonoBackend's own invariant.
             switch code {
             case 401: return "Your sign-in expired. Open Settings → Account to sign in again."
-            case 402, 429: return "An active trial or subscription is required. Open Settings to continue."
+            case 402: return "An active trial or subscription is required. Open Settings to continue."
+            case 429: return "Too many requests right now. Wait a minute and try again."
             default: return "Something went wrong. Try again in a moment."
             }
         case .notRegistered:

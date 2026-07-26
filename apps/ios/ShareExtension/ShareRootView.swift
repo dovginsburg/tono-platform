@@ -77,6 +77,10 @@ struct ShareAnalysisView: View {
                             riskLevel = RiskLevel(rawValue: level) ?? .medium
                             subtext = st; reason = rr; flags = f
                         case .error(let msg): throw ToneEngineError.backend(msg)
+                        // Build 113: the status reaches the mapper intact, so
+                        // Share keeps 401 / 402 / 429 apart instead of
+                        // answering all three with "Try again."
+                        case .failure(let status): throw StreamedFailure.http(status: status)
                         }
                     }
                     return ToneAnalysis(riskLevel: riskLevel, perception: perception, subtext: subtext, reason: reason, suggestions: try suggestions.canonicalCoachChoices(), flags: flags)

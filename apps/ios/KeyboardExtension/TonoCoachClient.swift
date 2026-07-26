@@ -487,8 +487,16 @@ public final class TonoCoachClient {
             case .timeout:
                 return "Request timed out. Check your connection and tap Retry."
             case .http(let status, _):
-                if status == 429 { return "Active trial or subscription required. Open Tono to continue." }
-                return "Coach couldn't finish. Tap Retry."
+                // Build 113: 429 is the per-IP rate limit, not the entitlement
+                // gate — telling a rate-limited subscriber to subscribe is a
+                // false statement. 401 and 402 used to fall through to the bare
+                // retry below, which named no recoverable next step at all.
+                switch status {
+                case 401: return "Your sign-in expired. Open Tono to sign in again."
+                case 402: return "Active trial or subscription required. Open Tono to continue."
+                case 429: return "Too many requests right now. Wait a minute and try again."
+                default: return "Coach couldn't finish. Tap Retry."
+                }
             case .decoding:
                 return "Coach couldn't finish. Tap Retry."
             case .staleDraft:

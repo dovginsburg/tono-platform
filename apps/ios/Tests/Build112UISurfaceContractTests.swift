@@ -117,6 +117,18 @@ final class Build112UISurfaceContractTests: XCTestCase {
         (#"\bstatusCode\b"#, "puts a status code on a consumer surface"),
         (#"\bresponseBody\b"#, "puts a response body on a consumer surface"),
         (#"\bhttpResponse\b"#, "puts response detail on a consumer surface"),
+        // Build 113. `localizedDescription` is one of several ways a
+        // Foundation error hands you its text, and the ban list knew only
+        // that one. An independent probe rendered
+        // `(error as NSError).localizedFailureReason` and another rendered
+        // `ns.domain`; both passed the Build 112 contract untouched.
+        (#"\.localizedFailureReason\b"#, "renders a failure's own description"),
+        (#"\.localizedRecoverySuggestion\b"#, "renders a failure's own description"),
+        (#"\.localizedRecoveryOptions\b"#, "renders a failure's own description"),
+        (#"\.failureReason\b"#, "renders a failure's own description"),
+        (#"\.recoverySuggestion\b"#, "renders a failure's own description"),
+        (#"\bNSError\b"#, "reaches for a failure's Foundation representation"),
+        (#"\.domain\b"#, "puts a failure's error domain on a consumer surface"),
     ]
 
     /// State rendered to the user when a request fails.
@@ -136,6 +148,24 @@ final class Build112UISurfaceContractTests: XCTestCase {
 
     private static let errorIdentifiers = [
         "error", "err", "e", "failure", "nsError", "urlError", "underlyingError",
+    ]
+
+    /// Build 113: the two surfaces that map an HTTP status onto a Coach
+    /// sentence, and the declaration whose body owns that mapping. Everything
+    /// else routes through `ConsumerErrorCopy`, which keeps them apart already.
+    private static let rateLimitSurfaces = [
+        ("App/CoachView.swift", "private func prettyError(_ e: TonoBackendError) -> String"),
+        ("KeyboardExtension/TonoCoachClient.swift", "public var userFacingMessage: String"),
+    ]
+
+    /// Words that mean "you must pay". True for 402, false for 429.
+    private static let paywallVocab = ["subscription", "subscribe", "trial"]
+
+    /// The surfaces that consume `TonoBackend.analyzeStream` directly. Both
+    /// take the streaming path in production, so both used to lose the status.
+    private static let streamingConsumers = [
+        "KeyboardExtension/KeyboardRootView.swift",
+        "ShareExtension/ShareRootView.swift",
     ]
 
     private static let shippedTargets = ["Tono", "TonoKeyboard", "TonoShare", "TonoMessagesExtension"]
@@ -403,6 +433,135 @@ final class Build112UISurfaceContractTests: XCTestCase {
         )
     }
 
+    /// Build 113: 429 is the rate limit. 402 is the entitlement gate. Never
+    /// one sentence.
+    ///
+    /// `TonoBackend` states the invariant in its own words — "Keep them
+    /// distinct — 429 is NOT 'subscription required'" — and both Coach
+    /// surfaces broke it anyway: the host app folded `402, 429` into a single
+    /// branch and the keyboard answered 429 with the paywall sentence
+    /// outright. A subscriber who trips the per-IP limit was told to buy the
+    /// subscription they already pay for — a false statement on the surface
+    /// people use most. 401 is judged alongside them because both surfaces
+    /// used to drop it into a bare retry that names no next step.
+    func testRateLimitedUsersAreNotToldToSubscribe() throws {
+        for (relative, signature) in Self.rateLimitSurfaces {
+            let body = try XCTUnwrap(
+                SwiftSource.body(
+                    ofDeclaration: signature,
+                    in: SwiftSource.stripComments(try Self.source(relative))
+                ),
+                "\(relative) must still declare \(signature)"
+            )
+
+            XCTAssertEqual(
+                SwiftSource.matches(#"case\s+(?:402\s*,\s*429|429\s*,\s*402)\s*:"#, in: body),
+                [],
+                "\(relative) answers 402 and 429 with one branch"
+            )
+
+            var answers: [Int: String] = [:]
+            for code in [401, 402, 429] {
+                let sentences = SwiftSource.captures(
+                    #"case\s+\#(code)\s*:\s*return\s+"([^"]*)""#,
+                    in: body
+                )
+                let sentence = try XCTUnwrap(
+                    sentences.first,
+                    "\(relative) must answer \(code) on its own"
+                )
+                answers[code] = sentence
+            }
+
+            XCTAssertEqual(
+                Set(answers.values).count, 3,
+                "\(relative) must give 401, 402 and 429 three different sentences"
+            )
+
+            // The truthfulness test runs in both directions: only the
+            // entitlement gate may talk about paying, and the rate limit must
+            // say what actually helps — wait.
+            let rateLimited = (answers[429] ?? "").lowercased()
+            for word in Self.paywallVocab {
+                XCTAssertFalse(
+                    rateLimited.contains(word),
+                    "\(relative) tells a rate-limited user to subscribe: \(answers[429] ?? "")"
+                )
+            }
+            XCTAssertTrue(
+                Self.paywallVocab.contains(where: { (answers[402] ?? "").lowercased().contains($0) }),
+                "\(relative) must still tell a gated user what they need: \(answers[402] ?? "")"
+            )
+            XCTAssertTrue(
+                rateLimited.contains("wait"),
+                "\(relative) must tell a rate-limited user to wait: \(answers[429] ?? "")"
+            )
+        }
+    }
+
+    /// Build 113: a streamed failure reaches the mapper as a status, never as
+    /// a sentence.
+    ///
+    /// The non-streaming path throws `TonoBackendError.http(code, …)` and
+    /// keeps 401, 402 and 429 apart. The streaming path — the one the keyboard
+    /// strip and the Share sheet actually take — used to yield
+    /// `.error("Server error (code)")`, which the consumers wrapped into
+    /// `ToneEngineError.backend`, and the mapper can only answer that with
+    /// "Try again." The status existed at the yield site and was destroyed a
+    /// line later. Build 112 removed the leak here but did not recover the
+    /// distinction; this keeps both — structure travels, prose does not.
+    func testStreamedFailuresReachTheMapperAsAStatus() throws {
+        let backend = SwiftSource.stripComments(try Self.source("Shared/TonoBackend.swift"))
+
+        XCTAssertTrue(
+            backend.contains("case failure(status: Int)"),
+            "the analysis stream must be able to carry a status code"
+        )
+        XCTAssertEqual(
+            SwiftSource.matches(#"yield\(\s*\.error\(\s*"Server error"#, in: backend), [],
+            "the stream must not stringify a status into a sentence"
+        )
+        XCTAssertFalse(
+            SwiftSource.matches(
+                #"continuation\.yield\(\s*\.failure\(status:\s*code\s*\)\s*\)"#, in: backend
+            ).isEmpty,
+            "a non-2xx response must yield its status rather than a sentence about it"
+        )
+
+        let declaration = "public enum StreamedFailure: Error, Equatable"
+        let payload = try XCTUnwrap(
+            SwiftSource.body(ofDeclaration: declaration, in: backend),
+            "the streamed failure must be a typed error"
+        )
+        // A body is where a host name or a stack trace would ride along. The
+        // type is useless to a leak if it cannot hold text at all.
+        XCTAssertFalse(
+            payload.contains("String"),
+            "the streamed failure must carry no message payload: \(payload)"
+        )
+
+        for relative in Self.streamingConsumers {
+            let source = SwiftSource.stripComments(try Self.source(relative))
+            // One stream loop per `.perception` arm. Every one of them has to
+            // hand the status on, or the surface it feeds quietly loses the
+            // distinction again.
+            let loops = SwiftSource.matches(#"case\s+\.perception\("#, in: source).count
+            let handled = SwiftSource.matches(#"case\s+\.failure\(let status\)"#, in: source).count
+            let forwarded = SwiftSource.matches(
+                #"StreamedFailure\.http\(status:\s*status\)"#, in: source
+            ).count
+            XCTAssertGreaterThan(loops, 0, "\(relative) must still consume the analysis stream")
+            XCTAssertGreaterThanOrEqual(
+                handled, loops,
+                "\(relative) leaves \(loops - handled) stream loop(s) without a status arm"
+            )
+            XCTAssertGreaterThanOrEqual(
+                forwarded, loops,
+                "\(relative) must hand every streamed status to the mapper"
+            )
+        }
+    }
+
     func testSettingsCarriesNoEndpointDiagnosticsUnderAnyCompilationMode() throws {
         let raw = try Self.source("App/SettingsView.swift")
         XCTAssertFalse(
@@ -514,16 +673,31 @@ final class Build112UISurfaceContractTests: XCTestCase {
     func testRenderedFailureStateIsFixedCopyOrAMappedFailure() throws {
         for relative in Self.renderingSurfaces {
             let source = SwiftSource.stripComments(try Self.source(relative))
+            // Build 113: the identifiers that hold a failure *in this file*,
+            // not a fixed list. `let cause = error` is one line of laundering
+            // and the old head-anchored rule could not see through it.
+            let tainted = SwiftSource.taintedIdentifiers(seeds: Self.errorIdentifiers, in: source)
             var offenders: [String] = []
             for sink in Self.failureStateSinks {
                 for assigned in SwiftSource.captures(sink, in: source) {
                     let rhs = assigned.trimmingCharacters(in: .whitespaces)
-                    if rhs.isEmpty || rhs.hasPrefix("nil") || rhs.hasPrefix("\"") || rhs.hasPrefix("#") {
-                        continue
-                    }
+                    if rhs.isEmpty || rhs.hasPrefix("nil") { continue }
                     if Self.approvedErrorMappers.contains(where: { rhs.contains($0) }) { continue }
-                    if Self.errorIdentifiers.contains(where: { SwiftSource.startsWithWord($0, rhs) }) {
-                        offenders.append(String(rhs.prefix(70)))
+                    // Judge the whole right-hand side, not just its first
+                    // token. A failure reached the screen through
+                    // `(error as NSError)…` and through `{ let ns = error … }()`
+                    // because both begin with punctuation, and through a
+                    // string literal because the old rule skipped anything
+                    // starting with a quote. Literal text drops out;
+                    // interpolations do not, because an interpolation is code
+                    // that gets rendered.
+                    let split = SwiftSource.splitLiterals(rhs)
+                    let named = SwiftSource.mentioned(
+                        tainted,
+                        in: split.code + " " + split.interpolations.joined(separator: " ")
+                    )
+                    if !named.isEmpty {
+                        offenders.append("\(named) in \(rhs.prefix(70))")
                     }
                 }
             }
@@ -565,7 +739,10 @@ final class Build112UISurfaceContractTests: XCTestCase {
             classify.contains("localizedDescription") || classify.contains("String(describing:"),
             "the mapper must classify a failure by case, never by its message payload"
         )
-        for family in ["TonoBackendError", "ToneEngineError", "StoreKitManager.StoreError", "URLError"] {
+        for family in [
+            "TonoBackendError", "ToneEngineError", "StoreKitManager.StoreError", "URLError",
+            "StreamedFailure",
+        ] {
             XCTAssertTrue(classify.contains(family), "the mapper must classify \(family)")
         }
 
@@ -976,6 +1153,116 @@ enum SwiftSource {
                 guard match.numberOfRanges > 1, match.range(at: 1).location != NSNotFound else { return nil }
                 return text.substring(with: match.range(at: 1))
             }
+    }
+
+    /// Separate Swift code from literal text, keeping interpolations as code.
+    ///
+    /// Build 113. The contract used to judge a right-hand side by its first
+    /// token and to skip anything starting with a quote. Both were bypassable
+    /// in one line: `"Couldn't load. \(cause)"` starts with a quote and every
+    /// character that matters is inside it. Literal *text* is copy, and is
+    /// judged as vocabulary elsewhere; an interpolation is executable code
+    /// that gets rendered, so it belongs on the code side of this split.
+    static func splitLiterals(_ source: String) -> (code: String, interpolations: [String]) {
+        var code = ""
+        var interpolations: [String] = []
+        var index = source.startIndex
+        var inString = false
+        while index < source.endIndex {
+            let character = source[index]
+            if inString {
+                let next = source.index(after: index)
+                if character == "\\", next < source.endIndex {
+                    if source[next] == "(" {
+                        var depth = 0
+                        var scan = next
+                        while scan < source.endIndex {
+                            if source[scan] == "(" { depth += 1 }
+                            if source[scan] == ")" {
+                                depth -= 1
+                                if depth == 0 { break }
+                            }
+                            scan = source.index(after: scan)
+                        }
+                        let start = source.index(after: next)
+                        if scan < source.endIndex, start <= scan {
+                            interpolations.append(String(source[start..<scan]))
+                            index = source.index(after: scan)
+                        } else {
+                            index = source.endIndex
+                        }
+                        continue
+                    }
+                    // An ordinary escape: \" \\ \n …
+                    index = source.index(index, offsetBy: 2, limitedBy: source.endIndex)
+                        ?? source.endIndex
+                    continue
+                }
+                if character == "\"" { inString = false }
+                index = source.index(after: index)
+                continue
+            }
+            if character == "\"" {
+                inString = true
+                index = source.index(after: index)
+                continue
+            }
+            code.append(character)
+            index = source.index(after: index)
+        }
+        return (code, interpolations)
+    }
+
+    /// Every name in `names` that appears in `expression` as a whole word.
+    static func mentioned(_ names: Set<String>, in expression: String) -> [String] {
+        names
+            .filter { name in
+                let escaped = NSRegularExpression.escapedPattern(for: name)
+                return !matches(#"\b\#(escaped)\b"#, in: expression).isEmpty
+            }
+            .sorted()
+    }
+
+    /// Names that hold a failure — including ones laundered through a binding.
+    ///
+    /// Build 113. A fixed list of identifiers is defeated by one `let`:
+    /// `let cause = error` renames the failure, and
+    /// `{ let ns = error as NSError; … }()` renames it inside a closure the
+    /// old head-anchored rule never looked into. Anything bound from
+    /// something already tainted is tainted too, to a fixed point, so a chain
+    /// of renames does not launder a failure either.
+    static func taintedIdentifiers(seeds: [String], in source: String) -> Set<String> {
+        var tainted = Set(seeds)
+        let split = splitLiterals(source)
+        let haystack = split.code + "\n" + split.interpolations.joined(separator: "\n")
+
+        for name in captures(#"\bcatch\s+let\s+([A-Za-z_][A-Za-z0-9_]*)"#, in: haystack) {
+            tainted.insert(name)
+        }
+
+        let bindings = matches(
+            #"\b(?:let|var)\s+[A-Za-z_][A-Za-z0-9_]*\s*(?::\s*[^=\n]+?)?=\s*[^\n]+"#,
+            in: haystack
+        )
+        for _ in 0..<4 {  // a fixed point; four renames is past any real chain
+            var grew = false
+            for binding in bindings {
+                guard
+                    let name = captures(
+                        #"\b(?:let|var)\s+([A-Za-z_][A-Za-z0-9_]*)"#, in: binding
+                    ).first,
+                    !tainted.contains(name),
+                    let equals = binding.firstIndex(of: "=")
+                else { continue }
+                let bound = String(binding[binding.index(after: equals)...])
+                if !mentioned(tainted, in: bound).isEmpty || bound.contains("NSError") {
+                    tainted.insert(name)
+                    grew = true
+                }
+            }
+            if !grew { break }
+        }
+        return tainted
     }
 
     /// True when `expression` begins with `word` as a whole identifier, so

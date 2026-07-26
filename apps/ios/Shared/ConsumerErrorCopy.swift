@@ -132,6 +132,15 @@ public enum ConsumerErrorCopy {
             }
         }
 
+        // Build 113: the streaming path's failure. Same status classes as a
+        // `TonoBackendError.http`, minus the body it never carried.
+        if let streamed = error as? StreamedFailure {
+            switch streamed {
+            case .http(let status):
+                return forStatus(status)
+            }
+        }
+
         if let engine = error as? ToneEngineError {
             switch engine {
             case .network:

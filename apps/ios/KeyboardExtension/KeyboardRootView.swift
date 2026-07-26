@@ -292,6 +292,13 @@ public final class KeyboardModel: ObservableObject {
                         flags = f
                     case .error(let msg):
                         throw ToneEngineError.backend(msg)
+                    case .failure(let status):
+                        // Build 113: carry the status to the mapper instead of
+                        // a sentence about it, so the strip can still tell
+                        // "sign in again" from "a subscription is required"
+                        // from "wait a minute" rather than saying "Try again."
+                        // to all three.
+                        throw StreamedFailure.http(status: status)
                     }
                 }
 
@@ -424,6 +431,13 @@ public final class KeyboardModel: ObservableObject {
                         flags = f
                     case .error(let msg):
                         throw ToneEngineError.backend(msg)
+                    case .failure(let status):
+                        // Build 113: carry the status to the mapper instead of
+                        // a sentence about it, so the strip can still tell
+                        // "sign in again" from "a subscription is required"
+                        // from "wait a minute" rather than saying "Try again."
+                        // to all three.
+                        throw StreamedFailure.http(status: status)
                     }
                 }
 

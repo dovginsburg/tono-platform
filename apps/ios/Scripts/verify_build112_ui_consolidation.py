@@ -122,6 +122,17 @@ RAW_ERROR_EXPRESSIONS = [
     (r"\bstatusCode\b", "puts a status code on a consumer surface"),
     (r"\bresponseBody\b", "puts a response body on a consumer surface"),
     (r"\bhttpResponse\b", "puts response detail on a consumer surface"),
+    # Build 113. `localizedDescription` is one of several ways a Foundation
+    # error will hand you its text, and the ban list only knew about that one.
+    # An independent probe rendered `(error as NSError).localizedFailureReason`
+    # and another rendered `ns.domain` — both passed the Build 112 contract.
+    (r"\.localizedFailureReason\b", "renders a failure's own description"),
+    (r"\.localizedRecoverySuggestion\b", "renders a failure's own description"),
+    (r"\.localizedRecoveryOptions\b", "renders a failure's own description"),
+    (r"\.failureReason\b", "renders a failure's own description"),
+    (r"\.recoverySuggestion\b", "renders a failure's own description"),
+    (r"\bNSError\b", "reaches for a failure's Foundation representation"),
+    (r"\.domain\b", "puts a failure's error domain on a consumer surface"),
 ]
 
 # State that is rendered to the user when a request fails. Anything assigned
@@ -146,6 +157,26 @@ APPROVED_ERROR_MAPPERS = [
 # Identifiers that name a failure. Assigning one straight into rendered
 # state is the leak, whatever it is later formatted with.
 ERROR_IDENTIFIERS = ["error", "err", "e", "failure", "nsError", "urlError", "underlyingError"]
+
+# ── Build 113: 429 is not 402 ───────────────────────────────────────────
+#
+# The two surfaces that map an HTTP status onto a Coach sentence, and the
+# declaration whose body owns that mapping. Everything else routes through
+# `ConsumerErrorCopy`, which already keeps the two apart.
+RATE_LIMIT_SURFACES = [
+    ("App/CoachView.swift", "private func prettyError(_ e: TonoBackendError) -> String"),
+    ("KeyboardExtension/TonoCoachClient.swift", "public var userFacingMessage: String"),
+]
+
+# Words that mean "you must pay". True for 402, false for 429.
+PAYWALL_VOCAB = ["subscription", "subscribe", "trial"]
+
+# The surfaces that consume `TonoBackend.analyzeStream` directly. Both take
+# the streaming path in production, so both used to lose the status.
+STREAMING_CONSUMERS = [
+    "KeyboardExtension/KeyboardRootView.swift",
+    "ShareExtension/ShareRootView.swift",
+]
 
 # The mapper is the one file allowed to author failure copy, so its copy is
 # pinned exactly. A sentence that is not on this list is a sentence nobody
@@ -363,6 +394,95 @@ def string_literals(source: str) -> list[str]:
     for match in re.finditer(r'"(?:\\.|[^"\\\n])*"', without_blocks):
         literals.append(match.group(0)[1:-1])
     return literals
+
+
+def split_literals(source: str) -> tuple[str, list[str]]:
+    """Separate Swift code from literal text, keeping interpolations as code.
+
+    Build 113. The contract used to judge a right-hand side by its first
+    token and to skip anything starting with a quote. Both were bypassable in
+    one line: `"Couldn't load. \\(cause)"` starts with a quote, and every
+    character that matters is inside it. Literal *text* is copy and is judged
+    as vocabulary elsewhere; an interpolation is executable code that gets
+    rendered, so it belongs on the code side of this split.
+    """
+    code: list[str] = []
+    interpolations: list[str] = []
+    index = 0
+    length = len(source)
+    in_string = False
+    while index < length:
+        char = source[index]
+        if in_string:
+            if char == "\\" and index + 1 < length:
+                if source[index + 1] == "(":
+                    depth = 0
+                    scan = index + 1
+                    while scan < length:
+                        if source[scan] == "(":
+                            depth += 1
+                        elif source[scan] == ")":
+                            depth -= 1
+                            if depth == 0:
+                                break
+                        scan += 1
+                    interpolations.append(source[index + 2 : scan])
+                    index = scan + 1
+                    continue
+                index += 2  # an ordinary escape: \" \\ \n …
+                continue
+            if char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            index += 1
+            continue
+        code.append(char)
+        index += 1
+    return "".join(code), interpolations
+
+
+def mentions(names: set[str], expression: str) -> list[str]:
+    """Every name in `names` that appears in `expression` as a whole word."""
+    return sorted(
+        name for name in names if re.search(rf"\b{re.escape(name)}\b", expression)
+    )
+
+
+def tainted_identifiers(source: str) -> set[str]:
+    """Names that hold a failure — including ones laundered through a binding.
+
+    Build 113. A fixed list of identifiers is defeated by one `let`:
+    `let cause = error` renames the failure, and
+    `{ let ns = error as NSError; … }()` renames it inside a closure the old
+    head-anchored rule never looked into. Anything bound from something
+    already tainted is tainted too, computed to a fixed point so a chain of
+    renames does not launder a failure either.
+    """
+    tainted = set(ERROR_IDENTIFIERS)
+    code, interpolated = split_literals(source)
+    haystack = code + "\n" + "\n".join(interpolated)
+
+    for match in re.finditer(r"\bcatch\s+let\s+([A-Za-z_][A-Za-z0-9_]*)", haystack):
+        tainted.add(match.group(1))
+
+    binding = re.compile(
+        r"\b(?:let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*[^=\n]+?)?=\s*([^\n]+)"
+    )
+    for _ in range(4):  # a fixed point; four renames is far past any real chain
+        grew = False
+        for match in binding.finditer(haystack):
+            name, bound = match.group(1), match.group(2)
+            if name in tainted:
+                continue
+            if mentions(tainted, bound) or "NSError" in bound:
+                tainted.add(name)
+                grew = True
+        if not grew:
+            break
+    return tainted
 
 
 def body_of(source: str, marker: str) -> str:
@@ -636,6 +756,121 @@ def scan_keyboard_consumer_copy(contract: Contract) -> None:
     )
 
 
+def scan_rate_limit_is_not_a_paywall(contract: Contract) -> None:
+    """429 is the rate limit. 402 is the entitlement gate. Never one sentence.
+
+    `TonoBackend.swift` states the invariant in its own words — "Keep them
+    distinct — 429 is NOT 'subscription required'" — and both Coach surfaces
+    broke it anyway: the host app folded `402, 429` into one branch and the
+    keyboard answered 429 with the paywall sentence outright. A subscriber who
+    trips the per-IP limit was told to buy the subscription they already pay
+    for. That is not a wording preference; it is a false statement on the
+    surface people use most, and it is what App Review reads.
+
+    401 is checked alongside them because both surfaces used to drop it into a
+    bare retry, which names no next step for an expired sign-in.
+    """
+    for relative, signature in RATE_LIMIT_SURFACES:
+        source = strip_comments(contract.read(relative))
+        body = body_of(source, signature)
+        if not contract.check(bool(body), f"{relative} still declares {signature}"):
+            continue
+
+        # A shared `case 402, 429:` is the exact shape of the defect: one
+        # sentence answering two unrelated facts about the user's account.
+        contract.check(
+            not re.search(r"case\s+(?:402\s*,\s*429|429\s*,\s*402)\s*:", body),
+            f"{relative} does not answer 402 and 429 with one branch",
+        )
+
+        answers: dict[int, str] = {}
+        for match in re.finditer(r"case\s+(401|402|429)\s*:\s*return\s+(\"[^\"]*\")", body):
+            answers[int(match.group(1))] = match.group(2)
+
+        missing = [code for code in (401, 402, 429) if code not in answers]
+        if not contract.check(
+            not missing,
+            f"{relative} answers 401, 402 and 429 each on its own (missing {missing})",
+        ):
+            continue
+
+        contract.check(
+            len({answers[401], answers[402], answers[429]}) == 3,
+            f"{relative} gives 401, 402 and 429 three different sentences",
+        )
+
+        # The truthfulness test, in both directions: only the entitlement gate
+        # may talk about paying, and the rate limit must not.
+        rate_limited = answers[429].lower()
+        contract.check(
+            not any(word in rate_limited for word in PAYWALL_VOCAB),
+            f"{relative} does not tell a rate-limited user to subscribe — {answers[429]}",
+        )
+        contract.check(
+            any(word in answers[402].lower() for word in PAYWALL_VOCAB),
+            f"{relative} still tells a gated user what they actually need — {answers[402]}",
+        )
+        contract.check(
+            "wait" in rate_limited,
+            f"{relative} tells a rate-limited user to wait — {answers[429]}",
+        )
+
+
+def scan_streaming_preserves_status(contract: Contract) -> None:
+    """A streamed failure reaches the mapper as a status, never as a sentence.
+
+    The non-streaming path throws `TonoBackendError.http(code, …)` and keeps
+    401, 402 and 429 apart. The streaming path — which is the path the
+    keyboard strip and the Share sheet actually take — used to yield
+    `.error("Server error (\\(code))")`, and the consumers wrapped that string
+    into `ToneEngineError.backend`, which the mapper can only answer with
+    "Try again." The code existed at the yield site and was destroyed one line
+    later, so an expired sign-in, a missing subscription and a rate limit all
+    rendered the same sentence.
+
+    Build 112 removed the leak on this path but did not recover the
+    distinction. This keeps both properties: structure travels, prose does not.
+    """
+    backend = strip_comments(contract.read("Shared/TonoBackend.swift"))
+
+    contract.check(
+        "case failure(status: Int)" in backend,
+        "the analysis stream can carry a status code",
+    )
+    contract.check(
+        not re.search(r"yield\(\s*\.error\(\s*\"Server error", backend),
+        "the stream no longer stringifies a status into a sentence",
+    )
+    contract.check(
+        bool(re.search(r"continuation\.yield\(\s*\.failure\(status:\s*code\s*\)\s*\)", backend)),
+        "a non-2xx response yields its status rather than a sentence about it",
+    )
+
+    declaration = "public enum StreamedFailure: Error, Equatable"
+    if contract.check(declaration in backend, "the streamed failure is a typed error"):
+        payload = body_of(backend, declaration)
+        # A body is where a host name or a stack trace would ride along. The
+        # type is useless to a leak if it cannot hold text at all.
+        contract.check(
+            "String" not in payload,
+            f"the streamed failure carries no message payload — {payload.strip()[:60]!r}",
+        )
+
+    for relative in STREAMING_CONSUMERS:
+        source = strip_comments(contract.read(relative))
+        # One stream loop per `.perception` arm. Every one of them has to hand
+        # the status on, or the surface it feeds silently loses the
+        # distinction again.
+        loops = len(re.findall(r"case\s+\.perception\(", source))
+        handled = len(re.findall(r"case\s+\.failure\(let status\)", source))
+        forwarded = len(re.findall(r"StreamedFailure\.http\(status:\s*status\)", source))
+        contract.check(
+            loops > 0 and handled >= loops and forwarded >= loops,
+            f"{relative} hands every streamed status to the mapper "
+            f"({handled}/{loops} handled, {forwarded} forwarded)",
+        )
+
+
 def balanced_call(source: str, open_paren: int) -> str:
     """The argument list of the call whose `(` is at `open_paren`."""
     depth = 0
@@ -752,23 +987,33 @@ def scan_failure_state_is_mapped(contract: Contract) -> None:
     surface. This says it cannot be *assigned* to one either — the two
     together leave no path from an `Error` to a screen that skips the mapper.
     """
-    error_head = re.compile(rf"^\s*(?:{'|'.join(ERROR_IDENTIFIERS)})\b")
     for relative in RENDERING_SURFACES:
         path = ROOT / relative
         if not path.exists():
             continue
         source = strip_comments(path.read_text())
+        # Build 113: the identifiers that hold a failure *in this file*, not a
+        # fixed list. `let cause = error` is one line of laundering and the
+        # old head-anchored rule could not see through it.
+        tainted = tainted_identifiers(source)
         offenders: list[str] = []
         for sink in FAILURE_STATE_SINKS:
             for match in re.finditer(sink, source):
                 rhs = match.group("rhs").strip()
-                if not rhs or rhs.startswith(("nil", '"', "#")):
+                if not rhs or rhs.startswith("nil"):
                     continue
                 if any(mapper in rhs for mapper in APPROVED_ERROR_MAPPERS):
                     continue
-                if error_head.match(rhs):
+                # Judge the whole right-hand side, not just its first token.
+                # A failure reached the screen through `(error as NSError)…`
+                # and through `{ let ns = error … }()` because both begin with
+                # punctuation. Literal text drops out; interpolations do not,
+                # because an interpolation is code that gets rendered.
+                code, interpolated = split_literals(rhs)
+                named = mentions(tainted, code + " " + " ".join(interpolated))
+                if named:
                     line = source.count("\n", 0, match.start()) + 1
-                    offenders.append(f"line {line}: {rhs[:70]!r}")
+                    offenders.append(f"line {line}: {named} in {rhs[:70]!r}")
         contract.check(
             not offenders,
             f"{relative} shows only fixed copy or mapped failures"
@@ -802,7 +1047,13 @@ def scan_consumer_error_mapper(contract: Contract) -> None:
         "localizedDescription" not in body and "String(describing:" not in body,
         "the mapper classifies a failure by case, never by its message",
     )
-    for family in ["TonoBackendError", "ToneEngineError", "StoreKitManager.StoreError", "URLError"]:
+    for family in [
+        "TonoBackendError",
+        "ToneEngineError",
+        "StoreKitManager.StoreError",
+        "URLError",
+        "StreamedFailure",
+    ]:
         contract.check(family in body, f"the mapper classifies {family}")
 
     project = contract.read("Tono.xcodeproj/project.pbxproj")
@@ -967,6 +1218,8 @@ def main() -> int:
     scan_settings_surface(contract)
     scan_consumer_copy(contract)
     scan_keyboard_consumer_copy(contract)
+    scan_rate_limit_is_not_a_paywall(contract)
+    scan_streaming_preserves_status(contract)
     discover_consumer_surfaces(contract)
     scan_no_raw_error_reaches_a_surface(contract)
     scan_failure_state_is_mapped(contract)

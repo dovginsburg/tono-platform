@@ -158,6 +158,31 @@ public enum AnalysisEvent {
     case suggestion(axis: String, text: String, rationale: String, riskAfter: String?)
     case complete(riskLevel: String, subtext: String, riskReason: String, flags: [String])
     case error(String)
+    /// Build 113: an HTTP failure carried as a status code rather than as
+    /// prose. The non-streaming path throws `TonoBackendError.http(code, …)`
+    /// and keeps 401, 402 and 429 apart; the streaming path used to stringify
+    /// the code into `"Server error (\(code))"` before anything could read it,
+    /// so the keyboard strip and the Share sheet collapsed all three into one
+    /// "Try again." The status is the only fact a user's next step depends on,
+    /// and a sentence is the one shape it must not travel in.
+    case failure(status: Int)
+}
+
+/// Build 113: a streamed failure reduced to the fact that changes what the
+/// user should do next.
+///
+/// Deliberately carries no message payload. A response body is exactly where
+/// hosts, status lines and stack traces live, so this type gives a consumer
+/// surface nothing it could render even by accident — `ConsumerErrorCopy`
+/// turns the code into a sentence, the same way it does for the
+/// non-streaming path.
+///
+/// It is intentionally *not* a `TonoBackendError`: the streaming callers
+/// already catch that type in a branch that re-checks entitlement, and this
+/// repair changes which sentence a user reads, not how many requests a tap
+/// makes.
+public enum StreamedFailure: Error, Equatable {
+    case http(status: Int)
 }
 
 public struct WeeklyDigestResponse: Codable {
@@ -601,7 +626,10 @@ public final class TonoBackend: @unchecked Sendable {
                     let (bytes, response) = try await URLSession.shared.bytes(for: urlReq)
                     guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
                         let code = (response as? HTTPURLResponse)?.statusCode ?? -1
-                        continuation.yield(.error("Server error (\(code))"))
+                        // Build 113: hand on the status, not a sentence about
+                        // it. Stringifying here is what lost the 401 / 402 /
+                        // 429 distinction on every streaming surface.
+                        continuation.yield(.failure(status: code))
                         continuation.finish()
                         return
                     }
