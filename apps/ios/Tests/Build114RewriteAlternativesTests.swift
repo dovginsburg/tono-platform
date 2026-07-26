@@ -712,4 +712,144 @@ final class Build114RewriteAlternativesTests: XCTestCase {
         )
     }
 
+    // ───────────────────────────────────────────────────────────────────
+    // RENDERED contract — both directions exist on the real card
+    //
+    // These drive the built view hierarchy, not the value type. The defect
+    // they exist for was invisible to a model test: `CoachAlternativeSequence`
+    // already had `canGoForward`/`stepForward` and they behaved correctly —
+    // the shipping card simply never rendered a control that called them, so
+    // version 2 became unreachable after stepping back.
+    //
+    // NOTE on the axis. `TonoCoachPalette.Axis` has no `warmer` case, and
+    // `presentCoachResults` renders only suggestions whose axis is in
+    // `orderedAxes` — so a card built with "warmer" silently collapses to
+    // "No rewrites available" and NOTHING is rendered. These tests therefore
+    // use a real axis, and assert the card actually rendered before asserting
+    // anything about it, so they can never pass vacuously.
+    // ───────────────────────────────────────────────────────────────────
+
+    private static func findView(
+        _ root: UIView, identifier: String
+    ) -> UIView? {
+        if root.accessibilityIdentifier == identifier { return root }
+        for child in root.subviews {
+            if let hit = findView(child, identifier: identifier) { return hit }
+        }
+        return nil
+    }
+
+    /// Drive a real two-version sequence on a RENDERED card, using an axis the
+    /// palette actually knows.
+    @MainActor
+    private static func renderTwoVersions(
+        _ controller: KeyboardViewController, first: String, second: String
+    ) {
+        controller.beginCoachRewrite(before: "please review this ", after: "", axis: "clearer")
+        let id = try! XCTUnwrap(controller.activeCoachRequestIDForTesting)
+        controller.completeCoach(
+            requestID: id,
+            liveBefore: "please review this ",
+            liveAfter: "",
+            result: .success(Self.variant(text: first, axis: "clearer"))
+        )
+        controller.tryAnotherTapped()
+        let altID = try! XCTUnwrap(controller.alternativeRequestIDForTesting)
+        controller.completeCoachAlternative(
+            requestID: altID,
+            liveBefore: "please review this ",
+            liveAfter: "",
+            result: .success(Self.variant(text: second, axis: "clearer"))
+        )
+        controller.view.layoutIfNeeded()
+    }
+
+    @MainActor
+    func testTheRenderedCardOffersBothDirectionsSoEitherRewriteCanBeUsed() throws {
+        let controller = Self.makeController()
+        Self.renderTwoVersions(controller, first: "version one text", second: "version two text")
+
+        // Guard against a vacuous pass: the card must genuinely have rendered.
+        XCTAssertNotNil(
+            Self.findView(controller.view, identifier: "TonoKB.versionCue"),
+            "the results card did not render — this test would prove nothing"
+        )
+
+        let back = try XCTUnwrap(
+            Self.findView(controller.view, identifier: "TonoKB.versionBack"),
+            "the rendered card must carry a step-back control"
+        )
+        // THE REGRESSION: before this fix no view with this identifier existed
+        // anywhere in the hierarchy, so this unwrap failed.
+        let forward = try XCTUnwrap(
+            Self.findView(controller.view, identifier: "TonoKB.versionForward"),
+            "the rendered card must carry a step-forward control, or version 2 "
+                + "becomes unreachable once the person steps back to compare"
+        )
+
+        // At version 2 of 2: back is offered, forward has nowhere to go.
+        XCTAssertFalse(back.isHidden)
+        XCTAssertTrue(forward.isHidden)
+        XCTAssertEqual(controller.coachDisplayedVersionForTesting, "version two text")
+
+        // Step back to compare version 1.
+        controller.showPreviousVersionTapped()
+        controller.view.layoutIfNeeded()
+        XCTAssertEqual(controller.coachDisplayedVersionForTesting, "version one text")
+
+        let backAfter = try XCTUnwrap(Self.findView(controller.view, identifier: "TonoKB.versionBack"))
+        let forwardAfter = try XCTUnwrap(
+            Self.findView(controller.view, identifier: "TonoKB.versionForward")
+        )
+        XCTAssertTrue(backAfter.isHidden, "nothing is further back than version 1")
+        XCTAssertFalse(
+            forwardAfter.isHidden,
+            "version 2 must be reachable again — otherwise stepping back is a trap "
+                + "and only one of the two rewrites can ever be used"
+        )
+
+        // And it actually works: return to version 2.
+        controller.showNextVersionTapped()
+        controller.view.layoutIfNeeded()
+        XCTAssertEqual(
+            controller.coachDisplayedVersionForTesting, "version two text",
+            "the forward control must return the person to the rewrite they left"
+        )
+    }
+
+    @MainActor
+    func testTheRenderedForwardControlIsWiredToATouchAction() throws {
+        // A control that renders but does nothing is the same defect wearing a
+        // different hat, so the button must carry a touch-up action.
+        let controller = Self.makeController()
+        Self.renderTwoVersions(controller, first: "one", second: "two")
+        controller.showPreviousVersionTapped()
+        controller.view.layoutIfNeeded()
+
+        let forward = try XCTUnwrap(
+            Self.findView(controller.view, identifier: "TonoKB.versionForward") as? UIControl
+        )
+        XCTAssertFalse(forward.isHidden)
+        XCTAssertTrue(forward.isEnabled)
+        // Firing the real control event moves the card, which is the only
+        // wiring assertion worth making: it proves the action exists AND that
+        // it does the right thing.
+        forward.sendActions(for: .touchUpInside)
+        controller.view.layoutIfNeeded()
+        XCTAssertEqual(controller.coachDisplayedVersionForTesting, "two")
+    }
+
+    func testBothStepControlsAreRegisteredSurfaceIdentifiers() throws {
+        // The identifier registry is what the UI-surface contract enumerates;
+        // a control missing from it is invisible to those assertions. `Const`
+        // is private to the controller, so this reads the reviewed source the
+        // same way the rest of this file's contract checks do.
+        let source = try Self.source("KeyboardExtension/KeyboardViewController.swift")
+        XCTAssertTrue(source.contains(#"static let idVersionForward   = "TonoKB.versionForward""#))
+        XCTAssertTrue(
+            source.contains("idAlternativeNotice, idVersionBack, idVersionForward,"),
+            "both step controls must be in the identifier registry"
+        )
+    }
+
 }

@@ -208,6 +208,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         static let idVersionCue       = "TonoKB.versionCue"
         static let idAlternativeNotice = "TonoKB.alternativeNotice"
         static let idVersionBack      = "TonoKB.versionBack"
+        static let idVersionForward   = "TonoKB.versionForward"
 
         /// The exact customer-visible action labels. Held as constants because
         /// they are a reviewed product contract, not incidental strings: the
@@ -220,6 +221,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         /// beside the "2 of 3" cue where it reads as navigation between
         /// versions rather than as a fourth action.
         static let versionBackLabel   = "‹"
+        static let versionForwardLabel = "›"
 
         /// Single-source-of-truth registry, returned by
         /// `allIdentifiers`. The lookup keeps the Swift optimiser
@@ -235,7 +237,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             idEmojiPanel, idEmojiCategory, idEmojiRecents, idEmojiFooter,
             idToneChips, idLocalBadge,
             idUseRewrite, idTryAnother, idDismissRewrite, idVersionCue,
-            idAlternativeNotice, idVersionBack,
+            idAlternativeNotice, idVersionBack, idVersionForward,
         ]
 
         /// Returns every TonoKB.* identifier this file declares.
@@ -410,6 +412,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private weak var coachTryAnotherSpinner: UIActivityIndicatorView?
     private weak var coachAlternativeNotice: UILabel?
     private weak var coachVersionBackButton: UIButton?
+    private weak var coachVersionForwardButton: UIButton?
 
     /// Test seam: the version currently displayed and the cap, so a unit test
     /// asserts the real sequence rather than re-deriving it.
@@ -3655,22 +3658,40 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         // `Use rewrite` applies whichever one is on screen, so asking for
         // another costs nothing but the tap.
         //
-        // A compact stepper beside the cue rather than a fourth action button:
+        // A compact stepper beside the cue rather than two more action buttons:
         // the action row is already three wide in a keyboard-height panel, and
-        // going back is a navigation between versions, not a peer of
+        // moving between versions is navigation, not a peer of
         // "Use rewrite" / "Dismiss".
-        let back = TonoMinimumHitTargetButton(type: .system)
-        back.accessibilityIdentifier = Const.idVersionBack
-        back.setTitle(Const.versionBackLabel, for: .normal)
-        back.titleLabel?.font = UIFontMetrics(forTextStyle: .caption1).scaledFont(
-            for: .systemFont(ofSize: 13, weight: .semibold)
+        //
+        // BOTH directions, and that is the whole point. Shipping only the back
+        // control made the trap symmetrical rather than fixing it: stepping
+        // back to compare version 1 hid the back control (nothing further
+        // back), while `Try another` stayed disabled because the generation
+        // budget was spent — so version 2 became unreachable and the person was
+        // stranded on the rewrite they had just stepped away from. "Either
+        // rewrite can be used" requires being able to get back to either one.
+        let stepper = UIStackView()
+        stepper.axis = .horizontal
+        stepper.spacing = 2
+        stepper.translatesAutoresizingMaskIntoConstraints = false
+
+        let back = Self.makeVersionStepButton(
+            identifier: Const.idVersionBack, title: Const.versionBackLabel
         )
-        back.titleLabel?.adjustsFontForContentSizeCategory = true
-        back.translatesAutoresizingMaskIntoConstraints = false
         back.addAction(UIAction { [weak self] _ in
             self?.showPreviousVersionTapped()
         }, for: .touchUpInside)
-        chip.addSubview(back)
+        stepper.addArrangedSubview(back)
+
+        let forward = Self.makeVersionStepButton(
+            identifier: Const.idVersionForward, title: Const.versionForwardLabel
+        )
+        forward.addAction(UIAction { [weak self] _ in
+            self?.showNextVersionTapped()
+        }, for: .touchUpInside)
+        stepper.addArrangedSubview(forward)
+
+        chip.addSubview(stepper)
 
         let actions = UIStackView()
         actions.axis = .horizontal
@@ -3741,9 +3762,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             cue.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -10),
             cue.topAnchor.constraint(equalTo: chip.topAnchor, constant: 6),
 
-            back.trailingAnchor.constraint(equalTo: cue.leadingAnchor, constant: -4),
-            back.centerYAnchor.constraint(equalTo: cue.centerYAnchor),
-            back.leadingAnchor.constraint(greaterThanOrEqualTo: axis.trailingAnchor, constant: 6),
+            stepper.trailingAnchor.constraint(equalTo: cue.leadingAnchor, constant: -4),
+            stepper.centerYAnchor.constraint(equalTo: cue.centerYAnchor),
+            stepper.leadingAnchor.constraint(greaterThanOrEqualTo: axis.trailingAnchor, constant: 6),
 
             notice.leadingAnchor.constraint(equalTo: chip.leadingAnchor, constant: 10),
             notice.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -10),
@@ -3766,24 +3787,50 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             coachTryAnotherSpinner = spinner
             coachAlternativeNotice = notice
             coachVersionBackButton = back
-            applySequencePresentation(cue: cue, tryAnother: another, back: back)
+            coachVersionForwardButton = forward
+            applySequencePresentation(
+                cue: cue, tryAnother: another, back: back, forward: forward
+            )
         } else {
             cue.isHidden = true
             another.isHidden = true
-            back.isHidden = true
+            stepper.isHidden = true
         }
         return chip
     }
 
-    /// Paint the version cue and the `Try another` control from the sequence.
+    /// One factory for both chevrons, so they cannot drift apart in font,
+    /// touch target, or the identifier discipline the UI contract asserts.
+    private static func makeVersionStepButton(
+        identifier: String, title: String
+    ) -> TonoMinimumHitTargetButton {
+        let button = TonoMinimumHitTargetButton(type: .system)
+        button.accessibilityIdentifier = identifier
+        button.setTitle(title, for: .normal)
+        button.titleLabel?.font = UIFontMetrics(forTextStyle: .caption1).scaledFont(
+            for: .systemFont(ofSize: 13, weight: .semibold)
+        )
+        button.titleLabel?.adjustsFontForContentSizeCategory = true
+        button.translatesAutoresizingMaskIntoConstraints = false
+        return button
+    }
+
+    /// Paint the version cue, the two step controls, and `Try another` from
+    /// the sequence.
     ///
-    /// At the limit the control is DISABLED rather than removed, and says so
-    /// in its accessibility label — a control that silently vanishes leaves a
-    /// VoiceOver user with no explanation for why the option is gone.
-    private func applySequencePresentation(cue: UILabel, tryAnother: UIButton, back: UIButton) {
+    /// At the generation limit `Try another` is DISABLED rather than removed,
+    /// and says so in its accessibility label — a control that silently
+    /// vanishes leaves a VoiceOver user with no explanation for why the option
+    /// is gone. The step controls are hidden rather than disabled, because
+    /// there genuinely is nothing in that direction and a permanently dead
+    /// chevron is noise.
+    private func applySequencePresentation(
+        cue: UILabel, tryAnother: UIButton, back: UIButton, forward: UIButton
+    ) {
         guard let sequence = coachSequence, sequence.displayedVersion > 0 else {
             cue.isHidden = true
             back.isHidden = true
+            forward.isHidden = true
             tryAnother.isEnabled = true
             tryAnother.accessibilityLabel = Const.tryAnotherLabel
             return
@@ -3797,9 +3844,19 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         // The rollback affordance appears only once there is something to go
         // back TO, so the first rewrite is not cluttered by a control that
         // would do nothing.
+        // Each direction appears only when there is something in it, so the
+        // card never shows a control that would do nothing — and, critically,
+        // the person can always reach whichever version they are not looking
+        // at. At the cap there is no further generation to buy, so these two
+        // controls ARE the whole of "either rewrite can be used".
         back.isHidden = !sequence.canGoBack
         back.accessibilityLabel = "Show previous version"
         back.accessibilityHint = "Goes back to version \(max(shown - 1, 1)) so you can use that one instead"
+
+        forward.isHidden = !sequence.canGoForward
+        forward.accessibilityLabel = "Show next version"
+        forward.accessibilityHint =
+            "Returns to version \(min(shown + 1, limit)) so you can use that one instead"
 
         if sequence.canRequestAnother {
             tryAnother.isEnabled = true
@@ -3866,6 +3923,38 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         // Re-present through the ordinary results path so the card, the cue and
         // the controls are all rebuilt from the sequence — there is no second
         // rendering path that could disagree with the first.
+        presentCoachResults(
+            TonoCoachClient.CoachResponse(
+                riskLevel: "medium",
+                perception: "",
+                subtext: "",
+                reason: nil,
+                suggestions: [
+                    TonoCoachClient.CoachRewrite(
+                        axis: sequence.axis, text: text, rationale: nil, riskAfter: nil
+                    )
+                ],
+                flags: []
+            )
+        )
+    }
+
+    /// Step forward to an already-generated version.
+    ///
+    /// The other half of "either rewrite can be used", and the half that was
+    /// missing. Without it, stepping back to compare version 1 was a one-way
+    /// trip: the back control hid itself (nothing further back) and
+    /// `Try another` was already disabled by the spent generation budget, so
+    /// version 2 could not be selected again.
+    ///
+    /// Exactly the same discipline as stepping back: it re-presents text the
+    /// device already holds, requests nothing, spends nothing, and un-rejects
+    /// nothing. It is refused mid-flight for the same reason.
+    @objc func showNextVersionTapped() {
+        guard coachAlternativeRequestID == nil, !coachBusy else { return }
+        guard var sequence = coachSequence, sequence.canGoForward else { return }
+        guard sequence.stepForward() != nil, let text = sequence.currentVersion else { return }
+        coachSequence = sequence
         presentCoachResults(
             TonoCoachClient.CoachResponse(
                 riskLevel: "medium",
