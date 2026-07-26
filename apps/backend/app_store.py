@@ -450,6 +450,15 @@ def compute_me_fields(user: User, store: Store) -> dict[str, Any]:
         subscription_status=subscription_status,
         subscription_renews_at=subscription_renews_at,
         account_id=user.account_id,
+        # Build 114 — the account-path fields every client already decodes.
+        # The iOS `TonoMe` has declared `email` / `email_verified_at` since
+        # 2026-07-03 while the server returned neither, so the app could never
+        # tell a signed-in person from an anonymous one. These are pure
+        # projections of account state and grant nothing: `is_pro` above
+        # remains the sole entitlement answer.
+        email=user.account.email if user.account else None,
+        email_verified_at=user.account.email_verified_at if user.account else None,
+        lifecycle_state=user.account.lifecycle_state if user.account else "anonymous",
     )
 
 

@@ -20,8 +20,16 @@ android {
         applicationId = "com.tono.myapp"
         minSdk = 26
         targetSdk = 35
-        // Bump on every build (parity with iOS MARKETING_VERSION fix on b3184ea)
-        versionCode = 15
+        // Build 114. Aligned with the iOS CFBundleVersion so one release number
+        // describes the whole product — the Android email account lane and the
+        // iOS one ship the same contract, and a support question that arrives as
+        // "build 114" must mean the same thing on either platform.
+        //
+        // One-way door: Google Play requires versionCode to increase strictly and
+        // forever, so codes 16–113 are burned by this jump and cannot be reused.
+        // Nothing is uploaded by this change; the number simply becomes the floor
+        // for every future Android release.
+        versionCode = 114
         versionName = "1.1"
     }
 

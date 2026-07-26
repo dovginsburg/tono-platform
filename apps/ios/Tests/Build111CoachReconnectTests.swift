@@ -363,8 +363,14 @@ final class Build111CoachReconnectTests: XCTestCase {
         task?.cancel()
         wait(for: [terminated], timeout: 5)
 
-        XCTAssertEqual(CoachStallingURLProtocol.transport.parkedCount, 0,
-                       "cancellation must remove the parked request from the transport")
+        // `stopLoading` is delivered on the URL loading system's own thread and
+        // is NOT ordered against the completion handler, so reading the
+        // transport the instant the completion fires races the loader rather
+        // than measuring it. Waiting for the teardown asserts the same
+        // property without the race: if cancellation never removed the parked
+        // request this times out and fails, and the delivery assertions below
+        // independently prove nothing was released afterwards.
+        waitForParkedRequests(0)
 
         // Connectivity returns AFTER the cancel. Nothing may be delivered.
         CoachStallingURLProtocol.transport.restoreConnectivity()

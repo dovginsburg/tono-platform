@@ -35,6 +35,7 @@ as a bare script. In production, ``Dockerfile`` (whose CMD is exactly
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import json
@@ -51,7 +52,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import app_store, google_play, passkeys, payments, rate_limit, slack, social_auth, supabase_auth
+from . import (
+    app_store,
+    email_auth,
+    email_identity,
+    google_play,
+    passkeys,
+    payments,
+    rate_limit,
+    slack,
+    social_auth,
+    supabase_auth,
+)
+from . import store as store_module
 from .app_store import compute_me_fields
 from .analyze import (
     AnalyzeRequest,
@@ -363,12 +376,19 @@ async def _lifespan(_: "FastAPI"):
         logger.exception("google-play acknowledge reconcile failed on startup; will retry")
 
     logger.info(
-        "tono backend ready: provider=%s stripe=%s slack=%s apple=%s google=%s",
+        # Build 114 adds `email=`. A project missing its auth configuration
+        # fails closed at 503, which a person meets as "email sign-in isn't
+        # available" — truthful, but the first place anyone would notice was a
+        # real signup. Saying it at boot makes the misconfiguration visible
+        # before it costs a registration. It logs the WORD "configured", never
+        # the key.
+        "tono backend ready: provider=%s stripe=%s slack=%s apple=%s google=%s email=%s",
         os.environ.get("TONO_PROVIDER", "mock"),
         "configured" if os.environ.get("STRIPE_SECRET_KEY") else "off",
         "configured" if os.environ.get("SLACK_CLIENT_ID") else "off",
         "configured" if os.environ.get("TONO_APPLE_ROOT_CA_PEM") else "off",
         "configured" if os.environ.get("TONO_GOOGLE_SERVICE_ACCOUNT_JSON") else "off",
+        "configured" if email_auth.config_is_valid() else "off",
     )
     try:
         yield
@@ -694,6 +714,11 @@ class MeResponse(BaseModel):
     # Required non-null after migration — the canonical entitlement principal
     # (contract §1). A null here is a contract violation.
     account_id: str
+    # Build 114 — account-path projection. Optional so a legacy/anonymous
+    # device is described truthfully rather than with a fabricated address.
+    email: Optional[str] = None
+    email_verified_at: Optional[str] = None
+    lifecycle_state: str = "anonymous"
 
 
 @app.get("/v1/me", response_model=MeResponse)
@@ -822,6 +847,10 @@ async def auth_google(
 
 class WebSignInRequest(BaseModel):
     access_token: str
+    # Build 114 — so a web sign-in is recorded on the same registration ledger
+    # the native surfaces write to. Optional: an older web build sends neither
+    # and is described as `web`/no-build rather than rejected.
+    app_version: Optional[str] = None
 
 
 class WebSignInResponse(BaseModel):
@@ -868,6 +897,28 @@ async def auth_web(
     # come for free (link=False = plain sign-in).
     account = _resolve_provider_signin(store, user, "supabase", claims.sub, email, link=False)
 
+    # Build 114 — one registration ledger for every surface. A person who signs
+    # up on the website is a registration Tono must be able to count and audit,
+    # exactly like an iOS or Android one; before this, only the native email
+    # path wrote a row, so the web population was invisible. Records the fact
+    # the provider proved (a confirmed address) and never the token that carried
+    # it. `record_registration_event` is monotonic, so a returning browser adds
+    # a sign-in event without ever walking the state back.
+    if email:
+        with contextlib.suppress(AccountConflictError):
+            store.mark_email_verified(
+                account_id=account.id,
+                email=email,
+                source_surface=email_identity.SURFACE_WEB,
+                app_version=body.app_version,
+            )
+    store.record_registration_event(
+        account_id=account.id,
+        event_type=email_identity.EVENT_SIGN_IN,
+        source_surface=email_identity.SURFACE_WEB,
+        app_version=body.app_version,
+    )
+
     return WebSignInResponse(
         device_id=user.device_id,
         api_token=user.api_token,
@@ -876,6 +927,603 @@ async def auth_web(
         plan=account.plan,
         is_pro=account.is_pro,
         email=account.email,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Build 114 — email registration, verification, login, reset, logout.
+#
+# One architecture, not a second login silo. Supabase keeps owning auth.users,
+# the password material and the verification/reset mail (see email_auth.py);
+# this server keeps owning the canonical account. Every endpoint below ends in
+# the SAME `_resolve_provider_signin` primitive that Apple/Google/web sign-in
+# uses, so an email login converges on the identical canonical person and the
+# identical entitlement projection. Nothing here writes a plan, a subscription
+# column, or a grant: verification proves an address, never a purchase.
+#
+# Anti-enumeration: register, resend and reset ALWAYS answer with the same
+# accepted shape for a known and an unknown address. The only ways these
+# endpoints answer differently are ones that carry no information about whether
+# an account exists: being throttled (429) and the provider being down (503),
+# both already observable from outside, and a refusal of the submitted string
+# itself (400 — malformed address, password the provider calls too weak), which
+# describes what the person just typed and nothing else.
+# ---------------------------------------------------------------------------
+
+
+# One bounded budget per email-auth family, so a flood against `login` cannot
+# starve a legitimate `resend`, and a per-address lockout bounds brute force
+# independently of how many IPs the attacker rotates through.
+_EMAIL_AUTH_IP_LIMIT = rate_limit.RATE_SCOPES["auth"]
+_EMAIL_AUTH_KEY_LIMIT = rate_limit.OTP_LOCKOUT_LIMIT
+_EMAIL_AUTH_KEY_WINDOW = rate_limit.OTP_LOCKOUT_WINDOW
+
+
+def _email_auth_rate_gate(request: Request, scope: str, normalized_email: Optional[str]) -> None:
+    """Bound attempts per IP and per address. Raises 429 — which the clients
+    render as wait-and-retry, never as a credential failure and never as a
+    paywall (Build 113's protected property)."""
+    ip = _get_client_ip(request)
+    allowed, _ = rate_limit.check_ip_rate(f"email_{scope}", ip, _EMAIL_AUTH_IP_LIMIT)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="too many attempts — try again in a minute",
+            headers={"Retry-After": "60"},
+        )
+    if normalized_email:
+        allowed, _ = rate_limit.check_keyed_rate(
+            f"email_{scope}",
+            normalized_email,
+            _EMAIL_AUTH_KEY_LIMIT,
+            _EMAIL_AUTH_KEY_WINDOW,
+        )
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="too many attempts — try again shortly",
+                headers={"Retry-After": str(_EMAIL_AUTH_KEY_WINDOW)},
+            )
+
+
+def _email_auth_failure(outcome: email_auth.EmailAuthOutcome) -> HTTPException:
+    """Map a provider outcome to a status the clients already know how to
+    render. The provider's own message is never consulted, so no provider or
+    transport text can reach a screen.
+
+    Note what is deliberately absent: there is no branch that turns a provider
+    outage into "we sent you an email". An operational failure is always 503.
+    """
+    if outcome is email_auth.EmailAuthOutcome.RATE_LIMITED:
+        return HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="too many attempts — try again shortly",
+            headers={"Retry-After": "60"},
+        )
+    if outcome is email_auth.EmailAuthOutcome.VERIFICATION_REQUIRED:
+        return HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="email_verification_required"
+        )
+    # Input-shaped refusals get a plain, actionable answer. They describe the
+    # string the person just typed — never an account — so they are not
+    # enumeration signals, and they must NOT ride the anti-enumerating
+    # "verification_pending" path: telling someone to check their inbox when
+    # the provider refused the request is the one failure they can never
+    # recover from on their own.
+    if outcome is email_auth.EmailAuthOutcome.WEAK_PASSWORD:
+        return HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="choose a stronger password and try again",
+        )
+    if outcome is email_auth.EmailAuthOutcome.INVALID_EMAIL:
+        return HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="that email address can't be used — try another",
+        )
+    if outcome in (
+        email_auth.EmailAuthOutcome.NOT_CONFIGURED,
+        email_auth.EmailAuthOutcome.PROVIDER_UNAVAILABLE,
+    ):
+        return HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="email sign-in is temporarily unavailable",
+        )
+    return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_credentials")
+
+
+def _require_email(raw: str) -> str:
+    normalized = store_module.normalize_email(raw)
+    if not normalized:
+        # Shape-only rejection. This is NOT enumeration: it says the string is
+        # not an address, which the caller can see for themselves.
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "enter a valid email address")
+    return normalized
+
+
+def _require_password(raw: str) -> str:
+    # A floor, not a policy lecture: the provider enforces its own rules and we
+    # never store or hash the value. Bounded above so a multi-megabyte body
+    # cannot be pushed through to the provider.
+    if len(raw) < 8:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "use at least 8 characters for your password"
+        )
+    if len(raw) > 512:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "that password is too long")
+    return raw
+
+
+class EmailRegisterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str
+    password: str
+    source_surface: Optional[str] = None
+    app_version: Optional[str] = None
+
+
+class EmailAcceptedResponse(BaseModel):
+    """The single anti-enumerating answer for register / resend / reset.
+
+    `status` is a constant. There is intentionally no field that varies with
+    whether the address exists, whether it is already verified, or whether the
+    person has an account — those are exactly the bits an attacker wants.
+    """
+
+    status: Literal["verification_pending"] = "verification_pending"
+
+
+class EmailSessionResponse(BaseModel):
+    device_id: str
+    api_token: str
+    device_credential: Optional[str] = None
+    account_id: str
+    plan: str
+    is_pro: bool
+    email: Optional[str] = None
+    email_verified: bool = False
+
+
+@app.post(
+    "/v1/auth/email/register",
+    response_model=EmailAcceptedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def auth_email_register(
+    body: EmailRegisterRequest,
+    request: Request,
+    user: OptionalCurrentUser,
+    store: StoreDep,
+    client: Annotated[
+        email_auth.SupabaseEmailAuthClient, Depends(email_auth.get_email_auth_client)
+    ],
+) -> EmailAcceptedResponse:
+    """Start an email registration.
+
+    Answers `verification_pending` for every outcome that depends on whether
+    the address is already registered — which is the whole anti-enumeration
+    property. It does NOT answer that way when the provider refused the
+    submitted address or password on its own validation rules: that is a fact
+    about the input, and reporting it is the difference between a person
+    fixing their password and a person waiting forever for mail that was
+    never sent.
+
+    The canonical account is bound here, BEFORE verification, so that an
+    anonymous device that has been coaching drafts for weeks upgrades in place
+    — its account UUID, history, usage and any purchase ownership all survive
+    the registration. The account stays in the `pending` lifecycle state and
+    unidentified until the person proves the address, so binding early costs
+    no access.
+    """
+    normalized = _require_email(body.email)
+    password = _require_password(body.password)
+    _email_auth_rate_gate(request, "register", normalized)
+
+    try:
+        await client.sign_up(email=normalized, password=password)
+    except email_auth.EmailAuthError as exc:
+        if exc.outcome is email_auth.EmailAuthOutcome.INVALID_CREDENTIALS:
+            # Supabase answers 4xx for "already registered". Revealing that
+            # would enumerate the address, so we record the attempt and return
+            # the same accepted shape a brand-new address gets. A person who
+            # genuinely owns it still receives provider mail; one who does not
+            # learns nothing.
+            _record_email_registration_intent(
+                store, user, normalized, body.source_surface, body.app_version
+            )
+            return EmailAcceptedResponse()
+        _record_provider_outage(
+            store,
+            exc.outcome,
+            account_id=user.account_id if user else None,
+            source_surface=body.source_surface,
+            app_version=body.app_version,
+        )
+        raise _email_auth_failure(exc.outcome) from None
+
+    _record_email_registration_intent(
+        store, user, normalized, body.source_surface, body.app_version
+    )
+    return EmailAcceptedResponse()
+
+
+def _record_email_registration_intent(
+    store: Store,
+    user: Optional[User],
+    normalized_email: str,
+    source_surface: Optional[str],
+    app_version: Optional[str],
+) -> None:
+    """Move the CALLER'S existing canonical account into `pending`, when there
+    is one. A browser or fresh install with no bearer has no account to bind
+    yet — it gets one at first login — so this is a no-op rather than a place
+    that mints stray accounts on unauthenticated input.
+
+    Never raises into the response: an audit write must not be able to turn a
+    successful registration into a visible failure, and a conflict here (the
+    account already has a different verified address) is a legitimate refusal
+    to re-point a live identity, not a reason to tell the caller anything.
+    """
+    if user is None or not user.account_id:
+        return
+    with contextlib.suppress(AccountConflictError):
+        store.begin_email_registration(
+            account_id=user.account_id,
+            email=normalized_email,
+            source_surface=source_surface,
+            app_version=app_version,
+        )
+
+
+# The outcomes that mean "we could not serve this", as opposed to "we served
+# it and the answer was no". Kept as one set so every path agrees about which
+# failures are operational — a rate limit and a wrong password are emphatically
+# not outages, and auditing them as such would make the outage count useless.
+_OUTAGE_OUTCOMES = frozenset(
+    {
+        email_auth.EmailAuthOutcome.PROVIDER_UNAVAILABLE,
+        email_auth.EmailAuthOutcome.NOT_CONFIGURED,
+    }
+)
+
+
+def _record_provider_outage(
+    store: Store,
+    outcome: email_auth.EmailAuthOutcome,
+    *,
+    account_id: Optional[str],
+    source_surface: Optional[str],
+    app_version: Optional[str],
+) -> None:
+    """Audit an attempt the auth provider could not serve.
+
+    Worth writing down because the alternative is that "how many people could
+    not register while the provider was down" is unanswerable afterwards — a
+    503 that is only ever a status code leaves no trace, and the person who
+    never got their link has no way to prove they tried.
+
+    `account_id` is frequently None here, and deliberately so: an
+    unauthenticated attempt has no caller account, and an outage is not a
+    reason to mint one. The row records that an attempt could not be served;
+    it carries no address, so it identifies nobody.
+
+    Swallows everything. An audit write must never be able to turn one failure
+    into two, and the caller is already on its way to raising the real one.
+    """
+    if outcome not in _OUTAGE_OUTCOMES:
+        return
+    with contextlib.suppress(Exception):
+        store.record_registration_event(
+            account_id=account_id,
+            event_type=email_identity.EVENT_PROVIDER_UNAVAILABLE,
+            source_surface=source_surface,
+            app_version=app_version,
+        )
+
+
+class EmailLoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str
+    password: str
+    source_surface: Optional[str] = None
+    app_version: Optional[str] = None
+
+
+@app.post("/v1/auth/email/login", response_model=EmailSessionResponse)
+async def auth_email_login(
+    body: EmailLoginRequest,
+    request: Request,
+    user: OptionalCurrentUser,
+    store: StoreDep,
+    client: Annotated[
+        email_auth.SupabaseEmailAuthClient, Depends(email_auth.get_email_auth_client)
+    ],
+    verifier: Annotated[
+        supabase_auth.SupabaseVerifier, Depends(supabase_auth.get_supabase_verifier)
+    ],
+) -> EmailSessionResponse:
+    """Sign in with email and password.
+
+    Two independent gates, both fail-closed:
+
+      1. The provider must accept the credentials AND consider the address
+         confirmed. Supabase withholds a session for an unconfirmed address,
+         which surfaces as 403 `email_verification_required`.
+      2. We re-verify the returned access token cryptographically through the
+         SAME verifier the web callback uses, and refuse to proceed unless its
+         `email_verified` claim is true. So even a misconfigured project with
+         confirmations switched off cannot mint a verified identity here.
+    """
+    normalized = _require_email(body.email)
+    password = _require_password(body.password)
+    _email_auth_rate_gate(request, "login", normalized)
+
+    try:
+        session = await client.sign_in(email=normalized, password=password)
+    except email_auth.EmailAuthError as exc:
+        if exc.outcome is email_auth.EmailAuthOutcome.VERIFICATION_REQUIRED:
+            # The provider knows this address and refused it for the one reason
+            # the person can fix. Recorded so "I never got the email" is
+            # answerable from the account's own history rather than from a
+            # status code nobody kept.
+            _record_email_audit(
+                store, normalized, email_identity.EVENT_VERIFICATION_PENDING_BLOCKED, body
+            )
+        _record_provider_outage(
+            store,
+            exc.outcome,
+            account_id=user.account_id if user else None,
+            source_surface=body.source_surface,
+            app_version=body.app_version,
+        )
+        raise _email_auth_failure(exc.outcome) from None
+
+    claims = await verifier(session.access_token)
+    if not claims.email_verified:
+        # Gate 2. A project with confirmations switched off can hand back a
+        # session for an unproven address; this is where that is refused, and
+        # it is the same refusal a person sees from gate 1, audited the same
+        # way — the two must not be distinguishable from outside.
+        _record_email_audit(
+            store, normalized, email_identity.EVENT_VERIFICATION_PENDING_BLOCKED, body
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="email_verification_required"
+        )
+
+    # A successful login clears the per-address lockout so a person who simply
+    # mistyped once is not held out by their own earlier attempts.
+    rate_limit.reset_keyed_rate("email_login", normalized)
+
+    device_credential: Optional[str] = None
+    if user is None:
+        registration = store.register_device()
+        user = registration.user
+        device_credential = registration.device_credential
+
+    verified_email = claims.email or normalized
+    account = _resolve_provider_signin(
+        store, user, "supabase", claims.sub, verified_email, link=False
+    )
+    try:
+        account = store.mark_email_verified(
+            account_id=account.id,
+            email=verified_email,
+            source_surface=body.source_surface,
+            app_version=body.app_version,
+        )
+    except AccountConflictError:
+        # The address is already the verified identity of a DIFFERENT canonical
+        # account — a second provider subject presenting the same spelling. The
+        # store is right to refuse (merging would hand this person someone
+        # else's history and entitlement), but the refusal has to arrive as a
+        # reviewed consumer answer.
+        #
+        # Uncaught, this propagated as a raw 500: the one shape Build 112
+        # established must never reach a screen, and the least recoverable one
+        # here — a person cannot tell "the server broke" from "try again later"
+        # and has no next step either way. 409 carries the shared vocabulary
+        # code the clients already map to "this address is spoken for; sign in
+        # the way you did before, or use a different address".
+        #
+        # `mark_email_verified` has already written the `identity_conflict`
+        # audit event, so the refusal is visible to support without the
+        # response having to describe the other account in any way.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=email_identity.OUTCOME_ACCOUNT_CONFLICT,
+        ) from None
+    store.record_registration_event(
+        account_id=account.id,
+        event_type=email_identity.EVENT_SIGN_IN,
+        source_surface=body.source_surface,
+        app_version=body.app_version,
+    )
+
+    # Project the entitlement through the SAME authority `/v1/me` uses, by
+    # re-reading the device now that it has been re-linked.
+    #
+    # `Account.is_pro` alone is not the entitlement answer and never was. It
+    # reads plan/subscription/coupon, which is the Stripe-shaped half; an
+    # Apple or Play subscription attaches to the canonical account as a
+    # provider ENTITLEMENT GRANT, and only `User.is_pro` (via
+    # `_attach_account`'s `provider_entitlement_active`) accounts for it.
+    #
+    # Returning `account.is_pro` therefore told every returning App Store and
+    # Play subscriber `is_pro: false` at the exact moment they signed back in to
+    # recover their subscription — the reinstall case this whole lane exists to
+    # serve. Re-reading here is what makes a login a genuine entitlement
+    # refresh, and what makes a same-account 402 resolve in one call instead of
+    # needing a Restore tap.
+    refreshed = store.get_by_device(user.device_id) or user
+    projection = compute_me_fields(refreshed, store)
+    return EmailSessionResponse(
+        device_id=user.device_id,
+        api_token=user.api_token,
+        device_credential=device_credential,
+        account_id=account.id,
+        plan=projection["plan"],
+        is_pro=projection["is_pro"],
+        email=account.email,
+        email_verified=account.email_is_verified,
+    )
+
+
+class EmailAddressRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str
+    source_surface: Optional[str] = None
+    app_version: Optional[str] = None
+
+
+@app.post(
+    "/v1/auth/email/resend",
+    response_model=EmailAcceptedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def auth_email_resend(
+    body: EmailAddressRequest,
+    request: Request,
+    store: StoreDep,
+    client: Annotated[
+        email_auth.SupabaseEmailAuthClient, Depends(email_auth.get_email_auth_client)
+    ],
+) -> EmailAcceptedResponse:
+    """Resend the verification link. Anti-enumerating: an unknown address and
+    an already-verified address produce the identical accepted answer."""
+    normalized = _require_email(body.email)
+    _email_auth_rate_gate(request, "resend", normalized)
+    try:
+        await client.resend_verification(email=normalized)
+    except email_auth.EmailAuthError as exc:
+        if exc.outcome is email_auth.EmailAuthOutcome.INVALID_CREDENTIALS:
+            return EmailAcceptedResponse()
+        if exc.outcome in _OUTAGE_OUTCOMES:
+            _record_email_audit(
+                store, normalized, email_identity.EVENT_PROVIDER_UNAVAILABLE, body
+            )
+        raise _email_auth_failure(exc.outcome) from None
+    _record_email_audit(store, normalized, email_identity.EVENT_VERIFICATION_RESENT, body)
+    return EmailAcceptedResponse()
+
+
+@app.post(
+    "/v1/auth/email/reset",
+    response_model=EmailAcceptedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def auth_email_reset(
+    body: EmailAddressRequest,
+    request: Request,
+    store: StoreDep,
+    client: Annotated[
+        email_auth.SupabaseEmailAuthClient, Depends(email_auth.get_email_auth_client)
+    ],
+) -> EmailAcceptedResponse:
+    """Begin password recovery. Anti-enumerating for the same reason as
+    resend: the answer is identical whether or not the address is known."""
+    normalized = _require_email(body.email)
+    _email_auth_rate_gate(request, "reset", normalized)
+    try:
+        await client.request_password_reset(email=normalized)
+    except email_auth.EmailAuthError as exc:
+        if exc.outcome is email_auth.EmailAuthOutcome.INVALID_CREDENTIALS:
+            return EmailAcceptedResponse()
+        if exc.outcome in _OUTAGE_OUTCOMES:
+            _record_email_audit(
+                store, normalized, email_identity.EVENT_PROVIDER_UNAVAILABLE, body
+            )
+        raise _email_auth_failure(exc.outcome) from None
+    _record_email_audit(store, normalized, email_identity.EVENT_PASSWORD_RESET_REQUESTED, body)
+    return EmailAcceptedResponse()
+
+
+def _record_email_audit(
+    store: Store,
+    normalized_email: str,
+    event: str,
+    body: "EmailAddressRequest | EmailLoginRequest",
+) -> None:
+    """Audit an address-scoped event against the account(s) that already own
+    the address. Writes nothing when the address is unknown — which is also why
+    this cannot become an enumeration oracle: the caller's response is
+    identical either way, and the write is invisible to them.
+
+    Takes either request shape because it reads only the two audit fields both
+    carry (surface and build) and never the credentials one of them also has.
+    """
+    for account in store.find_accounts_by_email(normalized_email):
+        store.record_registration_event(
+            account_id=account.id,
+            event_type=event,
+            source_surface=body.source_surface,
+            app_version=body.app_version,
+        )
+
+
+class EmailLogoutResponse(BaseModel):
+    signed_out: bool
+
+
+@app.post("/v1/auth/email/logout", response_model=EmailLogoutResponse)
+def auth_email_logout(user: CurrentUser, store: StoreDep) -> EmailLogoutResponse:
+    """Sign this DEVICE out, and mean it.
+
+    Deliberately local and provider-independent: the bearer the caller just
+    presented stops working before this returns, so logging out of a shared
+    device never depends on a reachable provider or a good network.
+
+    `sign_out_device` is used rather than `rotate_token` because rotating alone
+    is not a sign-out: the device also holds a durable credential that lets it
+    re-register itself into the same row, so the next `/v1/register` would hand
+    it a working bearer for an account it was just signed out of. See the store
+    method for the full argument.
+
+    The canonical account, its history, its entitlement and its registration
+    audit are untouched — signing back in returns the person to exactly the
+    same account. The sign-out event is recorded BEFORE the unlink, while the
+    account is still known.
+    """
+    if user.account_id:
+        store.record_registration_event(
+            account_id=user.account_id,
+            event_type=email_identity.EVENT_SIGN_OUT,
+        )
+    store.sign_out_device(user.device_id)
+    return EmailLogoutResponse(signed_out=True)
+
+
+class RegistrationEventsResponse(BaseModel):
+    account_id: str
+    lifecycle_state: str
+    email_verified: bool
+    events: list[dict]
+
+
+@app.get("/v1/account/registration-events", response_model=RegistrationEventsResponse)
+def account_registration_events(
+    user: CurrentUser, store: StoreDep
+) -> RegistrationEventsResponse:
+    """The caller's OWN registration/verification history.
+
+    Scoped by the bearer's account — there is no account id parameter, so one
+    person cannot read another's history. Every row carries a timestamp, the
+    source surface and the app build; none carries a password, a token or a
+    verification link (see the `account_registration_events` table comment).
+    """
+    if not user.account_id:
+        reloaded = store.ensure_account(user.device_id)
+        if reloaded is not None:
+            user = reloaded
+    if not user.account_id:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, "no canonical account for this device"
+        )
+    account = store.get_account(user.account_id)
+    return RegistrationEventsResponse(
+        account_id=user.account_id,
+        lifecycle_state=account.lifecycle_state if account else "anonymous",
+        email_verified=bool(account and account.email_is_verified),
+        events=store.list_registration_events(user.account_id),
     )
 
 
@@ -1458,6 +2106,53 @@ def admin_stats(request: Request, store: StoreDep) -> dict[str, Any]:
         }
 
     return store._run(_do).result()
+
+
+# ---------------------------------------------------------------------------
+# Admin registration analytics (Build 114)
+# ---------------------------------------------------------------------------
+
+
+class AdminRegistrationsResponse(BaseModel):
+    """Aggregate registration reporting. Every field is a count or a
+    count-by-category; there is deliberately no field that could hold an
+    address, an account id, or an event detail."""
+
+    days: int
+    registrations_total: int
+    by_lifecycle_state: dict[str, int]
+    by_source_surface: dict[str, int]
+    by_app_build: dict[str, int]
+    created_in_window: int
+    verified_in_window: int
+    signed_in_in_window: int
+    events_in_window: dict[str, int]
+
+
+@app.get("/admin/registrations", response_model=AdminRegistrationsResponse)
+def admin_registrations(
+    request: Request, store: StoreDep, days: int = 30
+) -> AdminRegistrationsResponse:
+    """How registration is going, for whoever runs the product.
+
+    The Build 114 brief asks Tono to TRACK registrations, not merely to record
+    them: `/v1/account/registration-events` answers "what happened to my
+    account" for one signed-in person and is scoped by their own bearer, which
+    is the right shape for support and the wrong shape for knowing whether
+    signup works at all.
+
+    Counts only. The response model above has no field an address could travel
+    in, and `Store.registration_metrics` selects nothing but counts and the
+    grouping columns the store itself sanitized on write — so this endpoint
+    could not identify a person even if an operator wanted it to. That is why
+    it is safe to expose an aggregate over a table whose per-row contents are
+    otherwise deliberately unreadable from outside.
+
+    Admin-secret protected like every other `/admin` route; without a
+    configured `TONO_ADMIN_SECRET` it answers 403 rather than opening.
+    """
+    _check_admin(request)
+    return AdminRegistrationsResponse(**store.registration_metrics(days=days))
 
 
 # ---------------------------------------------------------------------------

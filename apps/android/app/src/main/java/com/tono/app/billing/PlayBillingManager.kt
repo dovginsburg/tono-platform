@@ -15,6 +15,7 @@ import com.android.billingclient.api.QueryPurchasesParams
 import com.android.billingclient.api.Purchase
 import com.android.billingclient.api.PurchasesUpdatedListener
 import com.tono.shared.network.TonoBackend
+import com.tono.shared.storage.SecureStore
 import com.tono.shared.storage.SharedKeys
 import com.tono.shared.storage.SharedStore
 import kotlinx.coroutines.CoroutineScope
@@ -90,10 +91,24 @@ object PlayBillingManager : PurchasesUpdatedListener {
     fun purchase(activity: Activity, productId: String) {
         val accountId = SharedStore.getString(SharedKeys.ACCOUNT_ID)
             ?.takeIf { it.isNotBlank() }
-        if (accountId == null) {
+        // Build 114 — the same gate iOS applies in `StoreKitManager.purchase`.
+        //
+        // A canonical account id alone is not enough. An anonymous, device-only
+        // account has one, but it is lost when the app is removed, so a purchase
+        // bound to it cannot be recovered on the next install — the person pays
+        // again for something they already own. Requiring a CONFIRMED address
+        // means the id this purchase binds to is one they can get back.
+        //
+        // Note the direction: confirming an address is a precondition for buying,
+        // never a grant. Pro still comes only from a verified Play purchase the
+        // server accepted (see `EntitlementDecision`).
+        //
+        // Bound to a local non-null so the value actually sent to Play is the one
+        // the gate approved — re-reading the store below could race a sign-out.
+        if (accountId == null || !SecureStore.isIdentifiedAccount(accountId)) {
             _state.value = _state.value.copy(
                 isLoading = false,
-                error = "Sign in to Tono before starting a purchase.",
+                error = "Sign in with your email first so your subscription follows you if you reinstall.",
             )
             refresh()
             return
@@ -239,11 +254,14 @@ object PlayBillingManager : PurchasesUpdatedListener {
                             error = null,
                         )
                     },
-                    onFailure = { error ->
+                    onFailure = {
+                        // Build 114: this used to interpolate the failure's own
+                        // message — and fall back to the word "backend" — onto a
+                        // consumer screen. The person is told what to do instead.
                         _state.value = _state.value.copy(
                             isLoading = false,
                             message = if (hasPending) "Purchase pending approval in Google Play." else null,
-                            error = "Could not confirm entitlement: ${error.message ?: "backend unavailable"}",
+                            error = "Couldn't confirm your subscription just now. Check your connection and tap Retry.",
                         )
                     },
                 )
@@ -326,12 +344,20 @@ object PlayBillingManager : PurchasesUpdatedListener {
         )
     }
 
+    /**
+     * Build 114 — a billing failure becomes a next step, never a diagnostic.
+     *
+     * This used to append `result.debugMessage`, which is Google's own
+     * developer-facing string: it carries response codes, internal reasons and
+     * occasionally identifiers. `prefix` is the reviewed sentence; the debug
+     * message is deliberately dropped rather than shortened, because there is no
+     * length at which a diagnostic becomes consumer copy.
+     */
     private fun showBillingError(result: BillingResult, prefix: String) {
-        val detail = result.debugMessage.takeIf { it.isNotBlank() }
         _state.value = _state.value.copy(
             isLoading = false,
             message = null,
-            error = if (detail == null) prefix else "$prefix: $detail",
+            error = prefix,
         )
     }
 }

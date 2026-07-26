@@ -19,6 +19,72 @@
         "title": "AdminFlagOverrideRequest",
         "type": "object"
       },
+      "AdminRegistrationsResponse": {
+        "description": "Aggregate registration reporting. Every field is a count or a\ncount-by-category; there is deliberately no field that could hold an\naddress, an account id, or an event detail.",
+        "properties": {
+          "by_app_build": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By App Build",
+            "type": "object"
+          },
+          "by_lifecycle_state": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Lifecycle State",
+            "type": "object"
+          },
+          "by_source_surface": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Source Surface",
+            "type": "object"
+          },
+          "created_in_window": {
+            "title": "Created In Window",
+            "type": "integer"
+          },
+          "days": {
+            "title": "Days",
+            "type": "integer"
+          },
+          "events_in_window": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Events In Window",
+            "type": "object"
+          },
+          "registrations_total": {
+            "title": "Registrations Total",
+            "type": "integer"
+          },
+          "signed_in_in_window": {
+            "title": "Signed In In Window",
+            "type": "integer"
+          },
+          "verified_in_window": {
+            "title": "Verified In Window",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "days",
+          "registrations_total",
+          "by_lifecycle_state",
+          "by_source_surface",
+          "by_app_build",
+          "created_in_window",
+          "verified_in_window",
+          "signed_in_in_window",
+          "events_in_window"
+        ],
+        "title": "AdminRegistrationsResponse",
+        "type": "object"
+      },
       "AdminUpdateFlagRequest": {
         "properties": {
           "enabled": {
@@ -490,6 +556,210 @@
         "title": "DeleteAccountResponse",
         "type": "object"
       },
+      "EmailAcceptedResponse": {
+        "description": "The single anti-enumerating answer for register / resend / reset.\n\n`status` is a constant. There is intentionally no field that varies with\nwhether the address exists, whether it is already verified, or whether the\nperson has an account \u2014 those are exactly the bits an attacker wants.",
+        "properties": {
+          "status": {
+            "const": "verification_pending",
+            "default": "verification_pending",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "EmailAcceptedResponse",
+        "type": "object"
+      },
+      "EmailAddressRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "app_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Version"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "source_surface": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Surface"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "title": "EmailAddressRequest",
+        "type": "object"
+      },
+      "EmailLoginRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "app_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Version"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "password": {
+            "title": "Password",
+            "type": "string"
+          },
+          "source_surface": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Surface"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "EmailLoginRequest",
+        "type": "object"
+      },
+      "EmailLogoutResponse": {
+        "properties": {
+          "signed_out": {
+            "title": "Signed Out",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "signed_out"
+        ],
+        "title": "EmailLogoutResponse",
+        "type": "object"
+      },
+      "EmailRegisterRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "app_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Version"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "password": {
+            "title": "Password",
+            "type": "string"
+          },
+          "source_surface": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Surface"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "EmailRegisterRequest",
+        "type": "object"
+      },
+      "EmailSessionResponse": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "api_token": {
+            "title": "Api Token",
+            "type": "string"
+          },
+          "device_credential": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Credential"
+          },
+          "device_id": {
+            "title": "Device Id",
+            "type": "string"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "email_verified": {
+            "default": false,
+            "title": "Email Verified",
+            "type": "boolean"
+          },
+          "is_pro": {
+            "title": "Is Pro",
+            "type": "boolean"
+          },
+          "plan": {
+            "title": "Plan",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_id",
+          "api_token",
+          "account_id",
+          "plan",
+          "is_pro"
+        ],
+        "title": "EmailSessionResponse",
+        "type": "object"
+      },
       "EventRequest": {
         "additionalProperties": false,
         "properties": {
@@ -736,9 +1006,36 @@
             "title": "Device Id",
             "type": "string"
           },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "email_verified_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email Verified At"
+          },
           "is_pro": {
             "title": "Is Pro",
             "type": "boolean"
+          },
+          "lifecycle_state": {
+            "default": "anonymous",
+            "title": "Lifecycle State",
+            "type": "string"
           },
           "plan": {
             "title": "Plan",
@@ -1238,6 +1535,38 @@
         "title": "RegisterResponse",
         "type": "object"
       },
+      "RegistrationEventsResponse": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "email_verified": {
+            "title": "Email Verified",
+            "type": "boolean"
+          },
+          "events": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "lifecycle_state": {
+            "title": "Lifecycle State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "lifecycle_state",
+          "email_verified",
+          "events"
+        ],
+        "title": "RegistrationEventsResponse",
+        "type": "object"
+      },
       "RewriteSuggestion": {
         "properties": {
           "axis": {
@@ -1476,6 +1805,15 @@
             ],
             "title": "Preferred Voice"
           },
+          "prior_versions": {
+            "description": "Build 114 \u2014 rewrites already shown to this person for the SAME source message and axis, so the next one is meaningfully different. Bounded; the server truncates and never logs them. Does not affect the preflight decision or model routing.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 3,
+            "title": "Prior Versions",
+            "type": "array"
+          },
           "recipient_hint": {
             "anyOf": [
               {
@@ -1641,6 +1979,17 @@
           "access_token": {
             "title": "Access Token",
             "type": "string"
+          },
+          "app_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Version"
           }
         },
         "required": [
@@ -2078,6 +2427,47 @@
         "summary": "Admin Age Out Events"
       }
     },
+    "/admin/registrations": {
+      "get": {
+        "description": "How registration is going, for whoever runs the product.\n\nThe Build 114 brief asks Tono to TRACK registrations, not merely to record\nthem: `/v1/account/registration-events` answers \"what happened to my\naccount\" for one signed-in person and is scoped by their own bearer, which\nis the right shape for support and the wrong shape for knowing whether\nsignup works at all.\n\nCounts only. The response model above has no field an address could travel\nin, and `Store.registration_metrics` selects nothing but counts and the\ngrouping columns the store itself sanitized on write \u2014 so this endpoint\ncould not identify a person even if an operator wanted it to. That is why\nit is safe to expose an aggregate over a table whose per-row contents are\notherwise deliberately unreadable from outside.\n\nAdmin-secret protected like every other `/admin` route; without a\nconfigured `TONO_ADMIN_SECRET` it answers 403 rather than opening.",
+        "operationId": "admin_registrations_admin_registrations_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminRegistrationsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Registrations"
+      }
+    },
     "/admin/stats": {
       "get": {
         "description": "Aggregate product analytics: axis usage, registration count, active pro count.",
@@ -2380,6 +2770,30 @@
         "summary": "Delete Account"
       }
     },
+    "/v1/account/registration-events": {
+      "get": {
+        "description": "The caller's OWN registration/verification history.\n\nScoped by the bearer's account \u2014 there is no account id parameter, so one\nperson cannot read another's history. Every row carries a timestamp, the\nsource surface and the app build; none carries a password, a token or a\nverification link (see the `account_registration_events` table comment).",
+        "operationId": "account_registration_events_v1_account_registration_events_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrationEventsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Account Registration Events"
+      }
+    },
     "/v1/analyze": {
       "post": {
         "description": "Tone-analysis passthrough kept for backward compatibility with the\nhost-app Playground tab and integration tests. There is NO anonymous or\nfree rewrite path: the caller must present a valid bearer token\n(``CurrentUser`` -> 401 otherwise) AND hold a server-authoritative rewrite\nentitlement (the shared gate -> a DISTINCT 402 otherwise), both enforced\nBEFORE the per-IP window and BEFORE any provider invocation. Mirrors the\ngate on /api/analyze and /api/analyze/variant, so this route can never be\nthe free/anonymous rewrite bypass it once was.",
@@ -2556,6 +2970,196 @@
           }
         ],
         "summary": "Auth Apple"
+      }
+    },
+    "/v1/auth/email/login": {
+      "post": {
+        "description": "Sign in with email and password.\n\nTwo independent gates, both fail-closed:\n\n  1. The provider must accept the credentials AND consider the address\n     confirmed. Supabase withholds a session for an unconfirmed address,\n     which surfaces as 403 `email_verification_required`.\n  2. We re-verify the returned access token cryptographically through the\n     SAME verifier the web callback uses, and refuse to proceed unless its\n     `email_verified` claim is true. So even a misconfigured project with\n     confirmations switched off cannot mint a verified identity here.",
+        "operationId": "auth_email_login_v1_auth_email_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailLoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Auth Email Login"
+      }
+    },
+    "/v1/auth/email/logout": {
+      "post": {
+        "description": "Sign this DEVICE out, and mean it.\n\nDeliberately local and provider-independent: the bearer the caller just\npresented stops working before this returns, so logging out of a shared\ndevice never depends on a reachable provider or a good network.\n\n`sign_out_device` is used rather than `rotate_token` because rotating alone\nis not a sign-out: the device also holds a durable credential that lets it\nre-register itself into the same row, so the next `/v1/register` would hand\nit a working bearer for an account it was just signed out of. See the store\nmethod for the full argument.\n\nThe canonical account, its history, its entitlement and its registration\naudit are untouched \u2014 signing back in returns the person to exactly the\nsame account. The sign-out event is recorded BEFORE the unlink, while the\naccount is still known.",
+        "operationId": "auth_email_logout_v1_auth_email_logout_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailLogoutResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Auth Email Logout"
+      }
+    },
+    "/v1/auth/email/register": {
+      "post": {
+        "description": "Start an email registration.\n\nAnswers `verification_pending` for every outcome that depends on whether\nthe address is already registered \u2014 which is the whole anti-enumeration\nproperty. It does NOT answer that way when the provider refused the\nsubmitted address or password on its own validation rules: that is a fact\nabout the input, and reporting it is the difference between a person\nfixing their password and a person waiting forever for mail that was\nnever sent.\n\nThe canonical account is bound here, BEFORE verification, so that an\nanonymous device that has been coaching drafts for weeks upgrades in place\n\u2014 its account UUID, history, usage and any purchase ownership all survive\nthe registration. The account stays in the `pending` lifecycle state and\nunidentified until the person proves the address, so binding early costs\nno access.",
+        "operationId": "auth_email_register_v1_auth_email_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailRegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailAcceptedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Auth Email Register"
+      }
+    },
+    "/v1/auth/email/resend": {
+      "post": {
+        "description": "Resend the verification link. Anti-enumerating: an unknown address and\nan already-verified address produce the identical accepted answer.",
+        "operationId": "auth_email_resend_v1_auth_email_resend_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailAddressRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailAcceptedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Auth Email Resend"
+      }
+    },
+    "/v1/auth/email/reset": {
+      "post": {
+        "description": "Begin password recovery. Anti-enumerating for the same reason as\nresend: the answer is identical whether or not the address is known.",
+        "operationId": "auth_email_reset_v1_auth_email_reset_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailAddressRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailAcceptedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Auth Email Reset"
       }
     },
     "/v1/auth/google": {

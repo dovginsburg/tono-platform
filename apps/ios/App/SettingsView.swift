@@ -75,6 +75,13 @@ struct SettingsView: View {
     // build 101 — account deletion
     @State private var showDeleteAccountSheet: Bool = false
     @State private var accountDeleted:         Bool = false
+    // build 114 — email account. `signedInEmail` mirrors the one Keychain key
+    // that means "this person proved an address"; it is read, never written,
+    // here. Only `TonoBackend.signInWithEmail` writes it, and only after the
+    // server confirmed the address — so Settings cannot manufacture an identity.
+    @State private var signedInEmail:          String?
+    @State private var showSignInSheet:        Bool = false
+    @State private var isSigningOut:           Bool = false
     // build 106 — on-device intelligence self-test result (nil until run)
     @State private var localSelfTestResult: LocalIntelligenceSelfTest.Result?
 
@@ -109,6 +116,7 @@ struct SettingsView: View {
                 loadLiveTone()
                 coachVariants = coachVariantStore.load()
                 refreshAccountState()
+                refreshEmailIdentity()
                 Task { await refreshUsage() }
             }
             .task {
@@ -117,11 +125,34 @@ struct SettingsView: View {
                     appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0"
                 )
                 await store.refreshEntitlements()
-                await MainActor.run { refreshAccountState() }
+                await MainActor.run {
+                    refreshAccountState()
+                    refreshEmailIdentity()
+                }
                 await refreshUsage()
             }
             .sheet(isPresented: $showPaywall) {
                 PaywallView(onDismiss: { showPaywall = false })
+            }
+            .sheet(isPresented: $showSignInSheet) {
+                EmailSignInSheet(
+                    onSuccess: {
+                        showSignInSheet = false
+                        // A sign-in converges this device on the canonical
+                        // account, so the entitlement it already owns has to be
+                        // re-read here: a returning subscriber must not have to
+                        // tap Restore to stop seeing the paywall.
+                        Task {
+                            await store.refreshEntitlements()
+                            await MainActor.run {
+                                refreshEmailIdentity()
+                                refreshAccountState()
+                            }
+                            await refreshUsage()
+                        }
+                    },
+                    onCancel: { showSignInSheet = false }
+                )
             }
             .sheet(isPresented: $showDeleteAccountSheet) {
                 AccountDeletionView(
@@ -213,9 +244,96 @@ struct SettingsView: View {
                 }
             }
 
+            emailIdentityRows
+
             Text("Your draft is only used for coaching, and only when you tap Coach. There is nothing technical to set up.")
                 .font(.caption).foregroundColor(.secondary)
         }
+    }
+
+    /// Build 114 — the email account, from the one place a person looks for it.
+    ///
+    /// Signed in, this shows WHICH address they used, because that is the fact
+    /// they need when a subscription does not appear on a new device. Signed
+    /// out, it explains what signing in buys them without implying that signing
+    /// in is what grants Pro — a confirmed address makes a subscription
+    /// recoverable; only a subscription grants access.
+    ///
+    /// Signing out is deliberately here and not buried in Account Management
+    /// next to deletion: they are opposite actions, and a person looking to
+    /// leave a shared device should never have to read a delete-everything
+    /// screen to find the harmless one.
+    @ViewBuilder
+    private var emailIdentityRows: some View {
+        if let address = signedInEmail {
+            HStack {
+                Text("Email")
+                Spacer()
+                Text(address)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .accessibilityElement(children: .combine)
+
+            Button {
+                Task { await signOut() }
+            } label: {
+                HStack(spacing: 8) {
+                    if isSigningOut {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "rectangle.portrait.and.arrow.right")
+                    }
+                    Text(isSigningOut ? "Signing out…" : "Sign out")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            }
+            .disabled(isSigningOut)
+            .accessibilityHint("Signs this device out. Your account, your subscription and your saved style stay as they are.")
+        } else {
+            Button {
+                showSignInSheet = true
+            } label: {
+                Label("Sign in with email", systemImage: "envelope.badge.shield.half.filled")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            }
+            .accessibilityHint("Creates or signs in to your account so your subscription follows you.")
+
+            Text("Confirming an email keeps your subscription and your saved style recoverable if you reinstall or switch devices. It does not by itself unlock Pro.")
+                .font(.caption).foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Signs this device out, then re-reads the shared state the extensions
+    /// also read, so the keyboard, Share sheet and Messages app stop presenting
+    /// a signed-in person on the same pass rather than at their next launch.
+    ///
+    /// `TonoBackend.signOut()` clears the local credential whether or not the
+    /// call it makes first succeeds — signing out of a shared device must not
+    /// depend on a good connection — so there is no failure branch to render
+    /// and nothing here can leave the device half-signed-in.
+    private func signOut() async {
+        await MainActor.run { isSigningOut = true }
+        await TonoBackend.shared.signOut()
+        await MainActor.run {
+            isSigningOut = false
+            accountNotice = nil
+            // Signing out is not an entitlement change, but this device no
+            // longer holds a credential to prove one, so the shared mirror must
+            // stop claiming Pro until it registers and re-reads.
+            store.resetToAnonymous()
+            refreshEmailIdentity()
+            refreshAccountState()
+        }
+    }
+
+    private func refreshEmailIdentity() {
+        let stored = SharedKeychain.get(KeychainKeys.signedInEmail)
+        signedInEmail = (stored?.isEmpty ?? true) ? nil : stored
     }
 
     /// Local, synchronous, and truthful: has this device finished account

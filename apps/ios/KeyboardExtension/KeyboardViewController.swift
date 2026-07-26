@@ -201,6 +201,21 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         /// Subtle on-device-intelligence indicator (see `LocalIntelligence`).
         static let idLocalBadge       = "TonoKB.localBadge"
 
+        // Build 114 — the three rewrite-card actions and the version cue.
+        static let idUseRewrite       = "TonoKB.useRewrite"
+        static let idTryAnother       = "TonoKB.tryAnother"
+        static let idDismissRewrite   = "TonoKB.dismissRewrite"
+        static let idVersionCue       = "TonoKB.versionCue"
+        static let idAlternativeNotice = "TonoKB.alternativeNotice"
+
+        /// The exact customer-visible action labels. Held as constants because
+        /// they are a reviewed product contract, not incidental strings: the
+        /// Build 114 UI tests assert on these, so renaming one has to be a
+        /// deliberate edit here rather than a drive-by in the view code.
+        static let useRewriteLabel    = "Use rewrite"
+        static let tryAnotherLabel    = "Try another"
+        static let dismissLabel       = "Dismiss"
+
         /// Single-source-of-truth registry, returned by
         /// `allIdentifiers`. The lookup keeps the Swift optimiser
         /// from folding single-use constants into immediate operands
@@ -214,6 +229,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             idCoachErrorDetail, idRiskBadge, idRewrites,
             idEmojiPanel, idEmojiCategory, idEmojiRecents, idEmojiFooter,
             idToneChips, idLocalBadge,
+            idUseRewrite, idTryAnother, idDismissRewrite, idVersionCue,
+            idAlternativeNotice,
         ]
 
         /// Returns every TonoKB.* identifier this file declares.
@@ -374,6 +391,44 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private var coachRewriteTarget: CoachRewriteTarget?
     private var coachRequestGuard: CoachRequestLifecycleGuard?
     private var coachVariantSettings = CoachVariantSettings()
+
+    // Build 114 — "Try another". The sequence tracks how many versions have
+    // been SUCCESSFULLY DISPLAYED for the current (source message, host, axis);
+    // `coachAlternativeRequestID` is the separate in-flight token for an
+    // alternative request, which — unlike an initial rewrite — deliberately
+    // does NOT install a loading surface, because the contract requires the
+    // current card to stay on screen while the next one is fetched.
+    private var coachSequence: CoachAlternativeSequence?
+    private var coachAlternativeRequestID: UUID?
+    /// Retained so a completion can restore or update the card in place.
+    private weak var coachTryAnotherButton: UIButton?
+    private weak var coachTryAnotherSpinner: UIActivityIndicatorView?
+    private weak var coachAlternativeNotice: UILabel?
+
+    /// Test seam: the version currently displayed and the cap, so a unit test
+    /// asserts the real sequence rather than re-deriving it.
+    var coachSequenceStateForTesting: (displayed: Int, limit: Int, canRequestAnother: Bool)? {
+        guard let coachSequence else { return nil }
+        return (
+            coachSequence.displayedVersion,
+            coachSequence.versionLimit,
+            coachSequence.canRequestAnother
+        )
+    }
+
+    /// Test seam: whether an alternative request is currently in flight.
+    var coachAlternativeInFlightForTesting: Bool { coachAlternativeRequestID != nil }
+
+    /// Test seam: the in-flight alternative's token, so a test can deliver to
+    /// the exact request the tap created (and prove a second tap made none).
+    var alternativeRequestIDForTesting: UUID? { coachAlternativeRequestID }
+
+    /// Test seam: the real teardown, so "cancellation cannot leave Coach
+    /// permanently busy" is asserted against production code rather than a
+    /// re-enactment of it.
+    func invalidateCoachWorkForTesting() {
+        invalidateCoachWork(restoreKeyboard: false)
+    }
     /// Whether Coach tone chips are the live role — DERIVED, never stored.
     ///
     /// Build 109 removes the last stored mirror of the strip's role. Until now
@@ -852,9 +907,17 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         // the flag going false means a later deadline cannot claim "offline"
         // on a request that never waited.
         coachWaitingForConnectivity = false
+        // Build 114: an in-flight "Try another" is work too. Dropping its token
+        // here is what makes teardown terminal for the alternative path — a
+        // late completion fails `acceptsAlternative` and cannot revive a
+        // surface that is gone, and `coachBusy` cannot latch true behind it.
+        coachAlternativeRequestID = nil
         if clearTarget {
             coachRewriteTarget = nil
             coachRequestGuard = nil
+            // The sequence belongs to a captured target; without one there is
+            // no source message for an alternative to be an alternative OF.
+            coachSequence = nil
         }
         coachBusy = false
         coachButton?.isEnabled = true
@@ -2967,6 +3030,18 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             after: after,
             host: currentHostSession
         )
+        // Build 114 — sequence identity is (source message, host session,
+        // axis). A new captured message resets it; a different tone starts a
+        // SEPARATE sequence, so switching tone never inherits the previous
+        // tone's remaining budget. Re-tapping the same tone on the same
+        // unchanged draft also restarts at 1 of 3, because that is a fresh
+        // deliberate request rather than a continuation.
+        coachSequence = CoachAlternativeSequence(
+            axis: axis,
+            sourceDraft: target.draft,
+            host: currentHostSession
+        )
+        coachAlternativeRequestID = nil
         runCoach(draft: target.draft, axis: axis)
         return coachRequestID
     }
@@ -3276,6 +3351,18 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         }
         switch result {
         case .success(let response):
+            // Build 114 — this is version 1 of the sequence. Recorded BEFORE
+            // rendering so the card's "1 of 3" cue reads the committed state
+            // rather than a value the render has to guess.
+            if var sequence = coachSequence,
+               sequence.matches(
+                   axis: response.axis,
+                   sourceDraft: target.draft,
+                   host: currentHostSession
+               ) {
+                sequence.recordDisplayed(response.text)
+                coachSequence = sequence
+            }
             let rewrite = TonoCoachClient.CoachRewrite(
                 axis: response.axis,
                 text: response.text,
@@ -3527,34 +3614,166 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         ])
 
         let rewriteText = suggestion.text
+
+        // Build 114 — the version cue ("2 of 3"). Truthful by construction: it
+        // reads the sequence's successfully-displayed count, so a failed or
+        // superseded attempt can never advance it.
+        let cue = UILabel()
+        cue.accessibilityIdentifier = Const.idVersionCue
+        cue.font = UIFontMetrics(forTextStyle: .caption2).scaledFont(
+            for: .systemFont(ofSize: 11, weight: .semibold)
+        )
+        cue.adjustsFontForContentSizeCategory = true
+        cue.textColor = .secondaryLabel
+        cue.textAlignment = .right
+        cue.translatesAutoresizingMaskIntoConstraints = false
+        cue.setContentCompressionResistancePriority(.required, for: .horizontal)
+        chip.addSubview(cue)
+
+        // Inline failure guidance for a failed "Try another". Hidden until it
+        // has something true to say; the prior rewrite stays visible above it.
+        let notice = UILabel()
+        notice.accessibilityIdentifier = Const.idAlternativeNotice
+        notice.font = UIFontMetrics(forTextStyle: .caption2).scaledFont(
+            for: .systemFont(ofSize: 11, weight: .regular)
+        )
+        notice.adjustsFontForContentSizeCategory = true
+        notice.textColor = .secondaryLabel
+        notice.numberOfLines = 2
+        notice.isHidden = true
+        notice.translatesAutoresizingMaskIntoConstraints = false
+        chip.addSubview(notice)
+
         let actions = UIStackView()
         actions.axis = .horizontal
-        actions.distribution = .fillEqually
-        actions.spacing = 8
+        // Three actions in a keyboard-height panel. `.fillProportionally` with
+        // a scaled font lets "Try another" keep its full label at large Dynamic
+        // Type sizes instead of truncating to "Try an…", while
+        // TonoMinimumHitTargetButton keeps every one of them at the 44pt
+        // minimum touch target even when its drawn box is narrower.
+        actions.distribution = .fillProportionally
+        actions.spacing = 6
         actions.translatesAutoresizingMaskIntoConstraints = false
         chip.addSubview(actions)
 
-        let replace = TonoMinimumHitTargetButton(type: .system)
-        replace.setTitle("Replace", for: .normal)
-        replace.addAction(UIAction { [weak self] _ in
+        let use = TonoMinimumHitTargetButton(type: .system)
+        use.accessibilityIdentifier = Const.idUseRewrite
+        use.setTitle(Const.useRewriteLabel, for: .normal)
+        use.titleLabel?.font = UIFontMetrics(forTextStyle: .callout).scaledFont(
+            for: .systemFont(ofSize: 14, weight: .semibold)
+        )
+        use.titleLabel?.adjustsFontForContentSizeCategory = true
+        use.titleLabel?.adjustsFontSizeToFitWidth = true
+        use.titleLabel?.minimumScaleFactor = 0.75
+        use.titleLabel?.lineBreakMode = .byTruncatingTail
+        use.accessibilityLabel = Const.useRewriteLabel
+        use.accessibilityHint = "Replaces your message with this rewrite"
+        use.addAction(UIAction { [weak self] _ in
             self?.applyRewrite(rewriteText)
         }, for: .touchUpInside)
-        actions.addArrangedSubview(replace)
+        actions.addArrangedSubview(use)
+
+        let another = TonoMinimumHitTargetButton(type: .system)
+        another.accessibilityIdentifier = Const.idTryAnother
+        another.setTitle(Const.tryAnotherLabel, for: .normal)
+        another.titleLabel?.font = use.titleLabel?.font
+        another.titleLabel?.adjustsFontForContentSizeCategory = true
+        another.titleLabel?.adjustsFontSizeToFitWidth = true
+        another.titleLabel?.minimumScaleFactor = 0.75
+        another.titleLabel?.lineBreakMode = .byTruncatingTail
+        another.addAction(UIAction { [weak self] _ in
+            self?.tryAnotherTapped()
+        }, for: .touchUpInside)
+        actions.addArrangedSubview(another)
+
+        // The in-card busy indicator. It sits ON the card so the current
+        // rewrite stays readable while the next one is fetched — the contract
+        // forbids swapping the card out for a full-panel spinner here.
+        let spinner = UIActivityIndicatorView(style: .medium)
+        spinner.hidesWhenStopped = true
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        chip.addSubview(spinner)
 
         let dismiss = TonoMinimumHitTargetButton(type: .system)
-        dismiss.setTitle("Dismiss", for: .normal)
+        dismiss.accessibilityIdentifier = Const.idDismissRewrite
+        dismiss.setTitle(Const.dismissLabel, for: .normal)
+        dismiss.titleLabel?.font = use.titleLabel?.font
+        dismiss.titleLabel?.adjustsFontForContentSizeCategory = true
+        dismiss.titleLabel?.adjustsFontSizeToFitWidth = true
+        dismiss.titleLabel?.minimumScaleFactor = 0.75
+        dismiss.titleLabel?.lineBreakMode = .byTruncatingTail
+        dismiss.accessibilityLabel = Const.dismissLabel
+        dismiss.accessibilityHint = "Closes Coach and leaves your message unchanged"
         dismiss.addAction(UIAction { [weak self] _ in
             self?.backToKeysTapped()
         }, for: .touchUpInside)
         actions.addArrangedSubview(dismiss)
 
         NSLayoutConstraint.activate([
+            cue.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -10),
+            cue.topAnchor.constraint(equalTo: chip.topAnchor, constant: 6),
+            cue.leadingAnchor.constraint(greaterThanOrEqualTo: axis.trailingAnchor, constant: 6),
+
+            notice.leadingAnchor.constraint(equalTo: chip.leadingAnchor, constant: 10),
+            notice.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -10),
+            notice.bottomAnchor.constraint(equalTo: actions.topAnchor, constant: -2),
+
+            spinner.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -10),
+            spinner.centerYAnchor.constraint(equalTo: actions.centerYAnchor),
+
             actions.leadingAnchor.constraint(equalTo: chip.leadingAnchor, constant: 10),
             actions.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -10),
             actions.bottomAnchor.constraint(equalTo: chip.bottomAnchor, constant: -4),
             actions.heightAnchor.constraint(equalToConstant: 44),
         ])
+
+        // Only the FIRST card (the selected-tone answer) owns the sequence
+        // controls. A multi-suggestion response is not a "Try another"
+        // sequence, so its later cards keep Use/Dismiss without a cue.
+        if index == 0 {
+            coachTryAnotherButton = another
+            coachTryAnotherSpinner = spinner
+            coachAlternativeNotice = notice
+            applySequencePresentation(cue: cue, tryAnother: another)
+        } else {
+            cue.isHidden = true
+            another.isHidden = true
+        }
         return chip
+    }
+
+    /// Paint the version cue and the `Try another` control from the sequence.
+    ///
+    /// At the limit the control is DISABLED rather than removed, and says so
+    /// in its accessibility label — a control that silently vanishes leaves a
+    /// VoiceOver user with no explanation for why the option is gone.
+    private func applySequencePresentation(cue: UILabel, tryAnother: UIButton) {
+        guard let sequence = coachSequence, sequence.displayedVersion > 0 else {
+            cue.isHidden = true
+            tryAnother.isEnabled = true
+            tryAnother.accessibilityLabel = Const.tryAnotherLabel
+            return
+        }
+        let shown = sequence.displayedVersion
+        let limit = sequence.versionLimit
+        cue.isHidden = false
+        cue.text = "\(shown) of \(limit)"
+        cue.accessibilityLabel = "Version \(shown) of \(limit)"
+
+        if sequence.canRequestAnother {
+            tryAnother.isEnabled = true
+            tryAnother.alpha = 1.0
+            tryAnother.accessibilityLabel = Const.tryAnotherLabel
+            tryAnother.accessibilityHint = "Asks for a different version of this rewrite"
+            tryAnother.accessibilityTraits = [.button]
+        } else {
+            tryAnother.isEnabled = false
+            tryAnother.alpha = 0.5
+            tryAnother.accessibilityLabel = "\(Const.tryAnotherLabel), unavailable"
+            tryAnother.accessibilityHint =
+                "You've seen all \(limit) versions of this rewrite. Use rewrite or Dismiss."
+            tryAnother.accessibilityTraits = [.button, .notEnabled]
+        }
     }
 
     private func coachAxisStyle(
@@ -3564,6 +3783,255 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             return (axis.capitalized, .label, .separator)
         }
         return (semantic.label, semantic.accessibleLabel, semantic.accent)
+    }
+
+    // MARK: - Build 114 · Try another
+    //
+    // A deliberately separate request path from `runCoach`. The differences
+    // are the whole contract:
+    //
+    //   * it does NOT install a loading surface — the current rewrite stays on
+    //     screen and the busy state is local to its card;
+    //   * it carries the versions already shown so the answer is different;
+    //   * a failure restores the card exactly as it was and consumes no slot.
+    //
+    // Everything else is reused verbatim: the same captured target, the same
+    // stale-draft guard, the same deadline/cancellation lifecycle, the same
+    // consumer-error mapper, the same entitlement rules, and the same
+    // one-tap-one-request discipline.
+
+    /// Internal so the XCTest target can drive the real path; the tap handler
+    /// calls exactly this.
+    @objc func tryAnotherTapped() {
+        // One user action = one request. A second tap while the first is in
+        // flight is dropped here rather than de-duplicated downstream, so no
+        // duplicate request is ever issued.
+        guard coachAlternativeRequestID == nil, !coachBusy else { return }
+        guard let sequence = coachSequence, sequence.canRequestAnother else { return }
+        guard let target = coachRewriteTarget else { return }
+        // The draft must still be the one this sequence belongs to. A changed
+        // host document means the sequence is stale: refuse rather than
+        // generating an alternative for text the person no longer has.
+        //
+        // The axis argument is the sequence's own, and deliberately so: a tone
+        // change goes through `runCoach`, which builds a FRESH sequence, so the
+        // axis cannot have drifted by the time this runs. The two facts that
+        // can have changed — the captured draft and the host session — are the
+        // ones this guard is actually asking about.
+        guard sequence.matches(
+            axis: sequence.axis,
+            sourceDraft: target.draft,
+            host: currentHostSession
+        ) else {
+            presentCoachError(.staleDraft)
+            return
+        }
+
+        let requestID = UUID()
+        coachAlternativeRequestID = requestID
+        coachBusy = true
+        coachButton?.isEnabled = false
+        beginAlternativeBusyPresentation()
+
+        let tapTime = DispatchTime.now()
+        coachClockTapTime = tapTime
+        let axis = sequence.axis
+        let customPrompt = axis == "custom" ? coachVariantSettings.customInstruction : nil
+        NSLog(
+            "TONO_KB BUILD114 coach: try-another axis=\(axis) version=\(sequence.displayedVersion + 1) of \(sequence.versionLimit)"
+        )
+        coachTask = coachClient.variant(
+            draft: target.draft,
+            axis: axis,
+            customPrompt: customPrompt,
+            priorVersions: sequence.priorVersions,
+            waitingForConnectivity: { [weak self] in
+                self?.handleAlternativeWaitingForConnectivity(requestID: requestID)
+            }
+        ) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.completeCoachAlternative(
+                    requestID: requestID,
+                    liveBefore: self.documentProxy.documentContextBeforeInput ?? "",
+                    liveAfter: self.documentProxy.documentContextAfterInput ?? "",
+                    result: result
+                )
+            }
+        }
+        scheduleAlternativeDeadline(requestID: requestID, tapTime: tapTime, axis: axis)
+        // Nothing is written back to `coachSequence` here. A version is
+        // consumed only when one is actually delivered and displayed, in
+        // `completeCoachAlternative` — so a failed, timed-out, cancelled or
+        // superseded request costs the person nothing.
+    }
+
+    private func beginAlternativeBusyPresentation() {
+        coachAlternativeNotice?.isHidden = true
+        coachTryAnotherSpinner?.startAnimating()
+        if let button = coachTryAnotherButton {
+            button.isEnabled = false
+            button.alpha = 0.5
+            button.accessibilityLabel = "\(Const.tryAnotherLabel), working"
+            button.accessibilityTraits = [.button, .notEnabled]
+        }
+    }
+
+    /// Restore the card to exactly the state it had before the tap. Called on
+    /// every non-success path, so a failed alternative never leaves the card
+    /// stuck busy and never disturbs the rewrite already displayed.
+    private func endAlternativeBusyPresentation(notice: String?) {
+        coachTryAnotherSpinner?.stopAnimating()
+        if let button = coachTryAnotherButton {
+            let canRetry = coachSequence?.canRequestAnother ?? false
+            button.isEnabled = canRetry
+            button.alpha = canRetry ? 1.0 : 0.5
+            button.accessibilityLabel = canRetry
+                ? Const.tryAnotherLabel
+                : "\(Const.tryAnotherLabel), unavailable"
+            button.accessibilityTraits = canRetry ? [.button] : [.button, .notEnabled]
+        }
+        if let notice {
+            coachAlternativeNotice?.text = notice
+            coachAlternativeNotice?.isHidden = false
+        }
+    }
+
+    /// The alternative path's fail-closed gate. Unlike the initial request it
+    /// cannot key on the loading surface (there deliberately isn't one), so it
+    /// keys on the alternative token alone — which a teardown clears.
+    private func acceptsAlternative(_ requestID: UUID) -> Bool {
+        coachAlternativeRequestID == requestID
+    }
+
+    func handleAlternativeWaitingForConnectivity(requestID: UUID) {
+        guard acceptsAlternative(requestID) else { return }
+        guard !coachWaitingForConnectivity else { return }
+        coachWaitingForConnectivity = true
+        coachAlternativeNotice?.text = TonoCoachClient.CoachError.offline.userFacingMessage
+        coachAlternativeNotice?.isHidden = false
+    }
+
+    private func scheduleAlternativeDeadline(
+        requestID: UUID,
+        tapTime: DispatchTime,
+        axis: String,
+        after interval: TimeInterval = Const.coachVisibleDeadline
+    ) {
+        coachDeadline?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.handleAlternativeDeadlineFired(requestID: requestID, tapTime: tapTime)
+        }
+        coachDeadline = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + interval, execute: work)
+    }
+
+    /// Internal so a unit test can fire the watchdog synchronously.
+    func handleAlternativeDeadlineFired(requestID: UUID, tapTime: DispatchTime) {
+        guard acceptsAlternative(requestID) else { return }
+        coachTask?.cancel()
+        coachTask = nil
+        coachAlternativeRequestID = nil
+        coachBusy = false
+        coachButton?.isEnabled = true
+        coachDeadline = nil
+        let waited = coachWaitingForConnectivity
+        coachWaitingForConnectivity = false
+        NSLog("TONO_KB BUILD114 clock: phase=alt_deadline dt_ms=\(Self.coachElapsedMs(since: tapTime))")
+        // No slot consumed, prior card intact.
+        endAlternativeBusyPresentation(
+            notice: (waited
+                ? TonoCoachClient.CoachError.offline
+                : TonoCoachClient.CoachError.timeout).userFacingMessage
+        )
+        coachClockTapTime = nil
+    }
+
+    /// Deliver one alternative. Internal, and taking the live document context,
+    /// so the XCTest target drives the real guard.
+    func completeCoachAlternative(
+        requestID: UUID,
+        liveBefore: String,
+        liveAfter: String,
+        result: Result<TonoCoachClient.VariantResponse, TonoCoachClient.CoachError>
+    ) {
+        // Superseded / cancelled / already-delivered: drop silently. The card
+        // on screen belongs to whatever replaced this request.
+        guard acceptsAlternative(requestID) else { return }
+        // The draft moved under the request — refuse rather than showing an
+        // alternative for text that is no longer there.
+        guard let target = coachRewriteTarget,
+              target.isCurrent(
+                liveBefore: liveBefore,
+                liveAfter: liveAfter,
+                host: currentHostSession
+              ) else {
+            coachAlternativeRequestID = nil
+            coachBusy = false
+            coachButton?.isEnabled = true
+            coachDeadline?.cancel()
+            coachDeadline = nil
+            endAlternativeBusyPresentation(notice: nil)
+            presentCoachError(.staleDraft)
+            return
+        }
+
+        coachDeadline?.cancel()
+        coachDeadline = nil
+        let tapTime = coachClockTapTime
+        coachTask = nil
+        coachAlternativeRequestID = nil
+        coachBusy = false
+        coachWaitingForConnectivity = false
+        coachButton?.isEnabled = true
+
+        switch result {
+        case .success(let response):
+            guard var sequence = coachSequence else { return }
+            // A provider that returned what we already showed has produced no
+            // new version. Record nothing, keep the card, and say so plainly —
+            // the bounded retry already happened server-side, so looping here
+            // would be exactly the retry storm the contract forbids.
+            guard sequence.recordDisplayed(response.text) else {
+                endAlternativeBusyPresentation(
+                    notice: "That's the same wording. Try a different tone, or use this one."
+                )
+                logCoachRenderClock(
+                    tapTime: tapTime, axis: response.axis, outcome: "duplicate",
+                    providerMs: response.providerMs
+                )
+                coachClockTapTime = nil
+                return
+            }
+            coachSequence = sequence
+            let rewrite = TonoCoachClient.CoachRewrite(
+                axis: response.axis,
+                text: response.text,
+                rationale: response.rationale,
+                riskAfter: response.riskAfter
+            )
+            presentCoachResults(
+                TonoCoachClient.CoachResponse(
+                    riskLevel: response.riskAfter ?? "medium",
+                    perception: "",
+                    subtext: "",
+                    reason: nil,
+                    suggestions: [rewrite],
+                    flags: []
+                )
+            )
+            logCoachRenderClock(
+                tapTime: tapTime, axis: response.axis, outcome: "alternative",
+                providerMs: response.providerMs
+            )
+        case .failure(let error):
+            // No slot consumed; the previous rewrite is still on screen.
+            endAlternativeBusyPresentation(notice: error.userFacingMessage)
+            logCoachRenderClock(
+                tapTime: tapTime, axis: nil, outcome: "alternative_error", providerMs: nil
+            )
+        }
+        coachClockTapTime = nil
     }
 
     @objc private func backToKeysTapped() {

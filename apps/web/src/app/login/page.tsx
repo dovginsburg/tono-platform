@@ -1,10 +1,37 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase-client';
-import { buildAuthCallbackUrl } from '@/lib/auth-redirects';
+import { buildAuthCallbackUrl, sanitizeAuthErrorCode, type AuthErrorCode } from '@/lib/auth-redirects';
 import PasskeyLoginButton from '../PasskeyLoginButton';
+
+// Build 114 — the ONE place this page authors a failure sentence.
+//
+// It maps a reviewed CODE, never a message. The previous version rendered
+// `err.message` from the auth provider directly, which put provider detail on
+// screen and — because those messages differ for a known and an unknown address
+// — let anyone use this form to test whether someone has a Tono account.
+const AUTH_ERROR_COPY: Record<AuthErrorCode, string> = {
+  sign_in_failed: "that sign-in didn't go through. try again.",
+  link_expired: 'that link has expired. request a new one below.',
+  rate_limited: 'too many tries just now. wait a minute and try again.',
+  unavailable: "sign-in isn't available right now. try again in a few minutes.",
+};
+
+/**
+ * Classify a client-side auth failure by SHAPE.
+ *
+ * Reads only the status the provider client exposes. Sending a link is
+ * deliberately answered the same way whether or not the address is registered,
+ * so a failure here can never be the thing that reveals it.
+ */
+function classifyAuthFailure(error: unknown): AuthErrorCode {
+  const status = (error as { status?: number } | null)?.status;
+  if (status === 429) return 'rate_limited';
+  if (typeof status === 'number' && status >= 500) return 'unavailable';
+  return 'sign_in_failed';
+}
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 
@@ -36,10 +63,28 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [sending, setSending] = useState(false);
   const [magicSent, setMagicSent] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // A reviewed CODE, never a message. There is no state on this page that can
+  // hold provider text, so none can be rendered.
+  const [errorCode, setErrorCode] = useState<AuthErrorCode | null>(null);
+
+  // Read `?error=` AFTER mount, not in a `useState` initializer.
+  //
+  // This page is prerendered to static HTML at build time, so the server's
+  // markup never contains the alert paragraph. Deriving the code during the
+  // first client render would therefore make hydration produce an element the
+  // server HTML does not have — a structural mismatch that React reports as an
+  // error and recovers from by throwing away the server tree for this subtree.
+  // Doing it in an effect keeps the hydration render identical to the
+  // prerendered HTML and then shows the banner on the very next commit, which
+  // is the one path that reliably renders the only sentence telling a person
+  // why their sign-in bounced.
+  useEffect(() => {
+    const code = sanitizeAuthErrorCode(new URLSearchParams(window.location.search).get('error'));
+    if (code) setErrorCode(code);
+  }, []);
 
   const oauth = async (provider: 'apple' | 'google') => {
-    setError(null);
+    setErrorCode(null);
     const supabase = createClient();
     const { error: err } = await supabase.auth.signInWithOAuth({
       provider,
@@ -50,12 +95,12 @@ export default function LoginPage() {
         scopes: provider === 'google' ? 'email profile' : undefined,
       },
     });
-    if (err) setError(err.message);
+    if (err) setErrorCode(classifyAuthFailure(err));
   };
 
   const sendMagic = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
+    setErrorCode(null);
     setSending(true);
     try {
       const supabase = createClient();
@@ -66,8 +111,18 @@ export default function LoginPage() {
           shouldCreateUser: true,
         },
       });
-      if (err) setError(err.message);
-      else setMagicSent(true);
+      // Anti-enumerating: a rejected send shows the confirmation anyway unless
+      // the failure is one an outsider can already observe (throttling, outage).
+      // Otherwise "we couldn't send that" for an unregistered address and
+      // "check your inbox" for a registered one would answer the only question
+      // an attacker has.
+      if (err) {
+        const reason = classifyAuthFailure(err);
+        if (reason === 'sign_in_failed') setMagicSent(true);
+        else setErrorCode(reason);
+      } else {
+        setMagicSent(true);
+      }
     } finally {
       setSending(false);
     }
@@ -164,12 +219,12 @@ export default function LoginPage() {
             </form>
           )}
 
-          {error && (
+          {errorCode && (
             <p
               role="alert"
               className="mt-4 p-3 bg-[rgba(239,68,68,0.08)] border border-[rgba(239,68,68,0.3)] rounded-[12px] text-[#FCA5A5] text-[13px] leading-[1.5]"
             >
-              {error}
+              {AUTH_ERROR_COPY[errorCode]}
             </p>
           )}
 

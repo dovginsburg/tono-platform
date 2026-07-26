@@ -140,14 +140,43 @@ export function sanitizeNextPath(value: string | null | undefined): string {
   }
 }
 
+// Build 114 — the closed set of reasons a sign-in can bounce back to /login.
+//
+// This used to be a free `error` string, and the caller passed the auth
+// provider's own message straight into the URL, where the login page rendered
+// it. Two problems, both real:
+//
+//   * the provider's messages differ for a known and an unknown address, so the
+//     URL became an account-enumeration oracle;
+//   * the text is provider detail — it has named hosts, projects and internal
+//     reasons — and a person cannot act on any of it.
+//
+// A closed set of CODES fixes both. The page owns the words; the code only says
+// which reviewed sentence to show, and an unrecognised value is dropped rather
+// than displayed.
+export const AUTH_ERROR_CODES = [
+  'sign_in_failed',
+  'link_expired',
+  'rate_limited',
+  'unavailable',
+] as const;
+
+export type AuthErrorCode = (typeof AUTH_ERROR_CODES)[number];
+
+/** Keep only a reviewed code. Anything else becomes null — silence beats noise. */
+export function sanitizeAuthErrorCode(raw: string | null | undefined): AuthErrorCode | null {
+  return AUTH_ERROR_CODES.includes(raw as AuthErrorCode) ? (raw as AuthErrorCode) : null;
+}
+
 export function buildLoginRedirect(
   nextPath: string | null | undefined = APP_ENTRY_PATH,
   env: RedirectEnvironment = process.env,
-  error?: string
+  error?: AuthErrorCode | null
 ): string {
   const login = new URL(LOGIN_PATH, resolvePublicOrigin(undefined, env));
   login.searchParams.set('next', sanitizeNextPath(nextPath));
-  if (error) login.searchParams.set('error', error);
+  const code = sanitizeAuthErrorCode(error);
+  if (code) login.searchParams.set('error', code);
   return login.toString();
 }
 

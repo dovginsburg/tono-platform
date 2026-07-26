@@ -915,25 +915,52 @@ final class Build112UISurfaceContractTests: XCTestCase {
 
     // MARK: - Release identity
 
-    func testAllFourShippedBundlesAreBuild113AtVersion11() throws {
+    /// Every shipped bundle agrees with the ONE build authority, and the
+    /// marketing version is unchanged.
+    ///
+    /// Build 114: this used to hardcode "113", making it a fifth copy of the
+    /// build number — exactly the drift `BuildNumberGuardTests` documents,
+    /// where a release bump turns an unrelated suite red because someone
+    /// forgot one constant. The number is now DERIVED from
+    /// `Scripts/bump-build.sh`, so the real invariant (all four bundles match
+    /// the reviewed authority) is asserted without duplicating the value.
+    /// The marketing version stays a literal on purpose — it is not supposed
+    /// to move, so it should have to be edited deliberately.
+    func testAllFourShippedBundlesMatchTheBuildAuthorityAtVersion11() throws {
         let root = Self.sourceRoot()
         let guardScript = try Self.source("Scripts/bump-build.sh")
-        XCTAssertTrue(
-            guardScript.contains("EXPECTED_BUILD=\"113\""),
-            "the single build guard authority must pin 113"
+        let expected = try XCTUnwrap(
+            Self.value(ofAssignment: "EXPECTED_BUILD", in: guardScript),
+            "Scripts/bump-build.sh must pin EXPECTED_BUILD — it is the release authority"
         )
+        XCTAssertFalse(expected.isEmpty, "EXPECTED_BUILD must not be empty")
         for relative in Self.shippedPlists {
             let data = try Data(contentsOf: root.appendingPathComponent(relative))
             let plist = try PropertyListSerialization.propertyList(
                 from: data, options: [], format: nil
             ) as? [String: Any]
-            XCTAssertEqual(plist?["CFBundleVersion"] as? String, "113", "\(relative) must declare build 113")
+            XCTAssertEqual(
+                plist?["CFBundleVersion"] as? String, expected,
+                "\(relative) must declare build \(expected), the number Scripts/bump-build.sh pins"
+            )
             XCTAssertEqual(
                 plist?["CFBundleShortVersionString"] as? String, "1.1",
                 "\(relative) must stay at marketing version 1.1"
             )
             XCTAssertTrue(guardScript.contains(relative), "the guard must still cover \(relative)")
         }
+    }
+
+    /// Read `NAME="value"` out of the guard script. Mirrors the parser in
+    /// `BuildNumberGuardTests` so both read the authority the same way.
+    private static func value(ofAssignment name: String, in script: String) -> String? {
+        for rawLine in script.split(separator: "\n") {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix("\(name)=") else { continue }
+            return line.dropFirst(name.count + 1)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
+        }
+        return nil
     }
 
     // MARK: - Helpers

@@ -67,6 +67,97 @@ struct HostSessionIdentityFactory {
     }
 }
 
+/// Build 114 — the "Try another" sequence for ONE source message and ONE tone.
+///
+/// The founder contract is small and strict, so this models it as a value type
+/// rather than as flags on the view controller: at most three *successfully
+/// displayed* versions exist for an exact (source message, axis) pair — the
+/// initial answer plus at most two alternatives — and a failed, timed-out,
+/// cancelled, superseded or rejected response consumes nothing.
+///
+/// Why a value type: every rule below is a pure function of state, so the unit
+/// tests exercise the real production logic instead of a UIKit re-enactment of
+/// it. A mutation to any bound here turns those tests red.
+///
+/// Identity is (source draft, host/session, axis). A new captured message
+/// resets the sequence; changing tone starts a SEPARATE sequence, so switching
+/// warmer → clearer never inherits warmer's remaining budget.
+struct CoachAlternativeSequence: Equatable {
+    /// Initial version plus at most two alternatives.
+    static let maxVersions = 3
+
+    private(set) var axis: String
+    private(set) var sourceDraft: String
+    private(set) var host: HostSessionIdentity
+    /// Successfully displayed versions, oldest first. Only a delivered,
+    /// accepted result appends here.
+    private(set) var versions: [String]
+
+    init(axis: String, sourceDraft: String, host: HostSessionIdentity) {
+        self.axis = axis
+        self.sourceDraft = sourceDraft
+        self.host = host
+        self.versions = []
+    }
+
+    /// True when `other` addresses the exact same source message, host session
+    /// and tone — i.e. when a request may continue this sequence rather than
+    /// start a new one.
+    func matches(axis: String, sourceDraft: String, host: HostSessionIdentity) -> Bool {
+        self.axis == axis && self.sourceDraft == sourceDraft && self.host == host
+    }
+
+    /// 1-based position of the version currently on screen, for the `N of 3`
+    /// cue. Zero before the first result lands.
+    var displayedVersion: Int { versions.count }
+
+    /// Total slots, for the cue's denominator.
+    var versionLimit: Int { Self.maxVersions }
+
+    /// Whether another alternative may be requested. False at the limit, which
+    /// is what removes/disables `Try another` — `Use rewrite` and `Dismiss`
+    /// stay available regardless.
+    var canRequestAnother: Bool { versions.count < Self.maxVersions }
+
+    /// The text currently displayed, if any.
+    var currentVersion: String? { versions.last }
+
+    /// Bounded prior-output context for the next request. Passing the earlier
+    /// answers is what makes an alternative meaningfully different; it is
+    /// bounded so the request cannot grow without limit.
+    var priorVersions: [String] { versions }
+
+    /// Record a successfully displayed version. Returns false — changing
+    /// nothing — when the sequence is already full or the text duplicates the
+    /// version already on screen, so a duplicate provider answer can neither
+    /// consume a slot nor silently replace an identical card.
+    @discardableResult
+    mutating func recordDisplayed(_ text: String) -> Bool {
+        guard canRequestAnother else { return false }
+        let normalized = Self.normalized(text)
+        guard !normalized.isEmpty else { return false }
+        if versions.contains(where: { Self.normalized($0) == normalized }) { return false }
+        versions.append(text)
+        return true
+    }
+
+    /// Whether `text` repeats a version already shown. The response-boundary
+    /// duplicate check uses this before deciding to retry.
+    func isDuplicate(_ text: String) -> Bool {
+        let normalized = Self.normalized(text)
+        return versions.contains { Self.normalized($0) == normalized }
+    }
+
+    /// Case- and whitespace-insensitive comparison, so "Sure!" and "sure !"
+    /// count as the same answer rather than as a new version.
+    static func normalized(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+    }
+}
+
 /// Immutable request-time text range bound to the host/session it was captured
 /// in. A rewrite is permitted only while the same visible document is present
 /// in the same host/session; caret-only moves are handled by returning to the
@@ -762,10 +853,17 @@ public final class TonoCoachClient {
     ///   to widen its visible deadline to the connectivity budget. It is NOT a
     ///   retry hook: the same single task is still in flight and will complete
     ///   by itself when the network returns.
+    /// Build 114: `priorVersions` carries the alternatives already shown for
+    /// this exact source message + axis, so the server can ask for something
+    /// meaningfully different. It travels on the ESTABLISHED request contract
+    /// (the same endpoint, bearer, and strict envelope) — no second provider
+    /// path and no second identity. It is bounded by
+    /// `CoachAlternativeSequence.maxVersions`, and it is never logged.
     public func variant(
         draft: String,
         axis: String,
         customPrompt: String? = nil,
+        priorVersions: [String] = [],
         waitingForConnectivity: (() -> Void)? = nil,
         completion: @escaping (Result<VariantResponse, CoachError>) -> Void
     ) -> URLSessionDataTask? {
@@ -790,6 +888,12 @@ public final class TonoCoachClient {
         var body: [String: Any] = ["text": draft, "axis": axis]
         if axis == "custom", let customPrompt {
             body["custom_prompt"] = customPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        // Only send the key when there is something to say, so an initial
+        // request's wire shape is byte-identical to Build 113's.
+        let bounded = priorVersions.suffix(CoachAlternativeSequence.maxVersions)
+        if !bounded.isEmpty {
+            body["prior_versions"] = Array(bounded)
         }
         do {
             req.httpBody = try JSONSerialization.data(withJSONObject: body)

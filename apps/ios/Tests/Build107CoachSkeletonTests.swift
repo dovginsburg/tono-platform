@@ -77,10 +77,6 @@ final class Build107CoachSkeletonTests: XCTestCase {
         // be mistaken for the spinner still being constructed.
         let code = Self.strippingComments(try Self.keyboardControllerSource())
         XCTAssertFalse(
-            code.contains("UIActivityIndicatorView"),
-            "the legacy Coaching spinner must be deleted from KeyboardViewController, not merely bypassed"
-        )
-        XCTAssertFalse(
             code.contains("\"Coaching…\""),
             "the legacy Coaching… status label must be deleted from KeyboardViewController"
         )
@@ -88,11 +84,67 @@ final class Build107CoachSkeletonTests: XCTestCase {
             code.contains("TonoCoachSkeletonView"),
             "the loading surface must be the result-shaped skeleton"
         )
-        // And the removal is real in the built hierarchy, not just the text.
         XCTAssertFalse(
             code.contains("coachStatusLabel"),
             "the status-label field the spinner wrote to must be gone too"
         )
+
+        // Build 114 narrows — but does not weaken — the spinner ban.
+        //
+        // Build 107 banned the string `UIActivityIndicatorView` anywhere in the
+        // file, which was a fine proxy while the file had exactly one loading
+        // state. Build 114 adds a genuinely different one: an in-CARD busy
+        // indicator on the results card, required by the founder contract so
+        // that `Try another` keeps the current rewrite readable instead of
+        // swapping it for a full-panel spinner.
+        //
+        // The property Build 107 actually protects is "the LOADING SURFACE is
+        // the skeleton, never the Build-106 spinner body". That is now asserted
+        // precisely: the loading path must build no activity indicator, and the
+        // only one in the file is the results-card one. The runtime half —
+        // `testSkeletonReplacesSpinnerInTheBuiltHierarchy` above — still proves
+        // no indicator is parented in a presented loading surface.
+        let loadingBody = try XCTUnwrap(
+            Self.body(ofFunction: "func presentCoachLoading(", in: code),
+            "presentCoachLoading must still exist"
+        )
+        XCTAssertFalse(
+            loadingBody.contains("UIActivityIndicatorView"),
+            "the loading surface must remain spinner-free — it is the skeleton"
+        )
+        // Count CONSTRUCTIONS, not mentions: the stored property that holds the
+        // one permitted indicator necessarily names the type too, and banning
+        // that would be banning the declaration rather than the spinner.
+        XCTAssertEqual(
+            code.components(separatedBy: "UIActivityIndicatorView(").count - 1, 1,
+            """
+            exactly one UIActivityIndicatorView may be CONSTRUCTED in this \
+            file: the Build 114 in-card Try another indicator. A second one \
+            means a loading spinner came back somewhere.
+            """
+        )
+        XCTAssertTrue(
+            code.contains("coachTryAnotherSpinner"),
+            "the single permitted indicator is the results-card Try another spinner"
+        )
+    }
+
+    /// Extract a function body by brace matching from its declaration. Used so
+    /// the spinner ban can be scoped to one function instead of the whole file.
+    private static func body(ofFunction declaration: String, in code: String) -> String? {
+        guard let start = code.range(of: declaration) else { return nil }
+        var depth = 0
+        var started = false
+        var out = ""
+        for character in code[start.lowerBound...] {
+            if character == "{" { depth += 1; started = true }
+            if started { out.append(character) }
+            if character == "}" {
+                depth -= 1
+                if started && depth == 0 { return out }
+            }
+        }
+        return nil
     }
 
     /// The skeleton is genuinely result-shaped: a bordered card holding an

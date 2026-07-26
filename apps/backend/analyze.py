@@ -1713,6 +1713,14 @@ VARIANT_ALLOWLIST: frozenset[str] = frozenset({
 # Custom-prompt guardrails (deterministic, zero LLM calls).
 CUSTOM_PROMPT_MAX_CHARS = 240  # short Custom directive only; full rewrite lives in `safer`.
 
+# Build 114 — how many previously-shown rewrites a "Try another" request may
+# carry. Matches CoachAlternativeSequence.maxVersions on the client: three
+# successfully displayed versions is the product cap, so there is never a
+# fourth to describe. Bounding it here (not just on the client) keeps a
+# hostile or buggy client from turning the field into unbounded prompt input.
+VARIANT_MAX_PRIOR_VERSIONS = 3
+VARIANT_PRIOR_VERSION_MAX_CHARS = 2000
+
 # Deterministic crisis-keyword preflight -- the safest we can do without an
 # LLM call. This is intentionally conservative and stays tiny on purpose:
 # the production safety boundary (Safer, mandatory) is the load-bearing
@@ -1846,6 +1854,16 @@ class VariantRequest(BaseModel):
     preferred_voice: Optional[str] = None
     recipient_hint: Optional[str] = None
     thread_context: Optional[str] = None
+    prior_versions: list[str] = Field(
+        default_factory=list,
+        max_length=VARIANT_MAX_PRIOR_VERSIONS,
+        description=(
+            "Build 114 — rewrites already shown to this person for the SAME "
+            "source message and axis, so the next one is meaningfully "
+            "different. Bounded; the server truncates and never logs them. "
+            "Does not affect the preflight decision or model routing."
+        ),
+    )
 
 
 class VariantResponse(BaseModel):
@@ -1990,7 +2008,39 @@ def build_single_variant_user_prompt(req: VariantRequest) -> str:
     if req.preferred_voice:
         lines += ["", f"PREFERRED VOICE: {req.preferred_voice}"]
     lines += ["", f"REQUESTED AXIS (single chip): {req.axis}"]
+    # Build 114 — "Try another". The versions already shown for this exact
+    # source message and axis are named so the model produces something
+    # genuinely different rather than a paraphrase of its own last answer.
+    # Bounded on both ends (count and per-item length) so the field can never
+    # become unbounded prompt input, and never logged.
+    priors = bounded_prior_versions(req.prior_versions)
+    if priors:
+        lines += [
+            "",
+            "ALREADY SHOWN (same draft, same axis — produce a MEANINGFULLY "
+            "different rewrite; do not paraphrase these):",
+        ]
+        lines += [f"- {p}" for p in priors]
     return "\n".join(lines)
+
+
+def bounded_prior_versions(raw: Optional[list[str]]) -> list[str]:
+    """Clamp the client-supplied prior-output context.
+
+    Two independent bounds, because the client cap is a product decision and
+    this one is a safety decision: a hostile client that ignores
+    `CoachAlternativeSequence.maxVersions` still cannot push more than
+    `VARIANT_MAX_PRIOR_VERSIONS` items, nor an oversized item, into the prompt.
+    Blank entries are dropped so an empty string cannot pad the list.
+    """
+    if not raw:
+        return []
+    cleaned: list[str] = []
+    for item in raw[:VARIANT_MAX_PRIOR_VERSIONS]:
+        text = (item or "").strip()[:VARIANT_PRIOR_VERSION_MAX_CHARS]
+        if text:
+            cleaned.append(text)
+    return cleaned
 
 
 def _parse_json_response(raw: str) -> dict[str, Any]:

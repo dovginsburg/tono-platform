@@ -7,6 +7,7 @@ import com.tono.shared.analytics.CrashReporter
 import com.tono.shared.flags.FeatureFlag
 import com.tono.shared.flags.FeatureFlags
 import com.tono.shared.storage.SecureStore
+import com.tono.shared.storage.SharedKeys
 import com.tono.shared.storage.SharedStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,6 +19,10 @@ class TonoApplication : Application() {
         super.onCreate()
         SharedStore.init(this)   // must be first
         SecureStore.init(this)   // EncryptedSharedPreferences
+        // Build 114 — publish the shipped build number so registration events
+        // carry the release they came from. Written once, from BuildConfig, so
+        // there is exactly one source for it and no client can invent one.
+        SharedStore.putString(SharedKeys.APP_BUILD, BuildConfig.VERSION_CODE.toString())
         CrashReporter.configure(this)  // A1: no-op until Firebase added
         PlayBillingManager.start(this)
 

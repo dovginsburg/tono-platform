@@ -151,6 +151,8 @@
 		A71110000000000000000002 /* Build111CursorSensitivityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71110000000000000000001 /* Build111CursorSensitivityTests.swift */; };
 		B112C0FFEE0000000000A112 /* Build112UISurfaceContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B112C0FFEE0000000000B112 /* Build112UISurfaceContractTests.swift */; };
 		B113C0FFEE0000000000A113 /* Build113FailureCopyRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B113C0FFEE0000000000B113 /* Build113FailureCopyRuntimeTests.swift */; };
+		B114C0FFEE0000000000A114 /* Build114RewriteAlternativesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B114C0FFEE0000000000B114 /* Build114RewriteAlternativesTests.swift */; };
+		B114E0FFEE0000000000A115 /* Build114EmailAccountTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B114E0FFEE0000000000B115 /* Build114EmailAccountTests.swift */; };
 		A71110000000000000000004 /* Build111CoachReconnectTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71110000000000000000003 /* Build111CoachReconnectTests.swift */; };
 		5ED0C7000000000000000002 /* SetupDoctor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ED0C7000000000000000001 /* SetupDoctor.swift */; };
 		5ED0C7000000000000000003 /* SetupDoctor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ED0C7000000000000000001 /* SetupDoctor.swift */; };
@@ -321,6 +323,8 @@
 		A71110000000000000000001 /* Build111CursorSensitivityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build111CursorSensitivityTests.swift; sourceTree = "<group>"; };
 		B112C0FFEE0000000000B112 /* Build112UISurfaceContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build112UISurfaceContractTests.swift; sourceTree = "<group>"; };
 		B113C0FFEE0000000000B113 /* Build113FailureCopyRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build113FailureCopyRuntimeTests.swift; sourceTree = "<group>"; };
+		B114C0FFEE0000000000B114 /* Build114RewriteAlternativesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build114RewriteAlternativesTests.swift; sourceTree = "<group>"; };
+		B114E0FFEE0000000000B115 /* Build114EmailAccountTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build114EmailAccountTests.swift; sourceTree = "<group>"; };
 		A71110000000000000000003 /* Build111CoachReconnectTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build111CoachReconnectTests.swift; sourceTree = "<group>"; };
 		5ED0C7000000000000000001 /* SetupDoctor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupDoctor.swift; sourceTree = "<group>"; };
 		5ED0C7000000000000000005 /* SetupDoctorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupDoctorView.swift; sourceTree = "<group>"; };
@@ -444,6 +448,8 @@
 				A71110000000000000000001 /* Build111CursorSensitivityTests.swift */,
 				B112C0FFEE0000000000B112 /* Build112UISurfaceContractTests.swift */,
 				B113C0FFEE0000000000B113 /* Build113FailureCopyRuntimeTests.swift */,
+				B114C0FFEE0000000000B114 /* Build114RewriteAlternativesTests.swift */,
+				B114E0FFEE0000000000B115 /* Build114EmailAccountTests.swift */,
 				A71110000000000000000003 /* Build111CoachReconnectTests.swift */,
 				5ED0C7000000000000000007 /* SetupDoctorTests.swift */,
 				970000000000000000000010 /* Build97KeyboardGeometryTests.swift */,
@@ -888,6 +894,8 @@
 				A71110000000000000000002 /* Build111CursorSensitivityTests.swift in Sources */,
 				B112C0FFEE0000000000A112 /* Build112UISurfaceContractTests.swift in Sources */,
 				B113C0FFEE0000000000A113 /* Build113FailureCopyRuntimeTests.swift in Sources */,
+				B114C0FFEE0000000000A114 /* Build114RewriteAlternativesTests.swift in Sources */,
+				B114E0FFEE0000000000A115 /* Build114EmailAccountTests.swift in Sources */,
 				A71110000000000000000004 /* Build111CoachReconnectTests.swift in Sources */,
 				5ED0C7000000000000000004 /* SetupDoctor.swift in Sources */,
 				5ED0C7000000000000000008 /* SetupDoctorTests.swift in Sources */,
