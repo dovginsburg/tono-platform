@@ -4,43 +4,9 @@
 import Foundation
 import UIKit
 
-protocol SpellingChecking: AnyObject {
-    func lookup(word: String, language: String) -> SpellingLookup
-}
-
-struct SpellingLookup: Equatable {
-    let isMisspelled: Bool
-    let corrections: [String]
-    let completions: [String]
-}
-
-final class SystemSpellingChecker: SpellingChecking {
-    private let checker = UITextChecker()
-
-    func lookup(word: String, language: String) -> SpellingLookup {
-        let range = NSRange(location: 0, length: word.utf16.count)
-        let misspelled = checker.rangeOfMisspelledWord(
-            in: word,
-            range: range,
-            startingAt: 0,
-            wrap: false,
-            language: language
-        ).location != NSNotFound
-        let corrections = misspelled
-            ? (checker.guesses(forWordRange: range, in: word, language: language) ?? [])
-            : []
-        let completions = checker.completions(
-            forPartialWordRange: range,
-            in: word,
-            language: language
-        ) ?? []
-        return SpellingLookup(
-            isMisspelled: misspelled,
-            corrections: corrections,
-            completions: completions
-        )
-    }
-}
+// `SpellingChecking`, `SpellingLookup` and `SystemSpellingChecker` live in
+// LocalIntelligence.swift so the host app runs the REAL shipping checker in its
+// self-test rather than a second copy of it.
 
 enum SpellingFieldKind: Hashable {
     case ordinary
@@ -55,13 +21,30 @@ struct SpellingHostPolicy: Equatable {
     let fieldKind: SpellingFieldKind
     let allowsAutocorrection: Bool
     let allowsSpellChecking: Bool
+    /// Dictionaries iOS actually has installed. Injected (rather than read
+    /// statically) so the resolution is testable and so a test can prove the
+    /// English-only Build-105 behaviour is gone.
+    let availableLanguages: [String]
 
+    init(
+        language: String?,
+        fieldKind: SpellingFieldKind,
+        allowsAutocorrection: Bool,
+        allowsSpellChecking: Bool,
+        availableLanguages: [String] = UITextChecker.availableLanguages
+    ) {
+        self.language = language
+        self.fieldKind = fieldKind
+        self.allowsAutocorrection = allowsAutocorrection
+        self.allowsSpellChecking = allowsSpellChecking
+        self.availableLanguages = availableLanguages
+    }
+
+    /// Build 106: resolved against the installed dictionaries instead of the
+    /// Build-105 `prefix == "en"` gate, which disabled the entire local lane
+    /// for every non-English keyboard even when the dictionary was present.
     var supportedLanguage: String? {
-        guard let language = language?.replacingOccurrences(of: "_", with: "-") else {
-            return nil
-        }
-        let prefix = language.split(separator: "-").first?.lowercased()
-        return prefix == "en" ? language : nil
+        SpellingLanguageResolver.resolve(requested: language, available: availableLanguages)
     }
 
     var allowsSuggestions: Bool {
@@ -140,6 +123,16 @@ struct SpellingToken: Equatable {
 struct SpellingRequest: Equatable {
     let token: SpellingToken
     let host: SpellingHostPolicy
+    /// Text immediately before the token, used only for the local bigram
+    /// prior. Bounded to 64 characters by `LocalCandidateRanker`, never stored,
+    /// never transmitted.
+    let contextBefore: String
+
+    init(token: SpellingToken, host: SpellingHostPolicy, contextBefore: String = "") {
+        self.token = token
+        self.host = host
+        self.contextBefore = contextBefore
+    }
 }
 
 struct SpellingDecision: Equatable {
@@ -152,7 +145,7 @@ enum SpellingPolicy {
     static func evaluate(
         request: SpellingRequest,
         checker: SpellingChecking,
-        supplementaryWords: Set<String> = []
+        lexicon: LocalLexicon = .empty
     ) -> SpellingDecision? {
         let token = request.token
         let word = token.text
@@ -164,17 +157,52 @@ enum SpellingPolicy {
               word.rangeOfCharacter(from: .decimalDigits) == nil,
               word.unicodeScalars.allSatisfy({ CharacterSet.letters.contains($0) || $0 == "'" || $0 == "’" }),
               !isMixedCase(word),
-              !isAllCapsAcronym(word),
-              !supplementaryWords.contains(folded)
+              !isAllCapsAcronym(word)
         else { return nil }
 
+        // Build 106: a word in the user's own keyboard vocabulary is spelled
+        // correctly BUT may still be a configured shortcut. Build 105 bailed
+        // out entirely here, so "omw" offered nothing.
+        let personalExpansion = lexicon.expansion(for: folded)
+        if lexicon.contains(folded), personalExpansion == nil {
+            return nil
+        }
+
         let lookup = checker.lookup(word: folded, language: language)
-        var seen = Set<String>()
-        var replacements: [String] = []
+
+        // Rank the checker's raw output before truncating it — Build 105 took
+        // the first two in the checker's own order, so a better candidate
+        // further down the list was simply discarded.
+        var pool: [String] = []
+        var poolSeen = Set<String>()
         for raw in lookup.corrections + lookup.completions {
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { continue }
-            let replacement = preserveCase(of: word, in: trimmed)
+            guard !trimmed.isEmpty, trimmed.lowercased() != folded else { continue }
+            guard poolSeen.insert(trimmed.lowercased()).inserted else { continue }
+            pool.append(trimmed)
+            if pool.count == 16 { break }
+        }
+        let precedingWord = LocalCandidateRanker.precedingWord(
+            inContextBefore: request.contextBefore,
+            skipping: word
+        )
+        let ranked = LocalCandidateRanker.rank(
+            typed: folded,
+            candidates: pool,
+            precedingWord: precedingWord,
+            lexicon: lexicon
+        )
+
+        var seen = Set<String>()
+        var replacements: [String] = []
+        // A configured shortcut expansion is the user's own explicit intent and
+        // outranks anything the dictionary proposes.
+        if let personalExpansion {
+            replacements.append(personalExpansion)
+            seen.insert(personalExpansion.lowercased())
+        }
+        for scored in ranked {
+            let replacement = preserveCase(of: word, in: scored.value)
             let key = replacement.lowercased()
             guard key != folded, seen.insert(key).inserted else { continue }
             replacements.append(replacement)
@@ -187,14 +215,14 @@ enum SpellingPolicy {
         let candidates = [word] + replacements
         let top = replacements.first
         let looksLikeProperNoun = word.first?.isUppercase == true && !token.followsSentenceBoundary
-        let correctionDistances = lookup.corrections
-            .map { damerauLevenshtein(folded, $0.lowercased()) }
+        let correctionDistances = ranked.map { damerauLevenshtein(folded, $0.value.lowercased()) }
         let uniqueBestCorrection = correctionDistances.first.map { first in
             first <= 1 && correctionDistances.dropFirst().allSatisfy { $0 > first }
         } == true
-        let strong = lookup.isMisspelled
-            && !looksLikeProperNoun
-            && uniqueBestCorrection
+        // An explicit user shortcut is high-confidence by definition; otherwise
+        // the Build-105 conservative rule is unchanged.
+        let strong = personalExpansion != nil
+            || (lookup.isMisspelled && !looksLikeProperNoun && uniqueBestCorrection)
         return SpellingDecision(
             original: word,
             candidates: Array(candidates.prefix(3)),
@@ -224,33 +252,10 @@ enum SpellingPolicy {
     }
 
     /// Adjacent transposition counts as one edit, covering conservative
-    /// high-confidence typos such as "teh" and "recieve".
+    /// high-confidence typos such as "teh" and "recieve". Forwards to
+    /// `LocalEditDistance`, which the host-app self-test also uses.
     static func damerauLevenshtein(_ lhs: String, _ rhs: String) -> Int {
-        let a = Array(lhs)
-        let b = Array(rhs)
-        guard !a.isEmpty else { return b.count }
-        guard !b.isEmpty else { return a.count }
-        var matrix = Array(
-            repeating: Array(repeating: 0, count: b.count + 1),
-            count: a.count + 1
-        )
-        for i in 0...a.count { matrix[i][0] = i }
-        for j in 0...b.count { matrix[0][j] = j }
-        for i in 1...a.count {
-            for j in 1...b.count {
-                let cost = a[i - 1] == b[j - 1] ? 0 : 1
-                matrix[i][j] = min(
-                    matrix[i - 1][j] + 1,
-                    matrix[i][j - 1] + 1,
-                    matrix[i - 1][j - 1] + cost
-                )
-                if i > 1, j > 1,
-                   a[i - 1] == b[j - 2], a[i - 2] == b[j - 1] {
-                    matrix[i][j] = min(matrix[i][j], matrix[i - 2][j - 2] + 1)
-                }
-            }
-        }
-        return matrix[a.count][b.count]
+        LocalEditDistance.damerauLevenshtein(lhs, rhs)
     }
 }
 
@@ -261,6 +266,10 @@ final class SpellingCorrectionService {
         let word: String
         let language: String
         let fieldKind: SpellingFieldKind
+        /// Ranking is context-sensitive from Build 106, so the preceding word
+        /// is part of the identity of a decision. Only the single preceding
+        /// word is kept, in memory, bounded by the LRU below.
+        let precedingWord: String
     }
 
     private let checker: SpellingChecking
@@ -273,7 +282,7 @@ final class SpellingCorrectionService {
     private var pending: DispatchWorkItem?
     private var cache: [CacheKey: SpellingDecision?] = [:]
     private var cacheOrder: [CacheKey] = []
-    private var supplementaryWords = Set<String>()
+    private var lexicon = LocalLexicon.empty
 
     init(
         checker: SpellingChecking = SystemSpellingChecker(),
@@ -313,12 +322,21 @@ final class SpellingCorrectionService {
         _ = beginGeneration()
     }
 
-    func updateSupplementaryWords(_ words: Set<String>) {
+    /// Adopt the user's `UILexicon`-derived vocabulary. Invalidates the cache,
+    /// since every cached decision was ranked without it.
+    func updateLexicon(_ next: LocalLexicon) {
         lock.lock()
-        supplementaryWords = Set(words.lazy.map { $0.lowercased() }.prefix(256))
+        lexicon = next
         cache.removeAll(keepingCapacity: true)
         cacheOrder.removeAll(keepingCapacity: true)
         lock.unlock()
+    }
+
+    /// The vocabulary currently in force, for the in-keyboard self-test.
+    var currentLexicon: LocalLexicon {
+        lock.lock()
+        defer { lock.unlock() }
+        return lexicon
     }
 
     @discardableResult
@@ -344,7 +362,11 @@ final class SpellingCorrectionService {
         let key = CacheKey(
             word: request.token.text.lowercased(),
             language: language,
-            fieldKind: request.host.fieldKind
+            fieldKind: request.host.fieldKind,
+            precedingWord: LocalCandidateRanker.precedingWord(
+                inContextBefore: request.contextBefore,
+                skipping: request.token.text
+            ) ?? ""
         )
         lock.lock()
         if let boxed = cache[key] {
@@ -352,13 +374,13 @@ final class SpellingCorrectionService {
             lock.unlock()
             return boxed
         }
-        let lexicon = supplementaryWords
+        let vocabulary = lexicon
         lock.unlock()
 
         let decision = SpellingPolicy.evaluate(
             request: request,
             checker: checker,
-            supplementaryWords: lexicon
+            lexicon: vocabulary
         )
         lock.lock()
         cache[key] = decision

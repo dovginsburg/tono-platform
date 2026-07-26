@@ -17,7 +17,24 @@ import XCTest
 /// where build numbers disagree it fails on the version values, never on a
 /// syntax/type error.
 final class BuildNumberGuardTests: XCTestCase {
-    private static let expectedBuild = "101"
+    /// Read from `Scripts/bump-build.sh`, the SINGLE reviewed authority for the
+    /// shipped build number, rather than hardcoding a fifth copy. Every release
+    /// bump previously had to edit this constant too, and forgetting it turned
+    /// the whole iOS suite red on an unrelated change. Deriving here keeps the
+    /// real invariant — every shipped bundle agrees with the archive guard —
+    /// while removing the drift.
+    private static func expectedBuild(root: URL) throws -> String {
+        let script = try String(
+            contentsOf: root.appendingPathComponent("Scripts/bump-build.sh"),
+            encoding: .utf8
+        )
+        let value = Self.value(ofAssignment: "EXPECTED_BUILD", in: script)
+        let unwrapped = try XCTUnwrap(
+            value, "Scripts/bump-build.sh must pin EXPECTED_BUILD — it is the release authority"
+        )
+        XCTAssertFalse(unwrapped.isEmpty, "EXPECTED_BUILD must not be empty")
+        return unwrapped
+    }
 
     private static let shippedPlists = [
         "App/Info.plist",
@@ -34,8 +51,9 @@ final class BuildNumberGuardTests: XCTestCase {
             .deletingLastPathComponent()   // <srcroot>
     }
 
-    func testEveryShippedBundleDeclaresBuild101() throws {
+    func testEveryShippedBundleDeclaresTheReviewedBuildNumber() throws {
         let root = sourceRoot()
+        let expected = try Self.expectedBuild(root: root)
         for relative in Self.shippedPlists {
             let url = root.appendingPathComponent(relative)
             let data = try Data(contentsOf: url)
@@ -44,36 +62,43 @@ final class BuildNumberGuardTests: XCTestCase {
             ) as? [String: Any]
             let actual = plist?["CFBundleVersion"] as? String
             XCTAssertEqual(
-                actual, Self.expectedBuild,
-                "\(relative) declares CFBundleVersion \(actual ?? "nil"); build 101 requires \(Self.expectedBuild) across every shipped bundle"
+                actual, expected,
+                "\(relative) declares CFBundleVersion \(actual ?? "nil"); every shipped bundle must declare \(expected), the number Scripts/bump-build.sh pins"
             )
         }
     }
 
-    func testArchiveGuardRequiresTheSameBuild101AcrossEveryBundle() throws {
+    /// The shipped `CFBundleVersion` must also be a STRING. App Store Connect
+    /// rejects a numeric `CFBundleVersion`, and the failure only surfaces at
+    /// upload — long after the archive is built.
+    func testEveryShippedBundleDeclaresBuildNumberAsAString() throws {
+        let root = sourceRoot()
+        for relative in Self.shippedPlists {
+            let data = try Data(contentsOf: root.appendingPathComponent(relative))
+            let plist = try PropertyListSerialization.propertyList(
+                from: data, options: [], format: nil
+            ) as? [String: Any]
+            XCTAssertTrue(
+                plist?["CFBundleVersion"] is String,
+                "\(relative) must declare CFBundleVersion as <string>; App Store Connect rejects a numeric build number"
+            )
+        }
+    }
+
+    func testArchiveGuardCoversEveryShippedBundle() throws {
         let root = sourceRoot()
         let script = try String(
             contentsOf: root.appendingPathComponent("Scripts/bump-build.sh"),
             encoding: .utf8
         )
 
-        // The guard's own expected number must match `expectedBuild` so it
-        // agrees with the shipped plists. This is the exact invariant that
-        // failed prior regression candidates (plists moved to the new build
-        // but the guard stayed on the previous one → exit 65, zero executed
-        // tests).
-        let guardValue = Self.value(ofAssignment: "EXPECTED_BUILD", in: script)
-        XCTAssertEqual(
-            guardValue, Self.expectedBuild,
-            "Scripts/bump-build.sh pins EXPECTED_BUILD=\(guardValue ?? "nil"); it must require \(Self.expectedBuild) so the archive guard agrees with the shipped plists"
-        )
-
-        // …and the guard must still cover all four shipped bundles so none can
-        // silently drift off build 96.
+        // The guard must still cover all four shipped bundles, so none can
+        // silently drift off the reviewed build. (The number itself is no
+        // longer duplicated here — it is read from this same script.)
         for relative in Self.shippedPlists {
             XCTAssertTrue(
                 script.contains(relative),
-                "Scripts/bump-build.sh must verify \(relative) so no shipped bundle drifts off build \(Self.expectedBuild)"
+                "Scripts/bump-build.sh must verify \(relative) so no shipped bundle drifts off the reviewed build"
             )
         }
     }

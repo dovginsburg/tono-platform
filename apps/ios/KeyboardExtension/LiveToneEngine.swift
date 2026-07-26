@@ -76,6 +76,13 @@ public final class LiveToneEngine {
     private var inFlightHash: Int?
 
     /// The Timer scheduled by the 500 ms debounce.
+    ///
+    /// Confined to `queue`: it is only ever read or written from the engine's
+    /// serial queue. The timer *instance* is installed on the main run loop,
+    /// so every `add`/`invalidate` is handed to the main queue with the
+    /// instance captured directly — reading this property from the main queue
+    /// races the serial queue's writes and over-releases the underlying
+    /// `CFRunLoopTimer` (build 112 `Test crashed with signal trap`).
     private var pendingTimer: Timer?
 
     // MARK: - Public observers
@@ -108,9 +115,11 @@ public final class LiveToneEngine {
         self.opportunityCounters = opportunityCounters
     }
 
-    deinit {
-        pendingTimer?.invalidate()
-    }
+    // No `deinit` teardown: `pendingTimer` is serial-queue state and its timer
+    // is installed on the main run loop, so neither may be touched from the
+    // arbitrary thread that drops the last reference. The debounce body holds
+    // the engine weakly, so a still-pending timer fires once into nothing and
+    // the non-repeating timer then removes itself from the run loop.
 
     // MARK: - Public API
 
@@ -211,16 +220,25 @@ public final class LiveToneEngine {
         }
         pendingTimer = timer
         // Schedule on the main run loop so the timer survives the
-        // engine's serial queue without racing the keystroke path.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, let timer = self.pendingTimer, timer === timer else { return }
+        // engine's serial queue without racing the keystroke path. The
+        // instance is captured, never re-read from `pendingTimer`: the main
+        // queue reading that serial-queue property raced `cancelTimer()` and
+        // over-released the CFRunLoopTimer, and the re-read could hand the
+        // run loop the *successor* timer twice.
+        DispatchQueue.main.async {
             RunLoop.main.add(timer, forMode: .common)
         }
     }
 
     private func cancelTimer() {
-        pendingTimer?.invalidate()
+        guard let timer = pendingTimer else { return }
         pendingTimer = nil
+        // A Timer must be invalidated on the run loop it was added to. Both
+        // hops are enqueued from this serial queue, and the main queue is
+        // FIFO, so a timer is always added before it is invalidated.
+        DispatchQueue.main.async {
+            timer.invalidate()
+        }
     }
 
     /// Run the classifier synchronously on the engine's serial queue.

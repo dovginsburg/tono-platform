@@ -43,14 +43,11 @@ nuance — highest pain-per-dollar, strong organic community, low sales friction
   time. Unlock the full coach." (coaching framing, not rewrite-count framing)
 - **History:** last 5 coach sessions, tap to re-open any result
 
-### Companion App (4 tabs)
-**Coach tab (HomeView)**
+### Companion App (3 tabs)
+**Coach tab (CoachView)**
 - Setup walkthrough: enable keyboard → grant Full Access → switch to Tono
 - "You're all set" card once keyboard loads
 - Footer: StoreKit-backed Pro pricing with no hard-coded UI prices
-
-**Playground tab (PlaygroundView)**
-- In-app coaching without the keyboard (for testing / onboarding)
 
 **This Week tab (DigestView)**
 - Weekly coaching report: rewrites count, active days, go-to axis, axis breakdown bars

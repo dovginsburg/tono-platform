@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { startRegistration } from '@simplewebauthn/browser';
+import { apiPath } from '@/lib/auth-redirects';
 
 type Passkey = {
   credential_id: string;
@@ -41,7 +42,7 @@ export default function PasskeyManager() {
   const load = useCallback(async () => {
     setState('loading');
     try {
-      const res = await fetch('/api/passkey/list', { cache: 'no-store' });
+      const res = await fetch(apiPath('/api/passkey/list'), { cache: 'no-store' });
       if (!res.ok) {
         setState('error');
         return;
@@ -61,7 +62,7 @@ export default function PasskeyManager() {
     setError(null);
     setBusy(true);
     try {
-      const optRes = await fetch('/api/passkey/register/options', { method: 'POST' });
+      const optRes = await fetch(apiPath('/api/passkey/register/options'), { method: 'POST' });
       if (optRes.status === 401) {
         setError('please sign in again to add a passkey.');
         return;
@@ -91,7 +92,7 @@ export default function PasskeyManager() {
           ? 'this phone'
           : 'this device';
 
-      const verifyRes = await fetch('/api/passkey/register/verify', {
+      const verifyRes = await fetch(apiPath('/api/passkey/register/verify'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ credential: attestation, nickname }),
@@ -110,7 +111,7 @@ export default function PasskeyManager() {
     setError(null);
     setBusy(true);
     try {
-      const res = await fetch(`/api/passkey/${encodeURIComponent(credentialId)}`, {
+      const res = await fetch(apiPath(`/api/passkey/${encodeURIComponent(credentialId)}`), {
         method: 'DELETE',
       });
       if (!res.ok && res.status !== 204) {

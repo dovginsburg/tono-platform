@@ -352,12 +352,68 @@ def test_keyboard_writes_mirror_via_recordEntitlement():
 # ===========================================================================
 
 
-def test_release_gate_fails_closed_with_shipped_artifact():
+def _unresolved_artifact(gate):
+    """The shipped artifact with both evidence forms reset to their
+    pre-attestation shape — i.e. what ships if the owner attestation is ever
+    reverted. Used to exercise fail-closed without mutating the tracked file."""
+    artifact = gate.load_artifact()
+    artifact["evidence"] = {
+        "checkout_disabled": {
+            "supplied": False, "source": None, "verified_by": None,
+            "verified_at": None, "reference": None,
+        },
+        "charged_before_upgrade_policy": {
+            "supplied": False, "owner_approved": False, "approved_by": None,
+            "approved_at": None, "bounded_window_days": None, "policy_reference": None,
+        },
+    }
+    return artifact
+
+
+def test_release_gate_fails_closed_when_evidence_is_absent():
+    """The load-bearing invariant: with NO evidence the gate blocks.
+
+    This previously asserted the *shipped* artifact was unresolved. That stopped
+    being true on 2026-07-25, when the owner attested (Dov Ginsburg, recorded in
+    docs/operations/BUILD90-OWNER-ATTESTATION-2026-07-25.md) that nobody has paid
+    via Stripe/Apple/Play, closing the gate through Form B over an empty
+    population. The assertion is therefore re-expressed against a synthetic
+    evidence-free artifact so the fail-closed property is still proven — the gate
+    itself is unchanged and was NOT weakened.
+    """
     gate = _load_gate()
-    result = gate.evaluate(gate.load_artifact(), env={})
+    result = gate.evaluate(_unresolved_artifact(gate), env={})
     assert result.ready is False
     assert result.evidence_source is None
     assert any("UNRESOLVED" in r for r in result.reasons)
+
+
+def test_shipped_artifact_is_owner_attested_ready_via_form_b_only():
+    """Locks in the 2026-07-25 closure and its exact shape.
+
+    Fails if the attestation is silently reverted, and — just as importantly —
+    if anyone ever flips Form A (`checkout_disabled`) to supplied. No App Store
+    Connect observation was ever made, so Form A must stay unclaimed; only the
+    owner's Form B attestation closes this gate.
+    """
+    gate = _load_gate()
+    artifact = gate.load_artifact()
+    result = gate.evaluate(artifact, env={})
+    assert result.ready is True, f"shipped artifact should be attested-ready: {result.reasons}"
+    assert result.evidence_source == "artifact"
+
+    checkout = artifact["evidence"]["checkout_disabled"]
+    assert checkout["supplied"] is False, "Form A must stay unclaimed — no ASC observation was made"
+    for field in ("source", "verified_by", "verified_at", "reference"):
+        assert checkout[field] is None, f"checkout_disabled.{field} must remain null"
+
+    policy = artifact["evidence"]["charged_before_upgrade_policy"]
+    assert policy["supplied"] is True and policy["owner_approved"] is True
+    assert isinstance(policy["bounded_window_days"], int)
+    assert not isinstance(policy["bounded_window_days"], bool)
+    assert policy["bounded_window_days"] > 0
+    for field in ("approved_by", "approved_at", "policy_reference"):
+        assert isinstance(policy[field], str) and policy[field].strip()
 
 
 def test_release_gate_ready_with_checkout_disabled_evidence():
@@ -432,21 +488,66 @@ def test_release_gate_env_override_broken_pointer_fails_closed():
     assert result.ready is False
 
 
-def test_build91_verification_path_fails_closed_by_default():
-    """The build-91 verifier (which the gate is wired into) fails closed on the
-    unresolved build-90 prerequisite, and passes only when evidence is supplied
-    out-of-band. Proves the gate actually blocks the release path."""
+def _load_build91_verifier():
+    """Import the build-91 verifier as a module so its gate dependency can be
+    monkeypatched. Its sibling-import of build90_recovery_gate needs the Scripts
+    dir on sys.path."""
+    scripts = str(IOS_SCRIPTS)
+    added = scripts not in sys.path
+    if added:
+        sys.path.insert(0, scripts)
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "verify_build91_entitlement_contract",
+            IOS_SCRIPTS / "verify_build91_entitlement_contract.py",
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        if added:
+            sys.path.remove(scripts)
+
+
+def test_build91_verifier_blocks_the_release_path_when_the_gate_is_unresolved():
+    """The gate is genuinely load-bearing on the release path.
+
+    Previously this asserted the verifier exits 1 by default. Since the
+    2026-07-25 owner attestation the shipped artifact is legitimately READY, so
+    "by default" now means PASS. The invariant that actually matters — *remove
+    the evidence and the whole verification path blocks* — is proven here by
+    monkeypatching the gate's artifact loader, which leaves the tracked artifact
+    untouched. The gate and the verifier are unchanged; neither was weakened.
+    """
+    verifier = _load_build91_verifier()
+    gate = verifier.build90_recovery_gate
+    original = gate.load_artifact
+    try:
+        gate.load_artifact = lambda *a, **k: _unresolved_artifact(_load_gate())
+        with pytest.raises(AssertionError) as excinfo:
+            verifier.main()
+        assert "charged-before-upgrade" in str(excinfo.value)
+    finally:
+        gate.load_artifact = original
+
+    # ...and with the real, owner-attested artifact the same path passes.
+    assert verifier.main() == 0
+
+
+def test_build91_verification_path_passes_with_the_shipped_attestation():
+    """End-to-end subprocess proof at the committed tree: the verifier exits 0
+    on the shipped attestation, and still exits 0 when complete evidence is
+    additionally supplied out-of-band."""
     verifier = REPO_ROOT / "apps" / "ios" / "Scripts" / "verify_build91_entitlement_contract.py"
     env = dict(os.environ)
     env.pop("TONO_BUILD90_RECOVERY_EVIDENCE", None)
-    blocked = subprocess.run(
+    shipped = subprocess.run(
         [sys.executable, str(verifier)], cwd=REPO_ROOT, capture_output=True, text=True, env=env
     )
-    assert blocked.returncode == 1
-    assert "charged-before-upgrade" in (blocked.stdout + blocked.stderr)
+    assert shipped.returncode == 0, shipped.stdout + shipped.stderr
+    assert "build91-entitlement-contract: PASS" in shipped.stdout
 
-    # Supplying complete evidence out-of-band flips the whole verification path
-    # to PASS — the gate is the only thing blocking it.
+    # Supplying complete evidence out-of-band also passes the verification path.
     import tempfile
 
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:

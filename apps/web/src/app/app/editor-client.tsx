@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { apiPath } from '@/lib/auth-redirects';
 
 type Axis = 'warmer' | 'clearer' | 'funnier' | 'safer';
 
@@ -72,7 +73,7 @@ export function RewriteEditor({
   // closed. We surface only the plan (entitled vs. trial-required).
   const loadPlan = useCallback(async () => {
     try {
-      const res = await fetch('/api/me', { cache: 'no-store' });
+      const res = await fetch(apiPath('/api/me'), { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
         setPlan({ plan: data.plan ?? 'anonymous', is_pro: !!data.is_pro });
@@ -94,7 +95,7 @@ export function RewriteEditor({
     setPerception(null);
     setSelected(null);
     try {
-      const res = await fetch('/api/analyze', {
+      const res = await fetch(apiPath('/api/analyze'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: draft }),

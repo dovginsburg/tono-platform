@@ -109,11 +109,49 @@ final class Build95CoachContractTests: XCTestCase {
         )
     }
 
-    func testResultsRequireExplicitReplaceAndDismiss() throws {
+    /// Build 114 successor to `testResultsRequireExplicitReplaceAndDismiss`.
+    ///
+    /// The property Build 95 protected is unchanged and still asserted: a
+    /// rewrite card mutates the draft ONLY through an explicit, named action,
+    /// and the card itself must never auto-replace. What changed is the
+    /// vocabulary — the founder contract replaced the ambiguous `Replace`
+    /// with `Use rewrite`, and added `Try another` — so this pins the new
+    /// labels rather than the retired one. The no-auto-replace guard below is
+    /// carried over verbatim; it is the half that actually protects the draft.
+    func testResultsRequireExplicitNamedActionsAndNeverAutoReplace() throws {
         let source = try Self.source("KeyboardExtension/KeyboardViewController.swift")
-        XCTAssertTrue(source.contains("setTitle(\"Replace\""))
-        XCTAssertTrue(source.contains("setTitle(\"Dismiss\""))
-        XCTAssertFalse(source.contains("chip.addAction(UIAction { [weak self] _ in\n            self?.applyRewrite(rewriteText)"), "the card itself must not auto-replace")
+        XCTAssertTrue(
+            source.contains("setTitle(Const.useRewriteLabel, for: .normal)"),
+            "the apply action must be the explicit, capability-accurate Use rewrite"
+        )
+        XCTAssertTrue(source.contains("setTitle(Const.tryAnotherLabel, for: .normal)"))
+        XCTAssertTrue(source.contains("setTitle(Const.dismissLabel, for: .normal)"))
+        XCTAssertEqual(Const_useRewriteLabel(source), "Use rewrite")
+        XCTAssertEqual(Const_dismissLabel(source), "Dismiss")
+        // Unchanged from Build 95: the chip must not carry its own apply
+        // action, or tapping anywhere on the card would rewrite the draft.
+        XCTAssertFalse(
+            source.contains("chip.addAction(UIAction { [weak self] _ in\n            self?.applyRewrite(rewriteText)"),
+            "the card itself must not auto-replace"
+        )
+    }
+
+    /// Read a label constant out of source so the assertion is against the
+    /// reviewed literal, not against a symbol that could be re-pointed.
+    private func Const_useRewriteLabel(_ source: String) -> String? {
+        Self.literal(after: "useRewriteLabel", in: source)
+    }
+
+    private func Const_dismissLabel(_ source: String) -> String? {
+        Self.literal(after: "dismissLabel", in: source)
+    }
+
+    private static func literal(after name: String, in source: String) -> String? {
+        guard let range = source.range(of: "\(name)    = \"") ?? source.range(of: "\(name)       = \"")
+        else { return nil }
+        let rest = source[range.upperBound...]
+        guard let end = rest.firstIndex(of: "\"") else { return nil }
+        return String(rest[..<end])
     }
 
     func testBuild95FourPrivacySafeClocksExistWithoutDraftLogging() throws {

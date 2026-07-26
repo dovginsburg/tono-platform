@@ -4,16 +4,19 @@
 Run with: pytest tests/test_rate_limit.py
 or standalone: python3 tests/test_rate_limit.py
 
-Path A replaces the pre-Path-A per-endpoint-scope limiter (analyze_pub,
-register, coupon, auth, otp_lockout — implemented in backend.rate_limit.py
-which no longer exists) with a single per-IP sliding-window cap on
-/v1/analyze (see backend.server._check_ip_rate, _IP_RATE_LIMIT, default 20).
+The rewrite routes are capped per-IP at IP_RATE_LIMIT_PER_MIN (default 20)
+over a 60s sliding window, via backend.server._check_ip_rate.
 
-These tests verify what the new limiter ACTUALLY does. The per-endpoint
-scoping coverage that was here before Path A (register/auth/coupon caps,
-429-shape with X-RateLimit-Limit header) is intentionally dropped — that
-architecture belongs to the pre-Path-A email-identity world. If we want
-back per-endpoint scopes, that's a separate ticket (separate scope).
+That cap is now served by the SHARED limiter in backend.rate_limit (scope
+"analyze") — the same one /v1/register uses. server.py previously carried a
+second, parallel sliding-window implementation whose bucket dict was never
+evicted; because the bucket key comes from the client-supplied
+X-Forwarded-For header, that dict grew without bound. (An earlier revision of
+this docstring claimed backend.rate_limit "no longer exists" — it did exist and
+was live on /v1/register the whole time; the two limiters had simply drifted.)
+
+These tests verify what the limiter ACTUALLY does, plus the eviction that
+keeps bucket memory bounded.
 """
 
 from __future__ import annotations
@@ -49,8 +52,11 @@ def rate_limit_setup(monkeypatch, tmp_path):
     import backend.server as srv
     from fastapi.testclient import TestClient
 
-    # Reset the in-server IP limiter windows so each test starts fresh.
-    srv._ip_windows.clear()
+    # Reset the shared limiter's buckets so each test starts fresh.
+    import backend.rate_limit as _rl
+    _rl._ip_buckets.clear()
+    _rl._keyed_buckets.clear()
+    _rl._last_eviction = 0.0
 
     yield srv, TestClient
 
@@ -144,3 +150,72 @@ def test_health_and_whoami_not_rate_limited(rate_limit_setup):
             assert r.status_code == 200
             r = client.get("/v1/whoami")
             assert r.status_code == 200
+
+# ---------------------------------------------------------------------------
+# Bucket memory is bounded (the defect the consolidation closed)
+# ---------------------------------------------------------------------------
+
+
+def test_rewrite_cap_uses_the_shared_limiter_not_a_private_window():
+    """server.py must not carry a second sliding-window implementation.
+
+    The parallel copy it used to hold never evicted its buckets, so every
+    distinct X-Forwarded-For value a caller invented was retained for the life
+    of the process.
+    """
+    import backend.rate_limit as rl
+    import backend.server as srv
+
+    assert not hasattr(srv, "_ip_windows"), (
+        "server.py has reintroduced a private, non-evicting rate-limit window dict"
+    )
+    rl._ip_buckets.clear()
+    rl._last_eviction = 0.0
+    assert srv._check_ip_rate("203.0.113.7") is True
+    assert (srv._IP_RATE_SCOPE, "203.0.113.7") in rl._ip_buckets, (
+        "the rewrite cap must record into the shared limiter's buckets"
+    )
+
+
+def test_spoofed_forwarded_for_buckets_are_evicted(monkeypatch):
+    """Buckets for keys that have gone quiet are dropped, so a caller rotating
+    X-Forwarded-For cannot grow the dict without bound."""
+    import backend.rate_limit as rl
+    import backend.server as srv
+
+    rl._ip_buckets.clear()
+    rl._keyed_buckets.clear()
+    rl._last_eviction = 0.0
+
+    for i in range(500):
+        srv._check_ip_rate(f"198.51.100.{i // 256}.{i % 256}")
+    assert len(rl._ip_buckets) == 500
+
+    # Jump past the eviction TTL: the next call sweeps every stale bucket and
+    # leaves only the live one.
+    real_time = rl.time.time
+    monkeypatch.setattr(
+        rl.time, "time", lambda: real_time() + rl._EVICTION_TTL_SEC + 1
+    )
+    srv._check_ip_rate("203.0.113.99")
+    assert len(rl._ip_buckets) == 1, (
+        f"stale buckets were not evicted: {len(rl._ip_buckets)} remain"
+    )
+
+
+def test_rewrite_cap_limit_is_still_read_at_call_time():
+    """`_IP_RATE_LIMIT` stays a module attribute read per call, so tests and
+    ops can raise it without reimporting the module."""
+    import backend.rate_limit as rl
+    import backend.server as srv
+
+    rl._ip_buckets.clear()
+    rl._last_eviction = 0.0
+    original = srv._IP_RATE_LIMIT
+    try:
+        srv._IP_RATE_LIMIT = 2
+        assert srv._check_ip_rate("192.0.2.5") is True
+        assert srv._check_ip_rate("192.0.2.5") is True
+        assert srv._check_ip_rate("192.0.2.5") is False, "3rd call must exceed a cap of 2"
+    finally:
+        srv._IP_RATE_LIMIT = original

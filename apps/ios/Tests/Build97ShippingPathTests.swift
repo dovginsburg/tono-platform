@@ -436,21 +436,48 @@ final class Build97SettingsChipUITests: XCTestCase {
     /// .clearer). No normal / custom / fallback chip may wear red or
     /// rose — that hue is reserved for the recipient-directed red
     /// lane.
+    ///
+    /// The accent literal itself now lives in the SHARED source contract
+    /// (`CoachToneChipContract.accentHex`), which `TonoKeyboardVisualStyle`
+    /// reads — one palette definition for every surface. This test used to
+    /// grep TonoKeyboardVisualStyle.swift for
+    /// `case .custom: return UIColor(hexRGB: "38BDF8")`, a code shape that is
+    /// not present in that file (and, per `git log -S`, never was), so it
+    /// asserted false against correct behaviour and left the whole TonoTests
+    /// suite permanently red. It now asserts the behaviour — Custom resolves to
+    /// the website blue — plus the structural rule that keeps it that way.
     func testCustomChipPaletteIsWebsiteBlue38BDF8() throws {
-        let source = try Self.source("KeyboardExtension/TonoKeyboardVisualStyle.swift")
+        let contract = try Self.source("Shared/CoachVariantSettings.swift")
+        let style = try Self.source("KeyboardExtension/TonoKeyboardVisualStyle.swift")
+
+        // 1. The authority resolves Custom to the website blue (matches .clearer).
         XCTAssertTrue(
-            source.contains("case .custom: return UIColor(hexRGB: \"38BDF8\")"),
-            "Custom chip palette must be #38BDF8 (website blue)"
+            contract.contains("case \"custom\": return \"38BDF8\""),
+            "Custom chip accent must be #38BDF8 (website blue) in CoachToneChipContract"
         )
-        XCTAssertFalse(
-            source.contains("case .custom: return UIColor(hexRGB: \"FB7185\")"),
-            "the rose Custom chip color must be gone"
+        XCTAssertTrue(
+            contract.contains("case \"clearer\": return \"38BDF8\""),
+            "Custom must match .clearer, so .clearer must still be #38BDF8"
         )
-        // The 'fallback' / 'normal' / 'safer' colors must also never
-        // touch red or rose. Source-grep the entire palette block.
+
+        // 2. The keyboard must READ that contract rather than re-declaring a
+        //    literal — a second copy is how the two drifted apart before.
+        XCTAssertTrue(
+            style.contains("CoachToneChipContract.accentHex("),
+            "the keyboard palette must source its accent from the shared contract"
+        )
+
+        // 3. No chip accent may wear the rose reserved for the
+        //    recipient-directed red lane.
+        for rose in ["FB7185", "9F1239", "E11D48", "BE123C"] {
+            XCTAssertFalse(
+                contract.contains("case \"custom\": return \"\(rose)\""),
+                "the rose Custom chip accent (#\(rose)) must be gone"
+            )
+        }
         XCTAssertFalse(
-            source.contains("red: 1.0, green: 0.0, blue: 0.0")
-            || source.contains("red: 1.0, green: 0.0, blue: 0.4"),
+            style.contains("red: 1.0, green: 0.0, blue: 0.0")
+            || style.contains("red: 1.0, green: 0.0, blue: 0.4"),
             "no shipping palette entry may use raw red/rose RGB"
         )
     }

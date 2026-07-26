@@ -35,6 +35,7 @@ struct OnboardingEntryPointsView: View {
     @State private var shareExtDone = false
     @AppStorage("tono.onboarding.awaitingSettingsReturn") private var awaitingSettingsReturn = false
     @State private var showSettingsGuidance = false
+    @State private var showSetupDoctor = false
     @State private var keyboardCheckMessage: String?
     @State private var scrollTarget: Int?
     // Email identity (added 2026-07-03)
@@ -63,6 +64,14 @@ struct OnboardingEntryPointsView: View {
                                         .font(.footnote)
                                         .foregroundColor(.secondary)
                                 }
+                                // Preferred path: the Doctor can actually check
+                                // the keyboard, so it beats self-declaring done.
+                                Button("Open Setup Doctor") {
+                                    showSetupDoctor = true
+                                }
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                .foregroundColor(.purple)
+                                .accessibilityHint("Walks through adding the keyboard and confirms when it’s working.")
                                 Button("Verify Setup Manually") {
                                     completeKeyboardStep()
                                 }
@@ -147,6 +156,14 @@ struct OnboardingEntryPointsView: View {
                     },
                     onCancel: { showEmailSheet = false }
                 )
+            }
+            .sheet(isPresented: $showSetupDoctor) {
+                SetupDoctorSheet {
+                    showSetupDoctor = false
+                    // The Doctor may have produced the very check-in this tile
+                    // is waiting on, so re-read rather than assume.
+                    refreshKeyboardStatus(afterSettings: false)
+                }
             }
             .alert("Return to Tono after enabling the keyboard", isPresented: $showSettingsGuidance) {
                 Button("Not now", role: .cancel) {}
@@ -325,19 +342,69 @@ struct OnboardingEntryPointsView: View {
 // owner can add it in the next commit without re-touching this view.
 // MARK: - EmailSignInSheet
 
-/// Two-step email sign-in sheet (added 2026-07-03):
-///   1. User enters email → app POSTs /v1/auth/request-link
-///      (server emails a 6-digit code via Resend)
-///   2. User enters the 6-digit code → app POSTs /v1/auth/verify-otp
-///      (server links this device to the email, returns a new api_token)
-/// Internal (not private) so PaywallView and AccountDeletionView can present
-/// it when an identified account is required (build 101).
+/// The email account sheet — Build 114.
+///
+/// Build 113 and earlier drove a 6-digit code against `/v1/auth/request-link`
+/// and `/v1/auth/verify-otp`. Neither endpoint has ever existed on the server,
+/// so every tap in this sheet 404'd, `KeychainKeys.signedInEmail` was never
+/// written, and `StoreKitManager.isIdentifiedAccount` therefore refused every
+/// purchase on every device. Build 114 drives the registration lane that now
+/// exists: create the account, confirm the address from the link that arrives,
+/// then sign in with the password.
+///
+/// Three properties this sheet is responsible for holding:
+///
+///   * **It is not an account oracle.** Creating an account, asking for a new
+///     confirmation link, and starting a password reset all show the SAME
+///     confirmation whether or not the address is already registered. The
+///     server answers identically for a known and an unknown address; so does
+///     this sheet, because otherwise the anti-enumeration work upstream would
+///     be undone by the one surface a stranger can actually see.
+///   * **No implementation detail reaches the screen.** Every sentence comes
+///     from `emailOutcomeMessage`, which switches on a closed set of outcome
+///     SHAPES. It takes no `Error`, no status code and no message payload, so
+///     there is no parameter through which one could arrive.
+///   * **Confirming an address is not a purchase.** Nothing here grants an
+///     entitlement. `signedInEmail` — the key the paywall reads — is written
+///     by `TonoBackend.signInWithEmail` only after the server confirmed a
+///     verified identity, and Pro still comes from a subscription alone.
+///
+/// Internal (not private) so PaywallView, AccountDeletionView and the Setup
+/// Doctor can present it when an identified account is required (build 101).
 struct EmailSignInSheet: View {
+
+    /// Where the person is in the flow. `confirmSent` is a real destination
+    /// rather than a toast: confirming means leaving for an inbox and coming
+    /// back, possibly after closing the app entirely.
+    enum Step: Equatable {
+        case signIn
+        case createAccount
+        case confirmSent
+    }
+
+    /// What the person was trying to do. Kept separate from the outcome so a
+    /// single accepted answer ("check your email") can still say which link is
+    /// waiting for them — a confirmation link and a password-reset link lead
+    /// to genuinely different next steps.
+    enum Action: Equatable {
+        case createAccount
+        case signIn
+        case resendConfirmation
+        case resetPassword
+    }
+
+    /// The server's own floor, mirrored so the person is told before a round
+    /// trip rather than after one.
+    static let minimumPasswordLength = 8
+
     @State private var email: String = ""
-    @State private var otp: String = ""
-    @State private var step: Step = .enterEmail
-    @State private var isLoading: Bool = false
-    @State private var errorMessage: String?
+    @State private var password: String = ""
+    @State private var step: Step = .signIn
+    @State private var isWorking: Bool = false
+    /// The last thing that happened, as a shape. Never an `Error`.
+    @State private var lastOutcome: TonoBackend.EmailAuthOutcome?
+    @State private var lastAction: Action = .signIn
+
     let onSuccess: () -> Void
     let onCancel: () -> Void
 
@@ -346,181 +413,325 @@ struct EmailSignInSheet: View {
         self.onCancel = onCancel
     }
 
-    enum Step {
-        case enterEmail
-        case enterOTP
-    }
+    // MARK: - Body
 
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 16) {
-                if step == .enterEmail {
-                    emailStep
-                } else {
-                    otpStep
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    switch step {
+                    case .signIn:        signInStep
+                    case .createAccount: createAccountStep
+                    case .confirmSent:   confirmSentStep
+                    }
                 }
+                .padding(24)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(24)
-            .navigationTitle(step == .enterEmail ? "Sign in with email" : "Enter code")
+            .navigationTitle(navigationTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", action: onCancel)
+                        .disabled(isWorking)
                 }
             }
         }
     }
 
-    private var emailStep: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("We'll email you a 6-digit code. No password to remember.")
-                .font(.callout)
-                .foregroundColor(.secondary)
-            TextField("you@example.com", text: $email)
-                .keyboardType(.emailAddress)
-                .textContentType(.emailAddress)
-                .autocapitalization(.none)
-                .textFieldStyle(.roundedBorder)
-                .padding(.vertical, 4)
-            if let err = errorMessage {
-                Text(err).font(.caption).foregroundColor(.red)
-            }
-            Button(action: sendCode) {
-                HStack {
-                    if isLoading { ProgressView() }
-                    Text("Send code")
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(email.contains("@") ? Color.purple : Color.gray.opacity(0.3))
-                .foregroundColor(.white)
-                .clipShape(Capsule())
-            }
-            .disabled(isLoading || !email.contains("@"))
+    private var navigationTitle: String {
+        switch step {
+        case .signIn:        return "Sign in"
+        case .createAccount: return "Create your account"
+        case .confirmSent:   return "Confirm your email"
         }
     }
 
-    private var otpStep: some View {
+    // MARK: - Steps
+
+    private var signInStep: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Code sent to \(email). Check your inbox.")
+            Text("Sign in so your subscription follows you if you reinstall or switch devices.")
                 .font(.callout)
                 .foregroundColor(.secondary)
-            TextField("6-digit code", text: $otp)
-                .keyboardType(.numberPad)
-                .textContentType(.oneTimeCode)
-                .multilineTextAlignment(.center)
-                .font(.system(size: 28, weight: .semibold, design: .monospaced))
-                .textFieldStyle(.roundedBorder)
-                .padding(.vertical, 8)
-            if let err = errorMessage {
-                Text(err).font(.caption).foregroundColor(.red)
+                .fixedSize(horizontal: false, vertical: true)
+            emailField
+            passwordField(isNew: false)
+            noticeView
+            primaryButton(title: "Sign in", enabled: canSubmitCredentials) {
+                Task { await submitSignIn() }
             }
-            Button(action: verifyCode) {
-                HStack {
-                    if isLoading { ProgressView() }
-                    Text("Verify")
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(otp.count == 6 ? Color.purple : Color.gray.opacity(0.3))
-                .foregroundColor(.white)
-                .clipShape(Capsule())
+            Button("Send a new confirmation link") {
+                Task { await submitResend() }
             }
-            .disabled(isLoading || otp.count != 6)
-            Button("Use a different email") {
-                step = .enterEmail
-                otp = ""
-                errorMessage = nil
-            }
-            .font(.footnote)
+            .font(.footnote.weight(.semibold))
             .foregroundColor(.purple)
-        }
-    }
-
-    private func sendCode() {
-        errorMessage = nil
-        isLoading = true
-        Task {
-            defer { isLoading = false }
-            do {
-                _ = try await TonoBackend.shared.requestEmailLink(email: email.lowercased())
-                step = .enterOTP
-            } catch let error as TonoBackendError {
-                errorMessage = requestErrorMessage(error)
-            } catch {
-                errorMessage = "Email sign-in couldn't connect. Try again."
+            .disabled(isWorking || !looksLikeAddress)
+            .accessibilityHint("Sends another link to confirm the address you entered.")
+            Button("Forgot your password?") {
+                Task { await submitReset() }
             }
+            .font(.footnote.weight(.semibold))
+            .foregroundColor(.purple)
+            .disabled(isWorking || !looksLikeAddress)
+            .accessibilityHint("Emails you a link to choose a new password.")
+            Divider().padding(.vertical, 4)
+            Button("Create an account instead") { move(to: .createAccount) }
+                .font(.footnote.weight(.semibold))
+                .foregroundColor(.purple)
+                .disabled(isWorking)
         }
     }
 
-    private func verifyCode() {
-        errorMessage = nil
-        isLoading = true
-        Task {
-            defer { isLoading = false }
-            do {
-                _ = try await TonoBackend.shared.verifyEmailOTP(
-                    email: email.lowercased(),
-                    otp: otp
-                )
-                onSuccess()
-            } catch let e as TonoBackendError {
-                if case .tooManyDevices(let cur, let max) = e {
-                    errorMessage = "This email is on \(cur) devices (max \(max)). Contact support if you need more."
-                } else {
-                    errorMessage = verificationErrorMessage(e)
-                }
-            } catch {
-                errorMessage = "Couldn't verify code. Try again."
+    private var createAccountStep: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Your email keeps your subscription and your style memory recoverable. Pick a password of at least \(Self.minimumPasswordLength) characters.")
+                .font(.callout)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            emailField
+            passwordField(isNew: true)
+            noticeView
+            primaryButton(title: "Create account", enabled: canSubmitCredentials) {
+                Task { await submitCreateAccount() }
             }
+            Button("I already have an account") { move(to: .signIn) }
+                .font(.footnote.weight(.semibold))
+                .foregroundColor(.purple)
+                .disabled(isWorking)
         }
     }
 
-    private func requestErrorMessage(_ error: TonoBackendError) -> String {
-        switch error {
+    private var confirmSentStep: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Image(systemName: "envelope.badge")
+                .font(.system(size: 34))
+                .foregroundColor(.purple)
+                .accessibilityHidden(true)
+            noticeView
+            Text("Open the link on this device, then come back and sign in.")
+                .font(.callout)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            primaryButton(title: "Sign in", enabled: !isWorking) { move(to: .signIn) }
+            Button("Send a new link") {
+                Task { await submitResend() }
+            }
+            .font(.footnote.weight(.semibold))
+            .foregroundColor(.purple)
+            .disabled(isWorking)
+        }
+    }
+
+    // MARK: - Fields
+
+    private var emailField: some View {
+        TextField("you@example.com", text: $email)
+            .keyboardType(.emailAddress)
+            .textContentType(.emailAddress)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled(true)
+            .textFieldStyle(.roundedBorder)
+            .disabled(isWorking)
+            .accessibilityLabel("Email address")
+    }
+
+    private func passwordField(isNew: Bool) -> some View {
+        SecureField("Password", text: $password)
+            .textContentType(isNew ? .newPassword : .password)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled(true)
+            .textFieldStyle(.roundedBorder)
+            .disabled(isWorking)
+            .accessibilityLabel("Password")
+    }
+
+    /// The one rendered failure/notice surface. It reads a mapped sentence, so
+    /// there is no path from a transport failure to these pixels.
+    @ViewBuilder
+    private var noticeView: some View {
+        if let outcome = lastOutcome {
+            Text(Self.emailOutcomeMessage(outcome, action: lastAction))
+                .font(.callout)
+                .foregroundColor(Self.isAccepted(outcome) ? .secondary : .red)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isStaticText)
+        }
+    }
+
+    private func primaryButton(
+        title: String, enabled: Bool, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                if isWorking { ProgressView().controlSize(.small) }
+                Text(title).font(.system(size: 16, weight: .semibold, design: .rounded))
+            }
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background(enabled && !isWorking ? Color.purple : Color.gray.opacity(0.3))
+            .foregroundColor(.white)
+            .clipShape(Capsule())
+        }
+        .disabled(!enabled || isWorking)
+    }
+
+    // MARK: - Local validity (a courtesy, not the authority)
+
+    /// Cheap shape check so an obvious typo is caught before a round trip. The
+    /// server's strict normalization stays the authority; this only decides
+    /// whether the button is tappable.
+    private var looksLikeAddress: Bool {
+        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let at = trimmed.firstIndex(of: "@"), at != trimmed.startIndex else { return false }
+        let domain = trimmed[trimmed.index(after: at)...]
+        return !domain.isEmpty && domain.contains(".") && !domain.hasSuffix(".")
+            && !domain.contains("@") && !trimmed.contains(" ")
+    }
+
+    private var canSubmitCredentials: Bool {
+        looksLikeAddress && password.count >= Self.minimumPasswordLength
+    }
+
+    private var normalizedEmail: String {
+        email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private func move(to next: Step) {
+        step = next
+        lastOutcome = nil
+    }
+
+    // MARK: - Operations
+    //
+    // Each one records the SHAPE of what happened and nothing else. The
+    // `catch` blocks never touch the failure they caught beyond handing it to
+    // `EmailAuthOutcome.from`, which classifies by case and status class.
+
+    private func submitCreateAccount() async {
+        await run(.createAccount) {
+            _ = try await TonoBackend.shared.registerWithEmail(
+                email: normalizedEmail, password: password
+            )
+            lastOutcome = .checkYourEmail
+            step = .confirmSent
+        }
+    }
+
+    private func submitSignIn() async {
+        await run(.signIn) {
+            _ = try await TonoBackend.shared.signInWithEmail(
+                email: normalizedEmail, password: password
+            )
+            // Only the server can say this person is signed in, and it just
+            // did. Clear the password from memory before leaving.
+            password = ""
+            onSuccess()
+        }
+    }
+
+    private func submitResend() async {
+        await run(.resendConfirmation) {
+            _ = try await TonoBackend.shared.resendVerification(email: normalizedEmail)
+            lastOutcome = .checkYourEmail
+            step = .confirmSent
+        }
+    }
+
+    private func submitReset() async {
+        await run(.resetPassword) {
+            _ = try await TonoBackend.shared.requestPasswordReset(email: normalizedEmail)
+            lastOutcome = .checkYourEmail
+        }
+    }
+
+    /// Run one operation, recording only its outcome shape.
+    ///
+    /// `isWorking` is cleared in a `defer` so a thrown failure cannot leave the
+    /// sheet stuck in its busy state — the state Build 112 fixed elsewhere for
+    /// the same reason.
+    private func run(_ action: Action, _ operation: () async throws -> Void) async {
+        lastAction = action
+        lastOutcome = nil
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            try await operation()
+        } catch {
+            lastOutcome = TonoBackend.EmailAuthOutcome.from(error)
+        }
+    }
+
+    // MARK: - Copy
+
+    /// True when the outcome is the accepted, anti-enumerating answer rather
+    /// than a failure. Drives colour only; the sentence is the same either way.
+    static func isAccepted(_ outcome: TonoBackend.EmailAuthOutcome) -> Bool {
+        outcome == .checkYourEmail
+    }
+
+    /// The single place an outcome becomes something a person reads.
+    ///
+    /// Deliberately takes an outcome and an action — never an `Error`, a
+    /// status code, or a message. Exhaustive over both, with no `default`, so
+    /// a new outcome is a compile error rather than a silently generic screen.
+    static func emailOutcomeMessage(
+        _ outcome: TonoBackend.EmailAuthOutcome, action: Action
+    ) -> String {
+        switch outcome {
+        case .checkYourEmail:
+            // The one answer that is identical for a registered and an
+            // unregistered address. It differs only by which link is waiting.
+            switch action {
+            case .createAccount, .resendConfirmation:
+                return "Check your email. Open the link we sent to confirm your address, then sign in."
+            case .resetPassword:
+                return "Check your email. Open the link we sent to choose a new password."
+            case .signIn:
+                return "Check your email for the link we sent you."
+            }
+        case .verificationRequired:
+            return "Confirm your email address first. Open the link we sent you, or ask for a new one."
+        case .invalidCredentials:
+            return "That email and password don't match. Check them and try again."
+        case .rateLimited:
+            // A rate limit is never a paywall and never a bad password. Build
+            // 113 fixed exactly this confusion on the Coach path; the account
+            // path must not reintroduce it.
+            return "Too many tries just now. Wait a minute and try again."
+        case .invalidInput:
+            // Covers BOTH input-shaped refusals the server can answer with:
+            // an address it will not accept, and a password the auth provider
+            // considers too weak on its own rules. Naming only the length
+            // floor was a dead end for the second one — a person who typed
+            // twenty characters and was refused for lack of a digit would read
+            // "use at least 8 characters", change nothing, and be refused
+            // again. The client cannot tell the two apart (both arrive as 400,
+            // deliberately carrying no provider text), so the sentence must be
+            // true of either.
+            return "That email address or password can't be used. Try a different address, or a longer, less predictable password."
         case .offline:
-            return "You're offline. Connect to the internet and try again."
-        case .network:
-            return "Can't reach Tono right now. Check your connection and try again."
-        case .http(let status, _):
-            switch status {
-            case 400, 422:
-                return "Enter a valid email address."
-            case 404:
-                return "Email sign-in isn't available in this version yet."
-            case 429:
-                return "Too many code requests. Wait a few minutes and try again."
-            case 503:
-                return "Email delivery is temporarily unavailable. Try again later."
-            default:
-                return "Tono's sign-in service had a problem. Try again later."
-            }
-        default:
-            return "Email sign-in couldn't start. Try again."
-        }
-    }
-
-    private func verificationErrorMessage(_ error: TonoBackendError) -> String {
-        switch error {
-        case .offline:
-            return "You're offline. Connect to the internet and try again."
-        case .network:
-            return "Can't reach Tono right now. Check your connection and try again."
-        case .http(let status, _):
-            switch status {
-            case 400, 422:
-                return "Invalid or expired code. Request a new code and try again."
-            case 404:
-                return "Email sign-in isn't available in this version yet."
-            case 429:
-                return "Too many attempts. Wait a few minutes, then request a new code."
-            case 503:
-                return "Email sign-in is temporarily unavailable. Try again later."
-            default:
-                return "Tono's sign-in service had a problem. Try again later."
-            }
-        default:
-            return "Couldn't verify the code. Try again."
+            return "You're offline. Check your connection and try again."
+        case .serviceUnavailable:
+            // Never "we sent you an email". An operational failure must not be
+            // dressed up as delivery, or the person waits for mail that will
+            // never arrive.
+            return "Email sign-in isn't available right now. Try again in a few minutes."
+        case .addressAlreadyLinked:
+            // The ONE sentence in this file that says something about whether
+            // an address is spoken for, and the only one that may.
+            //
+            // It is reachable only after the auth provider accepted this
+            // password for this address, so the person reading it has already
+            // proven they own the mailbox — they learn nothing a stranger
+            // could not be refused at the password step. Every other sentence
+            // here is reachable unauthenticated and must stay silent.
+            //
+            // It has to be specific because retrying is futile: the server
+            // will refuse the same way forever. Naming the two things that do
+            // work is the difference between an exit and a loop.
+            return "That address is already in use by a different account. Sign in the way you did the first time, or use a different address."
+        case .unknownFailure:
+            return "That didn't work. Try again."
         }
     }
 }

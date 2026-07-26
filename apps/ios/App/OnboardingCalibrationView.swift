@@ -101,7 +101,7 @@ struct OnboardingCalibrationView: View {
                 "Everything Tono learns stays on your device",
                 "You can see and delete every fact in the Memory tab",
                 "Tono only gets smarter during sessions you choose",
-                "API keys never leave our server — your device never sees them",
+                "There is nothing technical to set up or enter",
             ]
         )
     }

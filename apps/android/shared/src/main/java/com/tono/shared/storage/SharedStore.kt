@@ -32,6 +32,10 @@ object SharedKeys {
     const val FEATURE_FLAGS     = "tc.featureFlags"
     const val ONBOARDING_DONE   = "tc.onboardingDone"
     const val LAST_WEEKLY_DIGEST = "tc.lastWeeklyDigest"
+    // Build 114 — the shipped build number, written once at launch and used as
+    // the audit tag on registration events so a support question can be tied to
+    // a release. A build number, not an identifier: nothing about the person.
+    const val APP_BUILD         = "tc.appBuild"
 }
 
 object SharedStore {

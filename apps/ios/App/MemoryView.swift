@@ -254,7 +254,7 @@ private struct AddMemoryFactView: View {
                     .pickerStyle(.segmented)
                 }
                 Section {
-                    Text("Stored only on your device. Sent as a short hint alongside your draft — never stored on the server.")
+                    Text("Stored only on this device. Used as a short hint alongside your draft, and never kept afterwards.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }

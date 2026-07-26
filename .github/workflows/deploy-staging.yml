@@ -61,10 +61,22 @@ jobs:
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
 
+      # next.config.js calls loadSupabaseDeployment(), which accepts NOTHING
+      # configured (returns null) or ALL FIVE names configured — a partial set
+      # throws and fails the build. It also requires NEXT_PUBLIC_SUPABASE_URL to
+      # be a canonical https://<20-char-ref>.supabase.co URL, so `example.invalid`
+      # cannot satisfy it. Supplying only the two NEXT_PUBLIC_* names aborted this
+      # workflow before it ever reached the deploy steps. These are the same
+      # non-secret placeholders the canonical CI web job builds with; the artifact
+      # produced here is the tarball for the release manifest, while the deployed
+      # bundle is rebuilt by `vercel build` from the project's Preview environment.
       - name: Build web artifact
         working-directory: apps/web
         env:
-          NEXT_PUBLIC_SUPABASE_URL: https://example.invalid
+          TONO_DEPLOYMENT_ENV: staging
+          TONO_SUPABASE_STAGING_PROJECT_REF: cistagingprojectref0
+          TONO_SUPABASE_PRODUCTION_PROJECT_REF: ciproductionproject0
+          NEXT_PUBLIC_SUPABASE_URL: https://cistagingprojectref0.supabase.co
           NEXT_PUBLIC_SUPABASE_ANON_KEY: staging-build-placeholder-not-a-secret
           TONO_BACKEND_URL: https://example.invalid
           TONO_CANONICAL_SHA: ${{ inputs.sha }}

@@ -32,13 +32,13 @@ struct RootView: View {
 
     var body: some View {
         TabView {
-            // v0: single-screen "Coach this" is the home tab. Settings
-            // is also reachable from a gear in CoachView's toolbar.
+            // Build 112: ONE Coach experience. The separate in-app rehearsal
+            // tab was removed — it duplicated this screen's draft editor,
+            // action, results and request path with a second one. Coach is the
+            // single host-app coaching surface; Settings is also reachable from
+            // a gear in CoachView's toolbar.
             CoachView()
                 .tabItem { Label("Coach", systemImage: "sparkles") }
-
-            PlaygroundView()
-                .tabItem { Label("Playground", systemImage: "keyboard") }
 
             DigestView()
                 .tabItem { Label("This Week", systemImage: "chart.line.uptrend.xyaxis") }

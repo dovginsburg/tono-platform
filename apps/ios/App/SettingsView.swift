@@ -1,36 +1,89 @@
 // SettingsView.swift
-// Voice + axis toggles, plan management, backend connection status.
+// Voice + axis toggles, plan management, and consumer-safe account status.
 // The paywall uses StoreKit 2 — no Stripe redirect on iOS.
 
 import SwiftUI
 import StoreKit
+import UIKit
+
+/// Build 112 — what Settings may say about the account.
+///
+/// The rejected Build 111 surface polled a service health endpoint and
+/// rendered its verdict ("temporarily unavailable", "this is on our side"),
+/// which is infrastructure state wearing consumer clothes. This state is
+/// derived from one local, truthful fact — whether this device has finished
+/// account setup — and it offers the one action a user can actually take.
+private enum SettingsAccountState: Equatable {
+    case ready
+    case needsSetup
+
+    var title: String {
+        switch self {
+        case .ready: return "Your account is set up"
+        case .needsSetup: return "Finish setting up Tono"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .ready: return "Coach is ready whenever you are."
+        case .needsSetup: return "Set up your account to start coaching drafts."
+        }
+    }
+
+    var setupAction: String? {
+        switch self {
+        case .needsSetup: return "Set up Tono"
+        case .ready: return nil
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .ready: return "checkmark.seal.fill"
+        case .needsSetup: return "sparkles"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .ready: return .green
+        case .needsSetup: return .purple
+        }
+    }
+}
 
 struct SettingsView: View {
     @Binding var prefs: TonePreferences
     @ObservedObject private var store = StoreKitManager.shared
 
-    // Runtime backend URL override (read by TonoBackend.baseURL resolution).
-    // Default empty → uses TonoBackend.baseURL fallback (https://api.tonoit.com in Release).
-    @AppStorage("tc.backendURL") private var customBackendURL: String = ""
-
     @State private var voiceField:        String     = ""
     @State private var showPaywall:       Bool       = false
     @State private var usage:             TonoUsage?
-    @State private var usageError:        String?
     @State private var recipients:        [Recipient] = []
-    @State private var showAddRecipient:  Bool       = false
+    @State private var contactsAccess:    ContactsAccessSummary = .notDetermined
     @State private var promoCode:         String     = ""
     @State private var promoError:        String?
     @State private var promoSuccess:      String?
     @State private var isRedeemingCode:   Bool       = false
     @State private var featureToggles:    [FeatureFlag: Bool] = [:]
     @State private var liveToneEnabled:   Bool       = true
-    @State private var healthState:       HealthState = .unknown
+    @State private var accountState:      SettingsAccountState = .needsSetup
+    @State private var accountNotice:     String?
     @State private var coachVariants = CoachVariantSettings()
     private let coachVariantStore = CoachVariantSettingsStore()
     // build 101 — account deletion
     @State private var showDeleteAccountSheet: Bool = false
     @State private var accountDeleted:         Bool = false
+    // build 114 — email account. `signedInEmail` mirrors the one Keychain key
+    // that means "this person proved an address"; it is read, never written,
+    // here. Only `TonoBackend.signInWithEmail` writes it, and only after the
+    // server confirmed the address — so Settings cannot manufacture an identity.
+    @State private var signedInEmail:          String?
+    @State private var showSignInSheet:        Bool = false
+    @State private var isSigningOut:           Bool = false
+    // build 106 — on-device intelligence self-test result (nil until run)
+    @State private var localSelfTestResult: LocalIntelligenceSelfTest.Result?
 
     // Live Tone v1 control surface (shipping release). A value type over the
     // shared App Group store — writes are visible to the keyboard on its next
@@ -38,25 +91,19 @@ struct SettingsView: View {
     // binding Live Tone v1 Acceptance Contract.
     private let liveTonePrefs = LiveTonePreference()
     @State private var isSettingUp:        Bool       = false
-    @State private var showWhySetup:       Bool       = false
-
-    enum HealthState: Equatable {
-        case unknown
-        case checking
-        case ok
-        case failed(String)
-    }
 
     var body: some View {
         NavigationStack {
             Form {
-                backendSection
+                setupSection
+                accountSection
                 voiceSection
                 memorySection
                 featurePreferencesSection
                 recipientsSection
                 axesSection
                 liveToneSection
+                localIntelligenceSection
                 planSection
                 privacySection
                 accountManagementSection
@@ -68,10 +115,9 @@ struct SettingsView: View {
                 loadFeatureToggles()
                 loadLiveTone()
                 coachVariants = coachVariantStore.load()
-                Task {
-                    await runHealthCheck()
-                    await refreshUsage()
-                }
+                refreshAccountState()
+                refreshEmailIdentity()
+                Task { await refreshUsage() }
             }
             .task {
                 try? await TonoBackend.shared.registerIfNeeded(
@@ -79,10 +125,34 @@ struct SettingsView: View {
                     appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0"
                 )
                 await store.refreshEntitlements()
+                await MainActor.run {
+                    refreshAccountState()
+                    refreshEmailIdentity()
+                }
                 await refreshUsage()
             }
             .sheet(isPresented: $showPaywall) {
                 PaywallView(onDismiss: { showPaywall = false })
+            }
+            .sheet(isPresented: $showSignInSheet) {
+                EmailSignInSheet(
+                    onSuccess: {
+                        showSignInSheet = false
+                        // A sign-in converges this device on the canonical
+                        // account, so the entitlement it already owns has to be
+                        // re-read here: a returning subscriber must not have to
+                        // tap Restore to stop seeing the paywall.
+                        Task {
+                            await store.refreshEntitlements()
+                            await MainActor.run {
+                                refreshEmailIdentity()
+                                refreshAccountState()
+                            }
+                            await refreshUsage()
+                        }
+                    },
+                    onCancel: { showSignInSheet = false }
+                )
             }
             .sheet(isPresented: $showDeleteAccountSheet) {
                 AccountDeletionView(
@@ -105,36 +175,43 @@ struct SettingsView: View {
 
     // MARK: - Sections
 
+    /// Entry point for the Setup Doctor. Kept as a push inside the existing
+    /// Settings navigation stack rather than a new tab — setup is a thing you
+    /// finish once, not a destination worth permanent chrome.
     @ViewBuilder
-    private var backendSection: some View {
+    private var setupSection: some View {
+        Section("Setup") {
+            NavigationLink {
+                SetupDoctorView()
+            } label: {
+                Label("Setup Doctor", systemImage: "stethoscope")
+            }
+            .accessibilityHint("Checks whether the Tono keyboard is added, has Full Access, and is working.")
+        }
+    }
+
+    @ViewBuilder
+    private var accountSection: some View {
         Section("Account") {
-            // Status row with health dot.
-            HStack(spacing: 8) {
-                healthDot
-                Text(healthLabel)
-                    .foregroundColor(healthLabelColor)
-                    .font(.subheadline)
-                Spacer()
-            }
-            // Resolved URL — shows Dov what the app is actually hitting.
-            HStack {
-                Text("Endpoint")
-                Spacer()
-                Text(resolvedBackendLabel)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            if TonoBackend.shared.isRegistered() {
-                HStack {
-                    Text("Status")
-                    Spacer()
-                    Text("Connected").foregroundColor(.secondary)
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: accountState.icon)
+                    .font(.title3)
+                    .foregroundColor(accountState.tint)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(accountState.title)
+                        .font(.subheadline.weight(.semibold))
+                    Text(accountState.detail)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-            } else {
-                // CTA: replaces the old dead-end "opens automatically on next
-                // Coach tap" hint with a button the user can tap right now.
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 2)
+            .accessibilityElement(children: .combine)
+
+            if let action = accountState.setupAction {
                 Button {
                     Task { await runSetup() }
                 } label: {
@@ -144,181 +221,177 @@ struct SettingsView: View {
                         } else {
                             Image(systemName: "sparkles")
                         }
-                        Text(isSettingUp ? "Setting up…" : "Set up Tono in one tap →")
+                        Text(isSettingUp ? "Working…" : action)
                             .font(.subheadline.weight(.semibold))
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 }
                 .disabled(isSettingUp)
-                DisclosureGroup(isExpanded: $showWhySetup) {
-                    Text("Tono needs to register your device with our server before rewrites work. Takes 2 seconds.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.top, 2)
-                } label: {
-                    Text("Why do I need this?")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
             }
+
+            if let notice = accountNotice {
+                Text(notice)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             if usage != nil {
                 HStack {
                     Text("Plan")
                     Spacer()
                     Text(store.statusLabel).foregroundColor(.secondary)
                 }
-            } else if let err = usageError {
-                Text(err).font(.caption).foregroundColor(.red)
             }
-            Text("Rewrites run on the Tono backend — your API key never leaves the server.")
+
+            emailIdentityRows
+
+            Text("Your draft is only used for coaching, and only when you tap Coach. There is nothing technical to set up.")
                 .font(.caption).foregroundColor(.secondary)
         }
-        Section("Backend") {
-            TextField("Custom backend URL (leave blank for default)", text: $customBackendURL)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled(true)
-                .keyboardType(.URL)
-                .font(.system(.body, design: .monospaced))
-                .onSubmit { Task { await runHealthCheck() } }
+    }
+
+    /// Build 114 — the email account, from the one place a person looks for it.
+    ///
+    /// Signed in, this shows WHICH address they used, because that is the fact
+    /// they need when a subscription does not appear on a new device. Signed
+    /// out, it explains what signing in buys them without implying that signing
+    /// in is what grants Pro — a confirmed address makes a subscription
+    /// recoverable; only a subscription grants access.
+    ///
+    /// Signing out is deliberately here and not buried in Account Management
+    /// next to deletion: they are opposite actions, and a person looking to
+    /// leave a shared device should never have to read a delete-everything
+    /// screen to find the harmless one.
+    @ViewBuilder
+    private var emailIdentityRows: some View {
+        if let address = signedInEmail {
             HStack {
-                Button {
-                    Task { await runHealthCheck() }
-                } label: {
-                    HStack(spacing: 6) {
-                        if case .checking = healthState {
-                            ProgressView().controlSize(.small)
-                        }
-                        Text(testButtonLabel)
-                    }
-                }
-                .disabled({
-                    if case .checking = healthState { return true }
-                    return false
-                }())
+                Text("Email")
                 Spacer()
-                if case .failed(let msg) = healthState {
-                    Text(msg)
-                        .font(.caption2)
-                        .foregroundColor(.red)
-                        .lineLimit(2)
-                } else if case .ok = healthState {
-                    Text("Healthy")
-                        .font(.caption)
-                        .foregroundColor(.green)
+                Text(address)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .accessibilityElement(children: .combine)
+
+            Button {
+                Task { await signOut() }
+            } label: {
+                HStack(spacing: 8) {
+                    if isSigningOut {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "rectangle.portrait.and.arrow.right")
+                    }
+                    Text(isSigningOut ? "Signing out…" : "Sign out")
+                        .font(.subheadline.weight(.semibold))
                 }
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             }
-            Text("Default: https://api.tonoit.com")
-                .font(.caption2).foregroundColor(.secondary)
-            Text("Paste a URL here to override (e.g. for staging). Changes take effect immediately on the next request.")
-                .font(.caption2).foregroundColor(.secondary)
-        }
-    }
-
-    // MARK: - Backend helpers
-
-    private var resolvedBackendLabel: String {
-        let trimmed = customBackendURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty { return trimmed }
-        return TonoBackend.shared.baseURL.absoluteString
-    }
-
-    private var healthDot: some View {
-        Group {
-            switch healthState {
-            case .unknown:
-                Circle().fill(Color.gray).frame(width: 10, height: 10)
-            case .checking:
-                Circle().fill(Color.gray.opacity(0.5)).frame(width: 10, height: 10)
-            case .ok:
-                Circle().fill(Color.green).frame(width: 10, height: 10)
-            case .failed:
-                Circle().fill(Color.red).frame(width: 10, height: 10)
+            .disabled(isSigningOut)
+            .accessibilityHint("Signs this device out. Your account, your subscription and your saved style stay as they are.")
+        } else {
+            Button {
+                showSignInSheet = true
+            } label: {
+                Label("Sign in with email", systemImage: "envelope.badge.shield.half.filled")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             }
+            .accessibilityHint("Creates or signs in to your account so your subscription follows you.")
+
+            Text("Confirming an email keeps your subscription and your saved style recoverable if you reinstall or switch devices. It does not by itself unlock Pro.")
+                .font(.caption).foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    private var healthLabel: String {
-        switch healthState {
-        case .unknown:  return "Backend status unknown"
-        case .checking: return "Checking…"
-        case .ok:       return "Backend reachable"
-        case .failed(let m): return "Backend unreachable: \(m)"
+    /// Signs this device out, then re-reads the shared state the extensions
+    /// also read, so the keyboard, Share sheet and Messages app stop presenting
+    /// a signed-in person on the same pass rather than at their next launch.
+    ///
+    /// `TonoBackend.signOut()` clears the local credential whether or not the
+    /// call it makes first succeeds — signing out of a shared device must not
+    /// depend on a good connection — so there is no failure branch to render
+    /// and nothing here can leave the device half-signed-in.
+    private func signOut() async {
+        await MainActor.run { isSigningOut = true }
+        await TonoBackend.shared.signOut()
+        await MainActor.run {
+            isSigningOut = false
+            accountNotice = nil
+            // Signing out is not an entitlement change, but this device no
+            // longer holds a credential to prove one, so the shared mirror must
+            // stop claiming Pro until it registers and re-reads.
+            store.resetToAnonymous()
+            refreshEmailIdentity()
+            refreshAccountState()
         }
     }
 
-    private var healthLabelColor: Color {
-        switch healthState {
-        case .ok:    return .green
-        case .failed: return .red
-        default:     return .secondary
-        }
+    private func refreshEmailIdentity() {
+        let stored = SharedKeychain.get(KeychainKeys.signedInEmail)
+        signedInEmail = (stored?.isEmpty ?? true) ? nil : stored
     }
 
-    private var testButtonLabel: String {
-        switch healthState {
-        case .checking: return "Testing…"
-        default:        return "Test Connection"
-        }
+    /// Local, synchronous, and truthful: has this device finished account
+    /// setup? Build 112 removed the periodic service probe this used to run —
+    /// a user cannot act on a health verdict, and rendering one put
+    /// implementation state on a consumer screen.
+    private func refreshAccountState() {
+        accountState = TonoBackend.shared.isRegistered() ? .ready : .needsSetup
     }
 
-    private func runHealthCheck() async {
-        await MainActor.run { healthState = .checking }
-        do {
-            let ok = try await TonoBackend.shared.health()
-            await MainActor.run {
-                healthState = ok ? .ok : .failed("non-2xx response")
-            }
-        } catch let e as TonoBackendError {
-            await MainActor.run {
-                healthState = .failed(prettyError(e))
-            }
-        } catch {
-            await MainActor.run {
-                healthState = .failed(error.localizedDescription)
-            }
-        }
-    }
-
-    /// CTA target: tap "Set up Tono in one tap" → triggers /v1/register
-    /// directly. Used in place of the old auto-register-on-Coach dead-end.
     private func runSetup() async {
-        isSettingUp = true
-        defer { isSettingUp = false }
+        await MainActor.run { isSettingUp = true }
+        defer { Task { @MainActor in isSettingUp = false } }
         do {
             _ = try await TonoBackend.shared.registerIfNeeded(
                 platform: "ios",
                 appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0"
             )
+            await MainActor.run {
+                accountNotice = nil
+                refreshAccountState()
+            }
             await refreshUsage()
-            await runHealthCheck()
         } catch let e as TonoBackendError {
             await MainActor.run {
-                usageError = prettyError(e)
+                accountNotice = consumerMessage(for: e)
+                refreshAccountState()
             }
         } catch {
             await MainActor.run {
-                usageError = error.localizedDescription
+                accountNotice = "Setup didn't finish. Try again in a moment."
+                refreshAccountState()
             }
         }
     }
 
-    private func prettyError(_ e: TonoBackendError) -> String {
+    /// Every failure the user can meet becomes one short sentence about what
+    /// they can do next. No transport, status code, or implementation detail
+    /// reaches this screen — those belong in logs.
+    private func consumerMessage(for e: TonoBackendError) -> String {
         switch e {
         case .offline:
-            return "No internet connection"
-        case .network(let m):
-            return "Network error: \(m)"
-        case .http(let code, let msg):
-            let trimmed = msg.count > 200 ? String(msg.prefix(200)) + "…" : msg
-            return trimmed.isEmpty
-                ? "Server error \(code)"
-                : "Server error \(code): \(trimmed)"
+            return "You're offline. Check Wi-Fi or cellular and try again."
+        case .network:
+            return "Couldn't connect. Check your connection and try again."
         case .notRegistered:
-            return "Account not set up yet. Tap ‘Set up Tono’ in Settings → Account."
-        case .decoding(let m):
-            return "Bad response: \(m)"
+            return "Finish setting up Tono to continue."
+        case .decoding:
+            return "Something went wrong. Try again in a moment."
         case .tooManyDevices(let current, let max):
-            return "This email is already on \(current) devices (max \(max))."
+            return "This email is already on \(current) devices (max \(max)). Contact support@tonoit.com if you need more."
+        case .http(let code, _):
+            switch code {
+            case 401: return "Your sign-in expired. Tap Set up Tono to sign in again."
+            case 402: return "An active trial or subscription is required."
+            case 429: return "Too many tries right now. Wait a minute and try again."
+            default:  return "Something went wrong. Try again in a moment."
+            }
         }
     }
 
@@ -329,7 +402,7 @@ struct SettingsView: View {
                     prefs.preferredVoice = new.isEmpty ? nil : new
                     prefs.save()
                 }
-            Text("Passed to the model so rewrites match how you actually talk.")
+            Text("Rewrites follow this so they sound like how you actually talk.")
                 .font(.caption).foregroundColor(.secondary)
         }
     }
@@ -348,7 +421,7 @@ struct SettingsView: View {
                     }
                 }
             }
-            Text("Tono learns from your rewrite choices and lets you add facts manually. These are sent as hints to personalize rewrites over time.")
+            Text("Tono learns from your rewrite choices and lets you add facts manually. They personalize your rewrites over time.")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
@@ -378,43 +451,36 @@ struct SettingsView: View {
     }
 
     private var recipientsSection: some View {
-        Section("Recipients") {
-            ForEach(recipients) { r in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(r.label)
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
-                    if let hint = r.voiceHint {
-                        Text(hint)
-                            .font(.caption)
+        let summary = RecipientsSettingsSummary(
+            recipientCount: recipients.count,
+            contactsAccess: contactsAccess
+        )
+        return Section("Recipients") {
+            NavigationLink {
+                RecipientsManagerView()
+            } label: {
+                HStack {
+                    Label(summary.title, systemImage: "person.2")
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(summary.detail).foregroundColor(.secondary)
+                        Text(summary.accessDetail)
+                            .font(.caption2)
                             .foregroundColor(.secondary)
                     }
                 }
-                .swipeActions {
-                    Button(role: .destructive) {
-                        RecipientMemory.delete(id: r.id)
-                        recipients = RecipientMemory.all()
-                    } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                }
+                .frame(minHeight: 44)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(summary.accessibilityLabel)
+                .accessibilityHint("Opens the recipients manager, where you can search, edit, import and delete.")
             }
-            Button("Add manually") { showAddRecipient = true }
-            NavigationLink {
-                ContactsAccessView()
-            } label: {
-                Label("Contacts Access & Import", systemImage: "person.crop.circle.badge.checkmark")
-            }
-            .accessibilityHint("Review Contacts permission, manage limited access, or import recipients.")
-            Text("Recipient profiles stay in Tono’s local App Group. Only a chosen recipient’s voice hint is sent with a coaching request.")
+            Text("Recipient profiles stay on this device. Only a chosen recipient’s voice hint is used when you coach a draft.")
                 .font(.caption).foregroundColor(.secondary)
         }
-        .sheet(isPresented: $showAddRecipient) {
-            AddRecipientView { r in
-                RecipientMemory.add(r)
-                recipients = RecipientMemory.all()
-            }
+        .onAppear {
+            recipients = RecipientMemory.all()
+            contactsAccess = SystemContactsStore().authorizationStatus().summary
         }
-        .onAppear { recipients = RecipientMemory.all() }
     }
 
     private var axesSection: some View {
@@ -570,8 +636,61 @@ struct SettingsView: View {
 
     private var privacySection: some View {
         Section("Privacy") {
-            Text("Tono sends your draft to our backend, which calls the LLM. Drafts are not stored. Your bearer token is kept in the Keychain, never in plain UserDefaults.")
+            Text("Tono sends your draft securely for coaching only when you ask. Drafts are not stored. Your sign-in information is protected by iOS.")
                 .font(.caption).foregroundColor(.secondary)
+        }
+    }
+
+    // MARK: - On-device intelligence (build 106)
+
+    /// Truthful, testable copy about what runs where, plus a self-test that
+    /// exercises the REAL shipping resolver, checker and ranker.
+    ///
+    /// Build 105 shipped no statement of this at all, which is why "offline
+    /// mode did not visibly utilize local intelligence" was a fair reading of
+    /// the product even where the local lane was working.
+    private var localIntelligenceSection: some View {
+        Section("On-device intelligence") {
+            Text(LocalIntelligenceCopy.offlineCapabilitySummary)
+                .font(.caption).foregroundColor(.secondary)
+            Text(LocalIntelligenceCopy.onlineRequirementSummary)
+                .font(.caption).foregroundColor(.secondary)
+            Text(LocalIntelligenceCopy.localModelDisclosure)
+                .font(.caption).foregroundColor(.secondary)
+                .accessibilityIdentifier("Tono.localModelDisclosure")
+
+            Button("Check on-device intelligence") {
+                localSelfTestResult = LocalIntelligenceSelfTest.run(
+                    language: Locale.current.identifier,
+                    availableLanguages: UITextChecker.availableLanguages,
+                    checker: SystemSpellingChecker(),
+                    lexicon: .empty
+                )
+            }
+            .accessibilityIdentifier("Tono.runLocalSelfTest")
+
+            if let result = localSelfTestResult {
+                Label {
+                    Text(result.summary).font(.caption)
+                } icon: {
+                    Image(systemName: result.isPass ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                        .foregroundColor(result.isPass ? .green : .orange)
+                }
+                .accessibilityIdentifier("Tono.localSelfTestResult")
+
+                if case .pass(let checks) = result {
+                    ForEach(checks, id: \.name) { check in
+                        Text("\(check.name): \(check.detail)")
+                            .font(.caption2).foregroundColor(.secondary)
+                    }
+                } else if case .fail(let checks) = result {
+                    ForEach(checks, id: \.name) { check in
+                        Text("\(check.passed ? "OK" : "FAILED") — \(check.name): \(check.detail)")
+                            .font(.caption2)
+                            .foregroundColor(check.passed ? .secondary : .orange)
+                    }
+                }
+            }
         }
     }
 
@@ -584,7 +703,7 @@ struct SettingsView: View {
                 Button("Delete account", role: .destructive) {
                     showDeleteAccountSheet = true
                 }
-                Text("Permanently removes your account and all server-stored data. Any active subscription must be cancelled separately in Apple ID settings. This cannot be undone.")
+                Text("Permanently removes your account and all data saved with it. Any active subscription must be cancelled separately in Apple ID settings. This cannot be undone.")
                     .font(.caption).foregroundColor(.secondary)
             }
         }
@@ -658,15 +777,15 @@ struct SettingsView: View {
             await MainActor.run {
                 store.acceptBackendState(me)
                 usage = TonoUsage(plan: me.plan, isPro: me.isPro)
-                usageError = nil
+                accountNotice = nil
             }
         } catch let e as TonoBackendError {
             await MainActor.run {
-                usageError = prettyError(e)
+                accountNotice = consumerMessage(for: e)
             }
         } catch {
             await MainActor.run {
-                usageError = error.localizedDescription
+                accountNotice = "Couldn't refresh your account right now. Try again in a moment."
             }
         }
     }
@@ -684,9 +803,9 @@ struct SettingsView: View {
             await store.refreshEntitlements()
             await refreshUsage()
         } catch let e as TonoBackendError {
-            promoError = e.localizedDescription
+            promoError = consumerMessage(for: e)
         } catch {
-            promoError = error.localizedDescription
+            promoError = "That code couldn't be applied. Check it and try again."
         }
         isRedeemingCode = false
     }
@@ -1110,7 +1229,7 @@ struct AccountDeletionView: View {
             Label("This cannot be undone", systemImage: "exclamationmark.triangle.fill")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundColor(.red)
-            Text("Deleting your account permanently removes all data from Tono's servers: your style memory, recipient profiles, and usage history. Your subscription is not automatically cancelled — cancel it separately in Apple ID settings before deleting.")
+            Text("Deleting your account permanently deletes your account and everything saved with it: your style memory, recipient profiles, and usage history. Your subscription is not automatically cancelled — cancel it separately in Apple ID settings before deleting.")
                 .font(.callout)
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1200,12 +1319,12 @@ struct AccountDeletionView: View {
                     case .offline:
                         errorMessage = "You're offline. Connect to the internet and try again."
                     default:
-                        errorMessage = "Account deletion failed (\(e.localizedDescription)). Your account was not deleted. Contact support@tonoit.com if this persists."
+                        errorMessage = "Account deletion didn't finish. Your account was not deleted. Contact support@tonoit.com if this persists."
                     }
                 }
             } catch {
                 await MainActor.run {
-                    errorMessage = "Deletion failed: \(error.localizedDescription). Your account was not deleted."
+                    errorMessage = "Account deletion didn't finish. Your account was not deleted."
                 }
             }
         }

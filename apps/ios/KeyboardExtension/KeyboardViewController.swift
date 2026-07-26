@@ -74,6 +74,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         static let keyBorderWidth: CGFloat = 0.5
         static let referencePortraitWidth: CGFloat = 367.5
 
+        /// Diameter of the non-interactive on-device-intelligence dot.
+        static let localBadgeDiameter: CGFloat = 6
+
         static func letterKeyWidth(availableWidth: CGFloat) -> CGFloat {
             let usable = max(availableWidth - edgePadding * 2, 320)
             return (usable - rowSpacing * 9) / 10
@@ -121,6 +124,27 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
         // Coach UX.
         static let coachTimeout: TimeInterval = 15
+        // Build 107: the user-visible deadline. If a request is still in
+        // flight ~10s after tap, the keyboard cancels it and shows a truthful
+        // retry/error state rather than an indefinitely shimmering skeleton.
+        // The 15s URLSession timeout above stays as a backstop.
+        static let coachVisibleDeadline: TimeInterval = 10
+
+        // Build 111 — connectivity recovery.
+        //
+        // `coachTimeout` above is the per-request IDLE timeout, which only
+        // applies once a connection exists. `coachResourceTimeout` caps the
+        // WHOLE lifetime of a request including any time the transport spends
+        // parked waiting for connectivity to return, so "Coach waits for the
+        // network" is a bounded promise: a prolonged outage still fails.
+        static let coachResourceTimeout: TimeInterval = 30
+        // The visible deadline once the transport has told us it is waiting.
+        // The 10s deadline above is correct for a CONNECTED request and wrong
+        // for a parked one — firing it would cancel exactly the task that is
+        // about to recover, which is the Build-110 behaviour this build fixes.
+        // Sits just past `coachResourceTimeout` so the transport's own
+        // truthful error normally lands first; this stays a backstop.
+        static let coachOfflineVisibleDeadline: TimeInterval = 33
         static let backendURL = "https://api.tonoit.com/v1/analyze"
 
         // Delete fires once immediately, then repeats with a bounded ramp.
@@ -167,6 +191,30 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         static let idEmojiRecents     = "TonoKB.emojiRecents"
         static let idEmojiFooter      = "TonoKB.emojiFooter"
 
+        // Build 106. `idCandidates` (above) is the spelling-suggestion row and
+        // keeps its historic identifier; `idToneChips` is the SEPARATE Coach
+        // row that used to share those same three buttons. Two identifiers
+        // means a physical inspector can confirm on-device which row it is
+        // actually touching — the Build-105 defect was invisible precisely
+        // because both roles wore one identifier.
+        static let idToneChips        = "TonoKB.toneChips"
+        /// Subtle on-device-intelligence indicator (see `LocalIntelligence`).
+        static let idLocalBadge       = "TonoKB.localBadge"
+
+        // Build 114 — the three rewrite-card actions and the version cue.
+        static let idUseRewrite       = "TonoKB.useRewrite"
+        static let idTryAnother       = "TonoKB.tryAnother"
+        static let idDismissRewrite   = "TonoKB.dismissRewrite"
+        static let idVersionCue       = "TonoKB.versionCue"
+        static let idAlternativeNotice = "TonoKB.alternativeNotice"
+
+        /// The exact customer-visible action labels. Held as constants because
+        /// they are a reviewed product contract, not incidental strings: the
+        /// Build 114 UI tests assert on these, so renaming one has to be a
+        /// deliberate edit here rather than a drive-by in the view code.
+        static let useRewriteLabel    = "Use rewrite"
+        static let tryAnotherLabel    = "Try another"
+        static let dismissLabel       = "Dismiss"
 
         /// Single-source-of-truth registry, returned by
         /// `allIdentifiers`. The lookup keeps the Swift optimiser
@@ -180,6 +228,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             idCoachBack, idCoachRetry, idCoachError,
             idCoachErrorDetail, idRiskBadge, idRewrites,
             idEmojiPanel, idEmojiCategory, idEmojiRecents, idEmojiFooter,
+            idToneChips, idLocalBadge,
+            idUseRewrite, idTryAnother, idDismissRewrite, idVersionCue,
+            idAlternativeNotice,
         ]
 
         /// Returns every TonoKB.* identifier this file declares.
@@ -340,13 +391,91 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private var coachRewriteTarget: CoachRewriteTarget?
     private var coachRequestGuard: CoachRequestLifecycleGuard?
     private var coachVariantSettings = CoachVariantSettings()
-    private var toneChipsEnabled = false
+
+    // Build 114 — "Try another". The sequence tracks how many versions have
+    // been SUCCESSFULLY DISPLAYED for the current (source message, host, axis);
+    // `coachAlternativeRequestID` is the separate in-flight token for an
+    // alternative request, which — unlike an initial rewrite — deliberately
+    // does NOT install a loading surface, because the contract requires the
+    // current card to stay on screen while the next one is fetched.
+    private var coachSequence: CoachAlternativeSequence?
+    private var coachAlternativeRequestID: UUID?
+    /// Retained so a completion can restore or update the card in place.
+    private weak var coachTryAnotherButton: UIButton?
+    private weak var coachTryAnotherSpinner: UIActivityIndicatorView?
+    private weak var coachAlternativeNotice: UILabel?
+
+    /// Test seam: the version currently displayed and the cap, so a unit test
+    /// asserts the real sequence rather than re-deriving it.
+    var coachSequenceStateForTesting: (displayed: Int, limit: Int, canRequestAnother: Bool)? {
+        guard let coachSequence else { return nil }
+        return (
+            coachSequence.displayedVersion,
+            coachSequence.versionLimit,
+            coachSequence.canRequestAnother
+        )
+    }
+
+    /// Test seam: whether an alternative request is currently in flight.
+    var coachAlternativeInFlightForTesting: Bool { coachAlternativeRequestID != nil }
+
+    /// Test seam: the in-flight alternative's token, so a test can deliver to
+    /// the exact request the tap created (and prove a second tap made none).
+    var alternativeRequestIDForTesting: UUID? { coachAlternativeRequestID }
+
+    /// Test seam: the real teardown, so "cancellation cannot leave Coach
+    /// permanently busy" is asserted against production code rather than a
+    /// re-enactment of it.
+    func invalidateCoachWorkForTesting() {
+        invalidateCoachWork(restoreKeyboard: false)
+    }
+    /// Whether Coach tone chips are the live role — DERIVED, never stored.
+    ///
+    /// Build 109 removes the last stored mirror of the strip's role. Until now
+    /// this was a separate `Bool` assigned at the top of `setToneChipsEnabled`,
+    /// running in parallel with `stripMode`. The two happened to agree, because
+    /// `applyStripMode` had exactly three call sites — but nothing enforced it,
+    /// and `coachTapped` toggled against the *flag* while every dispatch gate in
+    /// `TonoStripRoutingPolicy` decided against the *mode*. Any future path that
+    /// set the mode without also setting the flag would desynchronise them, and
+    /// the visible symptom is that TONO stops responding: with the flag stale at
+    /// `true` while the strip shows suggestions, one tap computes
+    /// `setToneChipsEnabled(false)` and turns Coach off again instead of on.
+    ///
+    /// A second boolean that can disagree with what the strip is actually
+    /// showing is the shape of the original Build-105 defect. Deriving it makes
+    /// disagreement unrepresentable rather than merely unlikely, and `stripMode`
+    /// becomes the single authority for both the toggle and the dispatch gate.
+    private var toneChipsEnabled: Bool { stripMode == .toneChips }
     private var selectedToneAxes: [String] = []
     private var coachRequestID: UUID?
     private var coachTask: URLSessionDataTask?
+    /// Monotonic anchor for the active request, captured at tap. Drives the
+    /// privacy-safe lifecycle clocks; durations only, never message content.
+    private var coachClockTapTime: DispatchTime?
+    /// Fires ~10s after tap if the request is still in flight, replacing the
+    /// skeleton with a truthful retry/error state. Cancelled the instant a
+    /// real completion lands or the session is invalidated.
+    private var coachDeadline: DispatchWorkItem?
+    /// Build 111. True once the transport has reported that the ACTIVE request
+    /// is parked waiting for connectivity. Two jobs: it widens the visible
+    /// deadline (a parked request must not be cancelled by the connected-path
+    /// watchdog), and it keeps the terminal error honest — a request that
+    /// never got a connection is offline, not "timed out". Reset at every
+    /// request boundary, so it can never describe a previous request.
+    private var coachWaitingForConnectivity = false
     private lazy var coachClient = TonoCoachClient(
         endpoint: Const.backendURL.replacingOccurrences(of: "/v1/analyze", with: "/api/analyze/variant"),
         timeout: Const.coachTimeout,
+        // Build 111: a dedicated connectivity-aware transport. Build 110 used
+        // `URLSession.shared`, whose configuration cannot wait for
+        // connectivity, so a tap made with the radio off failed terminally and
+        // only a manual Retry could recover. See `CoachTransportPolicy`.
+        transport: CoachTransportPolicy(
+            waitsForConnectivity: true,
+            requestTimeout: Const.coachTimeout,
+            resourceTimeout: Const.coachResourceTimeout
+        ),
         // Build 96: the bearer token comes from the app's shared Keychain
         // access group. When it is absent the client makes zero network
         // requests and surfaces a visible missing-token state.
@@ -369,7 +498,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             signature = ""
         }
         return HostSessionIdentityFactory.make(
-            documentIdentifier: HostDocumentIdentifier.read(from: textDocumentProxy),
+            documentIdentifier: HostDocumentIdentifier.read(from: documentProxy),
             traitSignature: signature,
             session: hostSessionSerial
         )
@@ -387,7 +516,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     private var keysStack: UIStackView?
     private var coachContainer: UIView?
-    private var coachStatusLabel: UILabel?
+    /// The result-shaped loading skeleton currently installed, if any. Build
+    /// 107 replaced the plain "Coaching…" label + spinner with this.
+    private var coachSkeleton: TonoCoachSkeletonView?
     private var coachResultsStack: UIStackView?
     private var coachErrorContainer: UIView?
     private var coachErrorLabel: UILabel?
@@ -403,6 +534,47 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     /// side. Production never reads it.
     private(set) var coachRequestsStarted = 0
 
+    // Build 107 test seams (internal, read-only): the live request identity
+    // and busy state, so the XCTest target can drive the ~10s deadline path
+    // without reaching into private state or waiting the real interval.
+    // Production never reads these.
+    var activeCoachRequestIDForTesting: UUID? { coachRequestID }
+    var coachIsBusyForTesting: Bool { coachBusy }
+    /// Build 111 test seam: whether the ACTIVE request is parked waiting for
+    /// connectivity. Read-only; production never reads it.
+    var coachIsWaitingForConnectivityForTesting: Bool { coachWaitingForConnectivity }
+    /// Build 111 test seam: the installed loading skeleton, so a test can
+    /// assert the surface stays result-shaped AND states the truth while the
+    /// transport waits.
+    var coachSkeletonForTesting: TonoCoachSkeletonView? { coachSkeleton }
+    /// The tone axes the chip row is currently backed by. Read-only seam so a
+    /// test can pin the Build-107 "turning Coach off clears the stale axes"
+    /// contract without reaching into private state.
+    var selectedToneAxesForTesting: [String] { selectedToneAxes }
+    /// Which role the strip believes it is presenting. Read-only seam for the
+    /// same contract.
+    var stripModeForTesting: TonoStripMode { stripMode }
+
+    /// The host document. EVERY read and every mutation in this controller goes
+    /// through this one accessor rather than touching `textDocumentProxy`
+    /// directly, so a test can substitute a recording document.
+    ///
+    /// Why this exists (Build 109). A unit-test `UIInputViewController` has no
+    /// connected host: its proxy reports nil context and silently discards
+    /// `insertText` / `deleteBackward`. That left the POSITIVE half of the
+    /// founder findings untestable. Every strip test could assert only that
+    /// Coach was *not* invoked — never that the tap actually accepted the word,
+    /// and never that a caret move left the text alone. A build in which
+    /// `candidateTapped` did nothing whatsoever passed the entire suite, so the
+    /// "suggestion taps stay local" guarantee rested on a measurement that could
+    /// be true for the wrong reason.
+    ///
+    /// Production behaviour is unchanged: the override is nil on every shipping
+    /// path, so this resolves to the real proxy. The class is `final`, so this
+    /// is an injection point rather than an override point.
+    var documentProxyOverride: UITextDocumentProxy?
+    var documentProxy: UITextDocumentProxy { documentProxyOverride ?? textDocumentProxy }
+
     // Build 93 — explicit Shift state plus monotonic document-mutation tracking.
     private var layoutMode: KeyboardLayoutMode = .letters
     private var shiftMachine = TonoShiftStateMachine()
@@ -417,6 +589,27 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private var deleteRepeatWorkItem: DispatchWorkItem?
     private var deleteRepeatGeneration = 0
     private var deleteRepeatCount = 0
+    // Apple-fidelity space hold/drag caret trackpad. `SpaceCursorSession` owns
+    // the pure engine plus the ONLY proxy operation this feature may perform —
+    // `adjustTextPosition(byCharacterOffset:)`. Its `SpaceCursorTextProxy`
+    // protocol has no insert or delete member, so no gesture path here can add
+    // or remove text; the single insertion is `insertSpaceCommit()` on a
+    // genuine quick tap. The activation timer is a generation-guarded work
+    // item, mirroring backspace-repeat, so it can never fire stale.
+    private lazy var spaceCursorSession = SpaceCursorSession(
+        proxy: SpaceCursorProxyAdapter(owner: self),
+        // Build 106: re-read at every takeover, so rotation and dynamic-type
+        // changes are picked up without rebuilding the session (which would
+        // reintroduce the Build-104 proxy-lifetime defect).
+        wrapWidthProvider: { [weak self] in self?.estimatedWrapWidth() }
+    )
+    private var spaceCursorActivationWork: DispatchWorkItem?
+    private var spaceCursorGeneration = 0
+    private var spaceCursorOrigin: CGPoint = .zero
+    private var spaceCursorLastLocation: CGPoint = .zero
+    private var spaceCursorAffordanceActive = false
+    private var spaceCursorRestoreTitle: String?
+    private weak var spaceButton: UIButton?
     private weak var previewOwner: UIButton?
     private var keyPreview: UIView?
     private var isEmojiPanelVisible: Bool = false
@@ -430,8 +623,22 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private var spellingToken: SpellingToken?
     private var autocorrectionRecord: AutoCorrectionRecord?
     private weak var candidateStack: UIStackView?
+    private weak var toneChipStack: UIStackView?
+    private weak var localBadge: UIView?
     private weak var coachButton: TonoCoachButton?
     private var candidateValues: [String] = []
+
+    /// Which role the top strip is presenting. Build 105 inferred this from
+    /// `toneChipsEnabled` *and* from whichever selector happened to be attached
+    /// to the shared buttons; the two could disagree, and did. Build 106 keeps
+    /// one authority and gates both handlers on it.
+    private var stripMode: TonoStripMode = .suggestions
+
+    /// Every strip dispatch this controller refused, keyed by reason. Debug
+    /// seam for the "a suggestion tap can never reach Coach" contract —
+    /// `roleMismatch` must stay at zero for the process lifetime. Privacy-safe:
+    /// counts only, never text.
+    private(set) var stripRefusals: [TonoStripRoutingPolicy.Reason: Int] = [:]
 
     // Live Tone v1 — shipping release. Pure observer; never touches the
     // keystroke path. The manager owns the debouncer, the session state
@@ -469,9 +676,17 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         keysInstalled = true
         installLiveTone()
         #if !TONO_BUILD92_HOSTSESSION
+        // Build 106: the user's own keyboard vocabulary now feeds BOTH lanes —
+        // it suppresses false corrections (as before) and contributes the
+        // shortcut expansions the user configured in Settings as real
+        // candidates. Build 105 collapsed both halves into one flat word set
+        // and used it only to bail out.
         requestSupplementaryLexicon { [weak self] lexicon in
-            let words = Set(lexicon.entries.lazy.flatMap { [$0.userInput, $0.documentText] })
-            self?.spellingService.updateSupplementaryWords(words)
+            self?.spellingService.updateLexicon(
+                LocalLexicon(lexiconEntries: lexicon.entries.map {
+                    (userInput: $0.userInput, documentText: $0.documentText)
+                })
+            )
             self?.refreshSpellingSuggestions()
         }
         #endif
@@ -487,16 +702,45 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     public override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         NSLog("TONO_KB BUILD86 04: viewDidAppear")
+        recordSetupHeartbeat()
         advanceHostSession()
         refreshHostConfigurationIfNeeded()
         applyAutoCapitalizationIfNeeded()
         refreshSpellingSuggestions()
     }
 
+    // MARK: - Setup Doctor heartbeat
+
+    /// Leaves a content-free liveness record in the App Group so the host app's
+    /// Setup Doctor can tell the user the truth about their setup.
+    ///
+    /// This exists because iOS gives the containing app no way to see any of it:
+    /// it cannot read whether its keyboard is enabled, and `hasFullAccess` is
+    /// readable *only* here, on `UIInputViewController`. Without this record the
+    /// app can do nothing but guess, so the Doctor would either nag a
+    /// correctly-configured user or show a green tick it cannot back up.
+    ///
+    /// PRIVACY (binding — see the contract note in `Shared/SetupDoctor.swift`):
+    /// the record carries a schema number, a timestamp, and `hasFullAccess`.
+    /// Nothing else. No typed text, no document context, no recipient, no host
+    /// app identity, no counters. Deliberately written where no document proxy
+    /// value is in scope, so there is nothing to accidentally include.
+    private func recordSetupHeartbeat() {
+        KeyboardHeartbeatStore().record(hasFullAccess: hasFullAccess, now: Date())
+        // Repairs a documented-but-never-honoured contract: `keyboardLoaded` is
+        // described in SharedUserDefaults.swift as "written by the keyboard
+        // extension on first load", and the onboarding flow reads it, but no
+        // write ever existed — so that check could never pass. It is a sticky
+        // "has ever loaded" marker; the Setup Doctor deliberately does NOT use
+        // it for any completed state, because a stale true is exactly the false
+        // success the timestamped heartbeat above exists to avoid.
+        SharedStore.defaults.set(true, forKey: SharedKeys.keyboardLoaded)
+    }
+
     public override func textDidChange(_ textInput: UITextInput?) {
         refreshHostConfigurationIfNeeded()
-        let liveBefore = textDocumentProxy.documentContextBeforeInput ?? ""
-        let liveAfter = textDocumentProxy.documentContextAfterInput ?? ""
+        let liveBefore = documentProxy.documentContextBeforeInput ?? ""
+        let liveAfter = documentProxy.documentContextAfterInput ?? ""
         let requestAction = coachRequestGuard?.action(
             liveBefore: liveBefore,
             liveAfter: liveAfter,
@@ -542,7 +786,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         DispatchQueue.main.async { [weak self] in
             guard let self,
                   self.documentMutationGeneration == deferredGeneration else { return }
-            let liveNow = self.textDocumentProxy.documentContextBeforeInput ?? ""
+            let liveNow = self.documentProxy.documentContextBeforeInput ?? ""
             self.liveToneDidMutate(context: liveNow)
         }
         DispatchQueue.main.async { [weak self] in
@@ -612,6 +856,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachTask?.cancel()
         spellingService.cancel()
         cancelDeleteRepeat()
+        cancelSpaceCursorActivation()
         dismissKeyPreview()
     }
 
@@ -621,9 +866,28 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         UIDevice.current.playInputClick()
     }
 
+    /// Estimated characters per visual row in the host field.
+    ///
+    /// Derived from the extension's own width and the user's body-font advance,
+    /// which are the only layout facts a keyboard extension can observe. The
+    /// host's real field width, font and line breaking are not readable through
+    /// any public API — see `SpaceCursorWrapEstimator` for why this is biased
+    /// low and what it does not claim.
+    private func estimatedWrapWidth() -> Int? {
+        let width = view.bounds.width
+        guard width > 0 else { return nil }
+        let font = UIFont.preferredFont(forTextStyle: .body)
+        let advance = ("n" as NSString).size(withAttributes: [.font: font]).width
+        return SpaceCursorWrapEstimator.charactersPerRow(
+            keyboardWidthPoints: Double(width),
+            averageCharacterWidthPoints: Double(advance)
+        )
+    }
+
     private func cancelTransientInteractions() {
         cancelDeleteRepeat()
         dismissKeyPreview()
+        resetSpaceCursorSession()
     }
 
     private func invalidateCoachWork(restoreKeyboard: Bool, clearTarget: Bool = true) {
@@ -631,9 +895,29 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachTask = nil
         coachRequestID = nil
         coachLoadingRequestID = nil
+        // Disarm the visible deadline and drop the clock anchor: a cancelled
+        // or superseded request must never leave a watchdog armed against a
+        // stale requestID, and must not leak its tap anchor into the next one.
+        coachDeadline?.cancel()
+        coachDeadline = nil
+        coachClockTapTime = nil
+        // Build 111: a cancelled or superseded request must never leave its
+        // connectivity state describing the next one. Cancellation is final —
+        // the task is already cancelled above, so nothing can resume it, and
+        // the flag going false means a later deadline cannot claim "offline"
+        // on a request that never waited.
+        coachWaitingForConnectivity = false
+        // Build 114: an in-flight "Try another" is work too. Dropping its token
+        // here is what makes teardown terminal for the alternative path — a
+        // late completion fails `acceptsAlternative` and cannot revive a
+        // surface that is gone, and `coachBusy` cannot latch true behind it.
+        coachAlternativeRequestID = nil
         if clearTarget {
             coachRewriteTarget = nil
             coachRequestGuard = nil
+            // The sequence belongs to a captured target; without one there is
+            // no source message for an alternative to be an alternative OF.
+            coachSequence = nil
         }
         coachBusy = false
         coachButton?.isEnabled = true
@@ -662,37 +946,57 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coach.addTarget(self, action: #selector(coachTapped), for: .touchUpInside)
         bar.addSubview(coach)
 
-        let candidates = UIStackView()
-        candidates.axis = .horizontal
-        candidates.alignment = .fill
-        candidates.distribution = .fillEqually
-        candidates.spacing = 1
-        candidates.translatesAutoresizingMaskIntoConstraints = false
-        candidates.accessibilityIdentifier = Const.idCandidates
-        bar.addSubview(candidates)
-        for index in 0..<3 {
-            let button = TonoMinimumHitTargetButton(type: .system)
-            button.tag = index
-            button.titleLabel?.font = UIFontMetrics(forTextStyle: .caption1).scaledFont(
-                for: .systemFont(ofSize: 13, weight: .regular)
-            )
-            button.titleLabel?.adjustsFontForContentSizeCategory = true
-            button.titleLabel?.lineBreakMode = .byTruncatingTail
-            button.setTitleColor(.label, for: .normal)
-            button.backgroundColor = .secondarySystemBackground
-            button.layer.cornerRadius = 5
-            button.isHidden = true
-            button.addTarget(self, action: #selector(candidateTapped(_:)), for: .touchUpInside)
-            candidates.addArrangedSubview(button)
-        }
-        // TONO is the leading anchor of the strip; the tone chips read to its
+        // Build 106 — two physically distinct rows, one per role.
+        //
+        // These are separate view hierarchies with separate buttons and
+        // separate, permanently-bound selectors. Exactly one row is visible and
+        // hit-testable at a time (`applyStripMode`). No target/action table is
+        // mutated after this function returns, which is what makes the
+        // Build-105 "suggestion tap runs Coach" state unreachable rather than
+        // merely unlikely.
+        let candidates = makeStripStack(
+            role: .suggestion,
+            identifier: Const.idCandidates,
+            action: #selector(candidateTapped(_:)),
+            in: bar
+        )
+        let chips = makeStripStack(
+            role: .toneChip,
+            identifier: Const.idToneChips,
+            action: #selector(toneChipTapped(_:)),
+            in: bar
+        )
+
+        // Subtle, non-interactive "running on device" signal. Never a touch
+        // target, so it cannot participate in any hit-region collision.
+        let badge = UIView()
+        badge.translatesAutoresizingMaskIntoConstraints = false
+        badge.isUserInteractionEnabled = false
+        badge.backgroundColor = .systemGreen
+        badge.layer.cornerRadius = Const.localBadgeDiameter / 2
+        badge.accessibilityIdentifier = Const.idLocalBadge
+        badge.isAccessibilityElement = true
+        badge.accessibilityTraits = [.staticText]
+        badge.accessibilityLabel = LocalIntelligenceCopy.badgeAccessibilityLabel
+        badge.isHidden = true
+        bar.addSubview(badge)
+
+        // TONO is the leading anchor of the strip; the active row reads to its
         // right. Accessibility order matches the visual order.
-        bar.accessibilityElements = [coach] + candidates.arrangedSubviews
-        let approvedCoachWidth = ceil(coach.intrinsicContentSize.width)
+        bar.accessibilityElements = [coach, badge] + candidates.arrangedSubviews
+        // A Coach control narrower than the 44pt minimum touch target would
+        // have its hit rect expanded outward by `TonoMinimumHitTargetButton`,
+        // pushing it under the first suggestion. Flooring the width at the
+        // minimum keeps the expansion purely vertical, and
+        // `TonoStripGeometry.coachSeparation` covers the rest.
+        let approvedCoachWidth = max(
+            ceil(coach.intrinsicContentSize.width),
+            TonoKeyboardMetrics.ControlGeometry.minimumTouchTarget
+        )
         coach.setContentHuggingPriority(.required, for: .horizontal)
         coach.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        NSLayoutConstraint.activate([
+        var constraints: [NSLayoutConstraint] = [
             bar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             bar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             bar.topAnchor.constraint(equalTo: view.topAnchor),
@@ -704,16 +1008,96 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             coach.heightAnchor.constraint(equalToConstant: Const.baselineMetrics.coachControlHeight),
             coach.widthAnchor.constraint(equalToConstant: approvedCoachWidth),
 
-            // The color-coded tone chips fill the trailing space after TONO.
-            candidates.leadingAnchor.constraint(equalTo: coach.trailingAnchor, constant: 5),
-            candidates.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -3),
-            candidates.topAnchor.constraint(equalTo: bar.topAnchor, constant: 4),
-            candidates.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -4),
-        ])
+            badge.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            badge.widthAnchor.constraint(equalToConstant: Const.localBadgeDiameter),
+            badge.heightAnchor.constraint(equalToConstant: Const.localBadgeDiameter),
+            badge.leadingAnchor.constraint(
+                equalTo: coach.trailingAnchor,
+                constant: TonoStripGeometry.coachSeparation
+            ),
+        ]
+        // Both rows occupy the identical frame; visibility, not geometry,
+        // selects between them.
+        for stack in [candidates, chips] {
+            constraints += [
+                stack.leadingAnchor.constraint(
+                    equalTo: badge.trailingAnchor,
+                    constant: TonoStripGeometry.coachSeparation
+                ),
+                stack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -3),
+                stack.topAnchor.constraint(equalTo: bar.topAnchor, constant: 4),
+                stack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -4),
+            ]
+        }
+        NSLayoutConstraint.activate(constraints)
 
         self.topBar = bar
         self.candidateStack = candidates
+        self.toneChipStack = chips
+        self.localBadge = badge
         self.coachButton = coach
+        applyStripMode(.suggestions)
+    }
+
+    /// Build one role's row. The selector is bound here, once, and never
+    /// removed — `TonoStripButton.stripRole` is `let`, so the pair
+    /// (button identity, action) is fixed for the button's lifetime.
+    private func makeStripStack(
+        role: TonoStripRole,
+        identifier: String,
+        action: Selector,
+        in bar: UIView
+    ) -> UIStackView {
+        let stack = UIStackView()
+        stack.axis = .horizontal
+        stack.alignment = .fill
+        stack.distribution = .fillEqually
+        stack.spacing = 1
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.accessibilityIdentifier = identifier
+        bar.addSubview(stack)
+        for index in 0..<3 {
+            let button = TonoStripButton(role: role, index: index)
+            button.titleLabel?.font = UIFontMetrics(forTextStyle: .caption1).scaledFont(
+                for: .systemFont(ofSize: 13, weight: .regular)
+            )
+            button.titleLabel?.adjustsFontForContentSizeCategory = true
+            button.titleLabel?.lineBreakMode = .byTruncatingTail
+            button.setTitleColor(.label, for: .normal)
+            button.backgroundColor = .secondarySystemBackground
+            button.layer.cornerRadius = 5
+            button.isHidden = true
+            button.addTarget(self, action: action, for: .touchUpInside)
+            stack.addArrangedSubview(button)
+        }
+        return stack
+    }
+
+    /// Make exactly one row live. The inactive row is hidden **and** has
+    /// interaction disabled, so it is excluded from hit testing twice over and
+    /// z-order between the two rows can never decide a tap.
+    private func applyStripMode(_ mode: TonoStripMode) {
+        stripMode = mode
+        let showSuggestions = mode == .suggestions
+        candidateStack?.isHidden = !showSuggestions
+        candidateStack?.isUserInteractionEnabled = showSuggestions
+        toneChipStack?.isHidden = showSuggestions
+        toneChipStack?.isUserInteractionEnabled = !showSuggestions
+        if let bar = topBar, let coach = coachButton, let badge = localBadge {
+            let active = showSuggestions ? candidateStack : toneChipStack
+            bar.accessibilityElements = [coach, badge] + (active?.arrangedSubviews ?? [])
+        }
+        updateLocalBadge()
+    }
+
+    /// Record and log a refused strip dispatch. Counts only — the refused
+    /// candidate text is never read, formatted or logged.
+    private func noteStripRefusal(_ reason: TonoStripRoutingPolicy.Reason) {
+        stripRefusals[reason, default: 0] += 1
+        if reason == .roleMismatch {
+            // Build-105 signature. Must never fire; loud if it ever does.
+            NSLog("TONO_KB BUILD106 ERR: strip role mismatch (count=%d)", stripRefusals[reason] ?? 0)
+        }
     }
 
     private func buildBodyContainer() {
@@ -740,27 +1124,27 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     // MARK: - Host-field traits
 
     private var hostKeyboardType: UIKeyboardType {
-        textDocumentProxy.keyboardType ?? .default
+        documentProxy.keyboardType ?? .default
     }
 
     private var hostReturnKeyType: UIReturnKeyType {
-        textDocumentProxy.returnKeyType ?? .default
+        documentProxy.returnKeyType ?? .default
     }
 
     private var hostKeyboardAppearance: UIKeyboardAppearance {
-        textDocumentProxy.keyboardAppearance ?? .default
+        documentProxy.keyboardAppearance ?? .default
     }
 
     private var hostAutocapitalizationType: UITextAutocapitalizationType {
-        textDocumentProxy.autocapitalizationType ?? .sentences
+        documentProxy.autocapitalizationType ?? .sentences
     }
 
     private var hostAutocorrectionType: UITextAutocorrectionType {
-        textDocumentProxy.autocorrectionType ?? .default
+        documentProxy.autocorrectionType ?? .default
     }
 
     private var hostSpellCheckingType: UITextSpellCheckingType {
-        textDocumentProxy.spellCheckingType ?? .default
+        documentProxy.spellCheckingType ?? .default
     }
 
     private var currentHostConfiguration: HostConfiguration {
@@ -1312,6 +1696,10 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         if let action = action {
             b.addTarget(self, action: action, for: .touchUpInside)
         }
+        if id == "space" {
+            spaceButton = b
+            attachSpaceCursorGesture(to: b)
+        }
         b.translatesAutoresizingMaskIntoConstraints = false
         if let width = width {
             b.widthAnchor.constraint(equalToConstant: width).isActive = true
@@ -1390,7 +1778,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             afterMutation = commitBoundary(title, contextBeforeInput: beforeMutation)
         } else {
             autocorrectionRecord = nil
-            textDocumentProxy.insertText(title)
+            documentProxy.insertText(title)
             afterMutation = beforeMutation + title
         }
         playInputClick()
@@ -1446,7 +1834,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
            pending.generation == documentMutationGeneration {
             return pending.contextAfter
         }
-        return textDocumentProxy.documentContextBeforeInput ?? ""
+        return documentProxy.documentContextBeforeInput ?? ""
     }
 
     private func recordDocumentMutation(
@@ -1631,8 +2019,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             spellingService.cancel()
             return
         }
-        let before = textDocumentProxy.documentContextBeforeInput ?? ""
-        let after = textDocumentProxy.documentContextAfterInput ?? ""
+        let before = documentProxy.documentContextBeforeInput ?? ""
+        let after = documentProxy.documentContextAfterInput ?? ""
         guard let token = SpellingToken.current(before: before, after: after, host: currentHostSession) else {
             spellingService.cancel()
             spellingDecision = nil
@@ -1640,7 +2028,11 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             if autocorrectionRecord == nil { updateCandidateStrip(values: []) }
             return
         }
-        let request = SpellingRequest(token: token, host: spellingHostPolicy)
+        let request = SpellingRequest(
+            token: token,
+            host: spellingHostPolicy,
+            contextBefore: before
+        )
         guard request.host.allowsSuggestions else {
             spellingService.cancel()
             spellingDecision = nil
@@ -1654,8 +2046,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         spellingService.schedule(request) { [weak self] _, decision in
             guard let self = self else { return }
             let live = SpellingToken.current(
-                before: self.textDocumentProxy.documentContextBeforeInput ?? "",
-                after: self.textDocumentProxy.documentContextAfterInput ?? "",
+                before: self.documentProxy.documentContextBeforeInput ?? "",
+                after: self.documentProxy.documentContextAfterInput ?? "",
                 host: self.currentHostSession
             )
             guard live == token else { return }
@@ -1665,7 +2057,14 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         }
     }
 
-    private func updateCandidateStrip(values: [String]) {
+    /// Render `values` onto the suggestion row.
+    ///
+    /// Internal, not private, so the XCTest target can drive the REAL strip:
+    /// a unit-test controller has no connected host document, so no spelling
+    /// pipeline can populate it, and the Build-105 defect lived precisely in
+    /// what happened to a populated strip after a Coach toggle. Production
+    /// callers are `refreshSpellingSuggestions` and the autocorrect paths.
+    func updateCandidateStrip(values: [String]) {
         guard let stack = candidateStack else { return }
         candidateValues = Array(values.prefix(3))
         for (index, view) in stack.arrangedSubviews.enumerated() {
@@ -1680,24 +2079,57 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             let value = candidateValues[index]
             let isOriginal = index == 0
             button.isHidden = false
-            // Reset to the neutral candidate style; the tone-chip path repaints
-            // afterward so tone token colors never leak into spelling
-            // candidates.
+            // Neutral candidate style. Build 106 paints tone tokens onto the
+            // separate chip row, so a tone color can no longer reach a spelling
+            // candidate even transiently.
             button.backgroundColor = .secondarySystemBackground
             button.setTitleColor(.label, for: .normal)
-            button.accessibilityValue = nil
             button.setTitle(value, for: .normal)
             button.accessibilityLabel = isOriginal ? "\(value), original" : value
             button.accessibilityHint = isOriginal
                 ? "Keeps or restores the original word"
                 : "Replaces the current word"
+            // Truthful provenance: every value on this row was produced on
+            // device. VoiceOver reads it; it is never sent anywhere.
+            button.accessibilityValue = LocalIntelligenceCopy.candidateProvenance
             button.accessibilityTraits = isOriginal ? [.button, .selected] : [.button]
         }
+        updateLocalBadge()
     }
 
+    /// Show the on-device indicator whenever the suggestion row is the live row
+    /// and is actually offering locally-computed values. It is a statement about
+    /// where the computation happened, not a network reachability light, so it
+    /// never lies about connectivity.
+    private func updateLocalBadge() {
+        localBadge?.isHidden = !(stripMode == .suggestions && !candidateValues.isEmpty)
+    }
+
+    /// Accept one spelling/autocorrect suggestion.
+    ///
+    /// This path is local-only by construction: it performs exactly one bounded
+    /// document mutation, updates local spelling state, plays the ordinary
+    /// input click, and returns. It contains no Coach call, no task creation
+    /// and no network I/O — and the routing gate above guarantees a tone chip
+    /// can never arrive here, nor a suggestion arrive at `toneChipTapped`.
     @objc private func candidateTapped(_ sender: UIButton) {
-        guard candidateValues.indices.contains(sender.tag) else { return }
-        let value = candidateValues[sender.tag]
+        guard let candidate = sender as? TonoStripButton else {
+            noteStripRefusal(.roleMismatch)
+            return
+        }
+        let decision = TonoStripRoutingPolicy.decide(
+            senderRole: candidate.stripRole,
+            handlerRole: .suggestion,
+            mode: stripMode,
+            index: candidate.stripIndex,
+            valueCount: candidateValues.count,
+            isBusy: false
+        )
+        guard case .perform(_, let index) = decision else {
+            if case .refuse(let reason) = decision { noteStripRefusal(reason) }
+            return
+        }
+        let value = candidateValues[index]
         if let record = autocorrectionRecord, value == record.original {
             let beforeMutation = effectiveDocumentContextBeforeInput
             guard let afterMutation = restoreAutocorrection(
@@ -1712,8 +2144,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         guard let expected = spellingToken,
               let plan = SpellingMutationPlan.candidate(
                 liveToken: SpellingToken.current(
-                    before: textDocumentProxy.documentContextBeforeInput ?? "",
-                    after: textDocumentProxy.documentContextAfterInput ?? "",
+                    before: documentProxy.documentContextBeforeInput ?? "",
+                    after: documentProxy.documentContextAfterInput ?? "",
                     host: currentHostSession
                 ),
                 expected: expected,
@@ -1779,10 +2211,10 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     private func applySpellingMutation(_ plan: SpellingMutationPlan) {
         if plan.cursorAdvance > 0 {
-            textDocumentProxy.adjustTextPosition(byCharacterOffset: plan.cursorAdvance)
+            documentProxy.adjustTextPosition(byCharacterOffset: plan.cursorAdvance)
         }
-        for _ in 0..<plan.deleteCount { textDocumentProxy.deleteBackward() }
-        textDocumentProxy.insertText(plan.insertion)
+        for _ in 0..<plan.deleteCount { documentProxy.deleteBackward() }
+        documentProxy.insertText(plan.insertion)
     }
 
     private func isSpellingBoundary(_ text: String) -> Bool {
@@ -1791,7 +2223,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     private func validateAutocorrectionRecord() {
         guard let record = autocorrectionRecord else { return }
-        let context = textDocumentProxy.documentContextBeforeInput ?? ""
+        let context = documentProxy.documentContextBeforeInput ?? ""
         if !context.hasSuffix(record.correctedSuffix) {
             autocorrectionRecord = nil
         }
@@ -1817,9 +2249,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             autocorrectionRecord = nil
             return nil
         }
-        for _ in record.correctedSuffix { textDocumentProxy.deleteBackward() }
+        for _ in record.correctedSuffix { documentProxy.deleteBackward() }
         let restored = keepBoundary ? record.restoredText : record.original
-        textDocumentProxy.insertText(restored)
+        documentProxy.insertText(restored)
         autocorrectionRecord = nil
         spellingDecision = nil
         spellingToken = nil
@@ -1831,7 +2263,19 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         )
     }
 
+    /// Space-key activation. This selector remains wired to `.touchUpInside`
+    /// so assistive activation (VoiceOver double-tap synthesises a control
+    /// event, not raw touches, and therefore bypasses the cursor gesture)
+    /// still types a space. Direct touches are owned by the space-cursor
+    /// gesture recognizer (`cancelsTouchesInView`), which routes a tap to the
+    /// same commit below via the engine's `.insertSpace` effect.
     @objc private func spaceTapped() {
+        insertSpaceCommit()
+    }
+
+    /// Single source of truth for "insert one space": the Apple double-space
+    /// → ". " transform, spelling-boundary commit, and mutation bookkeeping.
+    private func insertSpaceCommit() {
         let beforeMutation = effectiveDocumentContextBeforeInput
         let contextSuffix = String(beforeMutation.suffix(8))
         let transformedDoubleSpace = DoubleSpacePolicy.shouldTransform(
@@ -1841,8 +2285,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         )
         let afterMutation: String
         if transformedDoubleSpace {
-            textDocumentProxy.deleteBackward()
-            textDocumentProxy.insertText(". ")
+            documentProxy.deleteBackward()
+            documentProxy.insertText(". ")
             spellingService.cancel()
             spellingDecision = nil
             spellingToken = nil
@@ -1855,6 +2299,177 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         recordDocumentMutation(from: beforeMutation, to: afterMutation)
     }
 
+    // MARK: - Space hold/drag cursor mode
+
+    /// Attach the caret-trackpad gesture to a space key. `minimumPressDuration`
+    /// is zero so the engine (not UIKit) owns the tap-vs-hold decision via its
+    /// own activation delay; `cancelsTouchesInView` guarantees a direct touch
+    /// never also fires the button's `.touchUpInside`, so a tap or a recognized
+    /// hold inserts through exactly one path (no double space, no leak).
+    private func attachSpaceCursorGesture(to button: UIButton) {
+        let recognizer = UILongPressGestureRecognizer(
+            target: self,
+            action: #selector(spaceCursorGesture(_:))
+        )
+        recognizer.minimumPressDuration = 0
+        recognizer.allowableMovement = .greatestFiniteMagnitude
+        recognizer.cancelsTouchesInView = true
+        recognizer.delaysTouchesBegan = false
+        recognizer.delaysTouchesEnded = false
+        button.addGestureRecognizer(recognizer)
+    }
+
+    @objc private func spaceCursorGesture(_ recognizer: UILongPressGestureRecognizer) {
+        let now = Date()
+        let location = recognizer.location(in: view)
+        switch recognizer.state {
+        case .began:
+            beginSpaceCursorSession(now: now, location: location, button: recognizer.view as? UIButton)
+        case .changed:
+            spaceCursorLastLocation = location
+            // The session owns the proxy call. The ONLY proxy operation it can
+            // perform is `adjustTextPosition(byCharacterOffset:)` — its protocol
+            // has no delete or insert member — so a drag physically cannot
+            // remove or add text.
+            let dx = Double(location.x - spaceCursorOrigin.x)
+            let dy = Double(location.y - spaceCursorOrigin.y)
+            _ = spaceCursorSession.drag(translationX: dx, translationY: dy, at: now)
+            updateSpaceCursorAffordance()
+        case .ended:
+            concludeSpaceCursorSession(effect: spaceCursorSession.end(at: now))
+        case .cancelled, .failed:
+            concludeSpaceCursorSession(effect: spaceCursorSession.cancel())
+        default:
+            break
+        }
+    }
+
+    private func beginSpaceCursorSession(now: Date, location: CGPoint, button: UIButton?) {
+        // Context is captured by the session at TAKEOVER, not here: capturing at
+        // press froze a stale bound that could stop the caret short mid-drag
+        // (one of the build-103 device rejections).
+        spaceCursorOrigin = location
+        spaceCursorLastLocation = location
+        if let button { spaceButton = button }
+        spaceButton?.isHighlighted = true
+        spaceCursorSession.press(at: now)
+        scheduleSpaceCursorActivation(after: spaceCursorSession.config.activationDelay)
+    }
+
+    private func scheduleSpaceCursorActivation(after delay: TimeInterval) {
+        spaceCursorGeneration &+= 1
+        let generation = spaceCursorGeneration
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, generation == self.spaceCursorGeneration else { return }
+            let effect = self.spaceCursorSession.tick(at: Date())
+            if case .enteredCursorMode = effect {
+                // Trackpad engaged. Re-base the drag origin to the finger's
+                // current position so scrubbing starts from here, and freeze
+                // the (now stale) candidate strip for the duration of the drag.
+                self.spaceCursorOrigin = self.spaceCursorLastLocation
+                self.updateSpaceCursorAffordance()
+            }
+        }
+        spaceCursorActivationWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    /// Communicate trackpad mode without covering any system control.
+    ///
+    /// Deliberately restrained: the space key dims and its title is replaced by
+    /// a caret glyph, and the candidate strip announces the mode for VoiceOver.
+    /// Nothing is overlaid on the globe/dictation row, no popup is shown, and
+    /// the keyboard's height never changes — an overlay there would hide the
+    /// system keyboard-switch control.
+    private func updateSpaceCursorAffordance() {
+        let active = spaceCursorSession.isCursorActive
+        guard active != spaceCursorAffordanceActive else { return }
+        spaceCursorAffordanceActive = active
+        guard let space = spaceButton else { return }
+        if active {
+            spaceCursorRestoreTitle = space.title(for: .normal)
+            space.setTitle("⌷", for: .normal)
+            space.accessibilityLabel = "Cursor trackpad active. Drag to move the insertion point."
+            space.accessibilityHint = "Slide left or right to move by characters, up or down to change line."
+            UIAccessibility.post(notification: .announcement, argument: "Cursor mode")
+        } else {
+            space.setTitle(spaceCursorRestoreTitle ?? "space", for: .normal)
+            space.accessibilityLabel = "Space"
+            space.accessibilityHint = nil
+            spaceCursorRestoreTitle = nil
+        }
+        space.isHighlighted = active
+    }
+
+    private func cancelSpaceCursorActivation() {
+        spaceCursorGeneration &+= 1
+        spaceCursorActivationWork?.cancel()
+        spaceCursorActivationWork = nil
+    }
+
+    private func concludeSpaceCursorSession(effect: SpaceCursorEngine.Effect) {
+        cancelSpaceCursorActivation()
+        let moved = spaceCursorSession.didMoveCaret
+        updateSpaceCursorAffordance()
+        spaceButton?.isHighlighted = false
+        switch effect {
+        case .insertSpace:
+            // The ONLY insertion this whole gesture family can produce, and only
+            // from a genuine quick tap that never entered cursor mode.
+            insertSpaceCommit()
+        case .endedCursorMode:
+            if moved { resynchronizeAfterCaretMove() }
+        case .none, .enteredCursorMode, .moveCaret:
+            break
+        }
+        spaceCursorSession.clearMovementFlag()
+    }
+
+    /// Tear down any in-flight space-cursor session without inserting a space.
+    /// Called from every lifecycle boundary (mode/appearance/geometry change,
+    /// host-field switch, view disappearance) via `cancelTransientInteractions`.
+    private func resetSpaceCursorSession() {
+        cancelSpaceCursorActivation()
+        let wasCursor = spaceCursorSession.isCursorActive
+        let moved = spaceCursorSession.didMoveCaret
+        if spaceCursorSession.isTracking {
+            _ = spaceCursorSession.cancel()
+        }
+        updateSpaceCursorAffordance()
+        spaceButton?.isHighlighted = false
+        if wasCursor && moved {
+            resynchronizeAfterCaretMove()
+        }
+        spaceCursorSession.clearMovementFlag()
+    }
+
+    /// After the caret is repositioned by the trackpad, the previous keystroke
+    /// context is stale. Invalidate caret-dependent async work — spelling
+    /// prediction, the Coach request/authorization guard, and any in-flight
+    /// deferred document callbacks — then resynchronize UI to the new caret.
+    private func resynchronizeAfterCaretMove() {
+        // Callers gate on `spaceCursorSession.didMoveCaret`; a hold with no drag
+        // never reaches here, so suggestions survive an aborted takeover.
+        // New editing position ⇒ new host/editing session. This also drops any
+        // Coach authorization captured for the old caret and resets per-field
+        // Live Tone state (pure observer).
+        advanceHostSession()
+        // Invalidate stale prediction + Coach async work.
+        spellingService.cancel()
+        spellingDecision = nil
+        spellingToken = nil
+        autocorrectionRecord = nil
+        invalidateCoachWork(restoreKeyboard: false)
+        // Resynchronize the mutation-tracking generation: no local text change
+        // occurred, so any pending mutation / deferred callback is now stale.
+        documentMutationGeneration &+= 1
+        pendingDocumentMutation = nil
+        updateCandidateStrip(values: [])
+        // Re-derive context-dependent state at the new caret.
+        applyAutoCapitalizationIfNeeded()
+        refreshSpellingSuggestions()
+    }
+
     @objc private func quickCharacterTapped(_ sender: UIButton) {
         guard let character = sender.title(for: .normal), !character.isEmpty else { return }
         let beforeMutation = effectiveDocumentContextBeforeInput
@@ -1863,7 +2478,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             afterMutation = commitBoundary(character, contextBeforeInput: beforeMutation)
         } else {
             autocorrectionRecord = nil
-            textDocumentProxy.insertText(character)
+            documentProxy.insertText(character)
             afterMutation = beforeMutation + character
         }
         playInputClick()
@@ -1880,7 +2495,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             afterMutation = restored
         } else {
             autocorrectionRecord = nil
-            textDocumentProxy.deleteBackward()
+            documentProxy.deleteBackward()
             afterMutation = String(beforeMutation.dropLast())
         }
         playInputClick()
@@ -1903,7 +2518,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         let item = DispatchWorkItem { [weak self] in
             guard let self = self, generation == self.deleteRepeatGeneration else { return }
             let beforeMutation = self.effectiveDocumentContextBeforeInput
-            self.textDocumentProxy.deleteBackward()
+            self.documentProxy.deleteBackward()
             self.recordDocumentMutation(
                 from: beforeMutation,
                 to: String(beforeMutation.dropLast())
@@ -2103,6 +2718,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         emojiSpace.accessibilityLabel = "Space"
         emojiSpace.heightAnchor.constraint(greaterThanOrEqualToConstant: Const.keyMinHeight).isActive = true
         emojiSpace.addTarget(self, action: #selector(spaceTapped), for: .touchUpInside)
+        spaceButton = emojiSpace
+        attachSpaceCursorGesture(to: emojiSpace)
         footer.addArrangedSubview(emojiSpace)
 
         let returnKeySpec = self.returnKeySpec
@@ -2239,7 +2856,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     private func insertEmoji(_ emoji: String) {
         guard !emoji.isEmpty else { return }
-        textDocumentProxy.insertText(emoji)
+        documentProxy.insertText(emoji)
         playInputClick()
         var list = EmojiCategory.glyphsForRecents()
         list.removeAll { $0 == emoji }
@@ -2274,7 +2891,32 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     private func setToneChipsEnabled(_ enabled: Bool) {
-        toneChipsEnabled = enabled
+        // No flag assignment here by design: `applyStripMode` below is the one
+        // authority, and `toneChipsEnabled` reads back out of it. Both branches
+        // call it unconditionally, so the role can never be left behind by an
+        // early return further down.
+        if !enabled {
+            // Build 106 made switching back a pure visibility change: the two
+            // roles own separate, permanently-targeted rows, so — unlike
+            // Build 105 — no repaint can leave a suggestion button wired to
+            // `toneChipTapped`. That half needs no undo and gets none.
+            //
+            // Build 107 closes what Build 106 left behind. Turning Coach off
+            // used to fall through the axis assignment above, so the
+            // controller kept a populated `selectedToneAxes` and a fully
+            // painted, titled, VoiceOver-labelled chip row hidden behind the
+            // stack. The single `mode.activeRole == senderRole` check in
+            // `TonoStripRoutingPolicy` was then the only thing between that
+            // stale row and a network rewrite. Clearing the model and the row
+            // makes the refusal over-determined: a dispatch that somehow
+            // reached `toneChipTapped` with the mode check broken is still
+            // refused by `indexOutOfRange` against an empty `valueCount`.
+            selectedToneAxes = []
+            clearToneChipRow()
+            applyStripMode(.suggestions)
+            refreshSpellingSuggestions()
+            return
+        }
         coachVariantSettings = CoachVariantSettingsStore().load()
         // Safer is the fixed first token; exactly two configured optional
         // tokens follow. No hidden generation — the optional tokens come
@@ -2287,18 +2929,35 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             CoachVariantSettings.maximumOptionalCount
         ))
         selectedToneAxes = ["safer"] + configuredOptional.map(\.rawValue)
-        if !enabled {
-            refreshSpellingSuggestions()
-            return
-        }
-        updateCandidateStrip(values: selectedToneAxes.map { $0.capitalized })
-        for (index, view) in (candidateStack?.arrangedSubviews ?? []).enumerated() {
+        applyStripMode(.toneChips)
+        for (index, view) in (toneChipStack?.arrangedSubviews ?? []).enumerated() {
             guard let button = view as? UIButton else { continue }
-            button.removeTarget(self, action: #selector(candidateTapped(_:)), for: .touchUpInside)
-            button.addTarget(self, action: #selector(toneChipTapped(_:)), for: .touchUpInside)
-            if index < selectedToneAxes.count {
-                applyToneTokenStyle(to: button, axis: selectedToneAxes[index])
+            guard index < selectedToneAxes.count else {
+                button.setTitle(nil, for: .normal)
+                button.isHidden = true
+                continue
             }
+            button.isHidden = false
+            button.setTitle(selectedToneAxes[index].capitalized, for: .normal)
+            applyToneTokenStyle(to: button, axis: selectedToneAxes[index])
+        }
+    }
+
+    /// Undo `applyToneTokenStyle` across the whole chip row: no title, no tone
+    /// accent, and no VoiceOver residue of the axis that was showing. Called
+    /// only when Coach is switched off, so the hidden row carries no stale tone
+    /// state that a later regression could surface or dispatch from.
+    private func clearToneChipRow() {
+        for view in toneChipStack?.arrangedSubviews ?? [] {
+            guard let button = view as? UIButton else { continue }
+            button.setTitle(nil, for: .normal)
+            button.isHidden = true
+            button.backgroundColor = .secondarySystemBackground
+            button.setTitleColor(.label, for: .normal)
+            button.accessibilityValue = nil
+            button.accessibilityLabel = nil
+            button.accessibilityHint = nil
+            button.accessibilityTraits = [.button]
         }
     }
 
@@ -2321,14 +2980,29 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     @objc private func toneChipTapped(_ sender: UIButton) {
-        guard !coachBusy, selectedToneAxes.indices.contains(sender.tag) else { return }
+        guard let chip = sender as? TonoStripButton else {
+            noteStripRefusal(.roleMismatch)
+            return
+        }
+        let decision = TonoStripRoutingPolicy.decide(
+            senderRole: chip.stripRole,
+            handlerRole: .toneChip,
+            mode: stripMode,
+            index: chip.stripIndex,
+            valueCount: selectedToneAxes.count,
+            isBusy: coachBusy
+        )
+        guard case .perform(_, let index) = decision else {
+            if case .refuse(let reason) = decision { noteStripRefusal(reason) }
+            return
+        }
         cancelTransientInteractions()
         spellingService.cancel()
-        let proxy = textDocumentProxy
+        let proxy = documentProxy
         beginCoachRewrite(
             before: proxy.documentContextBeforeInput ?? "",
             after: proxy.documentContextAfterInput ?? "",
-            axis: selectedToneAxes[sender.tag]
+            axis: selectedToneAxes[index]
         )
     }
 
@@ -2356,6 +3030,18 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             after: after,
             host: currentHostSession
         )
+        // Build 114 — sequence identity is (source message, host session,
+        // axis). A new captured message resets it; a different tone starts a
+        // SEPARATE sequence, so switching tone never inherits the previous
+        // tone's remaining budget. Re-tapping the same tone on the same
+        // unchanged draft also restarts at 1 of 3, because that is a fresh
+        // deliberate request rather than a continuation.
+        coachSequence = CoachAlternativeSequence(
+            axis: axis,
+            sourceDraft: target.draft,
+            host: currentHostSession
+        )
+        coachAlternativeRequestID = nil
         runCoach(draft: target.draft, axis: axis)
         return coachRequestID
     }
@@ -2420,7 +3106,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachContainer?.removeFromSuperview()
         coachErrorContainer?.removeFromSuperview()
         coachContainer = nil
-        coachStatusLabel = nil
+        coachSkeleton = nil
         coachResultsStack = nil
         coachErrorContainer = nil
         coachErrorLabel = nil
@@ -2472,20 +3158,152 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachButton?.isEnabled = false
         let requestID = UUID()
         coachRequestID = requestID
-        presentCoachLoading(requestID: requestID)
+        // Clock: tap. Every downstream phase is measured against this anchor.
+        let tapTime = DispatchTime.now()
+        coachClockTapTime = tapTime
+        presentCoachLoading(requestID: requestID, axis: axis)
+        // Clock: loading committed. The skeleton is built synchronously above,
+        // before any network work, so this proves the result-shaped surface
+        // lands within ~100ms of the tap. Privacy-safe: axis + duration only.
+        NSLog("TONO_KB BUILD107 clock: phase=loading axis=\(axis) dt_ms=\(Self.coachElapsedMs(since: tapTime))")
         NSLog("TONO_KB BUILD95 coach: begin selected variant axis=\(axis) len=\(draft.count)")
         let customPrompt = axis == "custom" ? coachVariantSettings.customInstruction : nil
-        coachTask = coachClient.variant(draft: draft, axis: axis, customPrompt: customPrompt) { [weak self] result in
+        coachTask = coachClient.variant(
+            draft: draft,
+            axis: axis,
+            customPrompt: customPrompt,
+            // Build 111: the transport parked this request because the device
+            // has no route. Nothing is retried here — the same single task is
+            // still in flight and completes by itself when the network is back.
+            waitingForConnectivity: { [weak self] in
+                self?.handleCoachWaitingForConnectivity(
+                    requestID: requestID, tapTime: tapTime, axis: axis
+                )
+            }
+        ) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.completeCoach(
                     requestID: requestID,
-                    liveBefore: self.textDocumentProxy.documentContextBeforeInput ?? "",
-                    liveAfter: self.textDocumentProxy.documentContextAfterInput ?? "",
+                    liveBefore: self.documentProxy.documentContextBeforeInput ?? "",
+                    liveAfter: self.documentProxy.documentContextAfterInput ?? "",
                     result: result
                 )
             }
         }
+        // Clock: request dispatched.
+        NSLog("TONO_KB BUILD107 clock: phase=request axis=\(axis) dt_ms=\(Self.coachElapsedMs(since: tapTime))")
+        // Arm the ~10s user-visible deadline (fail-closed; see below).
+        scheduleCoachDeadline(requestID: requestID, tapTime: tapTime, axis: axis)
+    }
+
+    /// Monotonic elapsed milliseconds since `start`. Privacy-safe: a duration,
+    /// never content.
+    private static func coachElapsedMs(since start: DispatchTime) -> Int {
+        Int((DispatchTime.now().uptimeNanoseconds &- start.uptimeNanoseconds) / 1_000_000)
+    }
+
+    /// Emit the terminal render clock. Privacy-safe: durations + the axis
+    /// token + outcome + the server-measured provider milliseconds. Never
+    /// logs draft text, credentials, or any identifier.
+    private func logCoachRenderClock(
+        tapTime: DispatchTime?, axis: String?, outcome: String, providerMs: Int?
+    ) {
+        guard let tapTime else { return }
+        let provider = providerMs.map(String.init) ?? "na"
+        NSLog(
+            "TONO_KB BUILD107 clock: phase=render axis=\(axis ?? "na") outcome=\(outcome) provider_ms=\(provider) dt_ms=\(Self.coachElapsedMs(since: tapTime))"
+        )
+    }
+
+    /// Arm the ~10s user-visible deadline. Fail-closed: it fires only when the
+    /// request is still the active one AND still owns the installed loading
+    /// surface — the same gate a completion passes — so it can never overwrite
+    /// a newer request's state or a result that already landed. On fire it
+    /// cancels the in-flight task (so no late response can reattach) and
+    /// installs the truthful timeout error, which offers Retry.
+    private func scheduleCoachDeadline(
+        requestID: UUID,
+        tapTime: DispatchTime,
+        axis: String,
+        after interval: TimeInterval = Const.coachVisibleDeadline
+    ) {
+        // Exactly one watchdog may be armed at a time: re-arming always
+        // cancels the previous work item, so the connectivity path below
+        // replaces the connected-path deadline rather than racing it.
+        coachDeadline?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.handleCoachDeadlineFired(requestID: requestID, tapTime: tapTime, axis: axis)
+        }
+        coachDeadline = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + interval, execute: work)
+    }
+
+    /// Build 111. The transport reported that the active request is parked
+    /// waiting for connectivity.
+    ///
+    /// Three things happen, and nothing else — in particular NO request is
+    /// issued, cancelled or replayed here:
+    ///
+    ///   1. the loading surface stops implying progress and states the truth;
+    ///   2. the visible deadline is re-armed against the bounded connectivity
+    ///      budget, because the 10s connected-path watchdog would otherwise
+    ///      cancel exactly the task that is about to recover;
+    ///   3. the terminal error is pre-qualified as offline rather than timeout.
+    ///
+    /// Fail-closed on the same gate a completion passes, so a notification for
+    /// a superseded request cannot touch a newer request's surface. Internal so
+    /// the XCTest target can drive it without a live radio.
+    func handleCoachWaitingForConnectivity(requestID: UUID, tapTime: DispatchTime, axis: String) {
+        guard CoachCompletionGate.accepts(
+                completion: requestID,
+                activeRequestID: coachRequestID,
+                loadingSurfaceRequestID: coachLoadingRequestID
+              ) else { return }
+        // URLSession may report waiting more than once for one task; the
+        // client already de-duplicates, and this is idempotent regardless.
+        guard !coachWaitingForConnectivity else { return }
+        coachWaitingForConnectivity = true
+        NSLog("TONO_KB BUILD111 clock: phase=awaiting_connectivity axis=\(axis) dt_ms=\(Self.coachElapsedMs(since: tapTime))")
+        coachSkeleton?.showWaitingForConnection()
+        // Re-arm against the remaining connectivity budget, measured from the
+        // tap so a late notification cannot extend the bound.
+        let elapsed = Double(Self.coachElapsedMs(since: tapTime)) / 1000.0
+        let remaining = max(Const.coachOfflineVisibleDeadline - elapsed, 1)
+        scheduleCoachDeadline(
+            requestID: requestID, tapTime: tapTime, axis: axis, after: remaining
+        )
+    }
+
+    /// The visible-deadline body. Internal so the XCTest target can drive the
+    /// watchdog synchronously — waiting the real ~10s interval in a unit test
+    /// is untenable — through the same fail-closed path the timer fires.
+    ///
+    /// Fail-closed: honored only when the request is still active AND still
+    /// owns the installed loading surface. A superseded request, an
+    /// already-delivered result, or an invalidated session is dropped without
+    /// touching the surface. On fire it cancels the in-flight task so no late
+    /// response can reattach, then installs the truthful timeout error.
+    func handleCoachDeadlineFired(requestID: UUID, tapTime: DispatchTime, axis: String) {
+        guard CoachCompletionGate.accepts(
+                completion: requestID,
+                activeRequestID: coachRequestID,
+                loadingSurfaceRequestID: coachLoadingRequestID
+              ) else { return }
+        coachTask?.cancel()
+        coachTask = nil
+        coachRequestID = nil
+        coachBusy = false
+        coachButton?.isEnabled = true
+        coachDeadline = nil
+        // Build 111: a request that spent its life parked waiting for a
+        // connection did not "time out" — it never got a network. Say the
+        // true thing. Both are bounded and both offer Retry.
+        let waited = coachWaitingForConnectivity
+        coachWaitingForConnectivity = false
+        NSLog("TONO_KB BUILD107 clock: phase=deadline axis=\(axis) dt_ms=\(Self.coachElapsedMs(since: tapTime))")
+        presentCoachError(waited ? .offline : .timeout, replacingLoadingFor: requestID)
+        coachClockTapTime = nil
     }
 
     /// Hand one finished round trip to the UI, replacing the loading surface
@@ -2517,12 +3335,34 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
                 liveAfter: liveAfter,
                 host: currentHostSession
               ) else { return }
+        // A real completion landed inside the deadline: disarm the watchdog
+        // so it can't fire and clobber the result the user is about to see.
+        coachDeadline?.cancel()
+        coachDeadline = nil
+        let tapTime = coachClockTapTime
         coachTask = nil
         coachRequestID = nil
         coachBusy = false
+        coachWaitingForConnectivity = false
         coachButton?.isEnabled = true
+        // Clock: response received on the main thread.
+        if let tapTime {
+            NSLog("TONO_KB BUILD107 clock: phase=response dt_ms=\(Self.coachElapsedMs(since: tapTime))")
+        }
         switch result {
         case .success(let response):
+            // Build 114 — this is version 1 of the sequence. Recorded BEFORE
+            // rendering so the card's "1 of 3" cue reads the committed state
+            // rather than a value the render has to guess.
+            if var sequence = coachSequence,
+               sequence.matches(
+                   axis: response.axis,
+                   sourceDraft: target.draft,
+                   host: currentHostSession
+               ) {
+                sequence.recordDisplayed(response.text)
+                coachSequence = sequence
+            }
             let rewrite = TonoCoachClient.CoachRewrite(
                 axis: response.axis,
                 text: response.text,
@@ -2538,22 +3378,43 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
                 flags: []
             )
             presentCoachResults(atomic, replacingLoadingFor: requestID)
+            // Clock: render committed (+ truthful server-measured provider ms).
+            logCoachRenderClock(
+                tapTime: tapTime, axis: response.axis, outcome: "ok",
+                providerMs: response.providerMs
+            )
         case .failure(let error):
             presentCoachError(error, replacingLoadingFor: requestID)
+            logCoachRenderClock(
+                tapTime: tapTime, axis: nil, outcome: "error", providerMs: nil
+            )
         }
+        coachClockTapTime = nil
     }
 
     // Internal so the XCTest target can drive the real UIKit loading state
     // through the same entry point the request path uses.
     // This is not API surface outside the keyboard module.
-    func presentCoachLoading(requestID: UUID) {
+    //
+    // Build 107: renders a result-shaped skeleton (title rule + Back
+    // placeholder + one accent-bordered rewrite card) instead of the plain
+    // "Coaching…" label + `UIActivityIndicatorView`. The whole hierarchy is
+    // built synchronously on the main thread; the shimmer is a GPU-driven
+    // gradient sweep. `axis` accents the card exactly like the real chip so
+    // the loading state previews the specific selected-tone answer. It is
+    // optional (default nil → neutral accent) so surface-lifecycle callers
+    // that only exercise ownership still compile unchanged.
+    func presentCoachLoading(requestID: UUID, axis: String? = nil) {
         // Record ownership before the container check so a controller without
         // a body container still completes its request — and clears its busy
         // state — exactly as it did before surfaces became request-owned.
         coachLoadingRequestID = requestID
         guard let container = bodyContainer else { return }
         cancelTransientInteractions()
-        preferredHeightConstraint?.constant = currentVisualMetrics.preferredContentHeight
+        // Reserve the SAME height the results surface uses so the
+        // loading→results transition never resizes the keyboard extension
+        // around the host field (stable geometry across the whole flow).
+        preferredHeightConstraint?.constant = currentVisualMetrics.coachResultsContentHeight
         keysStack?.removeFromSuperview()
         keysStack = nil
         emojiPanelView?.removeFromSuperview()
@@ -2565,27 +3426,17 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         panel.accessibilityIdentifier = Const.idCoachLoading
         installCoachSurface(panel, in: container, requestID: requestID)
 
-        let label = UILabel()
-        label.text = "Coaching…"
-        label.font = .systemFont(ofSize: 15, weight: .medium)
-        label.textColor = .secondaryLabel
-        label.textAlignment = .center
-        label.translatesAutoresizingMaskIntoConstraints = false
-        panel.addSubview(label)
-
-        let spinner = UIActivityIndicatorView(style: .medium)
-        spinner.translatesAutoresizingMaskIntoConstraints = false
-        spinner.startAnimating()
-        panel.addSubview(spinner)
-
+        let accent = TonoCoachPalette.axis(axis ?? "")?.accent ?? .separator
+        let skeleton = TonoCoachSkeletonView(accent: accent)
+        panel.addSubview(skeleton)
         NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: panel.centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: panel.centerYAnchor),
-            spinner.centerXAnchor.constraint(equalTo: panel.centerXAnchor),
-            spinner.topAnchor.constraint(equalTo: label.bottomAnchor, constant: 8),
+            skeleton.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
+            skeleton.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
+            skeleton.topAnchor.constraint(equalTo: panel.topAnchor),
+            skeleton.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
         ])
-
-        coachStatusLabel = label
+        skeleton.beginShimmer()
+        coachSkeleton = skeleton
     }
 
     /// Completion entry point: install the results surface only when
@@ -2763,34 +3614,166 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         ])
 
         let rewriteText = suggestion.text
+
+        // Build 114 — the version cue ("2 of 3"). Truthful by construction: it
+        // reads the sequence's successfully-displayed count, so a failed or
+        // superseded attempt can never advance it.
+        let cue = UILabel()
+        cue.accessibilityIdentifier = Const.idVersionCue
+        cue.font = UIFontMetrics(forTextStyle: .caption2).scaledFont(
+            for: .systemFont(ofSize: 11, weight: .semibold)
+        )
+        cue.adjustsFontForContentSizeCategory = true
+        cue.textColor = .secondaryLabel
+        cue.textAlignment = .right
+        cue.translatesAutoresizingMaskIntoConstraints = false
+        cue.setContentCompressionResistancePriority(.required, for: .horizontal)
+        chip.addSubview(cue)
+
+        // Inline failure guidance for a failed "Try another". Hidden until it
+        // has something true to say; the prior rewrite stays visible above it.
+        let notice = UILabel()
+        notice.accessibilityIdentifier = Const.idAlternativeNotice
+        notice.font = UIFontMetrics(forTextStyle: .caption2).scaledFont(
+            for: .systemFont(ofSize: 11, weight: .regular)
+        )
+        notice.adjustsFontForContentSizeCategory = true
+        notice.textColor = .secondaryLabel
+        notice.numberOfLines = 2
+        notice.isHidden = true
+        notice.translatesAutoresizingMaskIntoConstraints = false
+        chip.addSubview(notice)
+
         let actions = UIStackView()
         actions.axis = .horizontal
-        actions.distribution = .fillEqually
-        actions.spacing = 8
+        // Three actions in a keyboard-height panel. `.fillProportionally` with
+        // a scaled font lets "Try another" keep its full label at large Dynamic
+        // Type sizes instead of truncating to "Try an…", while
+        // TonoMinimumHitTargetButton keeps every one of them at the 44pt
+        // minimum touch target even when its drawn box is narrower.
+        actions.distribution = .fillProportionally
+        actions.spacing = 6
         actions.translatesAutoresizingMaskIntoConstraints = false
         chip.addSubview(actions)
 
-        let replace = TonoMinimumHitTargetButton(type: .system)
-        replace.setTitle("Replace", for: .normal)
-        replace.addAction(UIAction { [weak self] _ in
+        let use = TonoMinimumHitTargetButton(type: .system)
+        use.accessibilityIdentifier = Const.idUseRewrite
+        use.setTitle(Const.useRewriteLabel, for: .normal)
+        use.titleLabel?.font = UIFontMetrics(forTextStyle: .callout).scaledFont(
+            for: .systemFont(ofSize: 14, weight: .semibold)
+        )
+        use.titleLabel?.adjustsFontForContentSizeCategory = true
+        use.titleLabel?.adjustsFontSizeToFitWidth = true
+        use.titleLabel?.minimumScaleFactor = 0.75
+        use.titleLabel?.lineBreakMode = .byTruncatingTail
+        use.accessibilityLabel = Const.useRewriteLabel
+        use.accessibilityHint = "Replaces your message with this rewrite"
+        use.addAction(UIAction { [weak self] _ in
             self?.applyRewrite(rewriteText)
         }, for: .touchUpInside)
-        actions.addArrangedSubview(replace)
+        actions.addArrangedSubview(use)
+
+        let another = TonoMinimumHitTargetButton(type: .system)
+        another.accessibilityIdentifier = Const.idTryAnother
+        another.setTitle(Const.tryAnotherLabel, for: .normal)
+        another.titleLabel?.font = use.titleLabel?.font
+        another.titleLabel?.adjustsFontForContentSizeCategory = true
+        another.titleLabel?.adjustsFontSizeToFitWidth = true
+        another.titleLabel?.minimumScaleFactor = 0.75
+        another.titleLabel?.lineBreakMode = .byTruncatingTail
+        another.addAction(UIAction { [weak self] _ in
+            self?.tryAnotherTapped()
+        }, for: .touchUpInside)
+        actions.addArrangedSubview(another)
+
+        // The in-card busy indicator. It sits ON the card so the current
+        // rewrite stays readable while the next one is fetched — the contract
+        // forbids swapping the card out for a full-panel spinner here.
+        let spinner = UIActivityIndicatorView(style: .medium)
+        spinner.hidesWhenStopped = true
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        chip.addSubview(spinner)
 
         let dismiss = TonoMinimumHitTargetButton(type: .system)
-        dismiss.setTitle("Dismiss", for: .normal)
+        dismiss.accessibilityIdentifier = Const.idDismissRewrite
+        dismiss.setTitle(Const.dismissLabel, for: .normal)
+        dismiss.titleLabel?.font = use.titleLabel?.font
+        dismiss.titleLabel?.adjustsFontForContentSizeCategory = true
+        dismiss.titleLabel?.adjustsFontSizeToFitWidth = true
+        dismiss.titleLabel?.minimumScaleFactor = 0.75
+        dismiss.titleLabel?.lineBreakMode = .byTruncatingTail
+        dismiss.accessibilityLabel = Const.dismissLabel
+        dismiss.accessibilityHint = "Closes Coach and leaves your message unchanged"
         dismiss.addAction(UIAction { [weak self] _ in
             self?.backToKeysTapped()
         }, for: .touchUpInside)
         actions.addArrangedSubview(dismiss)
 
         NSLayoutConstraint.activate([
+            cue.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -10),
+            cue.topAnchor.constraint(equalTo: chip.topAnchor, constant: 6),
+            cue.leadingAnchor.constraint(greaterThanOrEqualTo: axis.trailingAnchor, constant: 6),
+
+            notice.leadingAnchor.constraint(equalTo: chip.leadingAnchor, constant: 10),
+            notice.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -10),
+            notice.bottomAnchor.constraint(equalTo: actions.topAnchor, constant: -2),
+
+            spinner.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -10),
+            spinner.centerYAnchor.constraint(equalTo: actions.centerYAnchor),
+
             actions.leadingAnchor.constraint(equalTo: chip.leadingAnchor, constant: 10),
             actions.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -10),
             actions.bottomAnchor.constraint(equalTo: chip.bottomAnchor, constant: -4),
             actions.heightAnchor.constraint(equalToConstant: 44),
         ])
+
+        // Only the FIRST card (the selected-tone answer) owns the sequence
+        // controls. A multi-suggestion response is not a "Try another"
+        // sequence, so its later cards keep Use/Dismiss without a cue.
+        if index == 0 {
+            coachTryAnotherButton = another
+            coachTryAnotherSpinner = spinner
+            coachAlternativeNotice = notice
+            applySequencePresentation(cue: cue, tryAnother: another)
+        } else {
+            cue.isHidden = true
+            another.isHidden = true
+        }
         return chip
+    }
+
+    /// Paint the version cue and the `Try another` control from the sequence.
+    ///
+    /// At the limit the control is DISABLED rather than removed, and says so
+    /// in its accessibility label — a control that silently vanishes leaves a
+    /// VoiceOver user with no explanation for why the option is gone.
+    private func applySequencePresentation(cue: UILabel, tryAnother: UIButton) {
+        guard let sequence = coachSequence, sequence.displayedVersion > 0 else {
+            cue.isHidden = true
+            tryAnother.isEnabled = true
+            tryAnother.accessibilityLabel = Const.tryAnotherLabel
+            return
+        }
+        let shown = sequence.displayedVersion
+        let limit = sequence.versionLimit
+        cue.isHidden = false
+        cue.text = "\(shown) of \(limit)"
+        cue.accessibilityLabel = "Version \(shown) of \(limit)"
+
+        if sequence.canRequestAnother {
+            tryAnother.isEnabled = true
+            tryAnother.alpha = 1.0
+            tryAnother.accessibilityLabel = Const.tryAnotherLabel
+            tryAnother.accessibilityHint = "Asks for a different version of this rewrite"
+            tryAnother.accessibilityTraits = [.button]
+        } else {
+            tryAnother.isEnabled = false
+            tryAnother.alpha = 0.5
+            tryAnother.accessibilityLabel = "\(Const.tryAnotherLabel), unavailable"
+            tryAnother.accessibilityHint =
+                "You've seen all \(limit) versions of this rewrite. Use rewrite or Dismiss."
+            tryAnother.accessibilityTraits = [.button, .notEnabled]
+        }
     }
 
     private func coachAxisStyle(
@@ -2802,14 +3785,277 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         return (semantic.label, semantic.accessibleLabel, semantic.accent)
     }
 
+    // MARK: - Build 114 · Try another
+    //
+    // A deliberately separate request path from `runCoach`. The differences
+    // are the whole contract:
+    //
+    //   * it does NOT install a loading surface — the current rewrite stays on
+    //     screen and the busy state is local to its card;
+    //   * it carries the versions already shown so the answer is different;
+    //   * a failure restores the card exactly as it was and consumes no slot.
+    //
+    // Everything else is reused verbatim: the same captured target, the same
+    // stale-draft guard, the same deadline/cancellation lifecycle, the same
+    // consumer-error mapper, the same entitlement rules, and the same
+    // one-tap-one-request discipline.
+
+    /// Internal so the XCTest target can drive the real path; the tap handler
+    /// calls exactly this.
+    @objc func tryAnotherTapped() {
+        // One user action = one request. A second tap while the first is in
+        // flight is dropped here rather than de-duplicated downstream, so no
+        // duplicate request is ever issued.
+        guard coachAlternativeRequestID == nil, !coachBusy else { return }
+        guard let sequence = coachSequence, sequence.canRequestAnother else { return }
+        guard let target = coachRewriteTarget else { return }
+        // The draft must still be the one this sequence belongs to. A changed
+        // host document means the sequence is stale: refuse rather than
+        // generating an alternative for text the person no longer has.
+        //
+        // The axis argument is the sequence's own, and deliberately so: a tone
+        // change goes through `runCoach`, which builds a FRESH sequence, so the
+        // axis cannot have drifted by the time this runs. The two facts that
+        // can have changed — the captured draft and the host session — are the
+        // ones this guard is actually asking about.
+        guard sequence.matches(
+            axis: sequence.axis,
+            sourceDraft: target.draft,
+            host: currentHostSession
+        ) else {
+            presentCoachError(.staleDraft)
+            return
+        }
+
+        let requestID = UUID()
+        coachAlternativeRequestID = requestID
+        coachBusy = true
+        coachButton?.isEnabled = false
+        beginAlternativeBusyPresentation()
+
+        let tapTime = DispatchTime.now()
+        coachClockTapTime = tapTime
+        let axis = sequence.axis
+        let customPrompt = axis == "custom" ? coachVariantSettings.customInstruction : nil
+        NSLog(
+            "TONO_KB BUILD114 coach: try-another axis=\(axis) version=\(sequence.displayedVersion + 1) of \(sequence.versionLimit)"
+        )
+        coachTask = coachClient.variant(
+            draft: target.draft,
+            axis: axis,
+            customPrompt: customPrompt,
+            priorVersions: sequence.priorVersions,
+            waitingForConnectivity: { [weak self] in
+                self?.handleAlternativeWaitingForConnectivity(requestID: requestID)
+            }
+        ) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.completeCoachAlternative(
+                    requestID: requestID,
+                    liveBefore: self.documentProxy.documentContextBeforeInput ?? "",
+                    liveAfter: self.documentProxy.documentContextAfterInput ?? "",
+                    result: result
+                )
+            }
+        }
+        scheduleAlternativeDeadline(requestID: requestID, tapTime: tapTime, axis: axis)
+        // Nothing is written back to `coachSequence` here. A version is
+        // consumed only when one is actually delivered and displayed, in
+        // `completeCoachAlternative` — so a failed, timed-out, cancelled or
+        // superseded request costs the person nothing.
+    }
+
+    private func beginAlternativeBusyPresentation() {
+        coachAlternativeNotice?.isHidden = true
+        coachTryAnotherSpinner?.startAnimating()
+        if let button = coachTryAnotherButton {
+            button.isEnabled = false
+            button.alpha = 0.5
+            button.accessibilityLabel = "\(Const.tryAnotherLabel), working"
+            button.accessibilityTraits = [.button, .notEnabled]
+        }
+    }
+
+    /// Restore the card to exactly the state it had before the tap. Called on
+    /// every non-success path, so a failed alternative never leaves the card
+    /// stuck busy and never disturbs the rewrite already displayed.
+    private func endAlternativeBusyPresentation(notice: String?) {
+        coachTryAnotherSpinner?.stopAnimating()
+        if let button = coachTryAnotherButton {
+            let canRetry = coachSequence?.canRequestAnother ?? false
+            button.isEnabled = canRetry
+            button.alpha = canRetry ? 1.0 : 0.5
+            button.accessibilityLabel = canRetry
+                ? Const.tryAnotherLabel
+                : "\(Const.tryAnotherLabel), unavailable"
+            button.accessibilityTraits = canRetry ? [.button] : [.button, .notEnabled]
+        }
+        if let notice {
+            coachAlternativeNotice?.text = notice
+            coachAlternativeNotice?.isHidden = false
+        }
+    }
+
+    /// The alternative path's fail-closed gate. Unlike the initial request it
+    /// cannot key on the loading surface (there deliberately isn't one), so it
+    /// keys on the alternative token alone — which a teardown clears.
+    private func acceptsAlternative(_ requestID: UUID) -> Bool {
+        coachAlternativeRequestID == requestID
+    }
+
+    func handleAlternativeWaitingForConnectivity(requestID: UUID) {
+        guard acceptsAlternative(requestID) else { return }
+        guard !coachWaitingForConnectivity else { return }
+        coachWaitingForConnectivity = true
+        coachAlternativeNotice?.text = TonoCoachClient.CoachError.offline.userFacingMessage
+        coachAlternativeNotice?.isHidden = false
+    }
+
+    private func scheduleAlternativeDeadline(
+        requestID: UUID,
+        tapTime: DispatchTime,
+        axis: String,
+        after interval: TimeInterval = Const.coachVisibleDeadline
+    ) {
+        coachDeadline?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.handleAlternativeDeadlineFired(requestID: requestID, tapTime: tapTime)
+        }
+        coachDeadline = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + interval, execute: work)
+    }
+
+    /// Internal so a unit test can fire the watchdog synchronously.
+    func handleAlternativeDeadlineFired(requestID: UUID, tapTime: DispatchTime) {
+        guard acceptsAlternative(requestID) else { return }
+        coachTask?.cancel()
+        coachTask = nil
+        coachAlternativeRequestID = nil
+        coachBusy = false
+        coachButton?.isEnabled = true
+        coachDeadline = nil
+        let waited = coachWaitingForConnectivity
+        coachWaitingForConnectivity = false
+        NSLog("TONO_KB BUILD114 clock: phase=alt_deadline dt_ms=\(Self.coachElapsedMs(since: tapTime))")
+        // No slot consumed, prior card intact.
+        endAlternativeBusyPresentation(
+            notice: (waited
+                ? TonoCoachClient.CoachError.offline
+                : TonoCoachClient.CoachError.timeout).userFacingMessage
+        )
+        coachClockTapTime = nil
+    }
+
+    /// Deliver one alternative. Internal, and taking the live document context,
+    /// so the XCTest target drives the real guard.
+    func completeCoachAlternative(
+        requestID: UUID,
+        liveBefore: String,
+        liveAfter: String,
+        result: Result<TonoCoachClient.VariantResponse, TonoCoachClient.CoachError>
+    ) {
+        // Superseded / cancelled / already-delivered: drop silently. The card
+        // on screen belongs to whatever replaced this request.
+        guard acceptsAlternative(requestID) else { return }
+        // The draft moved under the request — refuse rather than showing an
+        // alternative for text that is no longer there.
+        guard let target = coachRewriteTarget,
+              target.isCurrent(
+                liveBefore: liveBefore,
+                liveAfter: liveAfter,
+                host: currentHostSession
+              ) else {
+            coachAlternativeRequestID = nil
+            coachBusy = false
+            coachButton?.isEnabled = true
+            coachDeadline?.cancel()
+            coachDeadline = nil
+            endAlternativeBusyPresentation(notice: nil)
+            presentCoachError(.staleDraft)
+            return
+        }
+
+        coachDeadline?.cancel()
+        coachDeadline = nil
+        let tapTime = coachClockTapTime
+        coachTask = nil
+        coachAlternativeRequestID = nil
+        coachBusy = false
+        coachWaitingForConnectivity = false
+        coachButton?.isEnabled = true
+
+        switch result {
+        case .success(let response):
+            guard var sequence = coachSequence else { return }
+            // A provider that returned what we already showed has produced no
+            // new version. Record nothing, keep the card, and say so plainly —
+            // the bounded retry already happened server-side, so looping here
+            // would be exactly the retry storm the contract forbids.
+            guard sequence.recordDisplayed(response.text) else {
+                endAlternativeBusyPresentation(
+                    notice: "That's the same wording. Try a different tone, or use this one."
+                )
+                logCoachRenderClock(
+                    tapTime: tapTime, axis: response.axis, outcome: "duplicate",
+                    providerMs: response.providerMs
+                )
+                coachClockTapTime = nil
+                return
+            }
+            coachSequence = sequence
+            let rewrite = TonoCoachClient.CoachRewrite(
+                axis: response.axis,
+                text: response.text,
+                rationale: response.rationale,
+                riskAfter: response.riskAfter
+            )
+            presentCoachResults(
+                TonoCoachClient.CoachResponse(
+                    riskLevel: response.riskAfter ?? "medium",
+                    perception: "",
+                    subtext: "",
+                    reason: nil,
+                    suggestions: [rewrite],
+                    flags: []
+                )
+            )
+            logCoachRenderClock(
+                tapTime: tapTime, axis: response.axis, outcome: "alternative",
+                providerMs: response.providerMs
+            )
+        case .failure(let error):
+            // No slot consumed; the previous rewrite is still on screen.
+            endAlternativeBusyPresentation(notice: error.userFacingMessage)
+            logCoachRenderClock(
+                tapTime: tapTime, axis: nil, outcome: "alternative_error", providerMs: nil
+            )
+        }
+        coachClockTapTime = nil
+    }
+
     @objc private func backToKeysTapped() {
         cancelTransientInteractions()
+        // Build 109. Back is the user-facing teardown of the whole Coach
+        // interaction, not merely a view removal, and it is reachable while a
+        // rewrite is still in flight (the results panel is shown for the
+        // PREVIOUS request while a new one runs, and Retry re-enters from the
+        // error surface). Removing the surfaces without invalidating the work
+        // left `coachBusy` latched true forever: `coachTapped` guards on
+        // `!coachBusy`, so TONO went permanently dead for the rest of the
+        // session — and the abandoned `coachTask` and its ~10s deadline stayed
+        // armed against a surface that no longer exists.
+        //
+        // `restoreKeyboard: false` because this function reinstalls the layout
+        // itself immediately below; letting `invalidateCoachWork` do it as well
+        // would install it twice.
+        invalidateCoachWork(restoreKeyboard: false)
         removeAllCoachSurfaces()
         installKeyboardLayout()
     }
 
     private func applyRewrite(_ rewrite: String) {
-        let proxy = textDocumentProxy
+        let proxy = documentProxy
         let originalBefore = proxy.documentContextBeforeInput ?? ""
         let originalAfter = proxy.documentContextAfterInput ?? ""
         guard let target = coachRewriteTarget,
@@ -2928,7 +4174,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         // Tear the error surface down before anything else: a retry that
         // lands on the empty state must not leave the failed attempt behind.
         removeAllCoachSurfaces()
-        let proxy = textDocumentProxy
+        let proxy = documentProxy
         beginCoachRewrite(
             before: proxy.documentContextBeforeInput ?? "",
             after: proxy.documentContextAfterInput ?? "",
@@ -3080,5 +4326,46 @@ private final class EmojiCollectionCell: UICollectionViewCell {
         glyphLabel.text = emoji
         accessibilityLabel = "Emoji \(emoji)"
         accessibilityIdentifier = identifier
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Space-cursor proxy adapter
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Bridges the live `UITextDocumentProxy` to the UIKit-free
+/// `SpaceCursorTextProxy` seam that `SpaceCursorSession` drives.
+///
+/// This adapter is the ENTIRE surface the space cursor has on the host
+/// document. It exposes two read-only context properties and exactly one
+/// mutating call — `adjustTextPosition(byCharacterOffset:)`. There is no
+/// `insertText`, no `deleteBackward`, and no way to reach them from here, which
+/// is what makes "cursor mode never deletes" a structural property rather than
+/// a convention someone could regress.
+///
+/// The owner reference is weak: the session outlives individual gestures but
+/// must never keep the input view controller alive.
+final class SpaceCursorProxyAdapter: SpaceCursorTextProxy {
+    /// Typed as `KeyboardViewController`, not `UIInputViewController`, so the
+    /// caret path reads and moves through the same `documentProxy` seam as every
+    /// other document access. Without this the space-cursor path would bypass
+    /// the seam and "a wrapped caret move never mutates text" could not be
+    /// observed in a test.
+    private weak var owner: KeyboardViewController?
+
+    init(owner: KeyboardViewController) {
+        self.owner = owner
+    }
+
+    var documentContextBeforeInput: String? {
+        owner?.documentProxy.documentContextBeforeInput
+    }
+
+    var documentContextAfterInput: String? {
+        owner?.documentProxy.documentContextAfterInput
+    }
+
+    func adjustTextPosition(byCharacterOffset offset: Int) {
+        owner?.documentProxy.adjustTextPosition(byCharacterOffset: offset)
     }
 }

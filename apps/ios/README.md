@@ -31,11 +31,10 @@ social-tone-coach/
 ├── SCOPE.md                     ← business case & spec (29KB, durable)
 ├── README.md                    ← this file
 ├── ToneApp.xcodeproj/           ← Xcode project (open this)
-├── App/                         ← host app: onboarding, settings, playground
+├── App/                         ← host app: onboarding, coach, settings
 │   ├── TonoApp.swift
 │   ├── HomeView.swift
 │   ├── SettingsView.swift
-│   ├── PlaygroundView.swift
 │   ├── Info.plist
 │   └── Tono.entitlements
 ├── KeyboardExtension/           ← the custom keyboard
@@ -88,7 +87,7 @@ social-tone-coach/
 ```
 ┌─────────────────────────────────────────┐
 │ Host app (Tono)                         │   ← onboarding, settings, paywall
-│ - TonePreferences (read/write)          │      playground
+│ - TonePreferences (read/write)          │      coach
 └──────────────┬──────────────────────────┘
                │ App Group: group.com.tonocoach.shared
                ▼
@@ -108,10 +107,10 @@ social-tone-coach/
 └─────────────────────────────────────────┘
 ```
 
-The host app is the **only** place the user enters their API key. The
-keyboard reads it from the App Group `UserDefaults`. The Playground tab
-in the host app uses the same engine so QA can rehearse the Coach flow
-without enabling the keyboard.
+Credentials never reach the device; the host app and the keyboard both
+coach through the same shared engine. Build 112 removed the separate
+in-app rehearsal tab — the Coach tab is the single host-app coaching
+surface, so there is exactly one draft editor, action and result view.
 
 ### The rewrite-axis system prompt
 

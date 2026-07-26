@@ -15,6 +15,7 @@ import os
 import re
 import time
 import unicodedata
+import weakref
 from typing import Any, Awaitable, Callable, Literal, Optional
 
 import httpx
@@ -22,6 +23,92 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Provider transport — pooled connections.
+# ---------------------------------------------------------------------------
+# Every provider POST used to build its own ``httpx.AsyncClient`` inside an
+# ``async with`` block, so each call paid a full connection establishment (TCP
+# handshake + TLS handshake) and then threw the connection away. One tone tap
+# is one provider call on the selected-variant path, and 1 + N calls on the
+# build-94 fan-out path, so the cost was paid once or N+1 times per tap.
+#
+# Reusing one pooled client per event loop is a pure transport change:
+#
+#   * The timeout is byte-identical (``_PROVIDER_TIMEOUT_SECONDS`` == the
+#     previous literal ``30``), so no request can now run longer than before.
+#   * The pool never makes a caller wait (see ``_PROVIDER_LIMITS``), so it can
+#     never open fewer concurrent connections than the per-call shape did.
+#   * Cancellation: a cancelled request does not poison the pooled client --
+#     the next request on it still succeeds. Pinned by
+#     ``test_cancelling_one_request_does_not_poison_the_pooled_client``.
+#   * No prompt, model, header, body, ordering, or safety decision is touched.
+#
+# The client is keyed by the running event loop and held weakly, so a loop
+# that goes away (e.g. a per-test loop) drops its client with it and can
+# never hand a connection bound to a dead loop to a live one.
+_PROVIDER_TIMEOUT_SECONDS = 30
+
+# Connection limits — the one place a shared pool could change behaviour, so
+# it is declared rather than inherited.
+#
+# The per-call shape this replaces gave every provider call a PRIVATE client
+# and therefore a private pool, so provider concurrency was never bounded by a
+# shared pool and ``httpx.PoolTimeout`` was unreachable. Simply inheriting
+# httpx's default ``max_connections=100`` on a SHARED client would introduce
+# both a new ceiling and a new failure mode: past 100 in-flight provider calls
+# on one event loop, callers would queue on the pool, that wait is charged to
+# the same 30s budget via the ``pool`` timeout component, and the resulting
+# ``httpx.PoolTimeout`` is NOT an ``HTTPException`` -- so it would escape
+# ``invoke_single_variant`` as a 5xx instead of the strict blocked envelope.
+#
+# ``max_connections=None`` keeps the pre-change property exactly: the pool
+# never makes a caller wait, so it can never hold fewer connections open than
+# the per-call shape would have. It only reuses the idle connections the
+# per-call shape threw away. The other two values restate httpx's own defaults
+# explicitly so that a library default change cannot silently move them.
+_PROVIDER_LIMITS = httpx.Limits(
+    max_connections=None,
+    max_keepalive_connections=20,
+    keepalive_expiry=5.0,
+)
+
+_provider_clients: "weakref.WeakKeyDictionary[Any, httpx.AsyncClient]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def provider_client() -> httpx.AsyncClient:
+    """Return the pooled provider client bound to the running event loop.
+
+    Must be called from inside a running loop (every caller is an ``async``
+    provider function, so this always holds).
+    """
+    loop = asyncio.get_running_loop()
+    client = _provider_clients.get(loop)
+    if client is None or client.is_closed:
+        client = httpx.AsyncClient(
+            timeout=_PROVIDER_TIMEOUT_SECONDS, limits=_PROVIDER_LIMITS
+        )
+        _provider_clients[loop] = client
+    return client
+
+
+async def aclose_provider_client() -> None:
+    """Close the pooled client for the running loop, if any.
+
+    Called from the app's lifespan shutdown so a graceful stop drains the
+    keep-alive pool instead of dropping sockets. Safe to call when no client
+    was ever created.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    client = _provider_clients.pop(loop, None)
+    if client is not None and not client.is_closed:
+        await client.aclose()
 
 
 SYSTEM_PROMPT = """\
@@ -1319,12 +1406,11 @@ async def _anthropic_post(body: dict[str, Any]) -> dict[str, Any]:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise HTTPException(500, "ANTHROPIC_API_KEY not set")
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
-            json=body,
-        )
+    response = await provider_client().post(
+        "https://api.anthropic.com/v1/messages",
+        headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+        json=body,
+    )
     if response.status_code != 200:
         logger.error(
             "Anthropic build-94 error axis=%s status=%s",
@@ -1627,6 +1713,14 @@ VARIANT_ALLOWLIST: frozenset[str] = frozenset({
 # Custom-prompt guardrails (deterministic, zero LLM calls).
 CUSTOM_PROMPT_MAX_CHARS = 240  # short Custom directive only; full rewrite lives in `safer`.
 
+# Build 114 — how many previously-shown rewrites a "Try another" request may
+# carry. Matches CoachAlternativeSequence.maxVersions on the client: three
+# successfully displayed versions is the product cap, so there is never a
+# fourth to describe. Bounding it here (not just on the client) keeps a
+# hostile or buggy client from turning the field into unbounded prompt input.
+VARIANT_MAX_PRIOR_VERSIONS = 3
+VARIANT_PRIOR_VERSION_MAX_CHARS = 2000
+
 # Deterministic crisis-keyword preflight -- the safest we can do without an
 # LLM call. This is intentionally conservative and stays tiny on purpose:
 # the production safety boundary (Safer, mandatory) is the load-bearing
@@ -1760,6 +1854,16 @@ class VariantRequest(BaseModel):
     preferred_voice: Optional[str] = None
     recipient_hint: Optional[str] = None
     thread_context: Optional[str] = None
+    prior_versions: list[str] = Field(
+        default_factory=list,
+        max_length=VARIANT_MAX_PRIOR_VERSIONS,
+        description=(
+            "Build 114 — rewrites already shown to this person for the SAME "
+            "source message and axis, so the next one is meaningfully "
+            "different. Bounded; the server truncates and never logs them. "
+            "Does not affect the preflight decision or model routing."
+        ),
+    )
 
 
 class VariantResponse(BaseModel):
@@ -1904,7 +2008,39 @@ def build_single_variant_user_prompt(req: VariantRequest) -> str:
     if req.preferred_voice:
         lines += ["", f"PREFERRED VOICE: {req.preferred_voice}"]
     lines += ["", f"REQUESTED AXIS (single chip): {req.axis}"]
+    # Build 114 — "Try another". The versions already shown for this exact
+    # source message and axis are named so the model produces something
+    # genuinely different rather than a paraphrase of its own last answer.
+    # Bounded on both ends (count and per-item length) so the field can never
+    # become unbounded prompt input, and never logged.
+    priors = bounded_prior_versions(req.prior_versions)
+    if priors:
+        lines += [
+            "",
+            "ALREADY SHOWN (same draft, same axis — produce a MEANINGFULLY "
+            "different rewrite; do not paraphrase these):",
+        ]
+        lines += [f"- {p}" for p in priors]
     return "\n".join(lines)
+
+
+def bounded_prior_versions(raw: Optional[list[str]]) -> list[str]:
+    """Clamp the client-supplied prior-output context.
+
+    Two independent bounds, because the client cap is a product decision and
+    this one is a safety decision: a hostile client that ignores
+    `CoachAlternativeSequence.maxVersions` still cannot push more than
+    `VARIANT_MAX_PRIOR_VERSIONS` items, nor an oversized item, into the prompt.
+    Blank entries are dropped so an empty string cannot pad the list.
+    """
+    if not raw:
+        return []
+    cleaned: list[str] = []
+    for item in raw[:VARIANT_MAX_PRIOR_VERSIONS]:
+        text = (item or "").strip()[:VARIANT_PRIOR_VERSION_MAX_CHARS]
+        if text:
+            cleaned.append(text)
+    return cleaned
 
 
 def _parse_json_response(raw: str) -> dict[str, Any]:
@@ -1982,30 +2118,29 @@ async def anthropic_single_variant(req: VariantRequest, model: str) -> dict[str,
             {"role": "user", "content": build_single_variant_user_prompt(req)}
         ],
     }
-    async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
-            json=body,
+    r = await provider_client().post(
+        "https://api.anthropic.com/v1/messages",
+        headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+        json=body,
+    )
+    if r.status_code != 200:
+        logger.error(
+            "Anthropic single-variant error axis=%s status=%s",
+            req.axis, r.status_code,
         )
-        if r.status_code != 200:
-            logger.error(
-                "Anthropic single-variant error axis=%s status=%s",
-                req.axis, r.status_code,
-            )
-            raise HTTPException(502, f"Anthropic API error: {r.status_code}")
-        for block in r.json()["content"]:
-            if block["type"] == "text":
-                try:
-                    parsed = _parse_json_response(block["text"])
-                except (ValueError, json.JSONDecodeError) as e:
-                    logger.error("single_variant: JSON parse failed: %s", e)
-                    raise HTTPException(502, "Coach response incomplete.") from e
-                try:
-                    return _extract_single_variant(parsed, req.axis)
-                except CoachContractError as e:
-                    logger.warning("single_variant: contract violation: %s", e)
-                    raise HTTPException(502, "Coach response incomplete.") from e
+        raise HTTPException(502, f"Anthropic API error: {r.status_code}")
+    for block in r.json()["content"]:
+        if block["type"] == "text":
+            try:
+                parsed = _parse_json_response(block["text"])
+            except (ValueError, json.JSONDecodeError) as e:
+                logger.error("single_variant: JSON parse failed: %s", e)
+                raise HTTPException(502, "Coach response incomplete.") from e
+            try:
+                return _extract_single_variant(parsed, req.axis)
+            except CoachContractError as e:
+                logger.warning("single_variant: contract violation: %s", e)
+                raise HTTPException(502, "Coach response incomplete.") from e
     raise HTTPException(502, "no text block in anthropic response")
 
 
@@ -2028,24 +2163,23 @@ async def openai_single_variant(req: VariantRequest, model: str) -> dict[str, An
             },
         ],
     }
-    async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json=body,
-        )
-        r.raise_for_status()
-        content = r.json()["choices"][0]["message"]["content"]
-        try:
-            parsed = _parse_json_response(content)
-        except (ValueError, json.JSONDecodeError) as e:
-            logger.error("single_variant: OpenAI JSON parse failed: %s", e)
-            raise HTTPException(502, "Coach response incomplete.") from e
-        try:
-            return _extract_single_variant(parsed, req.axis)
-        except CoachContractError as e:
-            logger.warning("single_variant: OpenAI contract violation: %s", e)
-            raise HTTPException(502, "Coach response incomplete.") from e
+    r = await provider_client().post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json=body,
+    )
+    r.raise_for_status()
+    content = r.json()["choices"][0]["message"]["content"]
+    try:
+        parsed = _parse_json_response(content)
+    except (ValueError, json.JSONDecodeError) as e:
+        logger.error("single_variant: OpenAI JSON parse failed: %s", e)
+        raise HTTPException(502, "Coach response incomplete.") from e
+    try:
+        return _extract_single_variant(parsed, req.axis)
+    except CoachContractError as e:
+        logger.warning("single_variant: OpenAI contract violation: %s", e)
+        raise HTTPException(502, "Coach response incomplete.") from e
 
 
 def mock_single_variant(req: VariantRequest) -> dict[str, Any]:
@@ -2169,10 +2303,32 @@ async def invoke_single_variant(
     No fan-out, no prefetch, no hidden Safer generation. The wire shape
     is always ``VariantResponse`` -- the caller never sees a 5xx for any
     block reason, only for catastrophic infrastructure failures.
+
+    Lifecycle clocks: a ``LifecycleClockRecorder`` is started on entry and
+    snapshotted at the four anchors. Every value is read from
+    ``time.monotonic_ns()`` on THIS side of the call -- never from a
+    client-supplied timestamp and never synthesized after the fact. The
+    envelope is attached only to a ``status="ok"`` response; a ``blocked``
+    envelope keeps the truthful ``clocks: null`` it has always carried, so
+    the locked blocked-envelope wire shape is unchanged.
+
+    On this path the four anchors mean:
+      * ``request_accepted_ms`` -- entry into the dispatcher.
+      * ``preflight_end_ms``    -- the deterministic safety preflight had a
+        verdict. ``preflight_ms`` is therefore the true cost of the safety
+        gate, and it is provider-free by construction.
+      * ``provider_start_ms``   -- the single selected-tone provider call is
+        about to be dispatched (after model routing).
+      * ``response_sent_ms``    -- the envelope is built. ``provider_ms`` is
+        the provider round trip, including the one bounded funnier retry when
+        that retry actually happens.
     """
+    recorder = LifecycleClockRecorder()
+    recorder.mark_request_accepted()
     block = preflight_variant(req)
     if block is not None:
         return variant_blocked(req.axis or "unknown", block)
+    recorder.mark_preflight_end()
     tier, model = select_model_for_variant(req.axis, req.risk_hint)
 
     async def _provider_call() -> dict[str, Any]:
@@ -2185,6 +2341,7 @@ async def invoke_single_variant(
         # Unknown provider: fail closed as a provider failure.
         raise HTTPException(502, f"unknown provider: {provider}")
 
+    recorder.mark_provider_start()
     try:
         variant = await _provider_call()
         # R7: an explicit Funnier tap must never return normalized/near-identical
@@ -2202,6 +2359,11 @@ async def invoke_single_variant(
         return variant_blocked(
             req.axis, VariantBlockedReason.PROVIDER_FAILED
         )
+    recorder.mark_response_sent()
+    clocks = recorder.finalize(
+        preflight_ms=recorder.preflight_end_ms - recorder.request_accepted_ms,
+        provider_ms=recorder.response_sent_ms - recorder.provider_start_ms,
+    )
     return VariantResponse(
         status="ok",
         axis=req.axis,
@@ -2210,4 +2372,5 @@ async def invoke_single_variant(
         risk_after=variant.get("risk_after"),
         model=model,
         tier=tier,  # type: ignore[arg-type]
+        clocks=clocks,
     )

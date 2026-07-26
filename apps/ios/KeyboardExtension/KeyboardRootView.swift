@@ -261,7 +261,8 @@ public final class KeyboardModel: ObservableObject {
             } catch {
                 self.isRefinementLoading = false
                 CrashReporter.setCustomKey(false, forKey: "network_in_flight")
-                self.mode = .error(error.localizedDescription)
+                // Build 112: the strip showed whatever text the failure carried.
+                self.mode = .error(ConsumerErrorCopy.message(for: error, action: .coachDraft))
                 return
             }
 
@@ -291,6 +292,13 @@ public final class KeyboardModel: ObservableObject {
                         flags = f
                     case .error(let msg):
                         throw ToneEngineError.backend(msg)
+                    case .failure(let status):
+                        // Build 113: carry the status to the mapper instead of
+                        // a sentence about it, so the strip can still tell
+                        // "sign in again" from "a subscription is required"
+                        // from "wait a minute" rather than saying "Try again."
+                        // to all three.
+                        throw StreamedFailure.http(status: status)
                     }
                 }
 
@@ -347,12 +355,12 @@ public final class KeyboardModel: ObservableObject {
                 if let usage = try? await TonoBackend.shared.me() {
                     self.isPro = usage.isPro
                 }
-                self.mode = .error(err.localizedDescription)
+                self.mode = .error(ConsumerErrorCopy.message(for: err, action: .coachDraft))
                 self.coachTapTime = nil
             } catch {
                 self.isRefinementLoading = false
                 CrashReporter.setCustomKey(false, forKey: "network_in_flight")
-                self.mode = .error(error.localizedDescription)
+                self.mode = .error(ConsumerErrorCopy.message(for: error, action: .coachDraft))
                 self.coachTapTime = nil
             }
         }
@@ -384,7 +392,7 @@ public final class KeyboardModel: ObservableObject {
                 self.isPro = me.isPro
             } catch {
                 CrashReporter.setCustomKey(false, forKey: "network_in_flight")
-                self.mode = .error(error.localizedDescription)
+                self.mode = .error(ConsumerErrorCopy.message(for: error, action: .readMessage))
                 return
             }
 
@@ -423,6 +431,13 @@ public final class KeyboardModel: ObservableObject {
                         flags = f
                     case .error(let msg):
                         throw ToneEngineError.backend(msg)
+                    case .failure(let status):
+                        // Build 113: carry the status to the mapper instead of
+                        // a sentence about it, so the strip can still tell
+                        // "sign in again" from "a subscription is required"
+                        // from "wait a minute" rather than saying "Try again."
+                        // to all three.
+                        throw StreamedFailure.http(status: status)
                     }
                 }
 
@@ -442,7 +457,7 @@ public final class KeyboardModel: ObservableObject {
                 self.mode = .error("No connection. Tap Back and try again when you have signal.")
             } catch {
                 CrashReporter.setCustomKey(false, forKey: "network_in_flight")
-                self.mode = .error(error.localizedDescription)
+                self.mode = .error(ConsumerErrorCopy.message(for: error, action: .readMessage))
             }
         }
     }

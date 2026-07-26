@@ -134,6 +134,40 @@ def _portal_return_url(request: Request, requested: Optional[str]) -> str:
     return _safe_return_url(request, requested, "/app/account")
 
 
+def _resolve_stripe_customer(store: Store, user) -> Optional[str]:
+    """The ONE Stripe-customer resolution order for a caller's account.
+
+    Shared by /v1/checkout and /v1/portal so the two can never disagree about
+    which customer a person owns. Order, most to least authoritative:
+
+      1. ``stripe_customer_bindings`` — the authoritative table. ``_bind_customer_tx``
+         inserts here first and only then COALESCEs onto ``accounts``, so the
+         binding is correct even when the mutable column is stale or was cleared.
+      2. ``accounts.stripe_customer_id`` — the mutable projection, kept for
+         backward compatibility and for rows written before the binding table.
+      3. ``users.stripe_customer_id`` — legacy only. No current code path writes
+         this column (``update_subscription`` sets plan/status/renews_at; the
+         customer arrives via ``attach_stripe_customer`` -> the account), so it
+         is a last-resort read for pre-migration rows, never the primary source.
+
+    The account is the entitlement principal for ANONYMOUS auto-accounts too
+    (contract §1), so resolution deliberately does NOT gate on
+    ``account.is_identified``: gating there made the portal read the always-NULL
+    legacy column and 400 for an anonymous account holding a live subscription.
+    ``user.account`` is the calling device's own account, so no cross-account
+    customer is ever reachable through this helper.
+    """
+    account = getattr(user, "account", None)
+    account_id = account.id if account is not None else getattr(user, "account_id", None)
+    if account_id:
+        bound = store.get_stripe_customer_binding(account_id)
+        if bound:
+            return bound
+    if account is not None and account.stripe_customer_id:
+        return account.stripe_customer_id
+    return getattr(user, "stripe_customer_id", None)
+
+
 def _is_configured() -> bool:
     return bool(_secret())
 
@@ -232,11 +266,7 @@ def create_checkout_session(
     if user.account is None:
         raise HTTPException(409, "canonical account missing")
     account_id = user.account.id
-    customer_id = (
-        store.get_stripe_customer_binding(account_id)
-        or user.account.stripe_customer_id
-        or user.stripe_customer_id
-    )
+    customer_id = _resolve_stripe_customer(store, user)
     include_trial = store.reserve_stripe_trial(
         account_id=account_id,
         customer_id=customer_id,
@@ -285,18 +315,32 @@ def create_checkout_session(
         line_items=[{"price": price_id, "quantity": 1}],
         success_url=success_url,
         cancel_url=cancel_url,
-        # Hosted Checkout in subscription mode. The ``payment_method_types``
-        # list intentionally ONLY contains ``card`` because the
-        # ``apple_pay`` / ``google_pay`` values are not valid
-        # ``payment_method_types`` for subscription Checkout (Stripe
-        # returns ``Invalid payment_method_types[i]: must be one of
-        # card, cashapp, link, ...``). Wallet buttons are surfaced
-        # separately via the **Dashboard → Settings → Payment methods
-        # → Wallets** toggles — when Apple Pay / Google Pay are enabled
-        # there, the hosted Checkout page renders them automatically in
-        # the express-checkout row when the buyer's browser supports
-        # them. This matches how Stripe-hosted Checkout Pages work.
-        payment_method_types=["card"],
+        # UNIFIED WEB CHECKOUT — card + Apple Pay + Google Pay.
+        #
+        # ``payment_method_types`` is deliberately NOT set. Passing it (this
+        # previously pinned ``["card"]``) opts the session OUT of Stripe's
+        # automatic payment methods and freezes the accepted set in code.
+        # Omitting it means Stripe applies the dashboard-configured automatic
+        # payment methods and filters them per request by eligibility —
+        # currency, amount, customer country, and the buyer's browser/device.
+        #
+        # Wallet model, stated exactly because it is easy to get wrong:
+        #   * Apple Pay on the WEB is a Stripe wallet rendered on the hosted
+        #     Checkout page. It is NOT StoreKit. It settles through Stripe and
+        #     lands on the same ``checkout.session.completed`` /
+        #     ``customer.subscription.*`` webhooks as any card.
+        #   * Google Pay on the WEB is likewise a Stripe wallet. It is NOT
+        #     Google Play Billing. Play Billing is Android-native only and must
+        #     never be presented as a website payment method.
+        #   * Both wallets are card-backed, so a browser/device that cannot
+        #     offer them simply falls back to the card form — there is no
+        #     separate code path, and no wallet-only dead end.
+        #
+        # Enablement is provider-side (Stripe Dashboard → Payment methods).
+        # Stripe-hosted Checkout runs on checkout.stripe.com, so Apple Pay needs
+        # no merchant domain registration here; registering a payment method
+        # domain only becomes necessary if the flow moves to an embedded
+        # Payment/Express Checkout Element on tonoit.com.
         subscription_data={"metadata": metadata},
         metadata=metadata,
     )
@@ -317,14 +361,14 @@ def create_checkout_session(
 def create_portal_session(
     request: Request,
     user: CurrentUser,
+    store: Annotated[Store, Depends(_store_dep)],
     body: Optional[PortalRequest] = None,
 ) -> PortalResponse:
     if not _is_configured():
         raise HTTPException(503, "Stripe is not configured on this server.")
-    identified = user.account is not None and user.account.is_identified
-    customer_id = (
-        user.account.stripe_customer_id if identified else user.stripe_customer_id
-    )
+    # Same resolution order as /v1/checkout — see _resolve_stripe_customer.
+    # Cancelling must never be harder to reach than paying.
+    customer_id = _resolve_stripe_customer(store, user)
     if not customer_id:
         raise HTTPException(400, "No Stripe customer on file. Start checkout first.")
 
