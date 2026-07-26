@@ -83,8 +83,19 @@ struct HostSessionIdentityFactory {
 /// resets the sequence; changing tone starts a SEPARATE sequence, so switching
 /// warmer → clearer never inherits warmer's remaining budget.
 struct CoachAlternativeSequence: Equatable {
-    /// Initial version plus at most two alternatives.
-    static let maxVersions = 3
+    /// The first rewrite plus exactly ONE additional generation.
+    ///
+    /// Two, and the acceptance cap is literal: an explicit tap buys one more
+    /// provider call and no more, so there are at most two preserved choices
+    /// and there is never a third generation. `canRequestAnother` goes false
+    /// the moment the second version lands, which is what disables `Try
+    /// another` — `Use rewrite` and `Dismiss` stay available, and the step-back
+    /// control keeps the first version reachable so "either" really is a
+    /// choice between two.
+    ///
+    /// Mirrored server-side by `VARIANT_MAX_PRIOR_VERSIONS`, which refuses a
+    /// request claiming more than one rejected version.
+    static let maxVersions = 2
 
     private(set) var axis: String
     private(set) var sourceDraft: String
@@ -107,9 +118,41 @@ struct CoachAlternativeSequence: Equatable {
         self.axis == axis && self.sourceDraft == sourceDraft && self.host == host
     }
 
+    /// Which generated version is currently on screen. Build 114 contract: an
+    /// alternative must never TRAP the person on a worse answer, so every
+    /// version that has been generated stays reachable and the card shows
+    /// whichever one this points at.
+    private(set) var cursor: Int = 0
+
     /// 1-based position of the version currently on screen, for the `N of 3`
     /// cue. Zero before the first result lands.
-    var displayedVersion: Int { versions.count }
+    var displayedVersion: Int { versions.isEmpty ? 0 : cursor + 1 }
+
+    /// How many versions have actually been generated, which is what the
+    /// remaining budget is measured against — stepping back must not buy
+    /// another generation.
+    var generatedCount: Int { versions.count }
+
+    /// Whether an earlier / later already-generated version can be shown.
+    var canGoBack: Bool { cursor > 0 }
+    var canGoForward: Bool { cursor + 1 < versions.count }
+
+    /// Move to the previous version. This is the rollback: the first rewrite
+    /// is still there, and `Use rewrite` applies whatever is on screen, so a
+    /// worse second attempt costs the person nothing.
+    @discardableResult
+    mutating func stepBack() -> String? {
+        guard canGoBack else { return nil }
+        cursor -= 1
+        return versions[cursor]
+    }
+
+    @discardableResult
+    mutating func stepForward() -> String? {
+        guard canGoForward else { return nil }
+        cursor += 1
+        return versions[cursor]
+    }
 
     /// Total slots, for the cue's denominator.
     var versionLimit: Int { Self.maxVersions }
@@ -120,11 +163,17 @@ struct CoachAlternativeSequence: Equatable {
     var canRequestAnother: Bool { versions.count < Self.maxVersions }
 
     /// The text currently displayed, if any.
-    var currentVersion: String? { versions.last }
+    var currentVersion: String? {
+        versions.indices.contains(cursor) ? versions[cursor] : versions.last
+    }
 
-    /// Bounded prior-output context for the next request. Passing the earlier
-    /// answers is what makes an alternative meaningfully different; it is
-    /// bounded so the request cannot grow without limit.
+    /// The rejected context for the next request: EVERY version generated so
+    /// far, not just the one on screen.
+    ///
+    /// All of them, deliberately — the server tells the model the person read
+    /// these and rejected them, so offering back one it already declined would
+    /// be the same failure as never asking. Stepping back to compare does not
+    /// un-reject anything, so the cursor has no say here.
     var priorVersions: [String] { versions }
 
     /// Record a successfully displayed version. Returns false — changing
@@ -138,6 +187,9 @@ struct CoachAlternativeSequence: Equatable {
         guard !normalized.isEmpty else { return false }
         if versions.contains(where: { Self.normalized($0) == normalized }) { return false }
         versions.append(text)
+        // A newly generated version is the one to show — the person asked for
+        // it. The earlier ones stay reachable behind the back control.
+        cursor = versions.count - 1
         return true
     }
 

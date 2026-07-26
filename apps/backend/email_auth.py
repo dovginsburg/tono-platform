@@ -157,6 +157,32 @@ def _redirect_base() -> str:
     )
 
 
+# The marker that tells the web callback a link is a RECOVERY link, so it can
+# send the person to the screen where they choose a new password instead of
+# straight into the app.
+#
+# Ours, not the provider's. Supabase does append its own `type=recovery` in
+# some flows, and the callback honours that too, but a recovery link that
+# silently signs someone in and never shows a password field is the exact dead
+# end this build shipped — so the one signal this depends on is one this server
+# writes itself.
+#
+# Carried as a query parameter on the SAME callback URL, deliberately: the web
+# login page already appends `?next=…` to this URL when it asks for a magic
+# link, so a query-bearing callback is a shape the provider's redirect
+# allowlist must already accept. A new PATH would have been the other option
+# and would have needed a provider-side allowlist change, which this lane is
+# not permitted to make.
+RECOVERY_FLOW_MARKER = "flow=recovery"
+
+
+def _recovery_redirect() -> str:
+    """Where a password-recovery link lands: the callback, flagged."""
+    base = _redirect_base()
+    separator = "&" if "?" in base else "?"
+    return f"{base}{separator}{RECOVERY_FLOW_MARKER}"
+
+
 class SupabaseEmailAuthClient:
     """Thin, fail-closed wrapper over the Supabase Auth REST endpoints."""
 
@@ -355,7 +381,7 @@ class SupabaseEmailAuthClient:
         response = await self._post(
             "/auth/v1/recover",
             json_body={"email": email},
-            params={"redirect_to": _redirect_base()},
+            params={"redirect_to": _recovery_redirect()},
         )
         outcome = self._classify(response)
         if outcome is not EmailAuthOutcome.OK:

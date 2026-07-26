@@ -918,22 +918,32 @@ final class Build112UISurfaceContractTests: XCTestCase {
     /// Every shipped bundle agrees with the ONE build authority, and the
     /// marketing version is unchanged.
     ///
-    /// Build 114: this used to hardcode "113", making it a fifth copy of the
-    /// build number — exactly the drift `BuildNumberGuardTests` documents,
-    /// where a release bump turns an unrelated suite red because someone
-    /// forgot one constant. The number is now DERIVED from
-    /// `Scripts/bump-build.sh`, so the real invariant (all four bundles match
-    /// the reviewed authority) is asserted without duplicating the value.
-    /// The marketing version stays a literal on purpose — it is not supposed
-    /// to move, so it should have to be edited deliberately.
-    func testAllFourShippedBundlesMatchTheBuildAuthorityAtVersion11() throws {
+    /// Build 114 asserts BOTH halves, deliberately.
+    ///
+    /// An intermediate version of this test derived the number from
+    /// `Scripts/bump-build.sh` and stopped pinning a literal, to avoid keeping
+    /// a fifth copy of the build number. That removed the only thing this test
+    /// uniquely protects: with nothing but the derivation, all five places
+    /// could drift together — an accidental bump to the guard script would
+    /// propagate to every plist and the suite would still pass.
+    ///
+    /// So the shape is: the four bundles must agree with the guard script
+    /// (that catches a partial bump, which is the common mistake), AND the
+    /// guard script must pin the number a human actually reviewed (that
+    /// catches a wholesale one). A real release edits the literal here on
+    /// purpose, which is the point — release identity should not be able to
+    /// change without somebody saying so.
+    func testAllFourShippedBundlesAreBuild114AtVersion11() throws {
         let root = Self.sourceRoot()
         let guardScript = try Self.source("Scripts/bump-build.sh")
         let expected = try XCTUnwrap(
             Self.value(ofAssignment: "EXPECTED_BUILD", in: guardScript),
             "Scripts/bump-build.sh must pin EXPECTED_BUILD — it is the release authority"
         )
-        XCTAssertFalse(expected.isEmpty, "EXPECTED_BUILD must not be empty")
+        XCTAssertEqual(
+            expected, "114",
+            "the single build guard authority must pin the reviewed build number"
+        )
         for relative in Self.shippedPlists {
             let data = try Data(contentsOf: root.appendingPathComponent(relative))
             let plist = try PropertyListSerialization.propertyList(

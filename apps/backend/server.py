@@ -1955,6 +1955,23 @@ async def api_analyze_variant(
         user.device_id, "/api/analyze/variant", 200,
         provider=provider, drafts_chars=len(body.text or ""),
     )
+    # Build 114 — a generation that happened is a generation that counts.
+    #
+    # This endpoint served a real provider call but never advanced the
+    # `used_today` disclosure, so the keyboard — the primary surface — produced
+    # rewrites the counter never saw. "Try another" makes that untenable rather
+    # than merely untidy: a second generation the person deliberately asked for
+    # is exactly the one they would expect to see counted, and a counter that
+    # silently ignores it is not a truthful disclosure of what was spent on
+    # their behalf.
+    #
+    # `record_rewrite` is NON-AUTHORIZING (see its docstring) and there is no
+    # free daily tier, so counting here cannot gate anyone out of anything —
+    # the entitlement decision was already made, above, before any provider
+    # call. It only makes the number honest. The blocked path above returns
+    # before this point and is deliberately not counted: no provider call was
+    # made, so nothing was generated.
+    store.record_rewrite(user.device_id)
     return response
 
 

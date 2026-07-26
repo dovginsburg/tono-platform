@@ -35,27 +35,33 @@ final class Build114RewriteAlternativesTests: XCTestCase {
         CoachAlternativeSequence(axis: axis, sourceDraft: draft, host: .unbound)
     }
 
-    func testInitialPlusTwoAlternativesAndNoFourth() {
+    /// The literal acceptance cap: a first rewrite plus exactly ONE additional
+    /// generation. Two preserved choices, never a third generation.
+    func testFirstRewritePlusExactlyOneAdditionalGeneration() {
         var seq = sequence()
         XCTAssertEqual(seq.displayedVersion, 0)
         XCTAssertTrue(seq.canRequestAnother)
 
         XCTAssertTrue(seq.recordDisplayed("first wording"))
         XCTAssertEqual(seq.displayedVersion, 1)
-        XCTAssertTrue(seq.canRequestAnother)
+        XCTAssertTrue(seq.canRequestAnother, "one additional generation is allowed")
 
         XCTAssertTrue(seq.recordDisplayed("second wording"))
         XCTAssertEqual(seq.displayedVersion, 2)
-        XCTAssertTrue(seq.canRequestAnother)
+        XCTAssertFalse(
+            seq.canRequestAnother,
+            "the first rewrite plus one additional generation is the whole budget"
+        )
 
-        XCTAssertTrue(seq.recordDisplayed("third wording"))
-        XCTAssertEqual(seq.displayedVersion, 3)
-        XCTAssertFalse(seq.canRequestAnother, "three successful versions is the cap")
+        // A third is impossible — not merely discouraged.
+        XCTAssertFalse(seq.recordDisplayed("third wording"))
+        XCTAssertEqual(seq.displayedVersion, 2)
+        XCTAssertEqual(seq.versionLimit, 2)
+        XCTAssertEqual(CoachAlternativeSequence.maxVersions, 2)
 
-        // A fourth is impossible — not merely discouraged.
-        XCTAssertFalse(seq.recordDisplayed("fourth wording"))
-        XCTAssertEqual(seq.displayedVersion, 3)
-        XCTAssertEqual(seq.versionLimit, 3)
+        // And both remain preserved, so "either" is a real choice between two.
+        XCTAssertEqual(seq.priorVersions, ["first wording", "second wording"])
+        XCTAssertTrue(seq.canGoBack)
     }
 
     func testDuplicateOutputConsumesNoSlot() {
@@ -91,7 +97,7 @@ final class Build114RewriteAlternativesTests: XCTestCase {
         seq.recordDisplayed("one")
         seq.recordDisplayed("two")
         seq.recordDisplayed("three")
-        XCTAssertEqual(seq.priorVersions.count, 3)
+        XCTAssertEqual(seq.priorVersions.count, 2, "the third was never recorded")
         XCTAssertLessThanOrEqual(
             seq.priorVersions.count, CoachAlternativeSequence.maxVersions,
             "prior-output context must stay bounded"
@@ -159,7 +165,7 @@ final class Build114RewriteAlternativesTests: XCTestCase {
     // ───────────────────────────────────────────────────────────────────
 
     @MainActor
-    func testFirstResultBecomesVersionOneOfThree() {
+    func testFirstResultBecomesVersionOneOfTwo() {
         let controller = Self.makeController()
         controller.beginCoachRewrite(before: "please review this ", after: "", axis: "warmer")
         let requestID = try! XCTUnwrap(controller.activeCoachRequestIDForTesting)
@@ -173,7 +179,7 @@ final class Build114RewriteAlternativesTests: XCTestCase {
 
         let state = try! XCTUnwrap(controller.coachSequenceStateForTesting)
         XCTAssertEqual(state.displayed, 1)
-        XCTAssertEqual(state.limit, 3)
+        XCTAssertEqual(state.limit, 2)
         XCTAssertTrue(state.canRequestAnother)
         XCTAssertFalse(controller.coachIsBusyForTesting, "the first result releases the busy gate")
     }
@@ -256,11 +262,11 @@ final class Build114RewriteAlternativesTests: XCTestCase {
     }
 
     @MainActor
-    func testThirdVersionRemovesTheAbilityToRequestAFourth() {
+    func testTheSecondVersionRemovesTheAbilityToRequestAThird() {
         let controller = Self.makeController()
         Self.deliverFirstVersion(controller, text: "version one")
 
-        for text in ["version two", "version three"] {
+        for text in ["version two"] {
             controller.tryAnotherTapped()
             let id = try! XCTUnwrap(controller.alternativeRequestIDForTesting)
             controller.completeCoachAlternative(
@@ -272,14 +278,14 @@ final class Build114RewriteAlternativesTests: XCTestCase {
         }
 
         let state = try! XCTUnwrap(controller.coachSequenceStateForTesting)
-        XCTAssertEqual(state.displayed, 3)
+        XCTAssertEqual(state.displayed, 2)
         XCTAssertFalse(state.canRequestAnother)
 
         // A further tap issues nothing at all.
         controller.tryAnotherTapped()
         XCTAssertNil(
             controller.alternativeRequestIDForTesting,
-            "at 3 of 3 a tap must issue no request"
+            "at 2 of 2 a tap must issue no request — there is no third generation"
         )
         XCTAssertFalse(controller.coachIsBusyForTesting)
     }
@@ -333,7 +339,7 @@ final class Build114RewriteAlternativesTests: XCTestCase {
             result: .success(Self.variant(text: "clearer wording", axis: "clearer"))
         )
         let state = try! XCTUnwrap(controller.coachSequenceStateForTesting)
-        XCTAssertEqual(state.displayed, 1, "a new tone starts its own sequence at 1 of 3")
+        XCTAssertEqual(state.displayed, 1, "a new tone starts its own sequence at 1 of 2")
         XCTAssertTrue(state.canRequestAnother)
     }
 
@@ -520,4 +526,190 @@ final class Build114RewriteAlternativesTests: XCTestCase {
             .deletingLastPathComponent()
         return try String(contentsOf: root.appendingPathComponent(relative), encoding: .utf8)
     }
+    // ───────────────────────────────────────────────────────────────────
+    // Build 114 approved contract — rejection context, same tone, rollback
+    // ───────────────────────────────────────────────────────────────────
+
+    /// The FIRST request must carry no rejection context, and the second must.
+    ///
+    /// This is the client half of the contract the backend enforces: an
+    /// initial rewrite has nothing to reject, so sending an empty rejected set
+    /// would be a lie about what the person did. Asserted on the real
+    /// sequence, which is what actually feeds the request.
+    func testTheFirstRequestCarriesNoRejectedContextAndTheSecondDoes() {
+        var seq = sequence(axis: "warmer")
+        XCTAssertTrue(
+            seq.priorVersions.isEmpty,
+            "an initial request must carry no rejected versions"
+        )
+
+        XCTAssertTrue(seq.recordDisplayed("Could you take a look at this?"))
+        XCTAssertEqual(
+            seq.priorVersions, ["Could you take a look at this?"],
+            "the second request must carry the rewrite the person just rejected"
+        )
+
+        XCTAssertTrue(seq.recordDisplayed("Mind giving this a look?"))
+        XCTAssertFalse(
+            seq.canRequestAnother,
+            "there is no third request: the budget is one additional generation"
+        )
+    }
+
+    /// The tone the person selected is the tone that is asked for again.
+    /// Nothing chooses a tone on their behalf, and none drifts across a retry.
+    func testTheAlternativeRequestReusesTheUserSelectedTone() {
+        for tone in ["warmer", "clearer", "funnier", "safer"] {
+            var seq = sequence(axis: tone)
+            XCTAssertTrue(seq.recordDisplayed("first"))
+            XCTAssertEqual(seq.axis, tone, "the sequence must keep the selected tone")
+            XCTAssertTrue(
+                seq.matches(axis: tone, sourceDraft: "can you look at this", host: .unbound),
+                "the retry must address the same tone and the same original draft"
+            )
+        }
+    }
+
+    /// The request builder sends the rejected set only when there is one, and
+    /// sends the same tone it was given.
+    func testTheRequestBuilderSendsRejectedContextOnlyOnARetry() throws {
+        let client = try Self.source("KeyboardExtension/TonoCoachClient.swift")
+        // The key is attached only when non-empty, so an initial request's
+        // wire shape is byte-identical to Build 113's.
+        XCTAssertTrue(client.contains("if !bounded.isEmpty {"))
+        XCTAssertTrue(client.contains(#"body["prior_versions"] = Array(bounded)"#))
+        // The axis travels unchanged — there is no client-side tone selection.
+        XCTAssertTrue(
+            client.contains(#"var body: [String: Any] = ["text": draft, "axis": axis]"#),
+            "the request must send the axis it was handed, unmodified"
+        )
+        let controller = try Self.source("KeyboardExtension/KeyboardViewController.swift")
+        XCTAssertTrue(
+            controller.contains("priorVersions: sequence.priorVersions"),
+            "the retry must pass the rejected versions the sequence holds"
+        )
+        XCTAssertTrue(
+            controller.contains("let axis = sequence.axis"),
+            "the retry must reuse the sequence's own tone, never pick one"
+        )
+    }
+
+    // ── Rollback: the person is never trapped on a worse second attempt ──
+
+    func testSteppingBackReturnsTheEarlierVersionWithoutSpendingAGeneration() {
+        var seq = sequence()
+        XCTAssertTrue(seq.recordDisplayed("first wording"))
+        XCTAssertTrue(seq.recordDisplayed("second wording"))
+
+        XCTAssertEqual(seq.displayedVersion, 2)
+        XCTAssertEqual(seq.currentVersion, "second wording")
+        XCTAssertTrue(seq.canGoBack)
+
+        XCTAssertEqual(seq.stepBack(), "first wording")
+        XCTAssertEqual(seq.currentVersion, "first wording", "the first rewrite is still there")
+        XCTAssertEqual(seq.displayedVersion, 1)
+        XCTAssertFalse(seq.canGoBack, "there is nothing before the first")
+        XCTAssertTrue(seq.canGoForward)
+
+        // Stepping back does NOT refund a generation — the provider call really
+        // happened — and does not un-reject anything.
+        XCTAssertEqual(seq.generatedCount, 2)
+        XCTAssertEqual(
+            seq.priorVersions, ["first wording", "second wording"],
+            "looking at an earlier version again does not un-reject it"
+        )
+
+        XCTAssertEqual(seq.stepForward(), "second wording")
+        XCTAssertEqual(seq.displayedVersion, 2)
+    }
+
+    func testTheFirstRewriteSurvivesAWorseSecondAttempt() {
+        var seq = sequence()
+        XCTAssertTrue(seq.recordDisplayed("the one they liked"))
+        XCTAssertTrue(seq.recordDisplayed("a worse attempt"))
+        seq.stepBack()
+        XCTAssertEqual(
+            seq.currentVersion, "the one they liked",
+            "asking for another must never be a one-way door"
+        )
+        // The generation budget really is spent — stepping back is a choice
+        // between what already exists, not a refund. Both remain usable, which
+        // is the whole point of "either".
+        XCTAssertFalse(seq.canRequestAnother)
+        XCTAssertEqual(seq.generatedCount, 2)
+        XCTAssertTrue(seq.canGoForward)
+        XCTAssertEqual(seq.stepForward(), "a worse attempt")
+    }
+
+    @MainActor
+    func testSteppingBackRePresentsTheEarlierRewriteOnTheCard() {
+        let controller = Self.makeController()
+        Self.deliverFirstVersion(controller, text: "Could you take a look?")
+
+        controller.tryAnotherTapped()
+        let altID = try! XCTUnwrap(controller.alternativeRequestIDForTesting)
+        controller.completeCoachAlternative(
+            requestID: altID,
+            liveBefore: "please review this ",
+            liveAfter: "",
+            result: .success(Self.variant(text: "Mind giving this a look?"))
+        )
+        XCTAssertEqual(controller.coachDisplayedVersionForTesting, "Mind giving this a look?")
+
+        controller.showPreviousVersionTapped()
+
+        let cursor = try! XCTUnwrap(controller.coachVersionCursorForTesting)
+        XCTAssertEqual(cursor.displayed, 1)
+        XCTAssertEqual(cursor.generated, 2, "the generation is still spent")
+        XCTAssertFalse(cursor.canGoBack)
+        XCTAssertEqual(
+            controller.coachDisplayedVersionForTesting, "Could you take a look?",
+            "the card must show the rewrite the person came back for"
+        )
+    }
+
+    @MainActor
+    func testTheCardIsNotSwappedUnderAnInFlightAlternative() {
+        // The step-back control must not race a completion that is about to
+        // land. Under the cap of two this is only reachable while the single
+        // permitted alternative is still in flight — at which point there is
+        // exactly one version, so the correct outcome is that nothing moves.
+        let controller = Self.makeController()
+        Self.deliverFirstVersion(controller, text: "Could you take a look?")
+
+        controller.tryAnotherTapped()
+        XCTAssertTrue(controller.coachAlternativeInFlightForTesting)
+
+        controller.showPreviousVersionTapped()
+        XCTAssertEqual(
+            controller.coachDisplayedVersionForTesting, "Could you take a look?",
+            "an in-flight request must not have the card swapped under it"
+        )
+        XCTAssertTrue(
+            controller.coachAlternativeInFlightForTesting,
+            "and the request itself must be undisturbed"
+        )
+    }
+
+    func testTheInFlightGuardIsPresentEvenThoughTheCapMakesItHardToReach() throws {
+        // Defence in depth: the cap means a second alternative can never be in
+        // flight while two versions exist, so this guard is unreachable today.
+        // It stays because the cap is a product decision that could widen, and
+        // a card swapped under a live completion is a race, not a preference.
+        let source = try Self.source("KeyboardExtension/KeyboardViewController.swift")
+        XCTAssertTrue(
+            source.contains("guard coachAlternativeRequestID == nil, !coachBusy else { return }"),
+            "stepping back must refuse while a request is in flight"
+        )
+    }
+
+    func testTheRollbackControlSaysWhatItDoesForVoiceOver() throws {
+        let source = try Self.source("KeyboardExtension/KeyboardViewController.swift")
+        XCTAssertTrue(source.contains("Show previous version"))
+        XCTAssertTrue(
+            source.contains("back.isHidden = !sequence.canGoBack"),
+            "the control must appear only when there is something to go back to"
+        )
+    }
+
 }

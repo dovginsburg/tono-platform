@@ -27,6 +27,8 @@ import {
   APP_ENTRY_PATH,
   buildAppRedirect,
   buildLoginRedirect,
+  buildResetRedirect,
+  isRecoveryCallback,
   sanitizeNextPath,
 } from '@/lib/auth-redirects';
 
@@ -35,6 +37,11 @@ export async function GET(request: Request) {
   const code = url.searchParams.get('code');
   const next = sanitizeNextPath(url.searchParams.get('next'));
   const error_description = url.searchParams.get('error_description');
+  // Build 114 remediation — a recovery link must end at the screen where a new
+  // password is chosen, not in the editor. Read before the exchange so the
+  // failure paths below can route a dead recovery link to the same place a
+  // dead sign-in link goes, with copy that offers another one.
+  const recovery = isRecoveryCallback(url.searchParams);
 
   // Build 114 — a provider's own `error_description` is never forwarded. It is
   // free-form provider text (hosts, projects, internal reasons) and it differs
@@ -121,7 +128,12 @@ export async function GET(request: Request) {
       }
     }
 
-    return NextResponse.redirect(buildAppRedirect(next));
+    // A recovery link has one destination and it is not the editor: the person
+    // was told they would get to choose a new password, and the session just
+    // established is what authorises them to. Sending them anywhere else is the
+    // defect — their password would be unchanged and they would still be locked
+    // out of the app they started from, with nothing left to try.
+    return NextResponse.redirect(recovery ? buildResetRedirect() : buildAppRedirect(next));
   }
 
   // No code, no error — bounce to login
