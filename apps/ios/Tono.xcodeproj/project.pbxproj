@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B115C0FFEE0000000000F015 /* LocalCoachRewrite.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */; };
+		B115C0FFEE0000000000F021 /* Build115LocalCoachTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F002 /* Build115LocalCoachTests.swift */; };
+		B115C0FFEE0000000000F011 /* LocalCoachRewrite.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */; };
+		B115C0FFEE0000000000F012 /* LocalCoachRewrite.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */; };
+		B115C0FFEE0000000000F013 /* LocalCoachRewrite.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */; };
+		B115C0FFEE0000000000F014 /* LocalCoachRewrite.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */; };
 		CE0000000000000000000010 /* ConsumerErrorCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE0000000000000000000001 /* ConsumerErrorCopy.swift */; };
 		CE0000000000000000000011 /* ConsumerErrorCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE0000000000000000000001 /* ConsumerErrorCopy.swift */; };
 		CE0000000000000000000012 /* ConsumerErrorCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE0000000000000000000001 /* ConsumerErrorCopy.swift */; };
@@ -248,6 +254,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		B115C0FFEE0000000000F002 /* Build115LocalCoachTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build115LocalCoachTests.swift; sourceTree = "<group>"; };
+		B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalCoachRewrite.swift; sourceTree = "<group>"; };
 		045FE2F8B15471B8BFD56595 /* ContactsAccessTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ContactsAccessTests.swift; sourceTree = "<group>"; };
 		1590C6120760B6DE05CC4AB9 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		1A5B6B766BC79F63A5B21178 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -422,6 +430,7 @@
 		7CCA65BB1F5C2B14CEB12B39 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				B115C0FFEE0000000000F002 /* Build115LocalCoachTests.swift */,
 				045FE2F8B15471B8BFD56595 /* ContactsAccessTests.swift */,
 				860000000000000000000003 /* CoachContractTests.swift */,
 				950000000000000000000002 /* Build95CoachContractTests.swift */,
@@ -480,6 +489,7 @@
 		8CDBA1B22180BBD9A85B4846 /* Shared */ = {
 			isa = PBXGroup;
 			children = (
+				B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */,
 				59A99B14322C64F30B091061 /* AppleRewriteBridge.swift */,
 				664006D51FBA77935CCA67AA /* AnthropicToneAnalyzer.swift */,
 				940000000000000000000004 /* CoachVariantSettings.swift */,
@@ -799,6 +809,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B115C0FFEE0000000000F011 /* LocalCoachRewrite.swift in Sources */,
 				CE0000000000000000000011 /* ConsumerErrorCopy.swift in Sources */,
 				A60000000000000000000005 /* LocalIntelligence.swift in Sources */,
 				A60000000000000000000002 /* TonoStripRouting.swift in Sources */,
@@ -855,6 +866,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B115C0FFEE0000000000F012 /* LocalCoachRewrite.swift in Sources */,
 				CE0000000000000000000012 /* ConsumerErrorCopy.swift in Sources */,
 				A950D38EBA2B8E065632F65A /* ShareRootView.swift in Sources */,
 				44FC072890D0B17F577A883D /* ShareViewController.swift in Sources */,
@@ -885,6 +897,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B115C0FFEE0000000000F015 /* LocalCoachRewrite.swift in Sources */,
+				B115C0FFEE0000000000F021 /* Build115LocalCoachTests.swift in Sources */,
 				A6000000000000000000000C /* Build106LocalIntelligenceTests.swift in Sources */,
 				A6000000000000000000000A /* Build106MultilineCursorTests.swift in Sources */,
 				A60000000000000000000008 /* Build106SuggestionRoutingTests.swift in Sources */,
@@ -957,6 +971,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B115C0FFEE0000000000F013 /* LocalCoachRewrite.swift in Sources */,
 				CE0000000000000000000013 /* ConsumerErrorCopy.swift in Sources */,
 				3C85BFB4E498791114E7670D /* AnthropicToneAnalyzer.swift in Sources */,
 				0D6E4F8C3F2A9B0D4E5F6A7B /* AppleRewriteBridge.swift in Sources */,
@@ -987,6 +1002,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B115C0FFEE0000000000F014 /* LocalCoachRewrite.swift in Sources */,
 				CE0000000000000000000010 /* ConsumerErrorCopy.swift in Sources */,
 				A70000000000000000000002 /* LocalIntelligence.swift in Sources */,
 				ACD65ABC66C16A8CF9A1228B /* AnthropicToneAnalyzer.swift in Sources */,

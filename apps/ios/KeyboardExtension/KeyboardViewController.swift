@@ -145,6 +145,21 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         // Sits just past `coachResourceTimeout` so the transport's own
         // truthful error normally lands first; this stays a backstop.
         static let coachOfflineVisibleDeadline: TimeInterval = 33
+
+        // Build 115 — the on-device deadline.
+        //
+        // A different budget because it bounds a different thing: no connection
+        // is involved, so neither the connected 10s nor the parked 33s says
+        // anything true about it. Measured on the iOS 26.5 Simulator (Apple M1,
+        // Apple Intelligence on): ~10s wall clock for one three-tone structured
+        // generation, ~11s cold. 30s is that measurement with room for a longer
+        // message and slower hardware, and it is a HARD bound — the request is
+        // cancelled and the person is told, exactly as on the connected path.
+        //
+        // Deliberately not longer than `coachOfflineVisibleDeadline`: a
+        // keyboard must not sit on a shimmer for a minute, whichever route it
+        // took.
+        static let coachLocalVisibleDeadline: TimeInterval = 30
         static let backendURL = "https://api.tonoit.com/v1/analyze"
 
         // Delete fires once immediately, then repeats with a bounded ramp.
@@ -210,6 +225,14 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         static let idVersionBack      = "TonoKB.versionBack"
         static let idVersionForward   = "TonoKB.versionForward"
 
+        // Build 115 — the route badge and the on-device substitution note.
+        // The badge states where the rewrites on screen were actually produced.
+        // It is set from the delivered result's own route, never from the route
+        // that was attempted, so it cannot claim the device for an answer that
+        // came over the network.
+        static let idCoachRoute       = "TonoKB.coachRoute"
+        static let idLocalNote        = "TonoKB.localNote"
+
         /// The exact customer-visible action labels. Held as constants because
         /// they are a reviewed product contract, not incidental strings: the
         /// Build 114 UI tests assert on these, so renaming one has to be a
@@ -238,6 +261,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             idToneChips, idLocalBadge,
             idUseRewrite, idTryAnother, idDismissRewrite, idVersionCue,
             idAlternativeNotice, idVersionBack, idVersionForward,
+            idCoachRoute, idLocalNote,
         ]
 
         /// Returns every TonoKB.* identifier this file declares.
@@ -473,7 +497,133 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     /// never got a connection is offline, not "timed out". Reset at every
     /// request boundary, so it can never describe a previous request.
     private var coachWaitingForConnectivity = false
-    private lazy var coachClient = TonoCoachClient(
+
+    // MARK: Build 115 — the on-device route
+    //
+    // The engine the live Coach flow calls. `AppleRewriteBridge.shared` is the
+    // production value and the only one that ships; the property is settable and
+    // internal solely so a unit test can drive the routing, cancellation,
+    // validation and zero-network contracts on a machine where Apple
+    // Intelligence may be unavailable. `testShippingDefaultEngineIsTheRealBridge`
+    // pins that the default is the real bridge.
+    //
+    // Resolved on read rather than stored at init: the XCTest target compiles
+    // this file into its own module, where a stored-property initialiser cannot
+    // name the bridge, and a lazily-resolved default keeps ONE expression of
+    // "what ships" instead of a second one behind a compilation condition.
+    private var injectedLocalCoachEngine: LocalCoachRewriteEngine?
+    var localCoachEngine: LocalCoachRewriteEngine {
+        get { injectedLocalCoachEngine ?? Self.productionLocalCoachEngine() }
+        set { injectedLocalCoachEngine = newValue }
+    }
+
+    /// The shipped engine. One call site, so the binary reachability proof has
+    /// exactly one branch to find.
+    ///
+    /// The compilation condition is a TARGET-GRAPH fact, not a behaviour switch,
+    /// and it is worth being explicit about why — Build 96 was burned by exactly
+    /// this shape. `TONO_BUILD92_HOSTSESSION` is defined only by TonoTests, which
+    /// compiles this file into its OWN module; `AppleRewriteBridge` lives in the
+    /// host-app module and its `rewriteSet` takes that module's request type, so
+    /// naming it here would not type-check in the XCTest module at all.
+    ///
+    /// What keeps this from repeating the Build 96 mistake is that it changes no
+    /// behaviour the tests could otherwise reach: every behavioural test injects
+    /// an engine through `localCoachEngine`, so the default is never the thing
+    /// under test. That the SHIPPED default is the real bridge is proved two
+    /// other ways — `testTheShippedDefaultEngineIsTheRealBridge` reads this
+    /// source, and `Scripts/verify_build115_binary_reachability.py` finds the
+    /// branch to `AppleRewriteBridge` in the built Release .appex.
+    static func productionLocalCoachEngine() -> LocalCoachRewriteEngine {
+        #if TONO_BUILD92_HOSTSESSION
+        return UnavailableLocalCoachEngine()
+        #else
+        return AppleRewriteBridge.shared
+        #endif
+    }
+
+    /// The in-flight on-device request, so a superseded tap, a host change or a
+    /// teardown can cancel it. Cooperative: the service checks `Task.isCancelled`
+    /// on both sides of the model call.
+    private var coachLocalTask: Task<Void, Never>?
+
+    /// Which route produced what is currently on screen. Written ONLY from a
+    /// delivered result — never from an attempt — so the badge cannot claim the
+    /// device for a rewrite that came over the network.
+    private var coachDeliveredRoute: CoachDeliveredRoute?
+
+    /// The truthful substitution note for the presented set, if any.
+    private var coachLocalNote: String?
+
+    /// Why the on-device route declined the ACTIVE request, when it did. Two
+    /// jobs: the connected route's error surface can name it, and a request
+    /// that turns out to have no connection at all can be re-run locally
+    /// instead of dying with "Coach needs internet" on a device that could
+    /// have answered.
+    private var coachPendingLocalRefusal: LocalCoachUnavailableReason?
+
+    /// Test seam: the reason the on-device route declined the active request.
+    var coachLocalRefusalForTesting: String? { coachPendingLocalRefusal?.rawValue }
+
+    /// The request that has already used its one on-device substitution.
+    ///
+    /// A hard, structural bound rather than a property of the routing rules:
+    /// "connected request parks → run it on the device instead" happens AT MOST
+    /// ONCE per request, so no combination of policy and transport behaviour
+    /// can turn it into a cancel/re-issue loop.
+    private var coachSubstitutedRequestID: UUID?
+
+    /// Cached per-process, because probing costs a cross-process hop and the
+    /// answer only changes when the OS, the Settings switch or the asset state
+    /// changes — none of which happen inside one keyboard presentation. Cleared
+    /// at every host-session boundary so a person who turns Apple Intelligence
+    /// on in Settings and comes straight back is not told the stale answer.
+    private var cachedLocalAvailability: LocalRewriteAvailability?
+
+    enum CoachDeliveredRoute: String {
+        case onDevice
+        case connected
+    }
+
+    /// Test seam: the route that produced the rewrites on screen.
+    var coachDeliveredRouteForTesting: String? { coachDeliveredRoute?.rawValue }
+
+    /// Test seam: whether an on-device request is in flight.
+    var coachLocalRequestInFlightForTesting: Bool { coachLocalTask != nil }
+
+    /// Test seam: the network client is built lazily and ONLY on the branch
+    /// that needs it, so "the successful offline route made zero network calls"
+    /// is provable by the strongest available evidence — the URLSession-backed
+    /// client was never even constructed.
+    var coachNetworkClientWasConstructedForTesting: Bool { storedCoachClient != nil }
+
+    /// Test seam: provider requests actually dispatched, or 0 when no client
+    /// was ever built.
+    var coachProviderCallCountForTesting: Int { storedCoachClient?.providerCallCount ?? 0 }
+
+    /// Test seam: install a client whose transport a test owns, WITHOUT
+    /// constructing the production one. Used by the offline harness to prove
+    /// that a local success leaves an injected spy transport at zero requests.
+    func installCoachClientForTesting(_ client: TonoCoachClient) {
+        storedCoachClient = client
+    }
+
+    private var storedCoachClient: TonoCoachClient?
+
+    /// The connected client. Deliberately NOT a `lazy var`: a lazy property is
+    /// constructed by the first read from anywhere, which would make "was the
+    /// network stack built" unobservable and would let a future refactor build
+    /// a URLSession on the on-device path by accident. This form makes the
+    /// construction a single, greppable event on exactly one branch.
+    private var coachClient: TonoCoachClient {
+        if let storedCoachClient { return storedCoachClient }
+        let client = Self.makeCoachClient()
+        storedCoachClient = client
+        return client
+    }
+
+    private static func makeCoachClient() -> TonoCoachClient {
+        TonoCoachClient(
         endpoint: Const.backendURL.replacingOccurrences(of: "/v1/analyze", with: "/api/analyze/variant"),
         timeout: Const.coachTimeout,
         // Build 111: a dedicated connectivity-aware transport. Build 110 used
@@ -489,7 +639,8 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         // access group. When it is absent the client makes zero network
         // requests and surfaces a visible missing-token state.
         tokenProvider: { SharedKeychain.get(KeychainKeys.apiToken) }
-    )
+        )
+    }
 
     /// Monotonic host/editing-session serial. It advances at every lifecycle
     /// boundary where the editing context may have changed (appear, disappear,
@@ -521,6 +672,13 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         // unconditionally (build 96) so the test build and the shipping
         // build run the identical path.
         liveToneManager?.fieldDidReset()
+        // Build 115 — re-ask the model at every editing-session boundary. This
+        // is the point where the person may have just come back from Settings
+        // having switched Apple Intelligence on (or off), and answering from a
+        // cached probe would tell them the state they left rather than the one
+        // they are in. `viewDidAppear` calls this, so returning to the keyboard
+        // is enough; no process reload is required.
+        cachedLocalAvailability = nil
     }
 
     private var keysStack: UIStackView?
@@ -902,6 +1060,18 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private func invalidateCoachWork(restoreKeyboard: Bool, clearTarget: Bool = true) {
         coachTask?.cancel()
         coachTask = nil
+        // Build 115: the on-device request is work too, and it is the one kind
+        // that keeps running with no transport to cancel it. Cancellation is
+        // cooperative — `OnDeviceAppleRewriteService` checks `Task.isCancelled`
+        // on both sides of the model call — and the completion additionally
+        // fails the same request-identity gate, so a result that arrives after
+        // teardown reaches nothing either way.
+        coachLocalTask?.cancel()
+        coachLocalTask = nil
+        coachPendingLocalRefusal = nil
+        coachSubstitutedRequestID = nil
+        coachDeliveredRoute = nil
+        coachLocalNote = nil
         coachRequestID = nil
         coachLoadingRequestID = nil
         // Disarm the visible deadline and drop the clock anchor: a cancelled
@@ -3170,12 +3340,151 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         // Clock: tap. Every downstream phase is measured against this anchor.
         let tapTime = DispatchTime.now()
         coachClockTapTime = tapTime
+        // Nothing on screen may describe the previous answer's route.
+        coachDeliveredRoute = nil
+        coachLocalNote = nil
         presentCoachLoading(requestID: requestID, axis: axis)
         // Clock: loading committed. The skeleton is built synchronously above,
         // before any network work, so this proves the result-shaped surface
         // lands within ~100ms of the tap. Privacy-safe: axis + duration only.
         NSLog("TONO_KB BUILD107 clock: phase=loading axis=\(axis) dt_ms=\(Self.coachElapsedMs(since: tapTime))")
         NSLog("TONO_KB BUILD95 coach: begin selected variant axis=\(axis) len=\(draft.count)")
+
+        // Build 115 — THE repair. The route is chosen here, before any network
+        // object exists, and the on-device branch never reaches `coachClient`,
+        // so a successful offline rewrite cannot have made a request: the
+        // URLSession-backed client was never constructed.
+        //
+        // Build 114 went straight to `coachClient.variant(...)` from this line.
+        // `KeyboardViewController` — the class `Info.plist` names as the
+        // extension's principal class — held no reference to
+        // `SystemLanguageModel`, `AppleRewriteBridge` or `OnDeviceAppleRewrite`
+        // at all, so with the radio off there was no rewrite to be had.
+        //
+        // The watchdog is armed HERE, before the availability probe, not inside
+        // whichever route wins. The probe is a cross-process hop; if it never
+        // answered, a deadline armed only by the route that follows it would
+        // never be armed at all, and Coach would sit on a shimmer with no bound.
+        // Each route re-arms against its own budget the moment it starts.
+        scheduleCoachDeadline(requestID: requestID, tapTime: tapTime, axis: axis)
+        resolveLocalAvailability(requestID: requestID) { [weak self] availability in
+            self?.startCoachRoute(
+                requestID: requestID, draft: draft, axis: axis,
+                tapTime: tapTime, availability: availability
+            )
+        }
+    }
+
+    /// Ask the on-device model what it can do, then continue on the main thread.
+    ///
+    /// Cached per host session because the answer changes only when the OS, the
+    /// Apple Intelligence switch or the downloaded assets change — never inside
+    /// one keyboard presentation — and an uncached probe would put a
+    /// cross-process hop in front of every connected request too.
+    /// `advanceHostSession()` clears it, so turning Apple Intelligence on in
+    /// Settings and coming straight back is observed rather than remembered.
+    private func resolveLocalAvailability(
+        requestID: UUID, then continuation: @escaping (LocalRewriteAvailability) -> Void
+    ) {
+        if let cachedLocalAvailability {
+            continuation(cachedLocalAvailability)
+            return
+        }
+        let engine = localCoachEngine
+        coachLocalTask = Task { [weak self] in
+            let availability = await engine.availability(locale: Locale.current)
+            DispatchQueue.main.async {
+                guard let self, self.coachRequestID == requestID else { return }
+                self.coachLocalTask = nil
+                self.cachedLocalAvailability = availability
+                continuation(availability)
+            }
+        }
+    }
+
+    /// The one place the local/connected decision is taken.
+    private func startCoachRoute(
+        requestID: UUID, draft: String, axis: String,
+        tapTime: DispatchTime, availability: LocalRewriteAvailability,
+        connectivityKnownAbsent: Bool = false
+    ) {
+        guard coachRequestID == requestID else { return }
+        let route = LocalCoachRoutePolicy.decide(
+            requestedAxis: axis,
+            draft: draft,
+            remoteKillSwitchAllows: FeatureFlags.isEnabled(.appleIntelligenceRewriteEnabled),
+            preference: LocalRewritePreferenceStore().load(),
+            availability: availability,
+            saferCorpusGateOpen: FeatureFlags.isEnabled(.appleIntelligenceAllowsSaferRoute),
+            connectivityKnownAbsent: connectivityKnownAbsent
+        )
+        switch route {
+        case .local(let plan):
+            startLocalCoach(
+                requestID: requestID, draft: draft, axis: axis,
+                tapTime: tapTime, plan: plan
+            )
+        case .cloud(let reason):
+            startConnectedCoach(
+                requestID: requestID, draft: draft, axis: axis,
+                tapTime: tapTime, localRefusal: reason
+            )
+        }
+    }
+
+    /// Run the on-device model. Touches no network type, by construction.
+    private func startLocalCoach(
+        requestID: UUID, draft: String, axis: String,
+        tapTime: DispatchTime, plan: LocalCoachPlan
+    ) {
+        // Privacy: tone count and a character count. Never the message.
+        NSLog(
+            "TONO_KB BUILD115 coach: on-device axis=\(axis) tones=\(plan.axes.count) len=\(draft.count)"
+        )
+        coachLocalNote = plan.substitutionNote
+        coachPendingLocalRefusal = nil
+        let engine = localCoachEngine
+        let request = LocalCoachSetRequest(draft: draft, axes: plan.axes, locale: Locale.current)
+        coachLocalTask = Task { [weak self] in
+            let outcome: Result<LocalCoachSetResult, LocalCoachFailure>
+            do {
+                outcome = .success(try await engine.rewriteSet(request))
+            } catch let declined as LocalCoachFailure {
+                outcome = .failure(declined)
+            } catch {
+                outcome = .failure(LocalCoachFailure(.generationFailed))
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.completeLocalCoach(
+                    requestID: requestID,
+                    draft: draft,
+                    axis: axis,
+                    tapTime: tapTime,
+                    liveBefore: self.documentProxy.documentContextBeforeInput ?? "",
+                    liveAfter: self.documentProxy.documentContextAfterInput ?? "",
+                    outcome: outcome
+                )
+            }
+        }
+        NSLog("TONO_KB BUILD115 clock: phase=on_device_request axis=\(axis) dt_ms=\(Self.coachElapsedMs(since: tapTime))")
+        scheduleCoachDeadline(
+            requestID: requestID, tapTime: tapTime, axis: axis,
+            after: Const.coachLocalVisibleDeadline
+        )
+    }
+
+    /// The connected route — Build 114's path, unchanged apart from carrying
+    /// the reason the on-device route declined, so the surface can say it.
+    private func startConnectedCoach(
+        requestID: UUID, draft: String, axis: String,
+        tapTime: DispatchTime, localRefusal: LocalCoachUnavailableReason?
+    ) {
+        guard coachRequestID == requestID else { return }
+        coachPendingLocalRefusal = localRefusal
+        if let localRefusal {
+            NSLog("TONO_KB BUILD115 coach: connected axis=\(axis) local_declined=\(localRefusal.rawValue)")
+        }
         let customPrompt = axis == "custom" ? coachVariantSettings.customInstruction : nil
         coachTask = coachClient.variant(
             draft: draft,
@@ -3204,6 +3513,21 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         NSLog("TONO_KB BUILD107 clock: phase=request axis=\(axis) dt_ms=\(Self.coachElapsedMs(since: tapTime))")
         // Arm the ~10s user-visible deadline (fail-closed; see below).
         scheduleCoachDeadline(requestID: requestID, tapTime: tapTime, axis: axis)
+    }
+
+    /// Which on-device refusals may be revisited once the transport proves
+    /// there is no route.
+    ///
+    /// Only the two axis-policy refusals. Every other reason is a statement
+    /// about the model or the input — an ineligible device, a disabled Apple
+    /// Intelligence, an unready model, an unsupported language, a draft that is
+    /// too long — and none of those become false just because the network is
+    /// also gone. Retrying them would produce the same refusal a second time.
+    static func localSubstitutionIsOffered(for reason: LocalCoachUnavailableReason) -> Bool {
+        switch reason {
+        case .saferNeedsReview, .customStyleNeedsConnection: return true
+        default: return false
+        }
     }
 
     /// Monotonic elapsed milliseconds since `start`. Privacy-safe: a duration,
@@ -3274,6 +3598,53 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         guard !coachWaitingForConnectivity else { return }
         coachWaitingForConnectivity = true
         NSLog("TONO_KB BUILD111 clock: phase=awaiting_connectivity axis=\(axis) dt_ms=\(Self.coachElapsedMs(since: tapTime))")
+
+        // Build 115 — this notification is the keyboard's ONLY truthful
+        // connectivity signal, and it is the transport's own: the request has
+        // no route to send on. (A reachability object is banned here for good
+        // reason — Build 111 removed the last one.)
+        //
+        // It is exactly the moment a request that deferred to the connected
+        // route can be answered on the device instead. That is what a Safer tap
+        // in airplane mode is: Safer keeps its corpus-quality gate, so it went
+        // connected on purpose, and without this it would sit on a shimmer and
+        // then say "Coach needs internet" on a phone that could have written
+        // three rewrites. Nothing is labelled Safer — `LocalCoachRoutePolicy`
+        // is asked again with the connectivity fact it did not have before, and
+        // it returns the base tones plus a note naming what is missing.
+        if let refusal = coachPendingLocalRefusal,
+           Self.localSubstitutionIsOffered(for: refusal),
+           coachSubstitutedRequestID != requestID,
+           let availability = cachedLocalAvailability, availability.isAvailable,
+           let target = coachRewriteTarget {
+            NSLog("TONO_KB BUILD115 coach: no route — substituting on-device axis=\(axis)")
+            coachSubstitutedRequestID = requestID
+            // Cancel the parked request FIRST. Nothing is replayed: the one task
+            // that existed is cancelled and no second connected one is issued.
+            coachTask?.cancel()
+            coachTask = nil
+            coachWaitingForConnectivity = false
+            coachPendingLocalRefusal = nil
+            coachDeadline?.cancel()
+            coachDeadline = nil
+            // Re-identify. Cancelling a URLSession task still delivers a
+            // completion, and that completion would pass the gate — it names the
+            // request that is still active and still owns the loading surface —
+            // and replace the on-device answer with a cancellation error. Taking
+            // a fresh identity for the on-device leg makes the dead connected
+            // completion fail the same fail-closed gate every other superseded
+            // delivery fails, rather than adding a special case for it.
+            let localRequestID = UUID()
+            coachRequestID = localRequestID
+            coachLoadingRequestID = localRequestID
+            startCoachRoute(
+                requestID: localRequestID, draft: target.draft, axis: axis,
+                tapTime: tapTime, availability: availability,
+                connectivityKnownAbsent: true
+            )
+            return
+        }
+
         coachSkeleton?.showWaitingForConnection()
         // Re-arm against the remaining connectivity budget, measured from the
         // tap so a late notification cannot extend the bound.
@@ -3301,6 +3672,13 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
               ) else { return }
         coachTask?.cancel()
         coachTask = nil
+        // Build 115: whichever route owns this request, the watchdog ends it.
+        // An on-device generation has no transport to cancel it, so the task is
+        // cancelled here explicitly; its completion additionally fails the
+        // identity gate below, so a late answer reaches nothing either way.
+        coachLocalTask?.cancel()
+        coachLocalTask = nil
+        coachPendingLocalRefusal = nil
         coachRequestID = nil
         coachBusy = false
         coachButton?.isEnabled = true
@@ -3386,6 +3764,10 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
                 suggestions: [rewrite],
                 flags: []
             )
+            // Build 115 — an answer actually arrived over the connection, so
+            // the badge may say so. Set here, at delivery, and nowhere earlier.
+            coachDeliveredRoute = .connected
+            coachLocalNote = nil
             presentCoachResults(atomic, replacingLoadingFor: requestID)
             // Clock: render committed (+ truthful server-measured provider ms).
             logCoachRenderClock(
@@ -3399,6 +3781,133 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             )
         }
         coachClockTapTime = nil
+    }
+
+    // MARK: - Build 115 · on-device delivery
+
+    /// Deliver one on-device result set.
+    ///
+    /// Fail-closed on exactly the gate the connected path uses, so a superseded
+    /// tap, a replaced loading surface or a draft that moved under the request
+    /// are all dropped without touching the screen. Internal, and taking the
+    /// live document context, so the XCTest target drives the real guard.
+    ///
+    /// Terminal-versus-recoverable is decided here and nowhere else:
+    ///
+    ///   * `.cancelled` is silent — something newer already owns the surface.
+    ///   * `.guardrail` and `.refusal` are TERMINAL. Apple's model declined this
+    ///     specific text; quietly posting the same text to the connected route
+    ///     would be routing around a safety decision, so the person is told the
+    ///     truth instead.
+    ///   * every other failure hands over to the connected route, which is
+    ///     honest about connectivity by construction: it parks, says it is
+    ///     waiting, and ends in the offline message if no route appears. The
+    ///     badge only ever says "checked with Tono" for an answer that landed.
+    func completeLocalCoach(
+        requestID: UUID,
+        draft: String,
+        axis: String,
+        tapTime: DispatchTime,
+        liveBefore: String,
+        liveAfter: String,
+        outcome: Result<LocalCoachSetResult, LocalCoachFailure>
+    ) {
+        guard CoachCompletionGate.accepts(
+                completion: requestID,
+                activeRequestID: coachRequestID,
+                loadingSurfaceRequestID: coachLoadingRequestID
+              ),
+              let target = coachRewriteTarget,
+              target.isCurrent(
+                liveBefore: liveBefore,
+                liveAfter: liveAfter,
+                host: currentHostSession
+              ) else { return }
+        coachLocalTask = nil
+
+        switch outcome {
+        case .success(let result):
+            coachDeadline?.cancel()
+            coachDeadline = nil
+            coachRequestID = nil
+            coachBusy = false
+            coachWaitingForConnectivity = false
+            coachButton?.isEnabled = true
+            // A local set is its own alternative set: three tones arrive at
+            // once, so there is no version sequence to step through and the
+            // card must not offer one.
+            coachSequence = nil
+            coachDeliveredRoute = .onDevice
+            // Privacy: counts and durations. `bytesIn`/`bytesOut` are sizes,
+            // not content, and nothing here writes the draft anywhere.
+            NSLog(
+                "TONO_KB BUILD115 clock: phase=on_device_render axis=\(axis) options=\(result.options.count) model_ms=\(Int(result.metrics.completionMilliseconds)) dt_ms=\(Self.coachElapsedMs(since: tapTime))"
+            )
+            TonoAnalytics.track(.onDeviceRewriteRoute(
+                axis: axis,
+                route: "onDevice",
+                reason: "success",
+                availabilityReason: result.metrics.availabilityReason,
+                bytesIn: result.metrics.bytesIn,
+                bytesOut: result.metrics.bytesOut,
+                firstTokenMs: nil,
+                completionMs: result.metrics.completionMilliseconds,
+                hasFullAccess: hasFullAccess
+            ))
+            presentCoachResults(
+                TonoCoachClient.CoachResponse(
+                    riskLevel: "medium",
+                    perception: "",
+                    subtext: "",
+                    reason: nil,
+                    suggestions: result.options.map {
+                        TonoCoachClient.CoachRewrite(
+                            axis: $0.axis.rawValue, text: $0.text,
+                            rationale: nil, riskAfter: nil
+                        )
+                    },
+                    flags: []
+                ),
+                replacingLoadingFor: requestID
+            )
+            coachClockTapTime = nil
+
+        case .failure(let declined):
+            let reason = declined.reason
+            NSLog("TONO_KB BUILD115 coach: on-device declined axis=\(axis) reason=\(reason.rawValue)")
+            TonoAnalytics.track(.onDeviceRewriteRoute(
+                axis: axis,
+                route: "cloudFallback",
+                reason: reason.rawValue,
+                availabilityReason: cachedLocalAvailability?.rawValue,
+                bytesIn: draft.utf8.count,
+                bytesOut: nil,
+                firstTokenMs: nil,
+                completionMs: nil,
+                hasFullAccess: hasFullAccess
+            ))
+            switch reason {
+            case .cancelled:
+                return
+            case .guardrail, .refusal:
+                coachDeadline?.cancel()
+                coachDeadline = nil
+                coachRequestID = nil
+                coachBusy = false
+                coachButton?.isEnabled = true
+                coachClockTapTime = nil
+                presentLocalCoachRefusal(reason, replacingLoadingFor: requestID)
+            default:
+                // Hand over. `startConnectedCoach` re-arms the watchdog against
+                // the connected budget, and that budget is measured from the
+                // original tap — so the on-device attempt cannot buy the
+                // connected one extra time.
+                startConnectedCoach(
+                    requestID: requestID, draft: draft, axis: axis,
+                    tapTime: tapTime, localRefusal: reason
+                )
+            }
+        }
     }
 
     // Internal so the XCTest target can drive the real UIKit loading state
@@ -3473,6 +3982,29 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         return true
     }
 
+    /// Build 115 — a terminal on-device refusal, said in its own words.
+    ///
+    /// Routed through the same error surface (one Retry, one Back, one detail
+    /// label) so there is still exactly one failure presentation in this
+    /// keyboard; only the sentence differs, and it comes from the reviewed
+    /// `LocalCoachCopy` table rather than from a failure's own description.
+    @discardableResult
+    func presentLocalCoachRefusal(
+        _ reason: LocalCoachUnavailableReason,
+        replacingLoadingFor requestID: UUID
+    ) -> Bool {
+        guard coachLoadingRequestID == requestID else { return false }
+        presentLocalCoachRefusal(reason)
+        return true
+    }
+
+    /// Internal so the XCTest target can exercise the real UIKit surface for
+    /// every reason in the table.
+    func presentLocalCoachRefusal(_ reason: LocalCoachUnavailableReason) {
+        coachDeliveredRoute = nil
+        presentCoachFailureSurface(detail: LocalCoachCopy.sentence(for: reason))
+    }
+
     // Internal so the XCTest target can exercise the real UIKit results state.
     // This is not API surface outside the keyboard module.
     func presentCoachResults(_ response: TonoCoachClient.CoachResponse) {
@@ -3497,6 +4029,38 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         title.accessibilityIdentifier = Const.idRiskBadge
         panel.addSubview(title)
         let titleHeight = ceil(title.font.lineHeight)
+
+        // Build 115 — where these words came from, stated on the card.
+        //
+        // Read from `coachDeliveredRoute`, which is written only by a delivery,
+        // so it cannot claim the device for an answer that arrived over the
+        // network. Absent (nil) when neither route has delivered — a version
+        // step re-presenting text already held, for instance — and then the
+        // badge is simply not shown rather than guessed at.
+        let route = UILabel()
+        route.accessibilityIdentifier = Const.idCoachRoute
+        route.font = UIFontMetrics(forTextStyle: .caption2).scaledFont(
+            for: .systemFont(ofSize: 11, weight: .medium)
+        )
+        route.adjustsFontForContentSizeCategory = true
+        route.textColor = .secondaryLabel
+        route.numberOfLines = 1
+        route.translatesAutoresizingMaskIntoConstraints = false
+        switch coachDeliveredRoute {
+        case .onDevice:
+            route.text = LocalCoachCopy.onDeviceRouteLabel
+            route.accessibilityLabel = "Written on this iPhone"
+        case .connected:
+            route.text = LocalCoachCopy.cloudRouteLabel
+            route.accessibilityLabel = "Checked with Tono"
+        case nil:
+            route.text = nil
+            route.isHidden = true
+        }
+        // The provenance claim must not be the thing that truncates.
+        route.setContentCompressionResistancePriority(.required, for: .horizontal)
+        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        panel.addSubview(route)
 
         let back = TonoMinimumHitTargetButton(type: .system)
         back.setTitle("Back", for: .normal)
@@ -3533,6 +4097,24 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         let shown = TonoCoachPalette.orderedAxes.compactMap {
             suggestionsByAxis[$0.rawValue]
         }
+        // Build 115 — the truthful substitution note, above the cards it
+        // qualifies. Present only when the tapped tone is genuinely absent from
+        // what follows, so the person is never left to infer that a Safer card
+        // is missing because Safer failed.
+        if let note = coachLocalNote, !shown.isEmpty {
+            let notice = UILabel()
+            notice.accessibilityIdentifier = Const.idLocalNote
+            notice.text = note
+            notice.font = UIFontMetrics(forTextStyle: .caption2).scaledFont(
+                for: .systemFont(ofSize: 11, weight: .regular)
+            )
+            notice.adjustsFontForContentSizeCategory = true
+            notice.textColor = .secondaryLabel
+            notice.numberOfLines = 3
+            notice.translatesAutoresizingMaskIntoConstraints = false
+            stack.addArrangedSubview(notice)
+        }
+
         if shown.isEmpty {
             let empty = UILabel()
             empty.text = "No rewrites available."
@@ -3542,16 +4124,26 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             empty.translatesAutoresizingMaskIntoConstraints = false
             stack.addArrangedSubview(empty)
         } else {
+            // A set of tones is not a version sequence. `Try another`, the
+            // "2 of 3" cue and the version steppers all describe successive
+            // wordings of ONE tone, so a multi-tone card set must not offer
+            // them — every alternative is already on screen.
+            let offersSequence = shown.count == 1
             for (idx, s) in shown.enumerated() {
-                stack.addArrangedSubview(makeRewriteChip(suggestion: s, index: idx))
+                stack.addArrangedSubview(
+                    makeRewriteChip(suggestion: s, index: idx, offersSequence: offersSequence)
+                )
             }
         }
 
         NSLayoutConstraint.activate([
             title.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 12),
             title.topAnchor.constraint(equalTo: panel.topAnchor, constant: 4),
-            title.trailingAnchor.constraint(lessThanOrEqualTo: back.leadingAnchor, constant: -8),
             title.heightAnchor.constraint(equalToConstant: titleHeight),
+
+            route.leadingAnchor.constraint(equalTo: title.trailingAnchor, constant: 6),
+            route.firstBaselineAnchor.constraint(equalTo: title.firstBaselineAnchor),
+            route.trailingAnchor.constraint(lessThanOrEqualTo: back.leadingAnchor, constant: -8),
 
             back.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -12),
             back.topAnchor.constraint(equalTo: panel.topAnchor, constant: 4),
@@ -3573,7 +4165,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachResultsStack = stack
     }
 
-    private func makeRewriteChip(suggestion: TonoCoachClient.CoachRewrite, index: Int) -> UIView {
+    private func makeRewriteChip(
+        suggestion: TonoCoachClient.CoachRewrite, index: Int, offersSequence: Bool = true
+    ) -> UIView {
         let chip = TonoCoachChoiceControl()
         let style = coachAxisStyle(for: suggestion.axis)
         chip.layer.cornerRadius = Const.keyCornerRadius
@@ -3623,6 +4217,18 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         ])
 
         let rewriteText = suggestion.text
+
+        // Build 115 — a card in a multi-tone set gets NO sequence controls at
+        // all, rather than hidden ones. Hiding was not enough: the stepper stack
+        // was hidden while its two chevrons stayed visible in their own right,
+        // and `Try another` sat there enabled with no sequence behind it to do
+        // anything with. A control that cannot act must not exist.
+        //
+        // The connected single-card path is unchanged: `offersSequence` is true
+        // for it, and everything below is built exactly as Build 114 built it.
+        guard offersSequence else {
+            return finishSetRewriteChip(chip, rewriteText: rewriteText)
+        }
 
         // Build 114 — the version cue ("2 of 3"). Truthful by construction: it
         // reads the sequence's successfully-displayed count, so a failed or
@@ -3782,6 +4388,12 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         // Only the FIRST card (the selected-tone answer) owns the sequence
         // controls. A multi-suggestion response is not a "Try another"
         // sequence, so its later cards keep Use/Dismiss without a cue.
+        //
+        // Build 115 makes that second half real. Before, the later cards hid
+        // their cue and stepper but the first card of a multi-card set still
+        // showed an enabled `Try another` with no sequence behind it. A set
+        // now returns above, at `finishSetRewriteChip`, before any of these
+        // controls is built — so by here there IS a sequence.
         if index == 0 {
             coachTryAnotherButton = another
             coachTryAnotherSpinner = spinner
@@ -3796,6 +4408,64 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             another.isHidden = true
             stepper.isHidden = true
         }
+        return chip
+    }
+
+    /// Finish a card that belongs to a SET of tones rather than to a version
+    /// sequence: Use rewrite and Dismiss, and nothing that would pretend there
+    /// is another version to fetch or step to.
+    ///
+    /// The two actions and their geometry are the same ones the sequence card
+    /// builds, so the person's reach and hit targets do not change between the
+    /// on-device and connected answers.
+    private func finishSetRewriteChip(
+        _ chip: TonoCoachChoiceControl, rewriteText: String
+    ) -> UIView {
+        let actions = UIStackView()
+        actions.axis = .horizontal
+        actions.distribution = .fillProportionally
+        actions.spacing = 6
+        actions.translatesAutoresizingMaskIntoConstraints = false
+        chip.addSubview(actions)
+
+        let use = TonoMinimumHitTargetButton(type: .system)
+        use.accessibilityIdentifier = Const.idUseRewrite
+        use.setTitle(Const.useRewriteLabel, for: .normal)
+        use.titleLabel?.font = UIFontMetrics(forTextStyle: .callout).scaledFont(
+            for: .systemFont(ofSize: 14, weight: .semibold)
+        )
+        use.titleLabel?.adjustsFontForContentSizeCategory = true
+        use.titleLabel?.adjustsFontSizeToFitWidth = true
+        use.titleLabel?.minimumScaleFactor = 0.75
+        use.titleLabel?.lineBreakMode = .byTruncatingTail
+        use.accessibilityLabel = Const.useRewriteLabel
+        use.accessibilityHint = "Replaces your message with this rewrite"
+        use.addAction(UIAction { [weak self] _ in
+            self?.applyRewrite(rewriteText)
+        }, for: .touchUpInside)
+        actions.addArrangedSubview(use)
+
+        let dismiss = TonoMinimumHitTargetButton(type: .system)
+        dismiss.accessibilityIdentifier = Const.idDismissRewrite
+        dismiss.setTitle(Const.dismissLabel, for: .normal)
+        dismiss.titleLabel?.font = use.titleLabel?.font
+        dismiss.titleLabel?.adjustsFontForContentSizeCategory = true
+        dismiss.titleLabel?.adjustsFontSizeToFitWidth = true
+        dismiss.titleLabel?.minimumScaleFactor = 0.75
+        dismiss.titleLabel?.lineBreakMode = .byTruncatingTail
+        dismiss.accessibilityLabel = Const.dismissLabel
+        dismiss.accessibilityHint = "Closes Coach and leaves your message unchanged"
+        dismiss.addAction(UIAction { [weak self] _ in
+            self?.backToKeysTapped()
+        }, for: .touchUpInside)
+        actions.addArrangedSubview(dismiss)
+
+        NSLayoutConstraint.activate([
+            actions.leadingAnchor.constraint(equalTo: chip.leadingAnchor, constant: 10),
+            actions.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -10),
+            actions.bottomAnchor.constraint(equalTo: chip.bottomAnchor, constant: -4),
+            actions.heightAnchor.constraint(equalToConstant: 44),
+        ])
         return chip
     }
 
@@ -4289,6 +4959,14 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     // Internal so the XCTest target can exercise the real UIKit error state.
     // This is not API surface outside the keyboard module.
     func presentCoachError(_ err: TonoCoachClient.CoachError) {
+        presentCoachFailureSurface(detail: err.userFacingMessage)
+    }
+
+    /// The single failure presentation. Both the connected route's mapper and
+    /// Build 115's on-device reason table feed a sentence into here, so there
+    /// is exactly one error surface in this keyboard and neither caller can
+    /// grow its own.
+    private func presentCoachFailureSurface(detail message: String) {
         guard let container = bodyContainer else { return }
         cancelTransientInteractions()
         preferredHeightConstraint?.constant = currentVisualMetrics.preferredContentHeight
@@ -4306,7 +4984,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         panel.addSubview(title)
 
         let detail = UILabel()
-        detail.text = err.userFacingMessage
+        detail.text = message
         detail.font = .systemFont(ofSize: 13)
         detail.textColor = .secondaryLabel
         detail.numberOfLines = 0

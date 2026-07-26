@@ -159,17 +159,75 @@ private struct GuidedRewrite {
     @Guide(description: "The rewritten text only")
     var text: String
 }
+
+// Build 115 — the whole Coach answer in ONE request.
+//
+// The founder contract is "tapping Coach produces Warmer, Clearer and Funnier
+// options, on the device, with no network". Three separate sessions would be
+// three requests for one tap; one structured generation with three guided
+// fields is one request that returns all three, which is both the contract and
+// the faster path. Measured on the iOS 26.5 Simulator: ~10s for the trio via
+// `respond`, versus ~60s for the same trio streamed snapshot-by-snapshot —
+// streaming re-parses the whole partial object per token, so the non-streaming
+// call is used here and `timeToFirstToken` is honestly absent from the metrics.
+@available(iOS 26.0, macOS 26.0, visionOS 26.0, *)
+@Generable(description: "Three rewrites of the sender's own message, one per tone")
+private struct GuidedRewriteTrio {
+    @Guide(description: "The same message rewritten to sound warmer and more considerate. Message text only.")
+    var warmer: String
+    @Guide(description: "The same message rewritten to be clearer and more direct. Message text only.")
+    var clearer: String
+    @Guide(description: "The same message rewritten with light, good-natured humour. Message text only.")
+    var funnier: String
+}
+
+// The Safer variant, reachable ONLY when the corpus-quality gate is explicitly
+// open. A separate type rather than an optional field, so a build with the gate
+// closed cannot ask the model for a Safer rewrite at all.
+@available(iOS 26.0, macOS 26.0, visionOS 26.0, *)
+@Generable(description: "Four rewrites of the sender's own message, one per tone")
+private struct GuidedRewriteQuartet {
+    @Guide(description: "The same message rewritten to sound warmer and more considerate. Message text only.")
+    var warmer: String
+    @Guide(description: "The same message rewritten to be clearer and more direct. Message text only.")
+    var clearer: String
+    @Guide(description: "The same message rewritten with light, good-natured humour. Message text only.")
+    var funnier: String
+    @Guide(description: "The same message rewritten to lower the chance of causing offence, without changing what it asks for. Message text only.")
+    var safer: String
+}
 #endif
 
 // MARK: - Service (actor)
 
 public actor OnDeviceAppleRewriteService {
-    private let policy: OnDeviceRewritePolicy
+    /// Build 115 — `var`, not `let`.
+    ///
+    /// This was the immutable-at-initialization defect. The policy was captured
+    /// once, at actor init, and `AppleRewriteBridge.shared` is a process-lifetime
+    /// singleton — so a service constructed while the flag was off kept refusing
+    /// with `.featureDisabled` for the rest of the process even after the person
+    /// turned the feature on, and `AppleRewriteBridge.reconfigure()` could only
+    /// emit a breadcrumb about it. Callers now push the live policy in before
+    /// every request, so a preference change takes effect on the very next tap
+    /// without waiting for the extension process to be recycled.
+    private var policy: OnDeviceRewritePolicy
     private var requestInFlight = false
 
     public init(policy: OnDeviceRewritePolicy) {
         self.policy = policy
     }
+
+    /// Adopt a freshly-derived policy. Idempotent, and never interrupts work
+    /// already in flight — the in-flight request finishes under the policy it
+    /// started with, which is what "one tap, one request" means.
+    public func updatePolicy(_ policy: OnDeviceRewritePolicy) {
+        self.policy = policy
+    }
+
+    /// Test seam: the policy currently in force, so "a preference change is
+    /// observed" is asserted against the real actor rather than inferred.
+    public var effectivePolicy: OnDeviceRewritePolicy { policy }
 
     /// Single entry point. Maps every spec-required guard onto a typed error
     /// before any model work runs. Caller is expected to fall back to the
@@ -292,6 +350,191 @@ public actor OnDeviceAppleRewriteService {
         let duration = start.duration(to: .now)
         let components = duration.components
         return Double(components.seconds) * 1_000 + Double(components.attoseconds) / 1e15
+    }
+
+    // MARK: - Build 115 · availability probe + one-request rewrite set
+
+    /// Report what the on-device model says about itself, WITHOUT generating.
+    ///
+    /// This is what makes "default ON only when runtime availability is
+    /// available" honest: the keyboard asks the model, per tap, rather than
+    /// remembering a stored answer that a Settings change, an OS update or an
+    /// asset download could have invalidated.
+    public func probeAvailability(locale: Locale) -> LocalRewriteAvailability {
+        guard #available(iOS 26.0, macOS 26.0, visionOS 26.0, *) else { return .unsupportedOS }
+        #if canImport(FoundationModels)
+        let model = SystemLanguageModel(
+            useCase: .general,
+            guardrails: .permissiveContentTransformations
+        )
+        switch model.availability {
+        case .available:
+            return model.supportsLocale(locale) ? .available : .unsupportedLocale
+        case .unavailable(.deviceNotEligible):
+            return .deviceNotEligible
+        case .unavailable(.appleIntelligenceNotEnabled):
+            return .appleIntelligenceNotEnabled
+        case .unavailable(.modelNotReady):
+            return .modelNotReady
+        case .unavailable:
+            return .unspecifiedUnavailable
+        }
+        #else
+        return .unsupportedOS
+        #endif
+    }
+
+    /// ONE request → the whole validated option set.
+    ///
+    /// Every guard the single-rewrite path applies is applied here, in the same
+    /// order, plus the two the set path adds: an extension memory pre-flight,
+    /// and cooperative cancellation between the model call and the validation
+    /// step so a superseded tap cannot deliver.
+    ///
+    /// Throws `LocalCoachFailure` and nothing else. No cloud fallback decision
+    /// is taken at this layer — the caller owns routing.
+    public func rewriteSet(_ request: LocalCoachSetRequest) async throws -> LocalCoachSetResult {
+        guard policy.enabled else { throw LocalCoachFailure(.remoteKillSwitch) }
+        guard !requestInFlight else { throw LocalCoachFailure(.busy) }
+        guard !request.axes.isEmpty else { throw LocalCoachFailure(.noValidRewrite) }
+        let trimmed = request.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw LocalCoachFailure(.emptyDraft) }
+        guard request.draft.count <= policy.maximumInputCharacters else {
+            throw LocalCoachFailure(.draftTooLong)
+        }
+        guard LocalCoachMemoryBudget.hasHeadroom(residentBytes: OnDeviceMemoryProbe.residentBytes())
+        else { throw LocalCoachFailure(.memoryPressure) }
+        guard #available(iOS 26.0, macOS 26.0, visionOS 26.0, *) else {
+            throw LocalCoachFailure(.unsupportedOS)
+        }
+
+        requestInFlight = true
+        defer { requestInFlight = false }
+        return try await performRewriteSet(request)
+    }
+
+    @available(iOS 26.0, macOS 26.0, visionOS 26.0, *)
+    private func performRewriteSet(_ request: LocalCoachSetRequest) async throws -> LocalCoachSetResult {
+        #if canImport(FoundationModels)
+        let started = ContinuousClock.now
+        let availability = probeAvailability(locale: request.locale)
+        guard availability.isAvailable else {
+            throw LocalCoachFailure(LocalCoachUnavailableReason(availability: availability))
+        }
+        try checkCancellation()
+
+        let model = SystemLanguageModel(
+            useCase: .general,
+            guardrails: .permissiveContentTransformations
+        )
+        // Framing the sender explicitly is load-bearing, not decoration. Without
+        // it the model reads the draft as a message TO it and answers the
+        // message instead of rewriting it — observed directly while measuring
+        // this path on the iOS 26.5 Simulator.
+        let session = LanguageModelSession(model: model, instructions: Instructions("""
+            You rewrite a message that the user is about to send to someone else.
+            The user is the sender. Keep the user as the speaker: never answer \
+            the message, never reply to it, and never change who is talking.
+            Preserve the user's meaning, intent, facts, names, links and language.
+            Do not add commentary, labels, quotation marks, markdown or new facts.
+            Return only the rewritten message for each tone.
+            """))
+        let options = GenerationOptions(
+            sampling: .greedy,
+            maximumResponseTokens: Self.maximumResponseTokens(for: request.axes.count)
+        )
+        let prompt = Prompt("Message to rewrite: \(request.draft)")
+        let wantsSafer = request.axes.contains(.safer)
+
+        var peak = OnDeviceMemoryProbe.residentBytes()
+        do {
+            var raw: [(axis: LocalCoachAxis, text: String)] = []
+            if wantsSafer {
+                let response = try await session.respond(
+                    to: prompt, generating: GuidedRewriteQuartet.self,
+                    includeSchemaInPrompt: true, options: options
+                )
+                let content = response.content
+                raw = [
+                    (.warmer, content.warmer), (.clearer, content.clearer),
+                    (.funnier, content.funnier), (.safer, content.safer),
+                ]
+            } else {
+                let response = try await session.respond(
+                    to: prompt, generating: GuidedRewriteTrio.self,
+                    includeSchemaInPrompt: true, options: options
+                )
+                let content = response.content
+                raw = [
+                    (.warmer, content.warmer), (.clearer, content.clearer),
+                    (.funnier, content.funnier),
+                ]
+            }
+            peak = Self.higher(peak, OnDeviceMemoryProbe.residentBytes())
+            try checkCancellation()
+
+            // Only the tones that were asked for, in the order they were asked
+            // for. A model that filled a field nobody requested contributes
+            // nothing to the answer.
+            let requested = raw.filter { request.axes.contains($0.axis) }
+            guard let validated = LocalCoachValidator.validateSet(
+                requested,
+                draft: request.draft,
+                maximumCharacters: policy.maximumOutputCharacters
+            ) else { throw LocalCoachFailure(.noValidRewrite) }
+
+            return LocalCoachSetResult(
+                options: validated,
+                metrics: LocalCoachMetrics(
+                    availabilityReason: availability.rawValue,
+                    requestedAxisCount: request.axes.count,
+                    validatedOptionCount: validated.count,
+                    bytesIn: request.draft.utf8.count,
+                    bytesOut: validated.reduce(0) { $0 + $1.text.utf8.count },
+                    completionMilliseconds: milliseconds(since: started),
+                    peakFootprintBytes: peak
+                )
+            )
+        } catch let known as LocalCoachFailure {
+            throw known
+        } catch is CancellationError {
+            throw LocalCoachFailure(.cancelled)
+        } catch LanguageModelSession.GenerationError.exceededContextWindowSize {
+            throw LocalCoachFailure(.draftTooLong)
+        } catch LanguageModelSession.GenerationError.guardrailViolation {
+            throw LocalCoachFailure(.guardrail)
+        } catch LanguageModelSession.GenerationError.refusal {
+            throw LocalCoachFailure(.refusal)
+        } catch LanguageModelSession.GenerationError.rateLimited {
+            throw LocalCoachFailure(.modelNotReady)
+        } catch LanguageModelSession.GenerationError.unsupportedLanguageOrLocale {
+            throw LocalCoachFailure(.unsupportedLocale)
+        } catch {
+            throw LocalCoachFailure(.generationFailed)
+        }
+        #else
+        throw LocalCoachFailure(.unsupportedOS)
+        #endif
+    }
+
+    private func checkCancellation() throws {
+        if Task.isCancelled { throw LocalCoachFailure(.cancelled) }
+    }
+
+    private static func higher(_ lhs: UInt64?, _ rhs: UInt64?) -> UInt64? {
+        switch (lhs, rhs) {
+        case let (l?, r?): return max(l, r)
+        case let (l?, nil): return l
+        case let (nil, r?): return r
+        default: return nil
+        }
+    }
+
+    /// Bounded output, scaled to how many tones were asked for. Generous enough
+    /// for a long message rewritten four ways, small enough that a runaway
+    /// generation ends rather than filling the extension's context.
+    private static func maximumResponseTokens(for axisCount: Int) -> Int {
+        min(1_024, 180 * max(axisCount, 1))
     }
 }
 

@@ -30,13 +30,23 @@ public enum FeatureFlag: String, CaseIterable {
     // ── Default OFF (not a consumer product line) ─────────────────────────
     case slackEnabled      = "slack_enabled"     // B2B/Slack stays off in consumer builds
 
-    // ── Default OFF (on-device Apple Intelligence rewrite) ───────────────
-    // P0 GARY (t_c52c376d — clean recovery of t_c938d56f): runtime kill
-    // switch for the on-device SystemLanguageModel rewrite service. Both
-    // flags default OFF. `appleIntelligenceAllowsSaferRoute` is the corpus
-    // quality gate the spec mandates for the Safer axis (do not assume
-    // Apple output is clinically/safety equivalent). When this gate is
-    // closed, the safer route behaves as if the kill switch is off.
+    // ── On-device Apple Intelligence rewrite ─────────────────────────────
+    // `appleIntelligenceRewriteEnabled` is a REMOTE KILL SWITCH and, since
+    // Build 115, defaults ON. It is not the person's switch and is no longer
+    // user-controllable: the Build 115 contract is that on-device rewriting
+    // defaults ON wherever runtime availability is `.available`, with an
+    // explicit opt-out, and a flag living in this cache could not carry that
+    // opt-out — `update(from:)` REPLACES the whole dictionary on every
+    // `/v1/features` fetch, so any user-set value here survives only until the
+    // next launch. The opt-out therefore lives in `LocalRewritePreferenceStore`
+    // (its own App Group key, never written by the refresh path) and this flag
+    // remains what it can actually be: a way to force the route off for
+    // everyone if the on-device model ever misbehaves in the field.
+    //
+    // `appleIntelligenceAllowsSaferRoute` stays DEFAULT OFF and stays the
+    // corpus quality gate for the Safer axis (do not assume on-device output is
+    // safety-equivalent to the reviewed Safer route). Fail-closed is the
+    // correct direction for this one, so a refresh that drops it is harmless.
     case appleIntelligenceRewriteEnabled  = "apple_intelligence_rewrite_enabled"
     case appleIntelligenceAllowsSaferRoute = "apple_intelligence_allows_safer_route"
 
@@ -47,7 +57,7 @@ public enum FeatureFlag: String, CaseIterable {
     public var defaultValue: Bool {
         switch self {
         case .customAxes, .recipientMemory, .widgetEnabled, .siriEnabled, .slackEnabled,
-             .emailSignIn, .appleIntelligenceRewriteEnabled, .appleIntelligenceAllowsSaferRoute:
+             .emailSignIn, .appleIntelligenceAllowsSaferRoute:
             return false
         default:
             return true
@@ -71,7 +81,7 @@ public enum FeatureFlag: String, CaseIterable {
         switch self {
         case .threadContext, .weeklyDigest, .riskDelta,
              .memoryInference, .memoryContextHints, .improveTono,
-             .appleIntelligenceRewriteEnabled, .appleIntelligenceAllowsSaferRoute:
+             .appleIntelligenceAllowsSaferRoute:
             return true
         default:
             return false
@@ -115,7 +125,7 @@ public enum FeatureFlag: String, CaseIterable {
         case .improveTono:
             return "Share anonymous outcome signals (which style worked, not your messages) to help improve Tono for everyone. Your messages never leave your device."
         case .appleIntelligenceRewriteEnabled:
-            return "When your device supports Apple Intelligence, rewrite selected text on-device instead of contacting Tono's server. Your draft never leaves the device."
+            return "Master switch for on-device rewriting. Not shown in Settings — the person's own choice lives beside the Apple Intelligence row."
         case .appleIntelligenceAllowsSaferRoute:
             return "Permit the on-device model to attempt the Safer rewrite axis. Off by default — Tono's Safer rewrite has been tuned against a sensitive-corpus evaluation; on-device output has not."
         default:

@@ -128,7 +128,10 @@ enum TonoCoachPalette {
     /// Canonical tonoit.com semantic tokens. The exact accent remains visible
     /// as the card rule/dot; labels use a contrast-safe dynamic companion.
     enum Axis: String, CaseIterable {
-        case safer, clearer, funnier, affectionate, professional, concise, custom
+        // `warmer` is Build 115's on-device result axis. It sits second so a
+        // local set renders Warmer, Clearer, Funnier in that order — the order
+        // the founder contract names — and it is not a selectable chip.
+        case safer, warmer, clearer, funnier, affectionate, professional, concise, custom
 
         var label: String { CoachToneChipContract.label(for: rawValue) }
 
@@ -141,6 +144,7 @@ enum TonoCoachPalette {
             let light: UIColor
             switch self {
             case .safer: light = UIColor(hexRGB: "065F46")
+            case .warmer: light = UIColor(hexRGB: "9A3412")
             case .clearer: light = UIColor(hexRGB: "075985")
             case .funnier: light = UIColor(hexRGB: "92400E")
             case .affectionate: light = UIColor(hexRGB: "9D174D")
@@ -152,7 +156,7 @@ enum TonoCoachPalette {
         }
     }
 
-    static let orderedAxes: [Axis] = [.safer, .clearer, .funnier, .affectionate, .professional, .concise, .custom]
+    static let orderedAxes: [Axis] = [.safer, .warmer, .clearer, .funnier, .affectionate, .professional, .concise, .custom]
 
     static func axis(_ rawValue: String) -> Axis? {
         Axis(rawValue: rawValue.lowercased())

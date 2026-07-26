@@ -68,6 +68,10 @@ struct SettingsView: View {
     @State private var isRedeemingCode:   Bool       = false
     @State private var featureToggles:    [FeatureFlag: Bool] = [:]
     @State private var liveToneEnabled:   Bool       = true
+    // build 115 — on-device rewriting. `localRewriteAvailability` is what the
+    // model reported on this appearance, never a stored guess.
+    @State private var localRewriteEnabled: Bool = false
+    @State private var localRewriteAvailability: LocalRewriteAvailability = .modelNotReady
     @State private var accountState:      SettingsAccountState = .needsSetup
     @State private var accountNotice:     String?
     @State private var coachVariants = CoachVariantSettings()
@@ -102,6 +106,7 @@ struct SettingsView: View {
                 featurePreferencesSection
                 recipientsSection
                 axesSection
+                onDeviceRewritingSection
                 liveToneSection
                 localIntelligenceSection
                 planSection
@@ -114,6 +119,7 @@ struct SettingsView: View {
                 recipients = RecipientMemory.all()
                 loadFeatureToggles()
                 loadLiveTone()
+                loadLocalRewriteState()
                 coachVariants = coachVariantStore.load()
                 refreshAccountState()
                 refreshEmailIdentity()
@@ -570,6 +576,65 @@ struct SettingsView: View {
             Text(LiveTonePreference.settingsCopy)
                 .font(.caption)
                 .foregroundColor(.secondary)
+        }
+    }
+
+    // MARK: - Build 115 · on-device rewriting
+    //
+    // Its own section rather than a row in `featurePreferencesSection`, because
+    // it is not a `FeatureFlag`. The generic section writes through
+    // `FeatureFlags.setUserPreference`, whose value lives in the same cached
+    // dictionary that `FeatureFlags.update(from:)` replaces wholesale on every
+    // `/v1/features` fetch — so a preference stored there lasts until the next
+    // feature refresh. This one is a privacy choice and has to outlive that, so
+    // it is persisted on its own key by `LocalRewritePreferenceStore`.
+    //
+    // The row states what is TRUE of this device, not what would be true of a
+    // supported one: on hardware that cannot run Apple Intelligence the toggle
+    // is disabled and the caption says which condition is unmet.
+    @ViewBuilder
+    private var onDeviceRewritingSection: some View {
+        Section("On-device rewriting") {
+            Toggle("Rewrite on this iPhone", isOn: localRewriteBinding)
+                .disabled(!localRewriteAvailability.isAvailable)
+            Text(localRewriteCaption)
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private var localRewriteCaption: String {
+        guard localRewriteAvailability.isAvailable else {
+            return LocalCoachCopy.sentence(
+                for: LocalCoachUnavailableReason(availability: localRewriteAvailability)
+            )
+        }
+        return localRewriteEnabled
+            ? "Coach writes your rewrites here, with no connection and nothing sent anywhere. Turn this off to have Tono do it instead."
+            : "Coach asks Tono for your rewrites. Turn this on to have them written here instead, with no connection needed."
+    }
+
+    private var localRewriteBinding: Binding<Bool> {
+        Binding(
+            get: { localRewriteEnabled },
+            set: { on in
+                localRewriteEnabled = on
+                LocalRewritePreferenceStore().setEnabled(on)
+            }
+        )
+    }
+
+    /// Ask the model itself, once per appearance. The switch must reflect the
+    /// device as it is now — somebody who just enabled Apple Intelligence in
+    /// iOS Settings should find this row live when they come back.
+    private func loadLocalRewriteState() {
+        let preference = LocalRewritePreferenceStore().load()
+        Task {
+            let availability = await AppleRewriteBridge.shared.availability(locale: Locale.current)
+            await MainActor.run {
+                localRewriteAvailability = availability
+                localRewriteEnabled = preference.resolved(availability: availability)
+            }
         }
     }
 

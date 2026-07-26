@@ -24,6 +24,12 @@ public enum CoachToneChipContract {
     public static func accentHex(for axis: String) -> String? {
         switch axis.lowercased() {
         case "safer": return "34D399"
+        // Build 115. `warmer` is a RESULT axis, not a chip: the on-device route
+        // always produces Warmer alongside Clearer and Funnier, and the card
+        // renderer only draws axes this contract knows. It is deliberately
+        // absent from `CoachOptionalVariant`, so it can never be selected as a
+        // chip and can never be sent to the connected variant allowlist.
+        case "warmer": return "FB923C"
         case "clearer": return "38BDF8"
         case "funnier": return "FBBF24"
         case "affectionate": return "F472B6"
@@ -338,6 +344,12 @@ public enum ShortcutRewrite {
     /// comparison — a byte-for-byte mirror of the iMessage extension's
     /// `normalized(_:)` so a rewrite that only churns casing or punctuation is
     /// still caught as a no-op.
+    ///
+    /// Build 115 added a third lane — the on-device keyboard route — whose
+    /// validator applies the identical rule from `LocalCoachValidator`. The two
+    /// are separate declarations because this file is not a member of every
+    /// bundle that one is, and `testTheNoOpNormalizerIsOneRuleSharedWithTheShortcutLane`
+    /// pins them to the same answer so they cannot drift apart unnoticed.
     public static func normalizedForNoOp(_ text: String) -> String {
         text.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)

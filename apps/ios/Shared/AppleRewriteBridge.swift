@@ -98,22 +98,33 @@ public actor AppleRewriteBridge {
         self.service = OnDeviceAppleRewriteService(policy: policy)
     }
 
-    /// Reset the policy when the host app flips the feature flag at runtime.
-    /// Called by `FeatureFlags.setUserPreference(.appleIntelligenceRewriteEnabled, …)`.
-    /// On iOS < 26 the actor body is never entered (the `#available` guard
-    /// rejects every call), so this is the right place to live.
-    public func reconfigure() {
-        // Re-read the flag. We do this lazily because the original policy was
-        // captured at actor init. The host app calls this after flipping the
-        // toggle; the keyboard reloads `KeyboardModel` (which re-inits this
-        // singleton's effective policy via this call) the next time the user
-        // taps a chip.
-        let enabled = FeatureFlags.isEnabled(.appleIntelligenceRewriteEnabled)
-        // The underlying actor's policy is immutable, but we can re-route by
-        // returning early in tryRewrite() based on the live flag. So this
-        // method just emits the breadcrumb and lets the next tryRewrite call
-        // observe the new flag.
-        CrashReporter.addBreadcrumb("appleRewriteBridge.reconfigure enabled=\(enabled)")
+    /// Push the live policy into the service.
+    ///
+    /// Build 115 repair. This used to re-read the flag and then do nothing with
+    /// it, because `OnDeviceAppleRewriteService.policy` was a `let` captured at
+    /// actor init and `AppleRewriteBridge.shared` lives for the whole process.
+    /// A person who turned the feature on in Settings kept getting
+    /// `.featureDisabled` until the keyboard extension happened to be recycled,
+    /// and the only trace was a breadcrumb saying the opposite. The policy is
+    /// now mutable and every entry point re-derives it first, so a preference
+    /// change is observed on the NEXT TAP — no process reload required.
+    @discardableResult
+    public func reconfigure() async -> OnDeviceRewritePolicy {
+        let policy = Self.currentPolicy()
+        await service.updatePolicy(policy)
+        return policy
+    }
+
+    /// Derive the policy from live state, every time. The remote kill switch is
+    /// the only input from the feature-flag cache; the person's own opt-out
+    /// lives in `LocalRewritePreferenceStore` precisely so a `/v1/features`
+    /// refresh cannot overwrite it.
+    static func currentPolicy() -> OnDeviceRewritePolicy {
+        OnDeviceRewritePolicy(
+            enabled: FeatureFlags.isEnabled(.appleIntelligenceRewriteEnabled),
+            maximumInputCharacters: LocalCoachRoutePolicy.maximumDraftCharacters,
+            maximumOutputCharacters: LocalCoachRoutePolicy.maximumOptionCharacters
+        )
     }
 
     /// Attempt one on-device rewrite. Never throws raw `OnDeviceRewriteUnavailableError`
@@ -251,5 +262,35 @@ public actor AppleRewriteBridge {
         case .funnier:   return .confident
         case .safer:     return .empathetic
         }
+    }
+}
+
+// MARK: - Build 115 · the live keyboard's engine
+
+// The UIKit keyboard reaches Foundation Models through exactly this
+// conformance. `tryRewrite` above stays as it is for the SwiftUI selected-chip
+// path; the two share one service, one policy derivation and one set of caps,
+// so there is still a single place where on-device policy is decided.
+//
+// The one deliberate difference: this path does NOT require Full Access.
+// `tryRewrite` refuses without it, on the reasoning that a keyboard extension
+// handling user text should hold Full Access before invoking a model. That
+// reasoning does not survive the offline-first contract — the local route makes
+// no network request at all, so it is strictly MORE private than the typing the
+// keyboard already does, and requiring a network permission to run something
+// that never touches the network would make the promise false for exactly the
+// people who declined Full Access for privacy reasons. Nothing here reads the
+// document proxy, persists a draft, or opens a connection.
+extension AppleRewriteBridge: LocalCoachRewriteEngine {
+    public func availability(locale: Locale) async -> LocalRewriteAvailability {
+        await service.probeAvailability(locale: locale)
+    }
+
+    public func rewriteSet(_ request: LocalCoachSetRequest) async throws -> LocalCoachSetResult {
+        // Re-derive the policy before every request. This is the fix for the
+        // immutable-at-initialization defect: the answer must reflect the
+        // preference as it is now, not as it was when this singleton was born.
+        await service.updatePolicy(Self.currentPolicy())
+        return try await service.rewriteSet(request)
     }
 }
