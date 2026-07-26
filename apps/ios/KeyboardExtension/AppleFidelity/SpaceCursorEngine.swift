@@ -76,18 +76,49 @@ public struct SpaceCursorConfig: Equatable {
     // Travel maps to characters on an accelerating curve so that small drags
     // stay precise (one character at a time, for fixing a typo) while long
     // drags cover a sentence or a paragraph without dragging off-screen.
+    //
+    // ── Build 111: the curve is DILATED, not reshaped ─────────────────────
+    // Build 110 was tested on device and reported as moving too fast: the
+    // caret outran the finger and overshot the character the user was aiming
+    // at. Build 110 used 8 / 24 / 120.
+    //
+    // The response curve `horizontalCharacters(forTranslation:)` has exactly
+    // one shape parameter per term, and all three scale the SAME axis —
+    // points of finger travel. Multiplying all three by the same factor k is
+    // therefore a pure horizontal dilation of the curve:
+    //
+    //     chars_new(m) == chars_old(m / k)     for every m
+    //
+    // i.e. every character now costs exactly k× the finger travel it cost in
+    // Build 110, at every point on the curve — inside the precision zone and
+    // out in accelerated travel alike. No inflection moves relative to the
+    // others, monotonicity and reversal symmetry are structurally untouched,
+    // and there is no region where the new curve is faster than the old one.
+    //
+    // Build 111 uses k = 1.5, so sensitivity (characters per point) is 2/3 of
+    // Build 110's — a one-third reduction, which is the correction the device
+    // report asked for. Scaling any one of the three alone would bend the
+    // curve and make the precision zone and the long sweep disagree.
+    //
+    // Practical range is preserved: a 350pt sweep (roughly edge-to-edge on an
+    // iPhone) still crosses ~74 characters, and vertical row travel is
+    // deliberately NOT rescaled — this report was about horizontal speed.
+    //
+    // Proven by `Tests/Build111CursorSensitivityTests.swift` and
+    // `Scripts/verify_build111_cursor_sensitivity.swift`, both of which
+    // compare the shipping default against a literal Build-110 config.
 
     /// Points per character inside the precision zone — the fine, 1:1 rate.
-    public var finePointsPerCharacter: Double = 8.0
+    public var finePointsPerCharacter: Double = 12.0
 
     /// How far the finger may travel before acceleration begins. Inside this
     /// zone movement is strictly linear at `finePointsPerCharacter`.
-    public var precisionZonePoints: Double = 24.0
+    public var precisionZonePoints: Double = 36.0
 
     /// Acceleration scale. Past the precision zone each additional point is
     /// worth progressively more: the multiplier grows as `1 + extra / scale`.
     /// SMALLER = more aggressive. Must be > 0.
-    public var accelerationScalePoints: Double = 120.0
+    public var accelerationScalePoints: Double = 180.0
 
     /// Hard ceiling on characters travelled in one gesture, per axis-direction.
     /// Guards against an absurd delta if a host reports a pathological context.

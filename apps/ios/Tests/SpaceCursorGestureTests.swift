@@ -125,11 +125,17 @@ final class SpaceCursorGestureTests: XCTestCase {
 
     // MARK: - 2. Accelerated horizontal movement
 
+    // Build 111 re-baselines every number in this section: the curve was
+    // dilated 1.5× along the travel axis after Build 110 was reported as too
+    // fast on device. The INVARIANTS are unchanged — precision near the
+    // origin, acceleration far from it, and a long sweep that still beats the
+    // rejected fixed 10pt/char rate. Only the travel each one costs moved.
+    // `Build111CursorSensitivityTests` pins the reduction itself.
     func testLongDragAcceleratesWellPastTheRejectedFixedRate() {
         let e = SpaceCursorEngine()
-        XCTAssertEqual(e.horizontalCharacters(forTranslation: 16), 2, "precise near the origin")
+        XCTAssertEqual(e.horizontalCharacters(forTranslation: 24), 2, "precise near the origin")
         let long = e.horizontalCharacters(forTranslation: 300)
-        XCTAssertGreaterThanOrEqual(long, 80, "300pt must cross a sentence (build-103 gave 30)")
+        XCTAssertGreaterThanOrEqual(long, 50, "300pt must still cross a sentence")
         XCTAssertGreaterThan(long, 30, "must beat the rejected fixed 10pt/char rate")
     }
 
@@ -147,8 +153,8 @@ final class SpaceCursorGestureTests: XCTestCase {
     func testSmallCorrectionsStayPrecise() {
         let e = SpaceCursorEngine()
         XCTAssertEqual(e.horizontalCharacters(forTranslation: 4), 0)
-        XCTAssertEqual(e.horizontalCharacters(forTranslation: 8), 1)
-        XCTAssertEqual(e.horizontalCharacters(forTranslation: 24), 3)
+        XCTAssertEqual(e.horizontalCharacters(forTranslation: 12), 1, "one character costs 12pt")
+        XCTAssertEqual(e.horizontalCharacters(forTranslation: 36), 3, "zone edge ⇒ 3 chars")
     }
 
     func testReversalRetracesExactlyWithNoRatchet() {
@@ -177,7 +183,7 @@ final class SpaceCursorGestureTests: XCTestCase {
         let long = String(repeating: "lorem ipsum dolor sit amet ", count: 200)
         var e = activated(before: long, after: long)
         _ = e.drag(translationX: 600, translationY: 0, at: at(0.4))
-        XCTAssertGreaterThan(e.appliedOffset ?? 0, 200, "600pt must cross >200 chars")
+        XCTAssertGreaterThan(e.appliedOffset ?? 0, 150, "600pt must cross >150 chars")
         XCTAssertLessThanOrEqual(e.caretIndex ?? .max, e.document?.count ?? 0)
     }
 
@@ -259,7 +265,7 @@ final class SpaceCursorGestureTests: XCTestCase {
         var e = activated(before: "a😀b", after: "")
         XCTAssertEqual(e.document!.count, 3, "emoji is ONE grapheme")
         XCTAssertEqual(e.document!.utf16Distance(from: 0, to: 3), 4)
-        _ = e.drag(translationX: -8, translationY: 0, at: at(0.4))
+        _ = e.drag(translationX: -12, translationY: 0, at: at(0.4))
         XCTAssertEqual(e.caretIndex, 2, "one step lands between 😀 and b, never inside it")
     }
 
@@ -277,7 +283,7 @@ final class SpaceCursorGestureTests: XCTestCase {
 
     func testUTF16DeltaMatchesTheSpanTheHostMustCross() {
         var e = activated(before: "😀😀😀", after: "😀😀😀")
-        let out = e.drag(translationX: 24, translationY: 0, at: at(0.4))
+        let out = e.drag(translationX: 36, translationY: 0, at: at(0.4))
         guard case .moveCaret(let g, let u) = out else { return XCTFail("expected a move") }
         XCTAssertEqual(g, 3)
         XCTAssertEqual(u, 6, "3 non-BMP emoji = 6 UTF-16 units")

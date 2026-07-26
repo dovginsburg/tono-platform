@@ -168,10 +168,14 @@ func verify_quick_tap_inserts_exactly_one_space_and_never_enters_cursor_mode() {
 
 func verify_long_drags_accelerate_far_past_the_rejected_fixed_rate() {
     let e = SpaceCursorEngine()
-    let short = e.horizontalCharacters(forTranslation: 16)
+    // Build 111 re-baseline: the curve was dilated 1.5× along the travel axis
+    // after Build 110 was reported as too fast on device. The invariants below
+    // are unchanged; only the travel each one costs moved. The one-third
+    // reduction itself is pinned by verify_build111_cursor_sensitivity.swift.
+    let short = e.horizontalCharacters(forTranslation: 24)
     let long = e.horizontalCharacters(forTranslation: 300)
-    check(short == 2, "16pt ⇒ 2 chars (precise near origin), got \(short)")
-    check(long >= 80, "300pt must cross a sentence, got \(long) (build-103 gave 30)")
+    check(short == 2, "24pt ⇒ 2 chars (precise near origin), got \(short)")
+    check(long >= 50, "300pt must still cross a sentence, got \(long) (build-103 gave 30)")
     check(long > 300 / 10, "300pt must beat the rejected fixed 10pt/char rate")
 
     var last = -1
@@ -186,8 +190,8 @@ func verify_long_drags_accelerate_far_past_the_rejected_fixed_rate() {
 func verify_precision_preserved_for_small_corrections() {
     let e = SpaceCursorEngine()
     check(e.horizontalCharacters(forTranslation: 4) == 0, "sub-threshold nudge does not move")
-    check(e.horizontalCharacters(forTranslation: 8) == 1, "8pt ⇒ exactly 1 char")
-    check(e.horizontalCharacters(forTranslation: 24) == 3, "24pt (zone edge) ⇒ 3 chars")
+    check(e.horizontalCharacters(forTranslation: 12) == 1, "12pt ⇒ exactly 1 char")
+    check(e.horizontalCharacters(forTranslation: 36) == 3, "36pt (zone edge) ⇒ 3 chars")
 }
 
 func verify_reversal_retraces_exactly_no_ratchet_no_stale_bound() {
@@ -303,7 +307,7 @@ func verify_non_BMP_emoji_cost_2_UTF_16_units_but_1_caret_step() {
     let doc = e.document!
     check(doc.count == 3, "emoji is ONE grapheme")
     check(doc.utf16Distance(from: 0, to: 3) == 4, "a(1)+😀(2)+b(1) = 4 UTF-16 units")
-    _ = e.drag(translationX: -8, translationY: 0, at: at(0.4))
+    _ = e.drag(translationX: -12, translationY: 0, at: at(0.4))
     check(e.caretIndex == 2, "one step left lands between 😀 and b")
 }
 
@@ -327,7 +331,7 @@ func verify_composed_families_flags_skin_tones_and_combining_marks_are_single_st
 
 func verify_UTF_16_delta_always_matches_the_grapheme_span_the_host_must_cross() {
     var e = activated(before: "😀😀😀", after: "😀😀😀")
-    let out = e.drag(translationX: 24, translationY: 0, at: at(0.4))
+    let out = e.drag(translationX: 36, translationY: 0, at: at(0.4))
     let g = graphemes(out) ?? 0
     let u = utf16Delta(out) ?? 0
     check(g == 3, "3 graphemes, got \(g)")
@@ -415,7 +419,7 @@ func verify_very_long_field_traverses_quickly_and_stays_in_bounds() {
     var e = activated(before: long, after: long)
     _ = e.drag(translationX: 600, translationY: 0, at: at(0.4))
     let moved = e.appliedOffset ?? 0
-    check(moved > 200, "600pt sweep crosses >200 chars in a long field, got \(moved)")
+    check(moved > 150, "600pt sweep crosses >150 chars in a long field, got \(moved)")
     check(e.caretIndex! <= e.document!.count, "never exceeds bounds")
 }
 
