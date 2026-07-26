@@ -440,7 +440,7 @@ struct CoachView: View {
             }
         } catch {
             await MainActor.run {
-                errorMessage = error.localizedDescription
+                errorMessage = "Something went wrong. Try again in a moment."
                 loading = false
             }
         }
@@ -448,22 +448,25 @@ struct CoachView: View {
 
     // MARK: - Error formatting (matches SettingsView pattern)
 
+    /// Build 112: one short sentence about what the user can do next. The
+    /// raw message a failure carries is never rendered — it named transports
+    /// and status codes, which is implementation detail, not guidance.
     private func prettyError(_ e: TonoBackendError) -> String {
         switch e {
         case .offline:
             return "No internet connection. Check Wi-Fi or cellular and try again."
-        case .network(let m):
-            return "Network error: \(m)"
-        case .http(let code, let msg):
-            let trimmed = msg.count > 200 ? String(msg.prefix(200)) + "…" : msg
-            if code == 429 {
-                return "Active trial or subscription required. Open Settings to continue."
+        case .network:
+            return "Couldn't connect. Check your connection and try again."
+        case .http(let code, _):
+            switch code {
+            case 401: return "Your sign-in expired. Open Settings → Account to sign in again."
+            case 402, 429: return "An active trial or subscription is required. Open Settings to continue."
+            default: return "Something went wrong. Try again in a moment."
             }
-            return trimmed.isEmpty ? "Server error \(code)" : "Server error \(code): \(trimmed)"
         case .notRegistered:
             return "Account not set up yet. Open Settings → Account and tap ‘Set up Tono’."
-        case .decoding(let m):
-            return "Bad response: \(m)"
+        case .decoding:
+            return "Something went wrong. Try again in a moment."
         case .tooManyDevices(let current, let max):
             return "This email is already on \(current) devices (max \(max))."
         }
@@ -488,7 +491,7 @@ struct CoachView: View {
                 explainerLine(number: "3", text: "Pick the rewrite that sounds like you. Copy. Send.")
             }
             .padding(.top, 4)
-            Text("Tono needs a one-time setup before it can reach our server (≈2 seconds).")
+            Text("Tono finishes a one-time setup before your first rewrite (about 2 seconds).")
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.6))
                 .multilineTextAlignment(.center)

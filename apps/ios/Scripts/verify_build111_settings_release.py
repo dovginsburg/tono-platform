@@ -185,8 +185,14 @@ def main() -> int:
         failures,
     )
 
+    # SUPERSEDED BY BUILD 112. This contract used to require the DEBUG endpoint
+    # diagnostics to survive in an internal build. The founder's Build 112
+    # correction — "backend details still showing" — removed that allowance:
+    # no user-reachable app UI may carry them under ANY compilation mode.
+    # `Scripts/verify_build112_ui_consolidation.py` owns the whole-surface scan;
+    # the line below keeps this older lane honest about the same rule.
     for term in ["Endpoint", "Custom backend URL", "Test Connection", "api.tonoit.com"]:
-        check(term in debug, f"Debug diagnostics retain {term!r}", failures)
+        check(term not in debug, f"Debug build also excludes {term!r}", failures)
 
     check(
         "struct RecipientsManagerView" in manager_raw

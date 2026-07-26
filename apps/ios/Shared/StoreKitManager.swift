@@ -250,7 +250,7 @@ public final class StoreKitManager: ObservableObject {
                     await updateProState()
                     await tx.finish()
                 } catch {
-                    purchaseError = "Purchase received, but server verification failed. Try Restore purchases."
+                    purchaseError = "Purchase received, but we couldn't confirm it yet. Try Restore purchases."
                 }
             }
         }

@@ -6,65 +6,49 @@ import SwiftUI
 import StoreKit
 import UIKit
 
-private enum SettingsServiceState: Equatable {
-    case checking
+/// Build 112 — what Settings may say about the account.
+///
+/// The rejected Build 111 surface polled a service health endpoint and
+/// rendered its verdict ("temporarily unavailable", "this is on our side"),
+/// which is infrastructure state wearing consumer clothes. This state is
+/// derived from one local, truthful fact — whether this device has finished
+/// account setup — and it offers the one action a user can actually take.
+private enum SettingsAccountState: Equatable {
     case ready
     case needsSetup
-    case offline
-    case unavailable
-
-    init(error: TonoBackendError) {
-        switch error {
-        case .offline, .network: self = .offline
-        case .notRegistered: self = .needsSetup
-        default: self = .unavailable
-        }
-    }
 
     var title: String {
         switch self {
-        case .checking: return "Checking Tono"
-        case .ready: return "Tono is ready"
+        case .ready: return "Your account is set up"
         case .needsSetup: return "Finish setting up Tono"
-        case .offline: return "You're offline"
-        case .unavailable: return "Tono is temporarily unavailable"
         }
     }
 
     var detail: String {
         switch self {
-        case .checking: return "Checking whether online coaching is available."
-        case .ready: return "Online coaching is available."
-        case .needsSetup: return "Set up your account to use online coaching."
-        case .offline: return "Connect to Wi-Fi or cellular, then try again."
-        case .unavailable: return "This is on our side. Try again in a moment."
+        case .ready: return "Coach is ready whenever you are."
+        case .needsSetup: return "Set up your account to start coaching drafts."
         }
     }
 
-    var recoveryAction: String? {
+    var setupAction: String? {
         switch self {
         case .needsSetup: return "Set up Tono"
-        case .offline, .unavailable: return "Try again"
-        case .checking, .ready: return nil
+        case .ready: return nil
         }
     }
 
     var icon: String {
         switch self {
-        case .checking: return "clock"
         case .ready: return "checkmark.seal.fill"
         case .needsSetup: return "sparkles"
-        case .offline: return "wifi.slash"
-        case .unavailable: return "exclamationmark.triangle"
         }
     }
 
     var tint: Color {
         switch self {
-        case .checking: return .secondary
         case .ready: return .green
         case .needsSetup: return .purple
-        case .offline, .unavailable: return .orange
         }
     }
 }
@@ -72,11 +56,6 @@ private enum SettingsServiceState: Equatable {
 struct SettingsView: View {
     @Binding var prefs: TonePreferences
     @ObservedObject private var store = StoreKitManager.shared
-
-#if DEBUG
-    // Internal-only runtime endpoint override.
-    @AppStorage("tc.backendURL") private var customBackendURL: String = ""
-#endif
 
     @State private var voiceField:        String     = ""
     @State private var showPaywall:       Bool       = false
@@ -89,11 +68,8 @@ struct SettingsView: View {
     @State private var isRedeemingCode:   Bool       = false
     @State private var featureToggles:    [FeatureFlag: Bool] = [:]
     @State private var liveToneEnabled:   Bool       = true
-    @State private var serviceState:      SettingsServiceState = .checking
+    @State private var accountState:      SettingsAccountState = .needsSetup
     @State private var accountNotice:     String?
-#if DEBUG
-    @State private var diagnosticHealthText: String?
-#endif
     @State private var coachVariants = CoachVariantSettings()
     private let coachVariantStore = CoachVariantSettingsStore()
     // build 101 — account deletion
@@ -124,9 +100,6 @@ struct SettingsView: View {
                 planSection
                 privacySection
                 accountManagementSection
-#if DEBUG
-                developerDiagnosticsSection
-#endif
             }
             .navigationTitle("Settings")
             .onAppear {
@@ -135,10 +108,8 @@ struct SettingsView: View {
                 loadFeatureToggles()
                 loadLiveTone()
                 coachVariants = coachVariantStore.load()
-                Task {
-                    await refreshServiceState()
-                    await refreshUsage()
-                }
+                refreshAccountState()
+                Task { await refreshUsage() }
             }
             .task {
                 try? await TonoBackend.shared.registerIfNeeded(
@@ -146,6 +117,7 @@ struct SettingsView: View {
                     appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0"
                 )
                 await store.refreshEntitlements()
+                await MainActor.run { refreshAccountState() }
                 await refreshUsage()
             }
             .sheet(isPresented: $showPaywall) {
@@ -191,14 +163,14 @@ struct SettingsView: View {
     private var accountSection: some View {
         Section("Account") {
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: serviceState.icon)
+                Image(systemName: accountState.icon)
                     .font(.title3)
-                    .foregroundColor(serviceState.tint)
+                    .foregroundColor(accountState.tint)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(serviceState.title)
+                    Text(accountState.title)
                         .font(.subheadline.weight(.semibold))
-                    Text(serviceState.detail)
+                    Text(accountState.detail)
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -208,15 +180,15 @@ struct SettingsView: View {
             .padding(.vertical, 2)
             .accessibilityElement(children: .combine)
 
-            if let action = serviceState.recoveryAction {
+            if let action = accountState.setupAction {
                 Button {
-                    Task { await recoverService() }
+                    Task { await runSetup() }
                 } label: {
                     HStack(spacing: 8) {
                         if isSettingUp {
                             ProgressView().controlSize(.small)
                         } else {
-                            Image(systemName: serviceState == .needsSetup ? "sparkles" : "arrow.clockwise")
+                            Image(systemName: "sparkles")
                         }
                         Text(isSettingUp ? "Working…" : action)
                             .font(.subheadline.weight(.semibold))
@@ -241,90 +213,17 @@ struct SettingsView: View {
                 }
             }
 
-            Text("Rewrites run on Tono's service. Your draft is sent only when you tap Coach, and you never need to enter a technical access key.")
+            Text("Your draft is only used for coaching, and only when you tap Coach. There is nothing technical to set up.")
                 .font(.caption).foregroundColor(.secondary)
         }
     }
 
-#if DEBUG
-    @ViewBuilder
-    private var developerDiagnosticsSection: some View {
-        Section {
-            HStack {
-                Text("Endpoint")
-                Spacer()
-                Text(resolvedBackendLabel)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            TextField("Custom backend URL (leave blank for default)", text: $customBackendURL)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled(true)
-                .keyboardType(.URL)
-                .font(.system(.body, design: .monospaced))
-                .onSubmit { Task { await runDiagnosticHealthCheck() } }
-            HStack {
-                Button("Test Connection") {
-                    Task { await runDiagnosticHealthCheck() }
-                }
-                Spacer()
-                if let raw = diagnosticHealthText {
-                    Text(raw)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .lineLimit(2)
-                }
-            }
-            Text("Registered: \(TonoBackend.shared.isRegistered() ? "yes" : "no") · default https://api.tonoit.com")
-                .font(.caption2).foregroundColor(.secondary)
-        } header: {
-            Text("Developer diagnostics (internal build)")
-        }
-    }
-
-    private var resolvedBackendLabel: String {
-        let trimmed = customBackendURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty { return trimmed }
-        return TonoBackend.shared.baseURL.absoluteString
-    }
-
-    private func runDiagnosticHealthCheck() async {
-        await MainActor.run { diagnosticHealthText = "checking…" }
-        do {
-            let ok = try await TonoBackend.shared.health()
-            await MainActor.run { diagnosticHealthText = ok ? "healthy" : "non-2xx response" }
-        } catch {
-            await MainActor.run { diagnosticHealthText = "\(error)" }
-        }
-        await refreshServiceState()
-    }
-#endif
-
-    private func refreshServiceState() async {
-        await MainActor.run { serviceState = .checking }
-        guard TonoBackend.shared.isRegistered() else {
-            await MainActor.run { serviceState = .needsSetup }
-            return
-        }
-        do {
-            let ok = try await TonoBackend.shared.health()
-            await MainActor.run { serviceState = ok ? .ready : .unavailable }
-        } catch let e as TonoBackendError {
-            await MainActor.run { serviceState = SettingsServiceState(error: e) }
-        } catch {
-            await MainActor.run { serviceState = .unavailable }
-        }
-    }
-
-    private func recoverService() async {
-        if serviceState == .needsSetup {
-            await runSetup()
-        } else {
-            await refreshServiceState()
-            await refreshUsage()
-        }
+    /// Local, synchronous, and truthful: has this device finished account
+    /// setup? Build 112 removed the periodic service probe this used to run —
+    /// a user cannot act on a health verdict, and rendering one put
+    /// implementation state on a consumer screen.
+    private func refreshAccountState() {
+        accountState = TonoBackend.shared.isRegistered() ? .ready : .needsSetup
     }
 
     private func runSetup() async {
@@ -335,40 +234,45 @@ struct SettingsView: View {
                 platform: "ios",
                 appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0"
             )
-            await MainActor.run { accountNotice = nil }
+            await MainActor.run {
+                accountNotice = nil
+                refreshAccountState()
+            }
             await refreshUsage()
-            await refreshServiceState()
         } catch let e as TonoBackendError {
             await MainActor.run {
                 accountNotice = consumerMessage(for: e)
-                serviceState = SettingsServiceState(error: e)
+                refreshAccountState()
             }
         } catch {
             await MainActor.run {
                 accountNotice = "Setup didn't finish. Try again in a moment."
-                serviceState = .unavailable
+                refreshAccountState()
             }
         }
     }
 
+    /// Every failure the user can meet becomes one short sentence about what
+    /// they can do next. No transport, status code, or implementation detail
+    /// reaches this screen — those belong in logs.
     private func consumerMessage(for e: TonoBackendError) -> String {
         switch e {
         case .offline:
             return "You're offline. Check Wi-Fi or cellular and try again."
         case .network:
-            return "Tono couldn't reach its service. Check your connection and try again."
+            return "Couldn't connect. Check your connection and try again."
         case .notRegistered:
             return "Finish setting up Tono to continue."
         case .decoding:
-            return "Tono got an unexpected reply. Try again in a moment."
+            return "Something went wrong. Try again in a moment."
         case .tooManyDevices(let current, let max):
             return "This email is already on \(current) devices (max \(max)). Contact support@tonoit.com if you need more."
         case .http(let code, _):
             switch code {
-            case 401: return "Your sign-in expired. Tap Set up Tono to refresh it."
+            case 401: return "Your sign-in expired. Tap Set up Tono to sign in again."
             case 402: return "An active trial or subscription is required."
-            case 429: return "Too many requests right now. Wait a minute and try again."
-            default:  return "Tono is temporarily unavailable. This is on our side — try again in a moment."
+            case 429: return "Too many tries right now. Wait a minute and try again."
+            default:  return "Something went wrong. Try again in a moment."
             }
         }
     }
@@ -380,7 +284,7 @@ struct SettingsView: View {
                     prefs.preferredVoice = new.isEmpty ? nil : new
                     prefs.save()
                 }
-            Text("Passed to the model so rewrites match how you actually talk.")
+            Text("Rewrites follow this so they sound like how you actually talk.")
                 .font(.caption).foregroundColor(.secondary)
         }
     }
@@ -399,7 +303,7 @@ struct SettingsView: View {
                     }
                 }
             }
-            Text("Tono learns from your rewrite choices and lets you add facts manually. These are sent as hints to personalize rewrites over time.")
+            Text("Tono learns from your rewrite choices and lets you add facts manually. They personalize your rewrites over time.")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
@@ -452,7 +356,7 @@ struct SettingsView: View {
                 .accessibilityLabel(summary.accessibilityLabel)
                 .accessibilityHint("Opens the recipients manager, where you can search, edit, import and delete.")
             }
-            Text("Recipient profiles stay in Tono’s local App Group. Only a chosen recipient’s voice hint is sent with a coaching request.")
+            Text("Recipient profiles stay on this device. Only a chosen recipient’s voice hint is used when you coach a draft.")
                 .font(.caption).foregroundColor(.secondary)
         }
         .onAppear {
@@ -763,7 +667,7 @@ struct SettingsView: View {
             }
         } catch {
             await MainActor.run {
-                accountNotice = "Tono couldn't refresh your account right now. Try again in a moment."
+                accountNotice = "Couldn't refresh your account right now. Try again in a moment."
             }
         }
     }
@@ -783,7 +687,7 @@ struct SettingsView: View {
         } catch let e as TonoBackendError {
             promoError = consumerMessage(for: e)
         } catch {
-            promoError = error.localizedDescription
+            promoError = "That code couldn't be applied. Check it and try again."
         }
         isRedeemingCode = false
     }
@@ -1207,7 +1111,7 @@ struct AccountDeletionView: View {
             Label("This cannot be undone", systemImage: "exclamationmark.triangle.fill")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundColor(.red)
-            Text("Deleting your account permanently removes all data from Tono's servers: your style memory, recipient profiles, and usage history. Your subscription is not automatically cancelled — cancel it separately in Apple ID settings before deleting.")
+            Text("Deleting your account permanently deletes your account and everything saved with it: your style memory, recipient profiles, and usage history. Your subscription is not automatically cancelled — cancel it separately in Apple ID settings before deleting.")
                 .font(.callout)
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1297,12 +1201,12 @@ struct AccountDeletionView: View {
                     case .offline:
                         errorMessage = "You're offline. Connect to the internet and try again."
                     default:
-                        errorMessage = "Account deletion failed (\(e.localizedDescription)). Your account was not deleted. Contact support@tonoit.com if this persists."
+                        errorMessage = "Account deletion didn't finish. Your account was not deleted. Contact support@tonoit.com if this persists."
                     }
                 }
             } catch {
                 await MainActor.run {
-                    errorMessage = "Deletion failed: \(error.localizedDescription). Your account was not deleted."
+                    errorMessage = "Account deletion didn't finish. Your account was not deleted."
                 }
             }
         }

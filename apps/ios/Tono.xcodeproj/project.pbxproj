@@ -46,7 +46,6 @@
 		2006FA0CC979F68A4F917014 /* MockToneAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C69903847843E133412E1E5 /* MockToneAnalyzer.swift */; };
 		20D1B23B844C847F7AB362C3 /* RecipientMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58D322318012F6E3758FBE16 /* RecipientMemory.swift */; };
 		255C57EC2FEFADD136CC95C4 /* MessagesViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C15A6D1DB3DF8DFB596C677 /* MessagesViewController.swift */; };
-		26A32AFB6BA4EE68D7300F89 /* PlaygroundView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 217A3D33DCC3DE654CA907C5 /* PlaygroundView.swift */; };
 		2A1053919D15380BA5597C24 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9B37E5A81C027DBCC41C8EA9 /* Assets.xcassets */; };
 		2F986D1C30D60DF7044A1827 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FCE9DA4E023C12BADC4BC12 /* HomeView.swift */; };
 		3445E8532232C012E7274043 /* CoachDraftIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3861F3AF2390477CF4D567E /* CoachDraftIntent.swift */; };
@@ -146,6 +145,7 @@
 		A71070000000000000000004 /* Build107ToneTargetResetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71070000000000000000003 /* Build107ToneTargetResetTests.swift */; };
 		A71090000000000000000002 /* Build109StripRoleAndDocumentIntegrityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71090000000000000000001 /* Build109StripRoleAndDocumentIntegrityTests.swift */; };
 		A71110000000000000000002 /* Build111CursorSensitivityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71110000000000000000001 /* Build111CursorSensitivityTests.swift */; };
+		B112C0FFEE0000000000A112 /* Build112UISurfaceContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B112C0FFEE0000000000B112 /* Build112UISurfaceContractTests.swift */; };
 		A71110000000000000000004 /* Build111CoachReconnectTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71110000000000000000003 /* Build111CoachReconnectTests.swift */; };
 		5ED0C7000000000000000002 /* SetupDoctor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ED0C7000000000000000001 /* SetupDoctor.swift */; };
 		5ED0C7000000000000000003 /* SetupDoctor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ED0C7000000000000000001 /* SetupDoctor.swift */; };
@@ -246,7 +246,6 @@
 		1A5B6B766BC79F63A5B21178 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		1AEE8A1C65E51602F4AD7330 /* TonoShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TonoShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		1B3DE7D6D3E9558EBAB94A9A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		217A3D33DCC3DE654CA907C5 /* PlaygroundView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaygroundView.swift; sourceTree = "<group>"; };
 		2850931F0F01200197FC84B7 /* TonoMessagesExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TonoMessagesExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		890000000000000000000003 /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		8A0000000000000000000001 /* LiveToneClassifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveToneClassifier.swift; sourceTree = "<group>"; };
@@ -314,6 +313,7 @@
 		A71070000000000000000003 /* Build107ToneTargetResetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build107ToneTargetResetTests.swift; sourceTree = "<group>"; };
 		A71090000000000000000001 /* Build109StripRoleAndDocumentIntegrityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build109StripRoleAndDocumentIntegrityTests.swift; sourceTree = "<group>"; };
 		A71110000000000000000001 /* Build111CursorSensitivityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build111CursorSensitivityTests.swift; sourceTree = "<group>"; };
+		B112C0FFEE0000000000B112 /* Build112UISurfaceContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build112UISurfaceContractTests.swift; sourceTree = "<group>"; };
 		A71110000000000000000003 /* Build111CoachReconnectTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build111CoachReconnectTests.swift; sourceTree = "<group>"; };
 		5ED0C7000000000000000001 /* SetupDoctor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupDoctor.swift; sourceTree = "<group>"; };
 		5ED0C7000000000000000005 /* SetupDoctorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupDoctorView.swift; sourceTree = "<group>"; };
@@ -435,6 +435,7 @@
 				A71070000000000000000003 /* Build107ToneTargetResetTests.swift */,
 				A71090000000000000000001 /* Build109StripRoleAndDocumentIntegrityTests.swift */,
 				A71110000000000000000001 /* Build111CursorSensitivityTests.swift */,
+				B112C0FFEE0000000000B112 /* Build112UISurfaceContractTests.swift */,
 				A71110000000000000000003 /* Build111CoachReconnectTests.swift */,
 				5ED0C7000000000000000007 /* SetupDoctorTests.swift */,
 				970000000000000000000010 /* Build97KeyboardGeometryTests.swift */,
@@ -529,7 +530,6 @@
 				8A0000000000000000000005 /* PrivacyInfo.xcprivacy */,
 				3C73FA31B4F44D8110957849 /* MemoryView.swift */,
 				600B6DD9AC9FC36C6BB8ED14 /* OnboardingCalibrationView.swift */,
-				217A3D33DCC3DE654CA907C5 /* PlaygroundView.swift */,
 				822A94BEAD307E044D2E1547 /* SettingsView.swift */,
 				B1115E770000000000000001 /* RecipientsManagerView.swift */,
 				5ED0C7000000000000000005 /* SetupDoctorView.swift */,
@@ -875,6 +875,7 @@
 				A71070000000000000000004 /* Build107ToneTargetResetTests.swift in Sources */,
 				A71090000000000000000002 /* Build109StripRoleAndDocumentIntegrityTests.swift in Sources */,
 				A71110000000000000000002 /* Build111CursorSensitivityTests.swift in Sources */,
+				B112C0FFEE0000000000A112 /* Build112UISurfaceContractTests.swift in Sources */,
 				A71110000000000000000004 /* Build111CoachReconnectTests.swift in Sources */,
 				5ED0C7000000000000000004 /* SetupDoctor.swift in Sources */,
 				5ED0C7000000000000000008 /* SetupDoctorTests.swift in Sources */,
@@ -995,7 +996,6 @@
 				3A9B7C1F625D2E3A7B8C9D0E /* OnDeviceAppleRewrite.swift in Sources */,
 				A3D6E3007ACDF66C3251C56E /* OnboardingCalibrationView.swift in Sources */,
 				09855EF291E1E11F38AA72AC /* OpenAIToneAnalyzer.swift in Sources */,
-				26A32AFB6BA4EE68D7300F89 /* PlaygroundView.swift in Sources */,
 				51381AED82774B5C91E484A7 /* CoachView.swift in Sources */,
 				511B5CB9D0506AE3B0B7BA9A /* RecipientMemory.swift in Sources */,
 				C89EABB2DBA692A1FF5AC255 /* SettingsView.swift in Sources */,

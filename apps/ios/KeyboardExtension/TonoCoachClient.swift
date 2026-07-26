@@ -469,25 +469,28 @@ public final class TonoCoachClient {
         /// surfacing a raw URLError string.
         case offline
 
+        /// Build 112: the keyboard says what the user can do, never what the
+        /// implementation did. The previous copy rendered raw status codes and
+        /// response bodies on the strip — the same class of leak the founder
+        /// rejected in Settings. The offline and timeout messages are Build 111
+        /// contract copy and are unchanged.
         public var userFacingMessage: String {
             switch self {
             case .invalidURL:
-                return "Internal error: invalid backend URL."
+                return "Coach can't run right now. Try again in a moment."
             case .missingToken:
                 return "Sign in to Tono to use Coach. Open the Tono app to continue."
             case .offline:
                 return LocalIntelligenceCopy.coachRequiresInternet
-            case .transport(let m):
-                return "Network error: \(m)"
+            case .transport:
+                return "Couldn't connect. Check your connection and tap Retry."
             case .timeout:
                 return "Request timed out. Check your connection and tap Retry."
-            case .http(let status, let body):
+            case .http(let status, _):
                 if status == 429 { return "Active trial or subscription required. Open Tono to continue." }
-                if status == 503 { return "Service temporarily unavailable. Tap Retry." }
-                if body.isEmpty { return "Server returned status \(status)." }
-                return "Server returned \(status): \(body.prefix(160))"
-            case .decoding(let m):
-                return "Could not read server response: \(m)"
+                return "Coach couldn't finish. Tap Retry."
+            case .decoding:
+                return "Coach couldn't finish. Tap Retry."
             case .staleDraft:
                 return "The draft changed while Coach was working. Run Coach again."
             }

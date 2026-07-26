@@ -508,9 +508,9 @@ struct EmailSignInSheet: View {
             case 429:
                 return "Too many code requests. Wait a few minutes and try again."
             case 503:
-                return "Email delivery is temporarily unavailable. Try again later."
+                return "We couldn't send the code just now. Try again in a few minutes."
             default:
-                return "Tono's sign-in service had a problem. Try again later."
+                return "Sign-in didn't work. Try again later."
             }
         default:
             return "Email sign-in couldn't start. Try again."
@@ -532,9 +532,9 @@ struct EmailSignInSheet: View {
             case 429:
                 return "Too many attempts. Wait a few minutes, then request a new code."
             case 503:
-                return "Email sign-in is temporarily unavailable. Try again later."
+                return "We couldn't verify the code just now. Try again in a few minutes."
             default:
-                return "Tono's sign-in service had a problem. Try again later."
+                return "Sign-in didn't work. Try again later."
             }
         default:
             return "Couldn't verify the code. Try again."
