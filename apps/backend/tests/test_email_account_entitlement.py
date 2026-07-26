@@ -430,9 +430,19 @@ def test_sign_out_cannot_be_undone_by_a_silent_re_registration(client, fake_auth
     # 1. The bearer that was just used is dead.
     assert client.get("/v1/me", headers=_headers(session["api_token"])).status_code == 401
 
-    # 2. Replaying the OLD device id with its old credential is refused
-    #    outright — the credential hash is gone, so there is no proof left to
-    #    present and the device cannot re-enter the row it was signed out of.
+    # 2. Replaying the OLD device id with its old credential cannot re-enter the
+    #    row it was signed out of. The credential hash is gone, so the presented
+    #    proof matches nothing.
+    #
+    #    What that replay now RECEIVES is a brand-new anonymous device: same
+    #    slot, new bearer, new credential, new canonical account, no
+    #    entitlement. It used to be a permanent 409, which was not a safety
+    #    property at all — the row was already empty — but it did mean any
+    #    client that kept its device id across a sign-out could never register
+    #    again, and the only reason nobody hit it is that both shipped clients
+    #    happen to discard their device identity too. The guarantee under test
+    #    is "a sign-out cannot be undone", and re-issuing an empty slot to a
+    #    stranger honours it more visibly than refusing them does.
     replay = client.post(
         "/v1/register",
         json={
@@ -440,8 +450,19 @@ def test_sign_out_cannot_be_undone_by_a_silent_re_registration(client, fake_auth
             "device_credential": device.get("device_credential"),
         },
     )
-    assert replay.status_code == 409, replay.text
-    assert "recovery proof" in replay.json()["error"]["message"]
+    assert replay.status_code == 200, replay.text
+    reissued = replay.json()
+    assert reissued["device_id"] == session["device_id"]
+    assert reissued["account_id"] != account_id, (
+        "re-registering a signed-out device must never return its old account"
+    )
+    assert reissued["is_pro"] is False
+    assert _coach(client, reissued["api_token"]).status_code == 402
+    # The old bearer stays dead, and the old credential does not become live
+    # again just because the slot was re-issued.
+    assert client.get("/v1/me", headers=_headers(session["api_token"])).status_code == 401
+    assert reissued["api_token"] != session["api_token"]
+    assert reissued["device_credential"] != device.get("device_credential")
 
     # 3. What the app actually does after signing out (it drops its local device
     #    identity too) lands on a NEW anonymous account with no entitlement.

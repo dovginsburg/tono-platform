@@ -248,7 +248,30 @@ SHIPPED_PLISTS = [
     "TonoMessagesExtension/Info.plist",
 ]
 
-EXPECTED_BUILD = "113"
+def _expected_build() -> str:
+    """Read the shipped build number from `Scripts/bump-build.sh`.
+
+    That script is the SINGLE reviewed authority for the number, and every
+    other consumer (Tests/BuildNumberGuardTests.swift,
+    Tests/Build112UISurfaceContractTests.swift,
+    Scripts/verify_messages_extension.py) already derives from it rather than
+    keeping a copy. This verifier did keep one — pinned at "113" — so cutting
+    Build 114 turned a green UI-consolidation gate red on a change that had
+    nothing to do with the UI. Deriving keeps the real invariant (all four
+    shipped bundles agree with the release authority) while removing the drift.
+    """
+    script = (ROOT / "Scripts" / "bump-build.sh").read_text(encoding="utf-8")
+    for line in script.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("EXPECTED_BUILD="):
+            return stripped.split("=", 1)[1].strip().strip("\"'")
+    raise SystemExit(
+        "verify_build112: Scripts/bump-build.sh must pin EXPECTED_BUILD — "
+        "it is the release authority"
+    )
+
+
+EXPECTED_BUILD = _expected_build()
 EXPECTED_VERSION = "1.1"
 
 EXPECTED_TABS = ["Coach", "This Week", "Settings"]

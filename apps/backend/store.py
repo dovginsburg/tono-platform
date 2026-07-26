@@ -176,12 +176,36 @@ CREATE TABLE IF NOT EXISTS account_registrations (
     provider         TEXT NOT NULL,
     created_at       TEXT NOT NULL,
     verified_at      TEXT,
+    -- Where the registration was STARTED. Immutable once known — see
+    -- `_upsert_registration_row`. A later sign-in from another surface moves
+    -- `last_seen_surface`, never this.
     source_surface   TEXT NOT NULL DEFAULT 'unknown',
+    -- The build the registration was started from. First non-null wins, for
+    -- the same reason.
     app_build        TEXT,
+    -- The most recent ATTESTED surface/build. "Attested" means a caller that
+    -- proved which account it was acting for (a device bearer, or a
+    -- provider-verified token) — never an unauthenticated address-scoped
+    -- request, which cannot be trusted to describe someone else's account.
+    last_seen_surface TEXT,
+    last_seen_app_build TEXT,
     last_sign_in_at  TEXT,
     last_seen_at     TEXT,
-    updated_at       TEXT NOT NULL
+    updated_at       TEXT NOT NULL,
+    -- The auth provider's own subject for the user this registration created,
+    -- recorded BEFORE verification. This is what makes the anonymous upgrade
+    -- actually hold: whichever surface completes the verification resolves
+    -- this claim and lands on THIS canonical account rather than minting a
+    -- second one (see `claim_pending_registration_account`). An opaque public
+    -- identifier, not a credential — it grants nothing on its own, and the
+    -- account stays unidentified until an address is proven.
+    provider_subject TEXT
 );
+-- A provider subject backs exactly ONE canonical registration. Partial so the
+-- overwhelmingly common NULL case is unconstrained.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_account_registrations_provider_subject
+    ON account_registrations(provider_subject)
+    WHERE provider_subject IS NOT NULL;
 -- A verified address may back exactly ONE canonical account. Partial index so
 -- pending rows (which have not proved ownership yet) can legitimately race for
 -- the same address, and only the one that verifies claims it. A second
@@ -743,9 +767,32 @@ class Store:
             # registration into a usable login identity.
             "ALTER TABLE accounts ADD COLUMN email_normalized TEXT",
             "ALTER TABLE accounts ADD COLUMN email_verified_at TEXT",
+            # Build 114 remediation. `source_surface` / `app_build` became
+            # immutable registration facts, so recency needed somewhere honest
+            # to live; `provider_subject` is the pre-verification claim that
+            # makes the anonymous upgrade survive the verification click. See
+            # the `account_registrations` SCHEMA comment for each.
+            "ALTER TABLE account_registrations ADD COLUMN last_seen_surface TEXT",
+            "ALTER TABLE account_registrations ADD COLUMN last_seen_app_build TEXT",
+            "ALTER TABLE account_registrations ADD COLUMN provider_subject TEXT",
+            # A signed-out device row is retired: its credential is gone and its
+            # bearer is rotated, so nothing can prove itself back into it.
+            # Recording WHEN it was retired is what lets `register_device`
+            # re-issue the slot as a brand-new device instead of answering a
+            # permanent 409 (see `sign_out_device`).
+            "ALTER TABLE users ADD COLUMN signed_out_at TEXT",
         ):
             with contextlib.suppress(sqlite3.OperationalError):
                 self._conn.execute(stmt)
+        # Created here rather than in SCHEMA for the same reason the
+        # supabase_sub index is: on a migrated DB the CREATE TABLE is a no-op,
+        # so the column does not exist yet when SCHEMA's executescript runs.
+        with contextlib.suppress(sqlite3.OperationalError):
+            self._conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_account_registrations_provider_subject"
+                " ON account_registrations(provider_subject)"
+                " WHERE provider_subject IS NOT NULL"
+            )
         # Non-unique: two DIFFERENT provider subjects may legitimately present
         # the same address (distinct Supabase users across projects/eras). We
         # keep them as separate accounts and audit the collision rather than
@@ -964,6 +1011,21 @@ class Store:
                         and not credential_hash
                         and secrets.compare_digest(row["api_token"], bearer_token)
                     )
+                    # A RETIRED row (signed out) is re-issuable as a brand-new
+                    # device. Nothing can prove itself back into it — sign-out
+                    # nulled the credential and rotated the bearer — so without
+                    # this the device id answered 409 forever, and a client that
+                    # keeps its device id across a sign-out (or a person
+                    # reinstalling on the same handset) could never register
+                    # again. Re-issuing is safe precisely because the row is
+                    # empty: sign-out already unlinked the account and cleared
+                    # the entitlement mirror, so the claimant inherits a fresh
+                    # anonymous account and nothing else. A row that was NOT
+                    # signed out still requires proof, so this widens nothing
+                    # for a live device.
+                    if row["account_id"] is None and _row_signed_out(row):
+                        return self._reissue_signed_out_device(cur, device_id, now)
+
                     if legacy_ok:
                         credential = _new_device_credential()
                         token = _new_token()
@@ -1037,6 +1099,62 @@ class Store:
             return DeviceRegistration(user=user, device_credential=credential)
 
         return self._run(_do).result()
+
+    def _reissue_signed_out_device(
+        self, cur: sqlite3.Cursor, device_id: str, now: str
+    ) -> DeviceRegistration:
+        """Re-issue a retired device slot as a brand-new anonymous device.
+
+        Everything a fresh `/v1/register` would produce: a new bearer, a new
+        durable credential, and a NEW canonical anonymous account. Nothing from
+        the retired occupant survives — the counters are zeroed and the
+        entitlement mirror is already clear — so this is a re-registration, not
+        a recovery, and it can never be a way back into the account the row was
+        signed out of. That account is reachable only by signing in.
+        """
+        token = _new_token()
+        credential = _new_device_credential()
+        cur.execute("BEGIN IMMEDIATE")
+        try:
+            account_id = _insert_anonymous_account(cur, now)
+            cur.execute(
+                """UPDATE users
+                      SET api_token = ?,
+                          device_credential_hash = ?,
+                          previous_api_token = NULL,
+                          previous_api_token_expires_at = NULL,
+                          account_id = ?,
+                          signed_out_at = NULL,
+                          plan = 'free',
+                          stripe_subscription_id = NULL,
+                          subscription_status = NULL,
+                          subscription_renews_at = NULL,
+                          coupon_pro_expires_at = NULL,
+                          daily_count = 0,
+                          daily_day = NULL,
+                          updated_at = ?
+                    WHERE device_id = ?
+                      AND account_id IS NULL
+                      AND device_credential_hash IS NULL
+                      AND signed_out_at IS NOT NULL""",
+                (token, _hash_device_credential(credential), account_id, now, device_id),
+            )
+            if cur.rowcount != 1:
+                # Someone else re-issued this slot between our read and our
+                # write. Fail closed rather than handing out a second bearer.
+                cur.execute("ROLLBACK")
+                raise DeviceRegistrationProofError()
+            cur.execute("SELECT * FROM users WHERE device_id = ?", (device_id,))
+            user = _row_to_user(cur.fetchone())
+            cur.execute("COMMIT")
+        except DeviceRegistrationProofError:
+            raise
+        except Exception:
+            with contextlib.suppress(sqlite3.Error):
+                cur.execute("ROLLBACK")
+            raise
+        self._attach_account(cur, user)
+        return DeviceRegistration(user=user, device_credential=credential)
 
     def _ensure_account(self, cur: sqlite3.Cursor, user: User, now: str) -> None:
         """Guarantee `user` references a canonical account, minting an
@@ -1546,6 +1664,7 @@ class Store:
         email: str,
         source_surface: Optional[str] = None,
         app_version: Optional[str] = None,
+        provider_subject: Optional[str] = None,
     ) -> Account:
         """Move `account_id` into the PENDING email-registration state.
 
@@ -1557,6 +1676,27 @@ class Store:
         Registering onto an account that already has a DIFFERENT verified
         address is refused, so a stray second registration cannot quietly
         re-point a live login identity at an attacker's address.
+
+        ``provider_subject`` is the auth provider's own id for the user the
+        signup just created. Recording it here is what makes "the anonymous
+        device upgrades in place" true rather than aspirational: without it the
+        only thing tying this registration to the eventual verification was the
+        address, and the verification arrives on a completely different surface
+        (a browser, from a mail app) with no bearer and no session — so the
+        click minted a SECOND canonical account and the person's original one
+        was orphaned, with its history, usage and purchase ownership on it.
+
+        It is recorded on the REGISTRATION row, not on `accounts`, precisely so
+        it changes nothing yet: writing it to `accounts.supabase_sub` would make
+        `Account.is_identified` and `lifecycle_state` report a verified identity
+        for an address nobody has proven. The claim is redeemed at proof time by
+        `claim_pending_registration_account`.
+
+        FIRST CLAIM WINS. A subject already claimed by a different account is
+        left alone rather than re-pointed: a later caller must never be able to
+        displace an earlier claimant and inherit the verification they are
+        waiting for. The registration itself still proceeds — the fallback is
+        simply the pre-existing behaviour for that device.
         """
         normalized = normalize_email(email)
         if not normalized:
@@ -1580,6 +1720,15 @@ class Store:
                 "UPDATE accounts SET email_normalized = ?, updated_at = ? WHERE id = ?",
                 (normalized, now, account_id),
             )
+            claim = _clean_provider_subject(provider_subject)
+            if claim is not None:
+                cur.execute(
+                    "SELECT account_id FROM account_registrations WHERE provider_subject = ?",
+                    (claim,),
+                )
+                held = cur.fetchone()
+                if held is not None and held["account_id"] != account_id:
+                    claim = None  # first claim wins — see the docstring.
             self._upsert_registration_row(
                 cur,
                 account_id=account_id,
@@ -1588,6 +1737,7 @@ class Store:
                 source_surface=source_surface,
                 app_build=app_version,
                 now=now,
+                provider_subject=claim,
             )
             self._insert_registration_event(
                 cur,
@@ -1692,6 +1842,55 @@ class Store:
 
         return self._run(_do).result()
 
+    def claim_pending_registration_account(self, provider_subject: str) -> Optional[str]:
+        """Redeem the pre-verification claim for ``provider_subject``.
+
+        Returns the canonical account id that STARTED a registration for this
+        provider user, when that account is still eligible to receive it. This
+        is the other half of `begin_email_registration`'s claim, and it is what
+        makes the shipped verification sequence land on one person:
+
+            anonymous account A  ->  register (A claims subject S)
+              ->  the person opens the link in their mail app, which lands in a
+                  BROWSER with no bearer and no session
+              ->  the browser proves S  ->  this returns A  ->  A is upgraded
+
+        Without it, that third step had nothing to resolve and minted a second
+        canonical account; the person's real one — with their history, usage
+        and any purchase ownership on it — was orphaned at the exact step the
+        product's own UI instructs ("open the link, then come back and sign
+        in").
+
+        Eligibility is deliberately narrow. The claimant must still be a live,
+        UNIDENTIFIED account: an account that has since acquired an identity of
+        its own is a different person's, and a tombstoned one is not
+        recoverable. A claim that fails either test is simply not redeemed, and
+        the caller falls back to its ordinary resolution — never an error, and
+        never a merge.
+        """
+        subject = _clean_provider_subject(provider_subject)
+        if subject is None:
+            return None
+
+        def _do() -> Optional[str]:
+            cur = self._conn.cursor()
+            cur.execute(
+                """SELECT a.*
+                     FROM account_registrations r
+                     JOIN accounts a ON a.id = r.account_id
+                    WHERE r.provider_subject = ?""",
+                (subject,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            account = _row_to_account(row)
+            if account.deleted_at or account.is_identified:
+                return None
+            return account.id
+
+        return self._run(_do).result()
+
     def find_accounts_by_email(self, email: str) -> list[Account]:
         """Every live account whose normalized address matches.
 
@@ -1737,12 +1936,20 @@ class Store:
         source_surface: Optional[str] = None,
         app_version: Optional[str] = None,
         detail: Optional[str] = None,
+        attested: bool = True,
     ) -> None:
         """Append one audit event and advance the registration state.
 
         The event vocabulary is closed (`email_identity.EVENT_TYPES`) and the
         state machine is monotonic, so a replayed client event can never walk a
         verified registration back to pending.
+
+        ``attested=False`` marks an event triggered by a caller that did not
+        prove which account it was acting for — an unauthenticated resend or
+        reset, which anyone can send for any address they can spell. The event
+        is still recorded (it really happened), but the surface and build it
+        claims are discarded rather than written onto someone else's row. See
+        `_upsert_registration_row`.
         """
 
         def _do() -> None:
@@ -1766,6 +1973,7 @@ class Store:
                         app_build=app_version,
                         now=now,
                         sign_in=event_type == email_identity.EVENT_SIGN_IN,
+                        attested=attested,
                     )
             self._insert_registration_event(
                 cur,
@@ -1775,6 +1983,7 @@ class Store:
                 app_build=app_version,
                 now=now,
                 detail=detail,
+                attested=attested,
             )
 
         self._run(_do).result()
@@ -1792,31 +2001,63 @@ class Store:
         verified_at: Optional[str] = None,
         sign_in: bool = False,
         provider: str = "email",
+        attested: bool = True,
+        provider_subject: Optional[str] = None,
     ) -> None:
         """Create or advance the registration row.
 
         COALESCE everywhere it matters: an `email_normalized=None` update (an
         audit-only event) must not erase the address already recorded, and
         `created_at` / `verified_at` are stamped once and never rewritten.
+
+        Two things this deliberately does NOT do, both of which it used to:
+
+        * **`source_surface` is not last-writer-wins.** The column is named for
+          where a registration STARTED, and a later event from another surface
+          is not that fact. It used to be overwritten by any caller supplying
+          something other than ``unknown``, so a registration begun on iOS and
+          verified in a browser ended up reporting whichever surface wrote last
+          — and `/admin/registrations` reported that as source. Once a real
+          surface is recorded it is now immutable; recency lives in
+          `last_seen_surface`, which is a different question with a different
+          answer. `app_build` follows the same rule for the same reason.
+
+        * **It does not accept unattested surface/build at all.** ``attested``
+          is False for address-scoped events any unauthenticated caller can
+          trigger for any address they can spell (resend, reset). Those callers
+          supply `source_surface` / `app_version` in the request body, so
+          honouring them let a stranger rewrite a stranger's audit fields.
+          The EVENT is still recorded — something really did happen to this
+          address — but it is recorded as unattributed, because an
+          unauthenticated caller's claim about which app it is has no evidence
+          behind it.
         """
-        surface = email_identity.sanitize_source_surface(source_surface)
-        build = email_identity.sanitize_app_build(app_build)
+        surface = email_identity.sanitize_source_surface(source_surface) if attested else None
+        build = email_identity.sanitize_app_build(app_build) if attested else None
         cur.execute(
             """INSERT INTO account_registrations
                    (account_id, lifecycle_state, email_normalized, provider,
                     created_at, verified_at, source_surface, app_build,
-                    last_sign_in_at, last_seen_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    last_seen_surface, last_seen_app_build,
+                    last_sign_in_at, last_seen_at, updated_at, provider_subject)
+               VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, ?), ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(account_id) DO UPDATE SET
+                   provider_subject = COALESCE(account_registrations.provider_subject,
+                                               excluded.provider_subject),
                    lifecycle_state = excluded.lifecycle_state,
                    email_normalized = COALESCE(excluded.email_normalized,
                                                account_registrations.email_normalized),
                    verified_at = COALESCE(account_registrations.verified_at,
                                           excluded.verified_at),
                    source_surface = CASE
-                       WHEN excluded.source_surface = ? THEN account_registrations.source_surface
+                       WHEN account_registrations.source_surface <> ?
+                           THEN account_registrations.source_surface
                        ELSE excluded.source_surface END,
-                   app_build = COALESCE(excluded.app_build, account_registrations.app_build),
+                   app_build = COALESCE(account_registrations.app_build, excluded.app_build),
+                   last_seen_surface = COALESCE(excluded.last_seen_surface,
+                                                account_registrations.last_seen_surface),
+                   last_seen_app_build = COALESCE(excluded.last_seen_app_build,
+                                                  account_registrations.last_seen_app_build),
                    last_sign_in_at = COALESCE(excluded.last_sign_in_at,
                                               account_registrations.last_sign_in_at),
                    last_seen_at = excluded.last_seen_at,
@@ -1829,10 +2070,14 @@ class Store:
                 now,
                 verified_at,
                 surface,
+                email_identity.SURFACE_UNKNOWN,
+                build,
+                surface,
                 build,
                 now if sign_in else None,
                 now,
                 now,
+                _clean_provider_subject(provider_subject),
                 email_identity.SURFACE_UNKNOWN,
             ),
         )
@@ -1847,9 +2092,14 @@ class Store:
         app_build: Optional[str],
         now: str,
         detail: Optional[str] = None,
+        attested: bool = True,
     ) -> None:
         if event_type not in email_identity.EVENT_TYPES:
             raise ValueError(f"unknown registration event: {event_type}")
+        # An unattested caller's surface/build claim is dropped here too, not
+        # only on the state row. An append-only audit that records a stranger's
+        # assertion as though it were observed is worse than one that records
+        # `unknown`: the second is honest about what it does not know.
         cur.execute(
             """INSERT INTO account_registration_events
                (account_id, event_type, occurred_at, source_surface, app_build, detail)
@@ -1858,8 +2108,8 @@ class Store:
                 account_id,
                 event_type,
                 now,
-                email_identity.sanitize_source_surface(source_surface),
-                email_identity.sanitize_app_build(app_build),
+                email_identity.sanitize_source_surface(source_surface if attested else None),
+                email_identity.sanitize_app_build(app_build) if attested else None,
                 detail,
             ),
         )
@@ -2003,6 +2253,23 @@ class Store:
         anonymous account for the device the next time it is seen, which is the
         truthful state for a signed-out device.
 
+        Two things this also does, both because the row is now RETIRED rather
+        than merely detached:
+
+        * It stamps ``signed_out_at``. Nulling the credential and rotating the
+          token means nothing can ever prove itself back into this row, so
+          ``register_device`` could satisfy neither its credential nor its
+          legacy-bearer proof and answered a permanent 409 for that device id.
+          The stamp is what lets it re-issue the slot as a brand-new device
+          instead (see `register_device`), which is what a person reinstalling
+          on the same handset actually experiences.
+        * It clears the device row's own plan/subscription/coupon copies. Those
+          columns are the anonymous-era entitlement mirror, and after sign-out
+          this row belongs to nobody; leaving a stale ``plan='pro'`` on a slot
+          that can be re-registered would hand the next claimant an entitlement
+          they never bought. The ACCOUNT's entitlement is untouched — it lives
+          on `accounts`, which this does not write.
+
         Returns True when a device row was actually signed out.
         """
 
@@ -2017,9 +2284,15 @@ class Store:
                               previous_api_token_expires_at = NULL,
                               device_credential_hash = NULL,
                               account_id = NULL,
+                              signed_out_at = ?,
+                              plan = 'free',
+                              stripe_subscription_id = NULL,
+                              subscription_status = NULL,
+                              subscription_renews_at = NULL,
+                              coupon_pro_expires_at = NULL,
                               updated_at = ?
                         WHERE device_id = ?""",
-                    (_new_token(), _now_iso(), device_id),
+                    (_new_token(), _now_iso(), _now_iso(), device_id),
                 )
                 changed = cur.rowcount
                 cur.execute("COMMIT")
@@ -4131,6 +4404,37 @@ def normalize_email(raw: Optional[str]) -> Optional[str]:
         return email_identity.normalize_email(raw)
     except email_identity.EmailNormalizationError:
         return None
+
+
+def _row_signed_out(row: sqlite3.Row) -> bool:
+    """True when a device row was RETIRED by `sign_out_device`.
+
+    Read defensively via ``keys()``: the column is added by migration, and a
+    connection opened against a database that predates it must answer "not
+    signed out" rather than raise — an old row is a legacy device, and those
+    keep their existing proof requirements.
+    """
+    try:
+        if "signed_out_at" not in row.keys():
+            return False
+    except AttributeError:
+        return False
+    return bool(row["signed_out_at"])
+
+
+def _clean_provider_subject(raw: Optional[str]) -> Optional[str]:
+    """Bound an auth-provider subject before it reaches an indexed column.
+
+    The value is opaque to us and comes from outside this process, so it is
+    length-bounded and empty-checked rather than trusted. Anything unusable
+    becomes ``None``: no claim is strictly better than a malformed one, because
+    an unredeemable claim only costs the pre-existing behaviour while a
+    malformed key would sit permanently in a unique index.
+    """
+    if raw is None:
+        return None
+    value = str(raw).strip()
+    return value if 0 < len(value) <= 128 else None
 
 
 def _row_to_webauthn_credential(row: sqlite3.Row | dict) -> WebAuthnCredential:

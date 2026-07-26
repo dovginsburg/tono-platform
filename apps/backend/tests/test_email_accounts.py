@@ -35,6 +35,13 @@ class FakeEmailAuth:
         self.users: dict[str, dict] = {}
         self.sent: list[tuple[str, str]] = []  # (kind, email)
         self.fail_with = None  # an EmailAuthOutcome to raise on every call
+        # The provider's own subject for an address. Supabase returns the user
+        # id on a signup even when it withholds a session, and the server binds
+        # it as the pre-verification claim — so a fake that omitted it could not
+        # model the one sequence the product instructs (register here, confirm
+        # in a browser, come back). `_wire` points this at the same mapping the
+        # token verifier uses, so the two always agree about who this is.
+        self.subject_for = lambda email: f"sub-for:{email}"
 
     def _maybe_fail(self):
         if self.fail_with is not None:
@@ -53,7 +60,17 @@ class FakeEmailAuth:
             )
         self.users[email] = {"password": password, "confirmed": False}
         self.sent.append(("signup", email))
-        return email_auth.EmailSignUpResult(verification_required=True)
+        try:
+            return email_auth.EmailSignUpResult(
+                verification_required=True, provider_user_id=self.subject_for(email)
+            )
+        except TypeError:
+            # A tree whose result type has no `provider_user_id` field. The fake
+            # degrades instead of erroring so the suite still exercises the real
+            # request path there — a receipt has to fail on the DEFECT it names,
+            # not on its own scaffolding, or it proves nothing when run against
+            # the version it is meant to catch.
+            return email_auth.EmailSignUpResult(verification_required=True)
 
     async def sign_in(self, *, email: str, password: str):
         import backend.email_auth as email_auth
@@ -108,6 +125,9 @@ def _wire(app, fake: FakeEmailAuth, *, subject_for=None):
     app.dependency_overrides[email_auth.get_email_auth_client] = lambda: fake
 
     subject_for = subject_for or (lambda email: f"sub-for:{email}")
+    # The signup response and the verified token must describe the SAME provider
+    # user, exactly as they do in production.
+    fake.subject_for = subject_for
 
     async def fake_verifier(token: str):
         assert token.startswith("token-for:"), token
@@ -195,6 +215,54 @@ def test_signup_then_verify_then_login_resolves_one_canonical_account(client, fa
     # Verification is not entitlement.
     assert session["is_pro"] is False
     assert session["plan"] == "free"
+
+
+def test_a_project_with_confirmations_disabled_still_cannot_mint_a_verified_identity(
+    client, fake_auth
+):
+    """The SECOND login gate, exercised on its own.
+
+    `auth_email_login` has two independent gates: the provider must accept the
+    credentials AND consider the address confirmed, and then the returned token
+    must independently carry `email_verified`. Every other test here is stopped
+    by gate 1, because the fake provider withholds a session for an unconfirmed
+    address exactly as a correctly-configured Supabase project does.
+
+    That left gate 2 unproven — a mutation deleting it kept the whole suite
+    green. It is the gate that matters when the project is MISCONFIGURED: turn
+    "Confirm email" off in the dashboard and the provider happily issues a
+    session for an address nobody proved. This models precisely that, and the
+    server must still refuse.
+    """
+    import backend.supabase_auth as supabase_auth
+    from backend.server import app
+
+    # A project that issues sessions without confirming anything.
+    fake_auth.users["unconfirmed@example.com"] = {
+        "password": PASSWORD,
+        "confirmed": True,  # gate 1 is satisfied…
+    }
+
+    async def unverified_claims(token: str):
+        # …but the token itself says the address was never proven.
+        email = token.split("token-for:", 1)[1]
+        return supabase_auth.SupabaseClaims(
+            sub=f"sub-for:{email}", email=email, email_verified=False
+        )
+
+    app.dependency_overrides[supabase_auth.get_supabase_verifier] = lambda: unverified_claims
+
+    r = client.post(
+        "/v1/auth/email/login",
+        json={"email": "unconfirmed@example.com", "password": PASSWORD},
+    )
+    assert r.status_code == 403, r.text
+    assert r.json()["error"]["message"] == "email_verification_required"
+
+    # And nothing was written: no account may carry this as a proven address.
+    from backend.store import get_store
+
+    assert get_store().find_accounts_by_email("unconfirmed@example.com") == []
 
 
 def test_pre_verification_login_is_refused_and_grants_nothing(client, fake_auth):

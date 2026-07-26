@@ -210,9 +210,17 @@ struct OnboardingEntryPointsView: View {
     }
 
     private var emailDetail: String {
-        // v1.0: email is the durable identity — keeps your plan/subscription
-        // across reinstalls, new phones, iPhone + iPad, and (future) web.
-        "Use the same account on iPhone, iPad, and any future web. Recovers your subscription if you lose your phone. We email you a 6-digit code — no password to remember."
+        // Email is the durable identity — it keeps your plan and subscription
+        // across reinstalls, new phones, iPhone + iPad, and the web.
+        //
+        // Build 114: this sentence used to promise "a 6-digit code — no
+        // password to remember", which described the pre-114 sheet. That sheet
+        // posted to two endpoints that never existed on the server, and the
+        // flow it named is gone: an account is created with an email and a
+        // password, and ownership is proven by opening a link. Copy that
+        // promises a code nobody will ever receive is the first thing a person
+        // would judge the product by, so it states what actually happens.
+        "Use the same account on iPhone, iPad, and the web. Recovers your subscription if you lose your phone. You'll pick a password and confirm your address from a link we email you."
     }
 
     private var emailComingSoonDetail: String {

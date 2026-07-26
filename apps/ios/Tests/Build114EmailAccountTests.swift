@@ -416,6 +416,40 @@ final class Build114EmailAccountTests: XCTestCase {
         )
     }
 
+    /// Onboarding must not describe a flow the app no longer has.
+    ///
+    /// The pre-114 sheet mailed a 6-digit code, and the tile that advertises
+    /// email sign-in said so. The sheet was replaced; the tile's sentence was
+    /// not, so the shipped onboarding promised a code that no endpoint could
+    /// ever send. This pins the whole onboarding surface — not just the sheet —
+    /// to the flow that actually exists.
+    func testOnboardingCopyDescribesTheFlowTheAppActuallyHas() throws {
+        let raw = try Self.source("App/OnboardingEntryPointsView.swift")
+        let code = Self.strippingComments(raw)
+
+        for retired in ["6-digit", "6 digit", "verification code", "enter the code"] {
+            XCTAssertFalse(
+                code.lowercased().contains(retired.lowercased()),
+                "onboarding must not promise \(retired) — Build 114 is password + emailed link"
+            )
+        }
+
+        // And it must positively describe what does happen, so this cannot be
+        // satisfied by deleting the sentence entirely.
+        let detail = try XCTUnwrap(
+            Self.sliceBetween(start: "private var emailDetail: String {", end: "}", in: code),
+            "the email tile must still explain what signing in does"
+        )
+        XCTAssertTrue(
+            detail.lowercased().contains("password"),
+            "the tile must say a password is chosen"
+        )
+        XCTAssertTrue(
+            detail.lowercased().contains("link"),
+            "the tile must say the address is confirmed from an emailed link"
+        )
+    }
+
     // ───────────────────────────────────────────────────────────────────
     // Surface behaviour
     // ───────────────────────────────────────────────────────────────────

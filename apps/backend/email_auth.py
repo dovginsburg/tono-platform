@@ -111,10 +111,23 @@ class EmailSignUpResult:
     ``session`` is populated only when a project has confirmations disabled;
     the caller still refuses to treat that as verified, so a misconfigured
     project cannot silently skip verification.
+
+    ``provider_user_id`` is the provider's own immutable subject for the user
+    the signup just created. Supabase returns it even when it withholds a
+    session, and it is the single fact that makes an anonymous upgrade actually
+    hold: the caller records it against the canonical account BEFORE
+    verification, so whichever surface completes the verification (the web
+    callback, or a native login) resolves the SAME canonical person instead of
+    minting a second one. See ``server._record_email_registration_intent``.
+
+    It is a public, opaque identifier — not a credential. It grants nothing on
+    its own: the account stays unidentified until an address is proven, and
+    every entitlement still reads plan/subscription/grant.
     """
 
     verification_required: bool
     session: Optional[EmailAuthSession] = None
+    provider_user_id: Optional[str] = None
 
 
 def _config() -> dict[str, Optional[str]]:
@@ -236,6 +249,38 @@ class SupabaseEmailAuthClient:
             raise EmailAuthError(EmailAuthOutcome.PROVIDER_UNAVAILABLE)
 
     @staticmethod
+    def _provider_user_id_from(response: httpx.Response) -> Optional[str]:
+        """The provider subject carried by a signup response.
+
+        Supabase answers a confirmation-required signup with the bare user
+        object (``{"id": ..., "email": ..., "confirmation_sent_at": ...}``) and
+        a session-issuing signup with ``{"access_token": ..., "user": {...}}``.
+        Both shapes are read here so no caller has to know which one a project
+        produced.
+
+        Returns None rather than raising for anything unexpected: a missing
+        subject degrades the anonymous upgrade to the pre-existing behaviour,
+        which must never be an outright registration failure.
+        """
+        try:
+            payload = response.json()
+        except ValueError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        candidate = payload.get("id")
+        if not candidate:
+            user = payload.get("user")
+            if isinstance(user, dict):
+                candidate = user.get("id")
+        if not candidate:
+            return None
+        subject = str(candidate).strip()
+        # Bounded: this value is written to an indexed identity column, so an
+        # unbounded provider string is not accepted on trust.
+        return subject if 0 < len(subject) <= 128 else None
+
+    @staticmethod
     def _session_from(response: httpx.Response) -> Optional[EmailAuthSession]:
         try:
             payload = response.json()
@@ -275,7 +320,9 @@ class SupabaseEmailAuthClient:
             raise EmailAuthError(outcome)
         session = self._session_from(response)
         return EmailSignUpResult(
-            verification_required=session is None, session=session
+            verification_required=session is None,
+            session=session,
+            provider_user_id=self._provider_user_id_from(response),
         )
 
     async def sign_in(self, *, email: str, password: str) -> EmailAuthSession:
