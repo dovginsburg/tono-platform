@@ -129,6 +129,22 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         // retry/error state rather than an indefinitely shimmering skeleton.
         // The 15s URLSession timeout above stays as a backstop.
         static let coachVisibleDeadline: TimeInterval = 10
+
+        // Build 111 — connectivity recovery.
+        //
+        // `coachTimeout` above is the per-request IDLE timeout, which only
+        // applies once a connection exists. `coachResourceTimeout` caps the
+        // WHOLE lifetime of a request including any time the transport spends
+        // parked waiting for connectivity to return, so "Coach waits for the
+        // network" is a bounded promise: a prolonged outage still fails.
+        static let coachResourceTimeout: TimeInterval = 30
+        // The visible deadline once the transport has told us it is waiting.
+        // The 10s deadline above is correct for a CONNECTED request and wrong
+        // for a parked one — firing it would cancel exactly the task that is
+        // about to recover, which is the Build-110 behaviour this build fixes.
+        // Sits just past `coachResourceTimeout` so the transport's own
+        // truthful error normally lands first; this stays a backstop.
+        static let coachOfflineVisibleDeadline: TimeInterval = 33
         static let backendURL = "https://api.tonoit.com/v1/analyze"
 
         // Delete fires once immediately, then repeats with a bounded ramp.
@@ -386,9 +402,25 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     /// skeleton with a truthful retry/error state. Cancelled the instant a
     /// real completion lands or the session is invalidated.
     private var coachDeadline: DispatchWorkItem?
+    /// Build 111. True once the transport has reported that the ACTIVE request
+    /// is parked waiting for connectivity. Two jobs: it widens the visible
+    /// deadline (a parked request must not be cancelled by the connected-path
+    /// watchdog), and it keeps the terminal error honest — a request that
+    /// never got a connection is offline, not "timed out". Reset at every
+    /// request boundary, so it can never describe a previous request.
+    private var coachWaitingForConnectivity = false
     private lazy var coachClient = TonoCoachClient(
         endpoint: Const.backendURL.replacingOccurrences(of: "/v1/analyze", with: "/api/analyze/variant"),
         timeout: Const.coachTimeout,
+        // Build 111: a dedicated connectivity-aware transport. Build 110 used
+        // `URLSession.shared`, whose configuration cannot wait for
+        // connectivity, so a tap made with the radio off failed terminally and
+        // only a manual Retry could recover. See `CoachTransportPolicy`.
+        transport: CoachTransportPolicy(
+            waitsForConnectivity: true,
+            requestTimeout: Const.coachTimeout,
+            resourceTimeout: Const.coachResourceTimeout
+        ),
         // Build 96: the bearer token comes from the app's shared Keychain
         // access group. When it is absent the client makes zero network
         // requests and surfaces a visible missing-token state.
@@ -453,6 +485,13 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     // Production never reads these.
     var activeCoachRequestIDForTesting: UUID? { coachRequestID }
     var coachIsBusyForTesting: Bool { coachBusy }
+    /// Build 111 test seam: whether the ACTIVE request is parked waiting for
+    /// connectivity. Read-only; production never reads it.
+    var coachIsWaitingForConnectivityForTesting: Bool { coachWaitingForConnectivity }
+    /// Build 111 test seam: the installed loading skeleton, so a test can
+    /// assert the surface stays result-shaped AND states the truth while the
+    /// transport waits.
+    var coachSkeletonForTesting: TonoCoachSkeletonView? { coachSkeleton }
     /// The tone axes the chip row is currently backed by. Read-only seam so a
     /// test can pin the Build-107 "turning Coach off clears the stale axes"
     /// contract without reaching into private state.
@@ -807,6 +846,12 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachDeadline?.cancel()
         coachDeadline = nil
         coachClockTapTime = nil
+        // Build 111: a cancelled or superseded request must never leave its
+        // connectivity state describing the next one. Cancellation is final —
+        // the task is already cancelled above, so nothing can resume it, and
+        // the flag going false means a later deadline cannot claim "offline"
+        // on a request that never waited.
+        coachWaitingForConnectivity = false
         if clearTarget {
             coachRewriteTarget = nil
             coachRequestGuard = nil
@@ -3048,7 +3093,19 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         NSLog("TONO_KB BUILD107 clock: phase=loading axis=\(axis) dt_ms=\(Self.coachElapsedMs(since: tapTime))")
         NSLog("TONO_KB BUILD95 coach: begin selected variant axis=\(axis) len=\(draft.count)")
         let customPrompt = axis == "custom" ? coachVariantSettings.customInstruction : nil
-        coachTask = coachClient.variant(draft: draft, axis: axis, customPrompt: customPrompt) { [weak self] result in
+        coachTask = coachClient.variant(
+            draft: draft,
+            axis: axis,
+            customPrompt: customPrompt,
+            // Build 111: the transport parked this request because the device
+            // has no route. Nothing is retried here — the same single task is
+            // still in flight and completes by itself when the network is back.
+            waitingForConnectivity: { [weak self] in
+                self?.handleCoachWaitingForConnectivity(
+                    requestID: requestID, tapTime: tapTime, axis: axis
+                )
+            }
+        ) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.completeCoach(
@@ -3090,12 +3147,57 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     /// a newer request's state or a result that already landed. On fire it
     /// cancels the in-flight task (so no late response can reattach) and
     /// installs the truthful timeout error, which offers Retry.
-    private func scheduleCoachDeadline(requestID: UUID, tapTime: DispatchTime, axis: String) {
+    private func scheduleCoachDeadline(
+        requestID: UUID,
+        tapTime: DispatchTime,
+        axis: String,
+        after interval: TimeInterval = Const.coachVisibleDeadline
+    ) {
+        // Exactly one watchdog may be armed at a time: re-arming always
+        // cancels the previous work item, so the connectivity path below
+        // replaces the connected-path deadline rather than racing it.
+        coachDeadline?.cancel()
         let work = DispatchWorkItem { [weak self] in
             self?.handleCoachDeadlineFired(requestID: requestID, tapTime: tapTime, axis: axis)
         }
         coachDeadline = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Const.coachVisibleDeadline, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + interval, execute: work)
+    }
+
+    /// Build 111. The transport reported that the active request is parked
+    /// waiting for connectivity.
+    ///
+    /// Three things happen, and nothing else — in particular NO request is
+    /// issued, cancelled or replayed here:
+    ///
+    ///   1. the loading surface stops implying progress and states the truth;
+    ///   2. the visible deadline is re-armed against the bounded connectivity
+    ///      budget, because the 10s connected-path watchdog would otherwise
+    ///      cancel exactly the task that is about to recover;
+    ///   3. the terminal error is pre-qualified as offline rather than timeout.
+    ///
+    /// Fail-closed on the same gate a completion passes, so a notification for
+    /// a superseded request cannot touch a newer request's surface. Internal so
+    /// the XCTest target can drive it without a live radio.
+    func handleCoachWaitingForConnectivity(requestID: UUID, tapTime: DispatchTime, axis: String) {
+        guard CoachCompletionGate.accepts(
+                completion: requestID,
+                activeRequestID: coachRequestID,
+                loadingSurfaceRequestID: coachLoadingRequestID
+              ) else { return }
+        // URLSession may report waiting more than once for one task; the
+        // client already de-duplicates, and this is idempotent regardless.
+        guard !coachWaitingForConnectivity else { return }
+        coachWaitingForConnectivity = true
+        NSLog("TONO_KB BUILD111 clock: phase=awaiting_connectivity axis=\(axis) dt_ms=\(Self.coachElapsedMs(since: tapTime))")
+        coachSkeleton?.showWaitingForConnection()
+        // Re-arm against the remaining connectivity budget, measured from the
+        // tap so a late notification cannot extend the bound.
+        let elapsed = Double(Self.coachElapsedMs(since: tapTime)) / 1000.0
+        let remaining = max(Const.coachOfflineVisibleDeadline - elapsed, 1)
+        scheduleCoachDeadline(
+            requestID: requestID, tapTime: tapTime, axis: axis, after: remaining
+        )
     }
 
     /// The visible-deadline body. Internal so the XCTest target can drive the
@@ -3119,8 +3221,13 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachBusy = false
         coachButton?.isEnabled = true
         coachDeadline = nil
+        // Build 111: a request that spent its life parked waiting for a
+        // connection did not "time out" — it never got a network. Say the
+        // true thing. Both are bounded and both offer Retry.
+        let waited = coachWaitingForConnectivity
+        coachWaitingForConnectivity = false
         NSLog("TONO_KB BUILD107 clock: phase=deadline axis=\(axis) dt_ms=\(Self.coachElapsedMs(since: tapTime))")
-        presentCoachError(.timeout, replacingLoadingFor: requestID)
+        presentCoachError(waited ? .offline : .timeout, replacingLoadingFor: requestID)
         coachClockTapTime = nil
     }
 
@@ -3161,6 +3268,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachTask = nil
         coachRequestID = nil
         coachBusy = false
+        coachWaitingForConnectivity = false
         coachButton?.isEnabled = true
         // Clock: response received on the main thread.
         if let tapTime {

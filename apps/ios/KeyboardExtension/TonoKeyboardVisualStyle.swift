@@ -482,6 +482,8 @@ final class TonoShimmerBlock: UIView {
 final class TonoCoachSkeletonView: UIView {
     static let identifier = "TonoKB.coachLoadingSkeleton"
     static let cardIdentifier = "TonoKB.coachSkeletonCard"
+    /// Build 111: the truthful connectivity caption.
+    static let waitingIdentifier = "TonoKB.coachWaitingForConnection"
 
     /// Every placeholder block, so a test can assert the skeleton is
     /// result-shaped (a card with an axis pill, two text lines, two actions —
@@ -489,6 +491,17 @@ final class TonoCoachSkeletonView: UIView {
     private(set) var shimmerBlocks: [TonoShimmerBlock] = []
     /// The accent-bordered rewrite-card placeholder.
     let card = UIView()
+
+    /// Build 111. Occupies the title rule's row, hidden until the transport
+    /// reports it is waiting for connectivity. Sharing that row keeps the
+    /// surface geometry identical, so the keyboard never resizes around the
+    /// host field when connectivity drops.
+    private let waitingLabel = UILabel()
+    /// The title-rule placeholder, hidden while the caption is showing.
+    private var titleBlock: TonoShimmerBlock?
+
+    /// True while the surface is stating that it is waiting for a connection.
+    private(set) var isShowingWaitingForConnection = false
 
     init(accent: UIColor) {
         super.init(frame: .zero)
@@ -516,8 +529,22 @@ final class TonoCoachSkeletonView: UIView {
         // placeholder — the same top row the results surface presents.
         let title = makeBlock(cornerRadius: 4)
         addSubview(title)
+        titleBlock = title
         let back = makeBlock(cornerRadius: 6)
         addSubview(back)
+
+        // Build 111: the truthful connectivity caption, sharing the title
+        // rule's row so showing it cannot change the surface's height.
+        waitingLabel.translatesAutoresizingMaskIntoConstraints = false
+        waitingLabel.accessibilityIdentifier = Self.waitingIdentifier
+        waitingLabel.text = LocalIntelligenceCopy.coachWaitingForConnection
+        waitingLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        waitingLabel.textColor = .secondaryLabel
+        waitingLabel.adjustsFontSizeToFitWidth = true
+        waitingLabel.minimumScaleFactor = 0.8
+        waitingLabel.isHidden = true
+        waitingLabel.isAccessibilityElement = false
+        addSubview(waitingLabel)
 
         // One rewrite card, accent-bordered like the real chip.
         card.translatesAutoresizingMaskIntoConstraints = false
@@ -551,6 +578,10 @@ final class TonoCoachSkeletonView: UIView {
             back.widthAnchor.constraint(equalToConstant: 44),
             back.heightAnchor.constraint(equalToConstant: 24),
 
+            waitingLabel.centerYAnchor.constraint(equalTo: title.centerYAnchor),
+            waitingLabel.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            waitingLabel.trailingAnchor.constraint(lessThanOrEqualTo: back.leadingAnchor, constant: -8),
+
             card.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 10),
             card.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             card.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
@@ -581,6 +612,24 @@ final class TonoCoachSkeletonView: UIView {
             actionRight.widthAnchor.constraint(equalTo: actionLeft.widthAnchor),
             actionRight.heightAnchor.constraint(equalToConstant: 36),
         ])
+    }
+
+    /// Build 111. State the truth while the transport is parked waiting for
+    /// connectivity: the shimmer alone implies work is progressing, and during
+    /// an outage nothing is. The surface stays result-shaped and the same
+    /// height — only the title rule is replaced by the caption — because the
+    /// one request really is still in flight and really will finish on its own
+    /// when the network returns.
+    ///
+    /// Idempotent, and deliberately one-way: the surface is torn down at the
+    /// end of every request, so there is no "connection came back" state to
+    /// revert to and no observer left watching for one.
+    func showWaitingForConnection() {
+        guard !isShowingWaitingForConnection else { return }
+        isShowingWaitingForConnection = true
+        titleBlock?.isHidden = true
+        waitingLabel.isHidden = false
+        accessibilityLabel = LocalIntelligenceCopy.coachWaitingForConnection
     }
 
     /// Refresh the accent-bordered card color after an interface-style change.

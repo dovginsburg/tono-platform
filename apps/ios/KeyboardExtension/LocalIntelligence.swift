@@ -175,6 +175,15 @@ public enum LocalIntelligenceCopy {
     /// Shown when a Coach rewrite is attempted with no connection.
     public static let coachRequiresInternet =
         "Coach rewrites need an internet connection. Spelling and Live Tone keep working offline."
+
+    /// Build 111. Shown on the loading surface while the transport is waiting
+    /// for connectivity to return, instead of an unqualified shimmer that
+    /// implies work is progressing. It claims exactly what is true: the one
+    /// request is parked in the transport and will resume by itself. It does
+    /// NOT promise success, and the surface still reaches a bounded, actionable
+    /// error if the outage outlasts the connectivity budget.
+    public static let coachWaitingForConnection =
+        "Waiting for connection… Coach resumes on its own"
 }
 
 // ───────────────────────────────────────────────────────────────────────────

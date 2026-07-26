@@ -145,6 +145,7 @@
 		A71070000000000000000004 /* Build107ToneTargetResetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71070000000000000000003 /* Build107ToneTargetResetTests.swift */; };
 		A71090000000000000000002 /* Build109StripRoleAndDocumentIntegrityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71090000000000000000001 /* Build109StripRoleAndDocumentIntegrityTests.swift */; };
 		A71110000000000000000002 /* Build111CursorSensitivityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71110000000000000000001 /* Build111CursorSensitivityTests.swift */; };
+		A71110000000000000000004 /* Build111CoachReconnectTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71110000000000000000003 /* Build111CoachReconnectTests.swift */; };
 		5ED0C7000000000000000002 /* SetupDoctor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ED0C7000000000000000001 /* SetupDoctor.swift */; };
 		5ED0C7000000000000000003 /* SetupDoctor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ED0C7000000000000000001 /* SetupDoctor.swift */; };
 		5ED0C7000000000000000004 /* SetupDoctor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ED0C7000000000000000001 /* SetupDoctor.swift */; };
@@ -311,6 +312,7 @@
 		A71070000000000000000003 /* Build107ToneTargetResetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build107ToneTargetResetTests.swift; sourceTree = "<group>"; };
 		A71090000000000000000001 /* Build109StripRoleAndDocumentIntegrityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build109StripRoleAndDocumentIntegrityTests.swift; sourceTree = "<group>"; };
 		A71110000000000000000001 /* Build111CursorSensitivityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build111CursorSensitivityTests.swift; sourceTree = "<group>"; };
+		A71110000000000000000003 /* Build111CoachReconnectTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build111CoachReconnectTests.swift; sourceTree = "<group>"; };
 		5ED0C7000000000000000001 /* SetupDoctor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupDoctor.swift; sourceTree = "<group>"; };
 		5ED0C7000000000000000005 /* SetupDoctorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupDoctorView.swift; sourceTree = "<group>"; };
 		5ED0C7000000000000000007 /* SetupDoctorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupDoctorTests.swift; sourceTree = "<group>"; };
@@ -431,6 +433,7 @@
 				A71070000000000000000003 /* Build107ToneTargetResetTests.swift */,
 				A71090000000000000000001 /* Build109StripRoleAndDocumentIntegrityTests.swift */,
 				A71110000000000000000001 /* Build111CursorSensitivityTests.swift */,
+				A71110000000000000000003 /* Build111CoachReconnectTests.swift */,
 				5ED0C7000000000000000007 /* SetupDoctorTests.swift */,
 				970000000000000000000010 /* Build97KeyboardGeometryTests.swift */,
 				970000000000000000000011 /* Build97BackspaceStateTests.swift */,
@@ -869,6 +872,7 @@
 				A71070000000000000000004 /* Build107ToneTargetResetTests.swift in Sources */,
 				A71090000000000000000002 /* Build109StripRoleAndDocumentIntegrityTests.swift in Sources */,
 				A71110000000000000000002 /* Build111CursorSensitivityTests.swift in Sources */,
+				A71110000000000000000004 /* Build111CoachReconnectTests.swift in Sources */,
 				5ED0C7000000000000000004 /* SetupDoctor.swift in Sources */,
 				5ED0C7000000000000000008 /* SetupDoctorTests.swift in Sources */,
 				A60000000000000000000006 /* LocalIntelligence.swift in Sources */,

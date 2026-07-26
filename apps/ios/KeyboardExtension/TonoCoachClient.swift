@@ -164,6 +164,175 @@ struct CoachRequestLifecycleGuard: Equatable {
     }
 }
 
+/// Transport policy for every Coach request.
+///
+/// ── Build 111: why this type exists ─────────────────────────────────────────
+/// Build 110 issued Coach requests on `URLSession.shared`, whose configuration
+/// has `waitsForConnectivity == false`. That makes an absent connection a
+/// TERMINAL outcome: a tap made while the radio is off fails instantly with
+/// `URLError.notConnectedToInternet`, the keyboard installs its error surface,
+/// and the ONLY route back is the user tapping Retry. Restoring Wi-Fi changes
+/// nothing, because there is no longer anything in flight to recover — which is
+/// exactly what was reported on device:
+///
+///     "I turned off internet connection and then turned it back on and I
+///      think the Tono coach didn't reconnect automatically to server."
+///
+/// The fix is at the transport layer, not the application layer. With
+/// `waitsForConnectivity == true` the ONE task the tap created stays parked
+/// inside URLSession until connectivity returns, then proceeds and completes
+/// normally. The 1 tap → 1 `URLSessionDataTask` → 1 server request contract is
+/// untouched: nothing is re-sent, because nothing was ever sent.
+///
+/// This deliberately does NOT cover a connection lost MIDFLIGHT, after request
+/// bytes have already gone out. `waitsForConnectivity` governs establishing a
+/// connection, not resuming a broken one, and that is the correct boundary: a
+/// POST that may already have reached the provider is ambiguous, and replaying
+/// it could bill and generate a second rewrite. Midflight loss therefore stays
+/// a truthful, bounded, actionable error with a Retry the user chooses.
+///
+/// Both timeouts are bounded so a keyboard extension can never hold a task
+/// open indefinitely: `requestTimeout` is the per-request idle timeout, and
+/// `resourceTimeout` caps the WHOLE lifetime of the task including any time
+/// spent waiting for connectivity.
+public struct CoachTransportPolicy: Equatable {
+
+    /// Park the task in the transport until connectivity returns, instead of
+    /// failing terminally the moment the device has no route.
+    public var waitsForConnectivity: Bool
+
+    /// Per-request idle timeout — the gap allowed between packets once a
+    /// connection exists.
+    public var requestTimeout: TimeInterval
+
+    /// Hard ceiling on the total lifetime of one request, INCLUDING time spent
+    /// waiting for connectivity. This is what makes "wait for the network" a
+    /// bounded promise rather than an open one: a prolonged outage fails here.
+    public var resourceTimeout: TimeInterval
+
+    public init(
+        waitsForConnectivity: Bool = true,
+        requestTimeout: TimeInterval = 15,
+        resourceTimeout: TimeInterval = 30
+    ) {
+        self.waitsForConnectivity = waitsForConnectivity
+        self.requestTimeout = requestTimeout
+        self.resourceTimeout = resourceTimeout
+    }
+
+    /// Build the configuration this policy describes.
+    ///
+    /// `.ephemeral` keeps every byte of a Coach round trip — response cache,
+    /// cookies, credentials — in memory only, so nothing about a draft is
+    /// written to the extension's container.
+    ///
+    /// `protocolClasses` is injected on THIS configuration, never registered
+    /// process-globally: a keyboard extension's tests run inside a host app
+    /// whose own traffic would otherwise be intercepted, and a global
+    /// registration measures the host rather than this client.
+    public func makeConfiguration(protocolClasses: [AnyClass]? = nil) -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.waitsForConnectivity = waitsForConnectivity
+        configuration.timeoutIntervalForRequest = requestTimeout
+        configuration.timeoutIntervalForResource = resourceTimeout
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        // One rewrite at a time; a keyboard extension has no use for a pool.
+        configuration.httpMaximumConnectionsPerHost = 1
+        if let protocolClasses {
+            configuration.protocolClasses = protocolClasses
+        }
+        return configuration
+    }
+}
+
+/// Per-request transport state, owned by the one call that created it.
+///
+/// Deliberately NOT a shared reachability object: there is no singleton, no
+/// global observer and no timer here. It exists only while its task is in
+/// flight and is dropped the moment the task completes — cancelled, failed or
+/// succeeded — so nothing accumulates across the extension's lifetime.
+public final class CoachRequestTransportState {
+    private let lock = NSLock()
+    private var waitingReported = false
+    private var notify: (() -> Void)?
+
+    init(notify: (() -> Void)?) {
+        self.notify = notify
+    }
+
+    /// True once the transport reported that this request is parked waiting
+    /// for connectivity. Used to keep the terminal error honest: a request
+    /// that never got a connection is offline, not "timed out".
+    public var didWaitForConnectivity: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return waitingReported
+    }
+
+    /// Called by the session delegate, possibly more than once for one task.
+    /// The caller-facing notification fires at most once, on the main queue.
+    func markWaitingForConnectivity() {
+        lock.lock()
+        let first = !waitingReported
+        waitingReported = true
+        let handler = first ? notify : nil
+        if first { notify = nil }
+        lock.unlock()
+        guard let handler else { return }
+        DispatchQueue.main.async(execute: handler)
+    }
+
+    /// Drop the caller's handler so a notification can never arrive after the
+    /// request has finished or been cancelled.
+    func finish() {
+        lock.lock()
+        notify = nil
+        lock.unlock()
+    }
+}
+
+/// Session delegate that routes `taskIsWaitingForConnectivity` back to the
+/// per-request state that asked for it.
+///
+/// The table holds one entry per IN-FLIGHT request and every entry is removed
+/// on its request's terminal path, so this is bounded by concurrency (in
+/// practice: one), not by time or by how long the keyboard has been loaded.
+final class CoachConnectivitySessionDelegate: NSObject, URLSessionTaskDelegate {
+    private let lock = NSLock()
+    private var entries: [(taskIdentifier: Int, state: CoachRequestTransportState)] = []
+
+    /// Registered after the task exists and before `resume()`, so a waiting
+    /// notification can never arrive before the state is reachable.
+    func attach(_ state: CoachRequestTransportState, to task: URLSessionTask) {
+        lock.lock()
+        entries.append((task.taskIdentifier, state))
+        lock.unlock()
+    }
+
+    func detach(_ state: CoachRequestTransportState) {
+        state.finish()
+        lock.lock()
+        entries.removeAll { $0.state === state }
+        lock.unlock()
+    }
+
+    /// Test seam: the number of in-flight registrations. Must return to zero
+    /// after every terminal path, including cancellation.
+    var registrationCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return entries.count
+    }
+
+    func urlSession(_ session: URLSession, taskIsWaitingForConnectivity task: URLSessionTask) {
+        lock.lock()
+        let state = entries.first { $0.taskIdentifier == task.taskIdentifier }?.state
+        lock.unlock()
+        state?.markWaitingForConnectivity()
+    }
+}
+
 public final class TonoCoachClient {
 
     /// Truthful four-clock lifecycle envelope for one `/v1/analyze` variant call.
@@ -366,10 +535,31 @@ public final class TonoCoachClient {
     /// tap and never contains duplicate axes within one round trip.
     public private(set) var dispatchedAxes: [String] = []
 
+    /// Transport policy in force. Exposed so a contract test can assert the
+    /// shipping client really does wait for connectivity within a bounded
+    /// budget, rather than inferring it from behaviour it cannot simulate.
+    public let transport: CoachTransportPolicy
+
+    /// Routes `taskIsWaitingForConnectivity` to the request that asked for it.
+    /// Only installed on a session this client built; an injected session
+    /// keeps whatever delegate its owner gave it.
+    private let connectivityDelegate: CoachConnectivitySessionDelegate?
+
+    /// True when `session` was built here and must therefore be invalidated
+    /// here. An injected session belongs to its caller.
+    private let ownsSession: Bool
+
+    /// - Parameters:
+    ///   - session: inject to redirect the transport in tests. When nil the
+    ///     client builds its own connectivity-aware session from `transport`
+    ///     — `URLSession.shared` is deliberately NOT the default any more,
+    ///     because its configuration cannot wait for connectivity and so
+    ///     makes an outage a terminal failure (see `CoachTransportPolicy`).
     public init(
         endpoint: String,
         timeout: TimeInterval,
-        session: URLSession = .shared,
+        session: URLSession? = nil,
+        transport: CoachTransportPolicy? = nil,
         tokenProvider: @escaping () -> String? = { nil }
     ) {
         // The endpoint string is fixed by the build configuration, so we
@@ -377,8 +567,76 @@ public final class TonoCoachClient {
         // can't crash on a bad constant.
         self.endpoint = URL(string: endpoint) ?? URL(string: "https://api.tonoit.com/v1/analyze")!
         self.timeout = timeout
-        self.session = session
+        let policy = transport ?? CoachTransportPolicy(requestTimeout: timeout)
+        self.transport = policy
         self.tokenProvider = tokenProvider
+        if let session {
+            self.session = session
+            self.connectivityDelegate = nil
+            self.ownsSession = false
+        } else {
+            let delegate = CoachConnectivitySessionDelegate()
+            // A dedicated serial queue: delegate callbacks and completion
+            // handlers must not be forced onto the main thread, where JSON
+            // decoding would compete with the keyboard's own touch handling.
+            let queue = OperationQueue()
+            queue.maxConcurrentOperationCount = 1
+            queue.qualityOfService = .userInitiated
+            self.session = URLSession(
+                configuration: policy.makeConfiguration(),
+                delegate: delegate,
+                delegateQueue: queue
+            )
+            self.connectivityDelegate = delegate
+            self.ownsSession = true
+        }
+    }
+
+    deinit {
+        // Break session → delegate and let anything in flight finish. An
+        // injected session belongs to its owner and is left alone.
+        if ownsSession { session.finishTasksAndInvalidate() }
+    }
+
+    /// Test seam: in-flight connectivity registrations. Zero at rest, and back
+    /// to zero after every terminal path including cancellation — the proof
+    /// that this adds no unbounded observer to the extension.
+    public var inFlightConnectivityRegistrations: Int {
+        connectivityDelegate?.registrationCount ?? 0
+    }
+
+    /// Register a request's transport state, if this client owns its session.
+    /// Called after the task exists and before `resume()`.
+    private func attachTransportState(
+        notify: (() -> Void)?,
+        to task: URLSessionTask
+    ) -> CoachRequestTransportState {
+        let state = CoachRequestTransportState(notify: notify)
+        connectivityDelegate?.attach(state, to: task)
+        return state
+    }
+
+    private func releaseTransportState(_ state: CoachRequestTransportState) {
+        if let connectivityDelegate {
+            connectivityDelegate.detach(state)
+        } else {
+            state.finish()
+        }
+    }
+
+    /// Map a `URLError` onto the truthful Coach error.
+    ///
+    /// The one subtlety is the resource-timeout case: when the task spent its
+    /// whole life parked waiting for a connection that never came, URLSession
+    /// reports `.timedOut`. Saying "request timed out" there would be false —
+    /// no request was ever sent. `didWaitForConnectivity` is the evidence that
+    /// distinguishes the two, so the user is told the actual reason.
+    static func mapped(_ urlError: URLError, didWaitForConnectivity: Bool) -> CoachError {
+        if urlError.code == .timedOut {
+            return didWaitForConnectivity ? .offline : .timeout
+        }
+        if CoachError.isOffline(urlError) { return .offline }
+        return .transport(urlError.localizedDescription)
     }
 
     /// Reset the build-97 debug counters. Production callers never
@@ -405,6 +663,7 @@ public final class TonoCoachClient {
     public func coach(
         draft: String,
         settings: CoachVariantSettings = CoachVariantSettings(),
+        waitingForConnectivity: (() -> Void)? = nil,
         completion: @escaping (Result<CoachResponse, CoachError>) -> Void
     ) -> URLSessionDataTask? {
         // Build 96: no bearer token → zero network requests + a visible
@@ -435,17 +694,17 @@ public final class TonoCoachClient {
             return nil
         }
 
-        let task = session.dataTask(with: req) { data, response, error in
+        // Declared before the task so the completion can close over it; filled
+        // in below, before `resume()`, so nothing can read it unset.
+        var transportState: CoachRequestTransportState!
+        let task = session.dataTask(with: req) { [weak self] data, response, error in
+            let didWait = transportState.didWaitForConnectivity
+            // Terminal: drop the registration on EVERY path out of here, so a
+            // waiting notification can never arrive after the request is over.
+            self?.releaseTransportState(transportState)
             if let urlErr = error as? URLError {
-                if urlErr.code == .timedOut {
-                    DispatchQueue.main.async { completion(.failure(.timeout)) }
-                    return
-                }
-                if CoachError.isOffline(urlErr) {
-                    DispatchQueue.main.async { completion(.failure(.offline)) }
-                    return
-                }
-                DispatchQueue.main.async { completion(.failure(.transport(urlErr.localizedDescription))) }
+                let mapped = TonoCoachClient.mapped(urlErr, didWaitForConnectivity: didWait)
+                DispatchQueue.main.async { completion(.failure(mapped)) }
                 return
             }
             if let error = error {
@@ -469,6 +728,7 @@ public final class TonoCoachClient {
                 DispatchQueue.main.async { completion(.failure(.decoding(error.localizedDescription))) }
             }
         }
+        transportState = attachTransportState(notify: waitingForConnectivity, to: task)
         providerCallCount += 1
         task.resume()
         return task
@@ -485,10 +745,17 @@ public final class TonoCoachClient {
     /// completion. A malformed or missing envelope fails closed as a
     /// decoding error rather than being coerced into a synthesized value.
     @discardableResult
+    /// - Parameter waitingForConnectivity: invoked at most once, on the main
+    ///   queue, when the transport parks this request because the device has
+    ///   no route. The caller uses it to keep the loading surface truthful and
+    ///   to widen its visible deadline to the connectivity budget. It is NOT a
+    ///   retry hook: the same single task is still in flight and will complete
+    ///   by itself when the network returns.
     public func variant(
         draft: String,
         axis: String,
         customPrompt: String? = nil,
+        waitingForConnectivity: (() -> Void)? = nil,
         completion: @escaping (Result<VariantResponse, CoachError>) -> Void
     ) -> URLSessionDataTask? {
         // Build 96: no bearer token → zero network requests + a visible
@@ -520,16 +787,16 @@ public final class TonoCoachClient {
             return nil
         }
 
-        let task = session.dataTask(with: req) { data, response, error in
+        // Declared before the task so the completion can close over it; filled
+        // in below, before `resume()`, so nothing can read it unset.
+        var transportState: CoachRequestTransportState!
+        let task = session.dataTask(with: req) { [weak self] data, response, error in
+            let didWait = transportState.didWaitForConnectivity
+            // Terminal: drop the registration on EVERY path out of here, so a
+            // waiting notification can never arrive after the request is over.
+            self?.releaseTransportState(transportState)
             if let urlError = error as? URLError {
-                let mapped: CoachError
-                if urlError.code == .timedOut {
-                    mapped = .timeout
-                } else if CoachError.isOffline(urlError) {
-                    mapped = .offline
-                } else {
-                    mapped = .transport(urlError.localizedDescription)
-                }
+                let mapped = TonoCoachClient.mapped(urlError, didWaitForConnectivity: didWait)
                 DispatchQueue.main.async { completion(.failure(mapped)) }
                 return
             }
@@ -562,11 +829,16 @@ public final class TonoCoachClient {
                 DispatchQueue.main.async { completion(.failure(.decoding(error.localizedDescription))) }
             }
         }
+        transportState = attachTransportState(notify: waitingForConnectivity, to: task)
         // Build-97 Coach 1:1 contract: one tap on a tone chip →
         // one provider call. Bumped exactly here, exactly once per
         // `variant(...)` invocation, immediately before `task.resume()`.
         // The counters are public-readonly test seams; the shipping
         // path is unchanged.
+        //
+        // Build 111 preserves this exactly. Waiting for connectivity happens
+        // INSIDE this one task; it never creates a second one, and there is no
+        // application-level replay anywhere in this file.
         providerCallCount += 1
         dispatchedAxes.append(axis)
         task.resume()
