@@ -2,6 +2,7 @@ export const BASE_PATH = '/app';
 export const APP_ENTRY_PATH = `${BASE_PATH}/app`;
 export const LOGIN_PATH = `${BASE_PATH}/login`;
 export const AUTH_CALLBACK_PATH = `${BASE_PATH}/auth/callback`;
+export const AUTH_RESET_PATH = `${BASE_PATH}/auth/reset`;
 
 const CANONICAL_ORIGIN = 'https://tonoit.com';
 
@@ -178,6 +179,26 @@ export function buildLoginRedirect(
   const code = sanitizeAuthErrorCode(error);
   if (code) login.searchParams.set('error', code);
   return login.toString();
+}
+
+// Build 114 remediation — is this callback completing a password RECOVERY?
+//
+// `flow=recovery` is ours: the backend appends it to the redirect target when
+// it asks the provider to mail a recovery link, so the signal does not depend
+// on provider link formatting. `type=recovery` is the provider's own marker,
+// honoured as well because it costs nothing and covers a link minted before
+// this shipped.
+//
+// It matters that this is a marker and not a guess. A recovery link that is
+// merely SIGNED IN and dropped into the app is exactly the dead end being
+// fixed: the person was promised a screen where they choose a new password and
+// never saw one.
+export function isRecoveryCallback(params: URLSearchParams): boolean {
+  return params.get('flow') === 'recovery' || params.get('type') === 'recovery';
+}
+
+export function buildResetRedirect(env: RedirectEnvironment = process.env): string {
+  return new URL(AUTH_RESET_PATH, resolvePublicOrigin(undefined, env)).toString();
 }
 
 export function buildAppRedirect(

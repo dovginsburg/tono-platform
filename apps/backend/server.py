@@ -788,10 +788,42 @@ def _resolve_provider_signin(
             )
         else:
             existing = store.get_account_by_provider(provider, sub)
+            # Scoped to the provider that can actually write a claim (the
+            # Supabase email signup path). Apple and Google subjects are minted
+            # in different namespaces and never appear in that column, so this
+            # guard changes no behaviour today — it is here so that adding a
+            # third identity provider later cannot silently start resolving
+            # against claims that were never about it.
+            claimed = (
+                store.claim_registration_by_provider_subject(sub)
+                if existing is None and provider == "supabase"
+                else None
+            )
             if existing is not None:
                 # Plain sign-in: switch to (or reuse) the account that already
                 # owns this identity — never a conflict (existing behavior).
                 account = existing
+            elif claimed is not None:
+                # The identity is new to us, but a registration already CLAIMED
+                # this provider subject before verification — so we know which
+                # canonical person started this, even though the caller cannot
+                # tell us.
+                #
+                # This is the branch the verification click takes. It arrives
+                # from the person's mail app in a browser, holding no device
+                # bearer; without this it fell through to "brand-new identity
+                # on a brand-new anonymous account" and upgraded the throwaway
+                # account the browser had just been given, orphaning the one
+                # with the person's history, usage and subscription. The
+                # product's own instruction — "open the link on this device,
+                # then come back and sign in" — walked people straight into it.
+                #
+                # `sub` has already been cryptographically verified by the
+                # caller's verifier, so this resolves an identity the provider
+                # vouched for, not one the request asserted.
+                account = store.upsert_account_by_provider(
+                    provider, sub, email, link_into_account_id=claimed
+                )
             elif user.account is not None and not user.account.is_identified:
                 # Brand-new identity while on an anonymous auto-account: upgrade
                 # that account IN PLACE so its UUID, history, and entitlement
@@ -919,13 +951,30 @@ async def auth_web(
         app_version=body.app_version,
     )
 
+    # Project the entitlement through the SAME authority `/v1/me` and the email
+    # login use, by re-reading the device now that it has been re-linked.
+    #
+    # `Account.is_pro` alone was never the entitlement answer: it reads
+    # plan/subscription/coupon, which is the Stripe-shaped half. An App Store or
+    # Play subscription attaches to the canonical account as a provider
+    # ENTITLEMENT GRANT, and only `User.is_pro` (via `_attach_account`'s
+    # `provider_entitlement_active`) accounts for it. Returning `account.is_pro`
+    # here told a real mobile subscriber `is_pro: false` — and the website
+    # writes that answer into the `tono_plan` cookie, so the person landed in
+    # the editor being shown the paywall for a subscription they already own.
+    #
+    # This is the same correction `auth_email_login` documents at length; the
+    # two are siblings and had drifted apart.
+    refreshed = store.get_by_device(user.device_id) or user
+    projection = compute_me_fields(refreshed, store)
+
     return WebSignInResponse(
         device_id=user.device_id,
         api_token=user.api_token,
         device_credential=device_credential,
         account_id=account.id,
-        plan=account.plan,
-        is_pro=account.is_pro,
+        plan=projection["plan"],
+        is_pro=projection["is_pro"],
         email=account.email,
     )
 
@@ -1119,7 +1168,7 @@ async def auth_email_register(
     _email_auth_rate_gate(request, "register", normalized)
 
     try:
-        await client.sign_up(email=normalized, password=password)
+        signup = await client.sign_up(email=normalized, password=password)
     except email_auth.EmailAuthError as exc:
         if exc.outcome is email_auth.EmailAuthOutcome.INVALID_CREDENTIALS:
             # Supabase answers 4xx for "already registered". Revealing that
@@ -1141,7 +1190,12 @@ async def auth_email_register(
         raise _email_auth_failure(exc.outcome) from None
 
     _record_email_registration_intent(
-        store, user, normalized, body.source_surface, body.app_version
+        store,
+        user,
+        normalized,
+        body.source_surface,
+        body.app_version,
+        provider_subject=signup.provider_user_id,
     )
     return EmailAcceptedResponse()
 
@@ -1152,6 +1206,8 @@ def _record_email_registration_intent(
     normalized_email: str,
     source_surface: Optional[str],
     app_version: Optional[str],
+    *,
+    provider_subject: Optional[str] = None,
 ) -> None:
     """Move the CALLER'S existing canonical account into `pending`, when there
     is one. A browser or fresh install with no bearer has no account to bind
@@ -1162,6 +1218,14 @@ def _record_email_registration_intent(
     successful registration into a visible failure, and a conflict here (the
     account already has a different verified address) is a legitimate refusal
     to re-point a live identity, not a reason to tell the caller anything.
+
+    ``provider_subject`` is what makes the binding SURVIVE. Binding the account
+    locally is only half the job: the person completes the registration by
+    clicking a link in their mail app, which opens a browser carrying no device
+    bearer, so nothing in that request can say which account started this.
+    Recording the provider's own subject here gives that request something to
+    resolve, and is the difference between an anonymous account upgrading in
+    place and one being abandoned at the last step.
     """
     if user is None or not user.account_id:
         return
@@ -1171,6 +1235,7 @@ def _record_email_registration_intent(
             email=normalized_email,
             source_surface=source_surface,
             app_version=app_version,
+            provider_subject=provider_subject,
         )
 
 
@@ -1450,6 +1515,17 @@ def _record_email_audit(
 
     Takes either request shape because it reads only the two audit fields both
     carry (surface and build) and never the credentials one of them also has.
+
+    Written UNATTESTED, always. Every caller of this helper reached it without
+    proving which account it was acting for: resend and reset take no bearer at
+    all by design (they must work for someone locked out), and the login paths
+    that land here failed before any identity was established. So the surface
+    and build the request claims are recorded as `unknown` rather than onto the
+    account the address happens to name.
+
+    Concretely: without that, anyone who could spell an address could rewrite
+    the "where did this person sign up, and on what build" fields of a
+    stranger's registration by posting a reset they never intended to complete.
     """
     for account in store.find_accounts_by_email(normalized_email):
         store.record_registration_event(
@@ -1457,6 +1533,7 @@ def _record_email_audit(
             event_type=event,
             source_surface=body.source_surface,
             app_version=body.app_version,
+            attested=False,
         )
 
 

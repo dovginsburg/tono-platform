@@ -36,6 +36,7 @@ from .test_mobile_billing import apple  # noqa: F401
 from .test_email_accounts import (  # noqa: F401
     FakeEmailAuth,
     PASSWORD,
+    _click_verification_link,
     _headers,
     _register_device,
     _wire,
@@ -61,7 +62,16 @@ def _coach(client, token: str):
 
 
 def _signup_and_verify(client, fake, email: str, *, token: str | None = None) -> dict:
-    """Register, confirm the address, then sign in. Returns the session."""
+    """Register, open the emailed link for real, then sign in.
+
+    Every entitlement assertion in this file runs through here, so the step in
+    the middle decides what they are worth. It used to be `fake.confirm(email)`
+    alone — the provider's half of a verification and none of the product's —
+    which meant the account these tests asserted about was never the account a
+    real person ends up on. `_click_verification_link` performs the bearer-less
+    browser exchange the emailed link actually triggers, so a purchase bound
+    before registration is measured against the account that really carries it.
+    """
     headers = _headers(token) if token else {}
     r = client.post(
         "/v1/auth/email/register",
@@ -74,7 +84,7 @@ def _signup_and_verify(client, fake, email: str, *, token: str | None = None) ->
         headers=headers,
     )
     assert r.status_code == 202, r.text
-    fake.confirm(email)
+    _click_verification_link(client, fake, email)
     r = client.post(
         "/v1/auth/email/login",
         json={
@@ -806,3 +816,166 @@ def test_mutation_an_enumerating_register_would_reveal_a_known_address(client, f
     assert second.json() == fresh.json() == {"status": "verification_pending"}
     # Not just equal bodies — nothing in the response distinguishes them.
     assert second.content == fresh.content
+
+
+# ---------------------------------------------------------------------------
+# The website is the same person, with the same entitlement
+# ---------------------------------------------------------------------------
+
+
+def test_signing_in_on_the_web_reports_the_subscription_the_person_owns(
+    client, fake_auth, apple
+):
+    """`auth_web` must project entitlement exactly as the native login does.
+
+    It returned `account.is_pro`, which reads plan/subscription/coupon and
+    misses a provider ENTITLEMENT GRANT entirely — so an App Store or Play
+    subscriber signing in on tonoit.com was told they were not Pro. The website
+    writes that answer into its plan cookie, so they landed in the editor
+    looking at a paywall for a subscription they were already paying for.
+    """
+    device = _register_device(client)
+    session = _signup_and_verify(client, fake_auth, "webpro@example.com", token=device["api_token"])
+    account_id = session["account_id"]
+    assert _sync_apple(
+        client, session["api_token"], apple.sign_transaction(appAccountToken=account_id)
+    ).status_code == 200
+
+    me = client.get("/v1/me", headers=_headers(session["api_token"])).json()
+    assert me["is_pro"] is True, f"fixture wrong: {me}"
+
+    # The same person opens the website.
+    web = client.post(
+        "/v1/auth/web",
+        json={"access_token": "token-for:webpro@example.com", "app_version": "web-114"},
+    )
+    assert web.status_code == 200, web.text
+    body = web.json()
+    assert body["account_id"] == account_id
+    assert body["is_pro"] is True, "a paying subscriber was shown the paywall on the web"
+    assert body["plan"] == me["plan"]
+
+
+def test_verification_on_the_web_still_never_grants_pro(client, fake_auth):
+    """The sibling guarantee: the fix must project truth, not optimism."""
+    client.post(
+        "/v1/auth/email/register",
+        json={"email": "webfree@example.com", "password": PASSWORD},
+    )
+    web = _click_verification_link(client, fake_auth, "webfree@example.com")
+    assert web["is_pro"] is False
+    assert web["plan"] == "free"
+
+
+# ---------------------------------------------------------------------------
+# A signed-out device is retired, not bricked
+# ---------------------------------------------------------------------------
+
+
+def test_a_signed_out_device_that_kept_only_its_id_can_start_over(client, fake_auth):
+    """Sign-out destroys the credential and rotates the bearer, so neither proof
+    can ever succeed against that row again. Answering 409 forever left the
+    device with no action available to it and the row stranded permanently.
+
+    Starting over is safe because the row holds nothing: sign-out unlinked the
+    account, and the history and entitlement stayed on the canonical account.
+    So this hands back exactly what registering with no device id at all would.
+    """
+    device = _register_device(client)
+    session = _signup_and_verify(client, fake_auth, "retired@example.com", token=device["api_token"])
+    account_id = session["account_id"]
+
+    assert client.post(
+        "/v1/auth/email/logout", headers=_headers(session["api_token"])
+    ).status_code == 200
+
+    again = client.post("/v1/register", json={"device_id": session["device_id"]})
+    assert again.status_code == 200, again.text
+    fresh = again.json()
+    assert fresh["account_id"] != account_id, "came back on the account it left"
+    assert fresh["is_pro"] is False
+    assert _coach(client, fresh["api_token"]).status_code == 402
+
+    # And the person can still sign back in to the account that owns the money.
+    back = client.post(
+        "/v1/auth/email/login",
+        json={"email": "retired@example.com", "password": PASSWORD},
+        headers=_headers(fresh["api_token"]),
+    ).json()
+    assert back["account_id"] == account_id
+
+
+def test_a_stale_credential_is_still_refused_after_sign_out(client, fake_auth):
+    """Re-issuing a retired slot must not become a way back in with an old secret.
+
+    The distinction is deliberate: presenting no proof is "this device is
+    starting over"; presenting the credential from before the sign-out is "I
+    still hold the secret and want back in", and on a shared phone that must
+    keep its outright refusal even though what it would receive is empty.
+    """
+    device = _register_device(client)
+    session = _signup_and_verify(client, fake_auth, "shared2@example.com", token=device["api_token"])
+    assert client.post(
+        "/v1/auth/email/logout", headers=_headers(session["api_token"])
+    ).status_code == 200
+
+    replay = client.post(
+        "/v1/register",
+        json={
+            "device_id": session["device_id"],
+            "device_credential": device.get("device_credential"),
+        },
+    )
+    assert replay.status_code == 409, replay.text
+    assert "recovery proof" in replay.json()["error"]["message"]
+
+
+def test_mutation_without_the_pre_verification_claim_the_click_orphans_the_account(
+    client, fake_auth, apple, monkeypatch
+):
+    """Install the pre-remediation behaviour and watch the guarantee break.
+
+    The whole anonymous upgrade rests on ONE lookup: the browser that opens the
+    emailed link has no device bearer, so the only way it can be resolved to the
+    person who started the registration is the provider-subject claim recorded
+    before verification. Take that lookup away — return None, exactly as a store
+    with no claim recorded would — and the browser mints a second canonical
+    account, the later app login lands on it, and the subscription bought
+    beforehand is stranded on an account nothing points at any more.
+
+    This is what makes the tests above load bearing rather than decorative: the
+    guarantee they assert has a single mechanism, and removing it is observable.
+    """
+    from backend.store import Store
+
+    device = _register_device(client)
+    anonymous_account = device["account_id"]
+    assert _sync_apple(
+        client, device["api_token"], apple.sign_transaction(appAccountToken=anonymous_account)
+    ).status_code == 200
+    assert client.get("/v1/me", headers=_headers(device["api_token"])).json()["is_pro"] is True
+
+    assert client.post(
+        "/v1/auth/email/register",
+        json={"email": "mutant@example.com", "password": PASSWORD},
+        headers=_headers(device["api_token"]),
+    ).status_code == 202
+
+    monkeypatch.setattr(
+        Store, "claim_registration_by_provider_subject", lambda self, subject: None
+    )
+
+    web = _click_verification_link(client, fake_auth, "mutant@example.com")
+    assert web["account_id"] != anonymous_account, (
+        "the mutation did not take — this test is not measuring what it claims"
+    )
+
+    session = client.post(
+        "/v1/auth/email/login",
+        json={"email": "mutant@example.com", "password": PASSWORD},
+        headers=_headers(device["api_token"]),
+    ).json()
+    # The measurable damage, all three parts of it.
+    assert session["account_id"] == web["account_id"] != anonymous_account
+    assert session["is_pro"] is False
+    assert _coach(client, session["api_token"]).status_code == 402

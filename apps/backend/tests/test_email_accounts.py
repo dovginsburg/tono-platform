@@ -31,10 +31,17 @@ class FakeEmailAuth:
     server never does.
     """
 
-    def __init__(self):
+    def __init__(self, subject_for=None):
         self.users: dict[str, dict] = {}
         self.sent: list[tuple[str, str]] = []  # (kind, email)
         self.fail_with = None  # an EmailAuthOutcome to raise on every call
+        # Supabase returns the new user's own id on signup, even while it
+        # withholds a session pending confirmation. Modelled here because the
+        # anonymous upgrade depends on it: the server records it as a claim so
+        # the browser that opens the emailed link can be resolved back to the
+        # account that started the registration. A fake that omitted it would
+        # make the whole claim path untestable by construction.
+        self.subject_for = subject_for or (lambda email: f"sub-for:{email}")
 
     def _maybe_fail(self):
         if self.fail_with is not None:
@@ -53,7 +60,9 @@ class FakeEmailAuth:
             )
         self.users[email] = {"password": password, "confirmed": False}
         self.sent.append(("signup", email))
-        return email_auth.EmailSignUpResult(verification_required=True)
+        return email_auth.EmailSignUpResult(
+            verification_required=True, provider_user_id=self.subject_for(email)
+        )
 
     async def sign_in(self, *, email: str, password: str):
         import backend.email_auth as email_auth
@@ -108,6 +117,11 @@ def _wire(app, fake: FakeEmailAuth, *, subject_for=None):
     app.dependency_overrides[email_auth.get_email_auth_client] = lambda: fake
 
     subject_for = subject_for or (lambda email: f"sub-for:{email}")
+    # The signup response and the token verifier must agree about who the
+    # provider thinks this is, or the claim recorded at registration would
+    # never match the identity presented at verification — which is exactly the
+    # bug this models, and it must come from production code, not the fake.
+    fake.subject_for = subject_for
 
     async def fake_verifier(token: str):
         assert token.startswith("token-for:"), token
@@ -138,6 +152,33 @@ def _headers(token: str) -> dict:
 
 
 PASSWORD = "correct-horse-battery"
+
+
+def _click_verification_link(client, fake, email: str) -> dict:
+    """What tapping the link in the confirmation email ACTUALLY does.
+
+    This is the step the Build 114 suite left out, and leaving it out is what
+    made a green suite compatible with the account-orphaning defect it claimed
+    to cover. Flipping the provider's confirmed flag models the provider's half
+    and stops there; the product's half is that the link opens the person's
+    BROWSER, which exchanges the code and posts the resulting token to
+    `POST /v1/auth/web` carrying NO device bearer — because a browser that has
+    never seen this person before does not have one.
+
+    That bearer-less request is the whole difficulty: nothing in it can say
+    which canonical account started the registration. Any test that skips it is
+    asserting the anonymous upgrade against a request the product never makes.
+
+    Both clients instruct exactly this ordering — "open the link on this device,
+    then come back and sign in" — so it is the normal path, not an edge case.
+    """
+    fake.confirm(email)
+    r = client.post(
+        "/v1/auth/web",
+        json={"access_token": f"token-for:{email}", "app_version": "web-114"},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
 
 
 # ---------------------------------------------------------------------------
@@ -172,8 +213,12 @@ def test_signup_then_verify_then_login_resolves_one_canonical_account(client, fa
     assert events["email_verified"] is False
     assert [e["event_type"] for e in events["events"]] == ["signup_requested"]
 
-    # The person clicks the link; the provider now considers them confirmed.
-    fake_auth.confirm("person@example.com")
+    # The person clicks the link in their mail app. This is the REAL step, not
+    # a provider flag flip: it opens a browser with no device bearer, which is
+    # the one request in this flow that cannot say who it is acting for.
+    web = _click_verification_link(client, fake_auth, "person@example.com")
+    # The browser must land on the SAME canonical person, not a second account.
+    assert web["account_id"] == anonymous_account
 
     r = client.post(
         "/v1/auth/email/login",
@@ -195,6 +240,211 @@ def test_signup_then_verify_then_login_resolves_one_canonical_account(client, fa
     # Verification is not entitlement.
     assert session["is_pro"] is False
     assert session["plan"] == "free"
+
+
+# ---------------------------------------------------------------------------
+# The clicked link — the step the product performs and the suite used to skip
+#
+# Every test in this section fails on the pre-remediation implementation. That
+# is the point: the anonymous-upgrade guarantee was asserted by a test that
+# modelled verification as a provider-side flag flip, so the assertion could
+# not fail for the defect that broke the guarantee in production.
+# ---------------------------------------------------------------------------
+
+
+def test_the_verification_click_lands_on_the_account_that_registered(client, fake_auth):
+    """One human, one canonical account, across the whole real sequence.
+
+    Anonymous account A -> register with A's bearer -> the person opens the
+    emailed link in a browser -> A comes back and signs in. A must be the
+    answer at every step.
+    """
+    device = _register_device(client)
+    anonymous_account = device["account_id"]
+
+    assert client.post(
+        "/v1/auth/email/register",
+        json={
+            "email": "click@example.com",
+            "password": PASSWORD,
+            "source_surface": "ios",
+            "app_version": "114",
+        },
+        headers=_headers(device["api_token"]),
+    ).status_code == 202
+
+    web = _click_verification_link(client, fake_auth, "click@example.com")
+    assert web["account_id"] == anonymous_account, (
+        "the browser minted a second canonical account instead of resolving the "
+        "registration that is already pending for this provider identity"
+    )
+
+    session = client.post(
+        "/v1/auth/email/login",
+        json={"email": "click@example.com", "password": PASSWORD},
+        headers=_headers(device["api_token"]),
+    ).json()
+    assert session["account_id"] == anonymous_account, (
+        "the app landed on the browser's account, orphaning the one with the "
+        "person's history"
+    )
+
+
+def test_the_ledger_counts_one_human_once(client, fake_auth):
+    """A registration report that double-counts is worse than none.
+
+    The orphaned account kept `email_normalized` and stayed `pending` forever,
+    so one person appeared as two registrations — one pending, one verified —
+    and every native signup inflated the count.
+    """
+    device = _register_device(client)
+    client.post(
+        "/v1/auth/email/register",
+        json={
+            "email": "counted@example.com",
+            "password": PASSWORD,
+            "source_surface": "ios",
+            "app_version": "114",
+        },
+        headers=_headers(device["api_token"]),
+    )
+    _click_verification_link(client, fake_auth, "counted@example.com")
+    client.post(
+        "/v1/auth/email/login",
+        json={"email": "counted@example.com", "password": PASSWORD},
+        headers=_headers(device["api_token"]),
+    )
+
+    from backend.store import get_store
+
+    metrics = get_store().registration_metrics()
+    assert metrics["registrations_total"] == 1, metrics
+    assert metrics["by_lifecycle_state"] == {"verified": 1}, metrics
+    # And it is attributed to where the person actually started.
+    assert metrics["by_source_surface"] == {"ios": 1}, metrics
+
+
+def test_a_subscription_bought_before_registering_survives_the_click(client, fake_auth):
+    """The consequence that costs money.
+
+    Both shipped clients currently gate purchase behind a confirmed address, so
+    this is reached through the server rather than their UI — but the endpoints
+    are live, the guarantee is the one the product's own copy makes ("confirming
+    an email keeps your subscription recoverable"), and an account that pays
+    before it registers must not be the account that gets abandoned.
+    """
+    device = _register_device(client)
+    anonymous_account = device["account_id"]
+
+    from backend.store import get_store
+
+    get_store().apply_apple_transaction(
+        account_id=anonymous_account,
+        original_transaction_id="otx-early",
+        transaction_id="tx-early",
+        product_id="tono_pro_monthly",
+        environment="Sandbox",
+        ownership_type="PURCHASED",
+        app_account_token=anonymous_account,
+        signed_ms=1_700_000_000_000,
+        expires_ms=4_100_000_000_000,
+    )
+    assert client.get("/v1/me", headers=_headers(device["api_token"])).json()["is_pro"] is True
+
+    client.post(
+        "/v1/auth/email/register",
+        json={"email": "paid@example.com", "password": PASSWORD},
+        headers=_headers(device["api_token"]),
+    )
+    _click_verification_link(client, fake_auth, "paid@example.com")
+    session = client.post(
+        "/v1/auth/email/login",
+        json={"email": "paid@example.com", "password": PASSWORD},
+        headers=_headers(device["api_token"]),
+    ).json()
+
+    assert session["account_id"] == anonymous_account
+    assert session["is_pro"] is True, "the subscription was stranded on the orphaned account"
+    # And the gated surface actually opens, which is what the person paid for.
+    assert client.post(
+        "/api/analyze/variant",
+        json={"text": "could you take a look at this when you get a chance", "axis": "warmer"},
+        headers=_headers(device["api_token"]),
+    ).status_code == 200
+
+
+def test_a_browser_first_registration_still_works_without_a_claim(client, fake_auth):
+    """Nobody registered from a device, so there is no claim to resolve.
+
+    The claim must be an addition, not a precondition: a person who starts on
+    the website has no prior anonymous account, and minting one for them is the
+    correct answer rather than a failure.
+    """
+    assert client.post(
+        "/v1/auth/email/register",
+        json={"email": "webfirst@example.com", "password": PASSWORD},
+    ).status_code == 202
+
+    web = _click_verification_link(client, fake_auth, "webfirst@example.com")
+    assert web["account_id"]
+    assert web["is_pro"] is False
+
+    # And signing in later converges on that same account.
+    session = client.post(
+        "/v1/auth/email/login",
+        json={"email": "webfirst@example.com", "password": PASSWORD},
+    ).json()
+    assert session["account_id"] == web["account_id"]
+
+
+def test_a_claim_never_hands_over_an_account_that_did_not_make_it(client, fake_auth):
+    """Two people, two registrations, two subjects — no crossing over."""
+    alice_device = _register_device(client)
+    bob_device = _register_device(client)
+
+    for device, address in ((alice_device, "alice@example.com"), (bob_device, "bob@example.com")):
+        client.post(
+            "/v1/auth/email/register",
+            json={"email": address, "password": PASSWORD},
+            headers=_headers(device["api_token"]),
+        )
+
+    alice_web = _click_verification_link(client, fake_auth, "alice@example.com")
+    bob_web = _click_verification_link(client, fake_auth, "bob@example.com")
+
+    assert alice_web["account_id"] == alice_device["account_id"]
+    assert bob_web["account_id"] == bob_device["account_id"]
+    assert alice_web["account_id"] != bob_web["account_id"]
+
+
+def test_a_provider_that_returns_no_subject_still_registers(client, fake_auth):
+    """The claim is best effort, never a new way for a signup to fail.
+
+    The mail has already been sent by the time the subject would be recorded,
+    so a provider that withholds it must degrade — not strand the person with a
+    link in their inbox and an error on their screen.
+    """
+    import backend.email_auth as email_auth
+
+    async def sign_up_without_subject(*, email: str, password: str):
+        fake_auth.users[email] = {"password": password, "confirmed": False}
+        return email_auth.EmailSignUpResult(verification_required=True)
+
+    fake_auth.sign_up = sign_up_without_subject
+
+    device = _register_device(client)
+    assert client.post(
+        "/v1/auth/email/register",
+        json={"email": "nosub@example.com", "password": PASSWORD},
+        headers=_headers(device["api_token"]),
+    ).status_code == 202
+
+    # Still pending on the caller's own account, and the address is recorded.
+    events = client.get(
+        "/v1/account/registration-events", headers=_headers(device["api_token"])
+    ).json()
+    assert events["lifecycle_state"] == "pending"
+    assert events["account_id"] == device["account_id"]
 
 
 def test_pre_verification_login_is_refused_and_grants_nothing(client, fake_auth):
@@ -353,6 +603,124 @@ def test_repeated_login_attempts_are_bounded(client, fake_auth):
         for _ in range(40)
     }
     assert 429 in statuses, "brute force must eventually be throttled"
+
+
+# ---------------------------------------------------------------------------
+# The audit row belongs to the account, not to whoever can spell the address
+#
+# `resend` and `reset` take no bearer by design: they have to work for someone
+# who is locked out. That makes them the two endpoints anybody can aim at any
+# address, so nothing they CLAIM may be written onto the account they name.
+# ---------------------------------------------------------------------------
+
+
+def _registration_row(account_id: str) -> dict:
+    from backend.store import get_store
+
+    return get_store().get_registration(account_id)
+
+
+def _register_from(client, device, address, surface, build):
+    assert client.post(
+        "/v1/auth/email/register",
+        json={
+            "email": address,
+            "password": PASSWORD,
+            "source_surface": surface,
+            "app_version": build,
+        },
+        headers=_headers(device["api_token"]),
+    ).status_code == 202
+
+
+def test_an_unauthenticated_reset_cannot_rewrite_a_victims_audit_row(client, fake_auth):
+    victim = _register_device(client)
+    _register_from(client, victim, "victim@example.com", "ios", "114")
+    before = _registration_row(victim["account_id"])
+    assert (before["source_surface"], before["app_build"]) == ("ios", "114")
+
+    # No bearer. Anyone who can spell the address can send this.
+    assert client.post(
+        "/v1/auth/email/reset",
+        json={"email": "victim@example.com", "source_surface": "android", "app_version": "666"},
+    ).status_code == 202
+
+    after = _registration_row(victim["account_id"])
+    assert (after["source_surface"], after["app_build"]) == ("ios", "114"), (
+        "an unauthenticated caller authored another account's registration facts"
+    )
+
+
+def test_an_unauthenticated_resend_cannot_rewrite_a_victims_audit_row(client, fake_auth):
+    victim = _register_device(client)
+    _register_from(client, victim, "resend-victim@example.com", "android", "114")
+
+    assert client.post(
+        "/v1/auth/email/resend",
+        json={
+            "email": "resend-victim@example.com",
+            "source_surface": "ios",
+            "app_version": "999",
+        },
+    ).status_code == 202
+
+    row = _registration_row(victim["account_id"])
+    assert (row["source_surface"], row["app_build"]) == ("android", "114")
+
+
+def test_an_unauthenticated_caller_cannot_keep_a_stranger_looking_active(client, fake_auth):
+    """`last_seen_at` is a claim about the account, so it needs attestation too."""
+    victim = _register_device(client)
+    _register_from(client, victim, "seen@example.com", "ios", "114")
+    seen_before = _registration_row(victim["account_id"])["last_seen_at"]
+
+    assert client.post(
+        "/v1/auth/email/reset", json={"email": "seen@example.com", "source_surface": "android"}
+    ).status_code == 202
+
+    assert _registration_row(victim["account_id"])["last_seen_at"] == seen_before
+
+
+def test_an_unattested_event_is_still_recorded_without_its_attribution(client, fake_auth):
+    """The event happened. What it CLAIMED about the account did not."""
+    victim = _register_device(client)
+    _register_from(client, victim, "audited@example.com", "ios", "114")
+
+    client.post(
+        "/v1/auth/email/reset",
+        json={"email": "audited@example.com", "source_surface": "android", "app_version": "666"},
+    )
+
+    events = client.get(
+        "/v1/account/registration-events", headers=_headers(victim["api_token"])
+    ).json()["events"]
+    reset_events = [e for e in events if e["event_type"] == "password_reset_requested"]
+    assert len(reset_events) == 1, "the request must still be auditable"
+    assert reset_events[0]["source_surface"] == "unknown"
+    assert reset_events[0]["app_build"] is None
+
+
+def test_source_surface_is_where_it_started_not_who_wrote_last(client, fake_auth):
+    """The column is named `source`. It has to mean source."""
+    device = _register_device(client)
+    _register_from(client, device, "moved@example.com", "ios", "114")
+    _click_verification_link(client, fake_auth, "moved@example.com")
+
+    # The same person signs in from the other platform.
+    assert client.post(
+        "/v1/auth/email/login",
+        json={
+            "email": "moved@example.com",
+            "password": PASSWORD,
+            "source_surface": "android",
+            "app_version": "114",
+        },
+        headers=_headers(device["api_token"]),
+    ).status_code == 200
+
+    row = _registration_row(device["account_id"])
+    assert row["source_surface"] == "ios", "source drifted to the most recent surface"
+    assert row["last_seen_surface"] == "android", "recency has nowhere honest to live"
 
 
 # ---------------------------------------------------------------------------

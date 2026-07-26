@@ -23,6 +23,12 @@ const read = (relative) =>
 const callback = read('src/app/auth/callback/route.ts');
 const loginPage = read('src/app/login/page.tsx');
 const redirects = read('src/lib/auth-redirects.ts');
+// Build 114 remediation — the reviewed sentences moved out of the login page
+// into a shared module when the web gained the rest of the email lifecycle
+// (register, password sign-in, resend, reset) and the password-reset screen.
+// They are asserted here rather than only in that module's own tests, because
+// this file is the one that pins the property against the sources that ship.
+const emailCopy = read('src/lib/email-auth.ts');
 
 /** Strip comments so prose explaining a ban cannot fail that ban. */
 function stripComments(source) {
@@ -129,10 +135,17 @@ test('no secret can reach a server log', () => {
 
 test('the login page renders a mapped sentence and holds no provider text', () => {
   const code = stripComments(loginPage);
-  assert.match(loginPage, /const AUTH_ERROR_COPY: Record<AuthErrorCode, string>/);
+  assert.match(emailCopy, /const EMAIL_AUTH_COPY: Record<EmailAuthOutcome, string>/);
   assert.ok(
-    code.includes('{AUTH_ERROR_COPY[errorCode]}'),
+    code.includes('{EMAIL_AUTH_COPY[outcome]}'),
     'the rendered sentence must come from the mapper'
+  );
+  // The code that selects the sentence is a reviewed value or nothing. An
+  // unrecognised one is dropped rather than displayed, so a new upstream
+  // failure shape cannot arrive on screen as itself.
+  assert.ok(
+    code.includes('sanitizeEmailAuthOutcome'),
+    'the rendered code must be sanitized to the reviewed set'
   );
   // The state cannot hold a message at all.
   assert.ok(
@@ -150,13 +163,29 @@ test('sending a link answers the same way for a known and an unknown address', (
   // can already observe — throttling and an outage — are surfaced.
   assert.match(
     code,
-    /if \(reason === 'sign_in_failed'\) setMagicSent\(true\)/,
+    /reason === 'unknown_failure' \? 'check_your_email' : reason/,
     'a rejected send must not distinguish a registered address'
   );
+  // The same property for the flows the web gained in the remediation: the
+  // route answers 200 with an outcome whether or not the address exists, so
+  // the HTTP status cannot become the oracle the body avoids being.
+  for (const route of ['register', 'resend', 'reset']) {
+    const handler = read(`src/app/api/auth/email/${route}/route.ts`);
+    const statuses = [...handler.matchAll(/\{\s*status:\s*(\d{3})\s*\}/g)].map((m) => m[1]);
+    assert.ok(statuses.length > 0, `${route} returns no explicit status`);
+    assert.deepEqual(
+      [...new Set(statuses)],
+      ['200'],
+      `${route} varies its status, which distinguishes a registered address`
+    );
+  }
 });
 
 test('the reviewed sentences name no implementation detail', () => {
-  const sentences = [...loginPage.matchAll(/^\s{2}\w+:\s+(['"])(.*?)\1,$/gm)].map((m) => m[2]);
+  // Join the entries whose sentence wrapped onto its own line, so a long
+  // sentence is not silently exempt from the ban below.
+  const flattened = emailCopy.replace(/:\s*\n\s+/g, ': ');
+  const sentences = [...flattened.matchAll(/^\s{2}\w+: (['"])(.*?)\1,$/gm)].map((m) => m[2]);
   assert.ok(sentences.length >= 4, 'expected the reviewed copy block to be found');
   const forbidden = [
     'backend', 'server', 'provider', 'supabase', 'endpoint', 'token', 'bearer',

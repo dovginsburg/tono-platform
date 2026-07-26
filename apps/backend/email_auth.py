@@ -111,10 +111,24 @@ class EmailSignUpResult:
     ``session`` is populated only when a project has confirmations disabled;
     the caller still refuses to treat that as verified, so a misconfigured
     project cannot silently skip verification.
+
+    ``provider_user_id`` is the provider's own immutable subject for the user
+    this signup just created. Supabase returns it even while withholding a
+    session, and it is the one fact that makes the anonymous upgrade actually
+    hold: the caller records it against the canonical account BEFORE
+    verification, so whichever surface completes the verification — the web
+    callback with no device bearer, or a later native login — resolves the
+    SAME canonical person instead of minting a second one. See
+    ``server._record_email_registration_intent``.
+
+    It is an opaque public identifier, not a credential. It grants nothing on
+    its own: the account stays unidentified until an address is proven, and
+    every entitlement still reads plan/subscription/grant.
     """
 
     verification_required: bool
     session: Optional[EmailAuthSession] = None
+    provider_user_id: Optional[str] = None
 
 
 def _config() -> dict[str, Optional[str]]:
@@ -142,6 +156,32 @@ def _redirect_base() -> str:
         os.environ.get("TONO_AUTH_REDIRECT_URL")
         or "https://tonoit.com/app/auth/callback"
     )
+
+
+# The marker that tells the web callback a link is a RECOVERY link, so it can
+# send the person to the screen where they choose a new password instead of
+# straight into the app.
+#
+# Ours, not the provider's. Supabase does append its own `type=recovery` in
+# some flows, and the callback honours that too, but a recovery link that
+# silently signs someone in and never shows a password field is the exact dead
+# end Build 114 shipped — so the one signal this depends on is one this server
+# writes itself.
+#
+# Carried as a query parameter on the SAME callback URL, deliberately: the web
+# login page already appends `?next=…` to this URL when it asks for a magic
+# link, so a query-bearing callback is a shape the provider's redirect
+# allowlist must already accept. A new PATH would have been the other option
+# and would have needed a provider-side allowlist change, which this lane is
+# not permitted to make.
+RECOVERY_FLOW_MARKER = "flow=recovery"
+
+
+def _recovery_redirect() -> str:
+    """Where a password-recovery link lands: the callback, flagged."""
+    base = _redirect_base()
+    separator = "&" if "?" in base else "?"
+    return f"{base}{separator}{RECOVERY_FLOW_MARKER}"
 
 
 class SupabaseEmailAuthClient:
@@ -236,6 +276,39 @@ class SupabaseEmailAuthClient:
             raise EmailAuthError(EmailAuthOutcome.PROVIDER_UNAVAILABLE)
 
     @staticmethod
+    def _provider_user_id_from(response: httpx.Response) -> Optional[str]:
+        """The provider subject carried by a signup response.
+
+        Supabase answers a confirmation-required signup with the bare user
+        object (``{"id": …, "email": …, "confirmation_sent_at": …}``) and a
+        session-issuing signup with ``{"access_token": …, "user": {…}}``. Both
+        shapes are read here so no caller has to know which one a project
+        produced.
+
+        Returns None rather than raising for anything unexpected. A missing
+        subject degrades the anonymous upgrade to the previous behaviour, which
+        is a worse outcome but must never be an outright registration failure —
+        the person's mail has already been sent by this point.
+        """
+        try:
+            payload = response.json()
+        except ValueError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        candidate = payload.get("id")
+        if not candidate:
+            user = payload.get("user")
+            if isinstance(user, dict):
+                candidate = user.get("id")
+        if not candidate:
+            return None
+        subject = str(candidate).strip()
+        # Bounded: this value becomes an indexed identity key, so an unbounded
+        # provider string is not accepted on trust.
+        return subject if 0 < len(subject) <= 128 else None
+
+    @staticmethod
     def _session_from(response: httpx.Response) -> Optional[EmailAuthSession]:
         try:
             payload = response.json()
@@ -275,7 +348,9 @@ class SupabaseEmailAuthClient:
             raise EmailAuthError(outcome)
         session = self._session_from(response)
         return EmailSignUpResult(
-            verification_required=session is None, session=session
+            verification_required=session is None,
+            session=session,
+            provider_user_id=self._provider_user_id_from(response),
         )
 
     async def sign_in(self, *, email: str, password: str) -> EmailAuthSession:
@@ -308,7 +383,7 @@ class SupabaseEmailAuthClient:
         response = await self._post(
             "/auth/v1/recover",
             json_body={"email": email},
-            params={"redirect_to": _redirect_base()},
+            params={"redirect_to": _recovery_redirect()},
         )
         outcome = self._classify(response)
         if outcome is not EmailAuthOutcome.OK:
