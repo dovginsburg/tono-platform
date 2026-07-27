@@ -51,13 +51,13 @@ export default function PrivacyPage() {
 
           <h2 className="text-2xl font-semibold pt-6">deletion</h2>
           <p>
-            email <a href="mailto:ezra-orchestrator@agentmail.to" className="underline">ezra-orchestrator@agentmail.to</a>{" "}
+            email <a href="mailto:privacy@tonoit.com?subject=tono%20data%20deletion" className="underline">privacy@tonoit.com</a>{" "}
             and your account + all associated data will be deleted within 7 days.
           </p>
 
           <h2 className="text-2xl font-semibold pt-6">contact</h2>
           <p>
-            questions: <a href="mailto:ezra-orchestrator@agentmail.to" className="underline">ezra-orchestrator@agentmail.to</a>
+            questions: <a href="mailto:privacy@tonoit.com" className="underline">privacy@tonoit.com</a>
           </p>
 
           <h2 className="text-2xl font-semibold pt-6">subscription</h2>

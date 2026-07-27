@@ -71,7 +71,7 @@ export default function AboutPage() {
             <p className="text-tono-text-soft">
               two builders, one designer, and a small but loud group of
               beta testers. we're based in brooklyn and shipping on the ios
-              keyboard next. for press or partnerships, see <a href="mailto:ezra-orchestrator@agentmail.to" className="underline hover:text-tono-text">ezra-orchestrator@agentmail.to</a>.
+              keyboard next. for press or partnerships, see <a href="mailto:press@tonoit.com" className="underline hover:text-tono-text">press@tonoit.com</a>.
             </p>
           </div>
 
@@ -80,8 +80,8 @@ export default function AboutPage() {
               contact
             </h2>
             <p className="text-tono-text-soft">
-              general: <a href="mailto:ezra-orchestrator@agentmail.to" className="underline hover:text-tono-text">ezra-orchestrator@agentmail.to</a>.
-              support: open a ticket from inside the app after you sign in.
+              general: <a href="mailto:hello@tonoit.com" className="underline hover:text-tono-text">hello@tonoit.com</a>.
+              support: <a href="mailto:support@tonoit.com" className="underline hover:text-tono-text">support@tonoit.com</a>.
             </p>
           </div>
         </section>

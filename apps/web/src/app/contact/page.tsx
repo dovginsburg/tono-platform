@@ -22,25 +22,25 @@ const CHANNELS = [
     label: 'support',
     title: 'help with your account',
     body: 'login trouble, billing questions, or a bug you hit. include your account email and a screenshot when you can.',
-    email: 'ezra-orchestrator@agentmail.to',
+    email: 'support@tonoit.com',
   },
   {
     label: 'feedback',
     title: 'product feedback',
-    body: 'a tone that misses, a workflow that\'s clunky, an idea you want us to hear. we read every email.',
-    email: 'ezra-orchestrator@agentmail.to',
+    body: "a tone that misses, a workflow that's clunky, an idea you want us to hear. we read every email.",
+    email: 'hello@tonoit.com',
   },
   {
     label: 'press',
     title: 'media & partnerships',
     body: 'podcast guest pitches, product reviews, and integration partners.',
-    email: 'ezra-orchestrator@agentmail.to',
+    email: 'press@tonoit.com',
   },
   {
     label: 'security',
     title: 'report a vulnerability',
     body: 'responsible disclosure. we triage within 24 hours and credit reporters who follow coordinated disclosure.',
-    email: 'ezra-orchestrator@agentmail.to',
+    email: 'security@tonoit.com',
   },
 ]
 

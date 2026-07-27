@@ -3,6 +3,12 @@ import Link from 'next/link'
 // ── Newsletter strip — replaced the no-op NewsletterSignup form
 // (which only set local "subscribed" state) with a single email link.
 // A real signup form is a backend project, not a marketer-lane fix. ──
+// Contact — published addresses per role:
+//   general / newsletter / iOS waitlist   -> hello@tonoit.com
+//   product feedback                       -> hello@tonoit.com
+//   press / partnerships                   -> press@tonoit.com
+//   data deletion / privacy inquiries      -> privacy@tonoit.com
+// Domain mailbox routes via Cloudflare Email Routing (verified MX).
 function NewsletterStrip() {
   return (
     <div className="mt-10 pt-8 border-t border-tono-border">
@@ -11,7 +17,7 @@ function NewsletterStrip() {
           Get the next rewrite.
         </p>
         <a
-          href="mailto:ezra-orchestrator@agentmail.to"
+          href="mailto:hello@tonoit.com?subject=tono%20newsletter"
           className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-[10px] bg-tono-accent hover:bg-tono-accent-hover text-white font-semibold transition min-h-[44px] text-[13px]"
         >
           Subscribe by email
@@ -111,7 +117,7 @@ export default function TonoFooter() {
               </li>
               <li>
                 <a
-                  href="mailto:ezra-orchestrator@agentmail.to"
+                  href="mailto:hello@tonoit.com?subject=tono%20feedback"
                   className="text-tono-text-soft hover:text-tono-text transition"
                 >
                   Feedback
@@ -146,7 +152,7 @@ export default function TonoFooter() {
               </li>
               <li>
                 <a
-                  href="mailto:ezra-orchestrator@agentmail.to"
+                  href="mailto:press@tonoit.com"
                   className="text-tono-text-soft hover:text-tono-text transition"
                 >
                   Press
@@ -154,7 +160,7 @@ export default function TonoFooter() {
               </li>
               <li>
                 <a
-                  href="mailto:ezra-orchestrator@agentmail.to"
+                  href="mailto:press@tonoit.com"
                   className="text-tono-text-soft hover:text-tono-text transition"
                 >
                   Partnerships
@@ -184,7 +190,7 @@ export default function TonoFooter() {
               </li>
               <li>
                 <a
-                  href="mailto:ezra-orchestrator@agentmail.to"
+                  href="mailto:privacy@tonoit.com?subject=tono%20data%20deletion"
                   className="text-tono-text-soft hover:text-tono-text transition"
                 >
                   Data deletion
@@ -201,7 +207,7 @@ export default function TonoFooter() {
             <ul className="space-y-2 text-[13px]">
               <li>
                 <a
-                  href="mailto:ezra-orchestrator@agentmail.to"
+                  href="mailto:hello@tonoit.com?subject=tono%20ios%20waitlist"
                   className="text-tono-text-soft hover:text-tono-text transition"
                 >
                   iOS — coming soon, join the waitlist
