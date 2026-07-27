@@ -32,16 +32,34 @@
 // `ReadableColumnLayout` has an explicit identity branch: when the proposed
 // width is at or below the cap it proposes *exactly the width it was proposed*,
 // reports *exactly the size its child chose*, and places that child at *its own
-// origin*. That is not "close to" a no-op — it is the identity function, and
-// `Build115AdaptiveLayoutTests` pins it at every iPhone portrait width across
-// every Dynamic Type size.
+// origin*. That is not "close to" a no-op — it is the identity function.
+//
+// What pins that, precisely (an earlier version of this comment claimed more
+// than the tests delivered, so the claim is now spelled out):
+//
+//   * the ARITHMETIC identity — `isIdentity` and `columnWidth` — is pinned at
+//     every iPhone portrait width from 320 to 440pt, one point at a time,
+//     across every Dynamic Type size;
+//   * the LAYOUT identity is pinned on real laid-out `UIView` frames for a
+//     FILLING child (`testHostedPhoneGeometryIsByteForByteUnchangedByTheColumn`)
+//     and — the case that actually distinguishes the two branches — for a
+//     HUGGING direct child
+//     (`testTheColumnReportsExactlyWhatAHuggingDirectChildChose`). For a
+//     filling child the two branches are arithmetically identical at any width
+//     at or under the cap, so only the hugging probe can tell them apart, and
+//     deleting the identity branch turns that one red.
 //
 // Because every cap here is wider than the widest iPhone portrait width
 // (440pt on the 17 Pro Max), the identity branch is the only branch a phone in
-// portrait can ever take. In landscape a large iPhone is 956pt wide and DOES
-// take the capped branch — that is intentional, it is the same readable-measure
-// treatment iOS gives long-form content, and it is captured in the runtime
-// evidence rather than left as a surprise.
+// portrait can ever take. In landscape a large iPhone is 844–956pt wide and
+// DOES take the capped branch — content caps at the reading measure, centres,
+// and the peer-item grids below form two columns. That is intentional and it
+// is the same readable-measure treatment iOS gives long-form content on a wide
+// window. It is pinned by its own tests
+// (`testPhoneLandscapeTakesTheCappedBranchOnPurpose`,
+// `testEveryShippingGridFormsTwoColumnsInsideAPhoneLandscapeReadingMeasure`,
+// `testPhoneLandscapeIsCappedAndCentredOnPurpose`) rather than left as a
+// surprise, so "the phone is untouched" is a claim about PORTRAIT only.
 //
 // DYNAMIC TYPE
 //
@@ -234,9 +252,97 @@ enum TonoAdaptiveLayout {
     }
 }
 
+// MARK: - The shipping grid specs
+
+/// The parameters one peer-item grid is laid out with.
+///
+/// These are DECLARED HERE and consumed by both the shipping call sites and the
+/// tests, so the two cannot drift. The previous arrangement — a hand-copied
+/// table inside the test file — had already drifted: it carried the wrong
+/// spacing for all three real grids and a fourth entry for a grid that does not
+/// exist (the This Week top-line stats are a plain `HStack`). A test table that
+/// describes a different app than the one that ships proves nothing about the
+/// app that ships.
+struct TonoGridSpec: Equatable {
+
+    /// What this grid is, for test failure messages.
+    let label: String
+
+    /// The narrowest a cell may be before the grid collapses to one column.
+    let minimumItemWidth: CGFloat
+
+    /// The gutter between columns. Set to the spacing of the `VStack` each call
+    /// site replaced, so the single-column result is frame-for-frame what
+    /// shipped on a phone.
+    let spacing: CGFloat
+
+    let maximumColumns: Int
+}
+
+extension TonoGridSpec {
+
+    /// This Week's two depth cards. Peers about the same week.
+    static let digestDepthCards = TonoGridSpec(
+        label: "This Week depth cards", minimumItemWidth: 300, spacing: 20, maximumColumns: 2
+    )
+
+    /// The onboarding entry-point tiles. Independent options, not a sequence.
+    static let onboardingTiles = TonoGridSpec(
+        label: "onboarding entry-point tiles", minimumItemWidth: 300, spacing: 20, maximumColumns: 2
+    )
+
+    /// Coach's "All rewrites" list. Four parallel answers to one draft.
+    static let coachAlternateRewrites = TonoGridSpec(
+        label: "Coach alternate rewrites", minimumItemWidth: 260, spacing: 8, maximumColumns: 2
+    )
+
+    /// Every grid the app actually ships. Adding a call site means adding it
+    /// here, which is what puts it under test.
+    static let shipping: [TonoGridSpec] = [digestDepthCards, onboardingTiles, coachAlternateRewrites]
+
+    /// The widest gutter a two-column grouping may use.
+    ///
+    /// Absolute, not derived from the specs above, so it is a real bound rather
+    /// than a restatement: the surfaces that group two-up have a 20pt vertical
+    /// stack rhythm, and a horizontal gutter wider than that rhythm stops
+    /// reading as one group of peers and starts reading as two unrelated
+    /// columns. 24pt leaves the shipping 20pt a little room and still fails a
+    /// gutter that has run away.
+    static let maximumGutter: CGFloat = 24
+}
+
 // MARK: - Typography
 
-/// Dynamic-Type-aware sizing for the app's rounded face.
+/// Which system face a call site renders in.
+///
+/// A named type rather than a bare `Font.Design` because the FACE is the thing
+/// that must not change silently: most of this app is SF Rounded, and a handful
+/// of call sites were authored in the standard face and must stay there.
+enum TonoFontFace: CaseIterable {
+
+    /// SF Rounded — the app's face.
+    case rounded
+
+    /// SF Pro — the system default. Used where the original call site had no
+    /// `design:` argument and the approved screen therefore shipped SF Pro.
+    case standard
+
+    var design: Font.Design {
+        switch self {
+        case .rounded:  return .rounded
+        case .standard: return .default
+        }
+    }
+
+    var systemDesign: UIFontDescriptor.SystemDesign {
+        switch self {
+        case .rounded:  return .rounded
+        case .standard: return .default
+        }
+    }
+}
+
+/// Dynamic-Type-aware sizing for the app's faces.
 ///
 /// `Font.system(size:weight:design:)` does not scale, and `Font.custom(_:size:
 /// relativeTo:)` cannot express the rounded design, so neither one alone can
@@ -246,8 +352,12 @@ enum TonoAdaptiveLayout {
 ///
 /// The property that makes this safe to apply to approved screens: at the
 /// DEFAULT content size the scaled value is the input value, so every converted
-/// call site renders identically to the fixed-point one it replaced.
-/// `testEveryConvertedSizeIsUnchangedAtTheDefaultContentSize` pins that.
+/// call site renders at the size of the fixed-point one it replaced.
+/// `testEveryConvertedSizeIsUnchangedAtTheDefaultContentSize` pins the size;
+/// `testTheModifiersRenderTheFaceTheyClaim`,
+/// `testTheModifierRendersTheWeightItClaims` and
+/// `testTheModifierRendersTheSameMetricsAsTheSystemFontItReplaced` pin the FACE
+/// and the WEIGHT, which a point-size comparison cannot see at all.
 enum TonoTypography {
 
     /// Growth ceiling for text. Past this, a screen designed at 13–22pt starts
@@ -289,6 +399,50 @@ enum TonoTypography {
         }
     }
 
+    /// The actual `UIFont` a converted call site renders in.
+    ///
+    /// This is not a mirror of the view layer for the tests to inspect — it IS
+    /// the view layer's resolution step. `ScaledSystemFontModifier` below wraps
+    /// exactly this font, so a test that reads this descriptor reads the object
+    /// that ships. `Font(_: UIFont)` and `Font.system(size:weight:design:)`
+    /// produce identical laid-out metrics for a system font, which
+    /// `testTheModifierRendersTheSameMetricsAsTheSystemFontItReplaced` measures
+    /// rather than assumes.
+    static func resolvedUIFont(
+        size: CGFloat,
+        weight: Font.Weight,
+        face: TonoFontFace,
+        relativeTo textStyle: Font.TextStyle,
+        dynamicTypeSize: DynamicTypeSize,
+        maximumGrowth: CGFloat = TonoTypography.maximumTextGrowth
+    ) -> UIFont {
+        let points = scaledSize(
+            size, relativeTo: textStyle, dynamicTypeSize: dynamicTypeSize, maximumGrowth: maximumGrowth
+        )
+        let base = UIFont.systemFont(ofSize: points, weight: uiWeight(weight))
+        guard let descriptor = base.fontDescriptor.withDesign(face.systemDesign) else { return base }
+        return UIFont(descriptor: descriptor, size: points)
+    }
+
+    /// `Font.Weight` carries no public accessor, so the two scales are mapped
+    /// case by case. They agree numerically — `.semibold` is 0.3 on both — and
+    /// `testTheModifierRendersTheSameMetricsAsTheSystemFontItReplaced` measures
+    /// that agreement at every weight this app uses.
+    static func uiWeight(_ weight: Font.Weight) -> UIFont.Weight {
+        switch weight {
+        case .ultraLight: return .ultraLight
+        case .thin:       return .thin
+        case .light:      return .light
+        case .regular:    return .regular
+        case .medium:     return .medium
+        case .semibold:   return .semibold
+        case .bold:       return .bold
+        case .heavy:      return .heavy
+        case .black:      return .black
+        default:          return .regular
+        }
+    }
+
     static func contentSizeCategory(_ size: DynamicTypeSize) -> UIContentSizeCategory {
         switch size {
         case .xSmall:          return .extraSmall
@@ -305,6 +459,132 @@ enum TonoTypography {
         case .accessibility5:  return .accessibilityExtraExtraExtraLarge
         @unknown default:      return .large
         }
+    }
+}
+
+// MARK: - Face-critical call sites
+
+/// A converted call site whose FACE is load-bearing, declared once and applied
+/// by the view.
+///
+/// Only the face-critical sites are listed. The other conversions are either
+/// the app's own rounded face — where a blanket flip is caught at the modifier
+/// by `testTheModifiersRenderTheFaceTheyClaim` — or `Image(systemName:)`
+/// glyphs, where `design` is inert. What this list exists for is the case that
+/// slipped through: two call sites whose ORIGINAL had no `design:` argument,
+/// and which a blanket `.rounded` conversion silently restyled.
+struct TonoTextStyle {
+    let label: String
+    let size: CGFloat
+    let weight: Font.Weight
+    let textStyle: Font.TextStyle
+    let face: TonoFontFace
+    let maximumGrowth: CGFloat
+
+    init(
+        label: String,
+        size: CGFloat,
+        weight: Font.Weight = .regular,
+        relativeTo textStyle: Font.TextStyle,
+        face: TonoFontFace,
+        maximumGrowth: CGFloat = TonoTypography.maximumTextGrowth
+    ) {
+        self.label = label
+        self.size = size
+        self.weight = weight
+        self.textStyle = textStyle
+        self.face = face
+        self.maximumGrowth = maximumGrowth
+    }
+
+    /// The font this call site renders in — the same resolution the view layer
+    /// performs, not a second copy of it.
+    func resolvedUIFont(dynamicTypeSize: DynamicTypeSize) -> UIFont {
+        TonoTypography.resolvedUIFont(
+            size: size, weight: weight, face: face, relativeTo: textStyle,
+            dynamicTypeSize: dynamicTypeSize, maximumGrowth: maximumGrowth
+        )
+    }
+}
+
+extension TonoTextStyle {
+
+    /// Memory's `Clear all` toolbar button. Shipped `.font(.system(size: 14))`
+    /// — no `design:` argument, therefore SF Pro.
+    static let memoryClearAll = TonoTextStyle(
+        label: "Memory · Clear all", size: 14, relativeTo: .subheadline, face: .standard
+    )
+
+    /// The account-deletion sheet's warning. Shipped `.font(.system(size: 17,
+    /// weight: .semibold))` — no `design:` argument, therefore SF Pro. That
+    /// sheet's Build 115 phase is layout only, so a typeface change here would
+    /// have been outside its own declared scope.
+    static let accountDeletionWarning = TonoTextStyle(
+        label: "Delete account · warning", size: 17, weight: .semibold, relativeTo: .body, face: .standard
+    )
+
+    /// Coach's explainer heading — the app's own rounded face, on the same
+    /// screen as the step badge, so a flip of the face is caught from the
+    /// rounded direction too and not only from the standard one.
+    static let coachExplainerTitle = TonoTextStyle(
+        label: "Coach · How Coach works", size: 22, weight: .bold, relativeTo: .title2, face: .rounded
+    )
+
+    static let faceCritical: [TonoTextStyle] = [
+        memoryClearAll, accountDeletionWarning, coachExplainerTitle,
+    ]
+}
+
+// MARK: - The numbered step badge
+
+/// The Coach explainer's numbered step badge: a digit inside a filled circle.
+///
+/// Declared here, and consumed by both `CoachView.StepBadge` and the tests,
+/// for the same reason the grid specs are: a badge is a fixed frame with a
+/// `clipShape(Circle())` over it, so if the digit grows and the circle does
+/// not, the digit is silently CUT. That happened — the first Dynamic Type pass
+/// gave the digit the text growth ceiling (2.2×, 28.6pt at the accessibility
+/// sizes) while leaving the circle at a hard 22pt, and the app's first-run
+/// overlay clipped for anyone with large text turned on.
+///
+/// The rule that makes it safe at every size: the digit and the circle scale
+/// TOGETHER, both against the same text style and both held to the decorative
+/// ceiling. Their ratio is therefore fixed at 13/22, so the digit's line box
+/// occupies a constant ~0.71 of the circle at every Dynamic Type size — and at
+/// the default size both resolve to exactly the approved 13pt and 22pt, so the
+/// approved appearance is unchanged.
+enum TonoStepBadge {
+
+    /// The approved phone diameter, unchanged at the default content size.
+    static let baseDiameter: CGFloat = 22
+
+    /// The approved digit size, unchanged at the default content size.
+    static let baseFontSize: CGFloat = 13
+
+    static let textStyle: Font.TextStyle = .footnote
+    static let weight: Font.Weight = .bold
+
+    static func diameter(dynamicTypeSize: DynamicTypeSize) -> CGFloat {
+        TonoTypography.scaledSize(
+            baseDiameter, relativeTo: textStyle, dynamicTypeSize: dynamicTypeSize,
+            maximumGrowth: TonoTypography.maximumDecorativeGrowth
+        )
+    }
+
+    static func fontSize(dynamicTypeSize: DynamicTypeSize) -> CGFloat {
+        TonoTypography.scaledSize(
+            baseFontSize, relativeTo: textStyle, dynamicTypeSize: dynamicTypeSize,
+            maximumGrowth: TonoTypography.maximumDecorativeGrowth
+        )
+    }
+
+    /// The resolved font of the digit — the object the badge actually renders.
+    static func font(dynamicTypeSize: DynamicTypeSize) -> UIFont {
+        TonoTypography.resolvedUIFont(
+            size: baseFontSize, weight: weight, face: .rounded, relativeTo: textStyle,
+            dynamicTypeSize: dynamicTypeSize,
+            maximumGrowth: TonoTypography.maximumDecorativeGrowth
+        )
     }
 }
 
@@ -494,24 +774,30 @@ private struct ReadableColumnModifier: ViewModifier {
     }
 }
 
-private struct ScaledRoundedFontModifier: ViewModifier {
+private struct ScaledSystemFontModifier: ViewModifier {
     let size: CGFloat
     let weight: Font.Weight
+    let face: TonoFontFace
     let textStyle: Font.TextStyle
     let maximumGrowth: CGFloat
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     func body(content: Content) -> some View {
+        // Resolved through `TonoTypography.resolvedUIFont` rather than through
+        // `Font.system(size:weight:design:)` so that there is exactly ONE place
+        // the face is decided, and a test can read the descriptor that actually
+        // ships instead of a parallel re-derivation of it. The two produce
+        // identical laid-out metrics; that is measured, not assumed.
         content.font(
-            .system(
-                size: TonoTypography.scaledSize(
-                    size,
+            Font(
+                TonoTypography.resolvedUIFont(
+                    size: size,
+                    weight: weight,
+                    face: face,
                     relativeTo: textStyle,
                     dynamicTypeSize: dynamicTypeSize,
                     maximumGrowth: maximumGrowth
-                ),
-                weight: weight,
-                design: .rounded
+                )
             )
         )
     }
@@ -528,29 +814,52 @@ extension View {
         modifier(ReadableColumnModifier(measure: measure, alignment: alignment))
     }
 
-    /// The app's rounded face at `size` points, scaling with Dynamic Type
-    /// relative to `textStyle`. At the default content size this is exactly
-    /// `.font(.system(size:weight:design: .rounded))` — the call it replaces.
+    /// The app's face at `size` points, scaling with Dynamic Type relative to
+    /// `textStyle`. At the default content size this is exactly
+    /// `.font(.system(size:weight:design:))` — the call it replaces.
+    ///
+    /// `face` defaults to `.rounded`, which is the app's face and what all but
+    /// two converted call sites want. The two that pass `.standard` were
+    /// authored with no `design:` argument, so the approved screen ships SF Pro
+    /// there and this conversion must not quietly restyle them.
     func tonoFont(
         size: CGFloat,
         weight: Font.Weight = .regular,
         relativeTo textStyle: Font.TextStyle,
+        face: TonoFontFace = .rounded,
         maximumGrowth: CGFloat = TonoTypography.maximumTextGrowth
     ) -> some View {
         modifier(
-            ScaledRoundedFontModifier(
-                size: size, weight: weight, textStyle: textStyle, maximumGrowth: maximumGrowth
+            ScaledSystemFontModifier(
+                size: size, weight: weight, face: face,
+                textStyle: textStyle, maximumGrowth: maximumGrowth
             )
         )
     }
 
-    /// A decorative glyph or badge: same scaling, tighter ceiling, no rounded
-    /// design assumption beyond what `.system` already gives symbols.
-    func tonoGlyphFont(size: CGFloat, weight: Font.Weight = .regular, relativeTo textStyle: Font.TextStyle) -> some View {
+    /// A call site whose face is declared once, in `TonoTextStyle`, and applied
+    /// here — so a test that reads the declaration is reading what ships.
+    func tonoFont(_ style: TonoTextStyle) -> some View {
         modifier(
-            ScaledRoundedFontModifier(
+            ScaledSystemFontModifier(
+                size: style.size, weight: style.weight, face: style.face,
+                textStyle: style.textStyle, maximumGrowth: style.maximumGrowth
+            )
+        )
+    }
+
+    /// A decorative glyph or badge: same scaling, tighter ceiling.
+    func tonoGlyphFont(
+        size: CGFloat,
+        weight: Font.Weight = .regular,
+        relativeTo textStyle: Font.TextStyle,
+        face: TonoFontFace = .rounded
+    ) -> some View {
+        modifier(
+            ScaledSystemFontModifier(
                 size: size,
                 weight: weight,
+                face: face,
                 textStyle: textStyle,
                 maximumGrowth: TonoTypography.maximumDecorativeGrowth
             )
@@ -566,6 +875,36 @@ struct AdaptiveItemGrid<Content: View>: View {
     var maximumColumns: Int
     var itemAlignment: Alignment = .topLeading
     @ViewBuilder var content: () -> Content
+
+    /// The shipping call sites use this initialiser, so the numbers a surface
+    /// lays out with are the numbers `TonoGridSpec` declares and the tests read.
+    init(
+        _ spec: TonoGridSpec,
+        itemAlignment: Alignment = .topLeading,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.minimumItemWidth = spec.minimumItemWidth
+        self.spacing = spec.spacing
+        self.maximumColumns = spec.maximumColumns
+        self.itemAlignment = itemAlignment
+        self.content = content
+    }
+
+    /// Kept for probes that need an arbitrary minimum rather than a shipping
+    /// one. No shipping call site uses it.
+    init(
+        minimumItemWidth: CGFloat,
+        spacing: CGFloat,
+        maximumColumns: Int,
+        itemAlignment: Alignment = .topLeading,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.minimumItemWidth = minimumItemWidth
+        self.spacing = spacing
+        self.maximumColumns = maximumColumns
+        self.itemAlignment = itemAlignment
+        self.content = content
+    }
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 

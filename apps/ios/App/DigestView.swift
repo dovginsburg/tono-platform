@@ -92,10 +92,13 @@ struct DigestView: View {
                     // Build 115 — iPad. The breakdown and the streak are peer
                     // depth cards about the same week, so where there is room
                     // they sit beside each other rather than pushing the second
-                    // one below the fold. `spacing: 20` is the spacing of the
-                    // stack they were direct children of, so at a phone width
-                    // this is frame-for-frame what shipped.
-                    AdaptiveItemGrid(minimumItemWidth: 300, spacing: 20, maximumColumns: 2) {
+                    // one below the fold. The spec's `spacing: 20` is the
+                    // spacing of the stack they were direct children of, so at
+                    // a phone PORTRAIT width this is frame-for-frame what
+                    // shipped. A phone in LANDSCAPE clears the reading measure
+                    // and does get the two-up grouping; that is intentional and
+                    // separately tested.
+                    AdaptiveItemGrid(.digestDepthCards) {
                         if !d.axisBreakdown.isEmpty {
                             axisBars(d.axisBreakdown, prevBreakdown: d.prevAxisBreakdown)
                         }

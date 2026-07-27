@@ -324,11 +324,12 @@ struct CoachView: View {
                     // answers to the same draft, and comparing them is the
                     // whole point. Two columns where there is room lets a
                     // person read two side by side instead of scrolling
-                    // between them. At every phone width this resolves to one
-                    // column and is frame-for-frame the stack it replaced.
-                    AdaptiveItemGrid(
-                        minimumItemWidth: 260, spacing: 8, maximumColumns: 2
-                    ) {
+                    // between them. At every phone PORTRAIT width this resolves
+                    // to one column and is frame-for-frame the stack it
+                    // replaced; a phone in LANDSCAPE is 844–956pt wide, so it
+                    // takes the capped measure and does get two columns, which
+                    // is intentional and separately tested.
+                    AdaptiveItemGrid(.coachAlternateRewrites) {
                         ForEach(mapped) { s in
                             rewriteRow(s)
                         }
@@ -510,7 +511,10 @@ struct CoachView: View {
                 .tonoGlyphFont(size: 36, relativeTo: .largeTitle)
                 .foregroundColor(.purple)
             Text("How Coach works")
-                .tonoFont(size: 22, weight: .bold, relativeTo: .title2)
+                // Declared in `TonoTextStyle.coachExplainerTitle` — the app's
+                // own rounded face, pinned so a blanket face change is caught
+                // from the rounded direction as well as the standard one.
+                .tonoFont(.coachExplainerTitle)
                 .foregroundColor(.white)
             VStack(alignment: .leading, spacing: 10) {
                 explainerLine(number: "1", text: "Type or paste a draft message.")
@@ -565,14 +569,39 @@ struct CoachView: View {
         .shadow(color: .black.opacity(0.5), radius: 20, y: 10)
     }
 
-    private func explainerLine(number: String, text: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+    /// The numbered step badge.
+    ///
+    /// Its own view so it can read `dynamicTypeSize`, because a digit inside a
+    /// fixed frame with `.clipShape(Circle())` over it is CUT rather than
+    /// wrapped when it outgrows the frame — and the first Dynamic Type pass did
+    /// exactly that, giving the digit the 2.2× text ceiling (28.6pt at the
+    /// accessibility sizes) inside a hard 22pt circle. Both numbers now come
+    /// from `TonoStepBadge`, which scales them together against the same text
+    /// style and the same decorative ceiling, so the digit's line box stays a
+    /// constant fraction of the circle at every size — and at the default size
+    /// both are exactly the approved 13pt and 22pt.
+    ///
+    /// Deliberately not `private`: `Build115AdaptiveLayoutTests` hosts this
+    /// exact view and measures its laid-out size, so the assertion is about the
+    /// badge that ships rather than about a replica of it.
+    struct StepBadge: View {
+        let number: String
+        @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+        var body: some View {
+            let diameter = TonoStepBadge.diameter(dynamicTypeSize: dynamicTypeSize)
             Text(number)
-                .tonoFont(size: 13, weight: .bold, relativeTo: .footnote)
+                .font(Font(TonoStepBadge.font(dynamicTypeSize: dynamicTypeSize)))
                 .foregroundColor(.purple)
-                .frame(width: 22, height: 22)
+                .frame(width: diameter, height: diameter)
                 .background(Color.purple.opacity(0.18))
                 .clipShape(Circle())
+        }
+    }
+
+    private func explainerLine(number: String, text: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            StepBadge(number: number)
             Text(text)
                 .tonoFont(size: 14, relativeTo: .subheadline)
                 .foregroundColor(.white.opacity(0.85))

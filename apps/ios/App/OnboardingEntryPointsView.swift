@@ -54,9 +54,12 @@ struct OnboardingEntryPointsView: View {
                         // Doctor's numbered steps, they group two-up where there
                         // is room. Tile 1 and its verification buttons are one
                         // cell, because those buttons belong to that tile.
-                        // `spacing: 20` is the stack spacing they had, so a
-                        // phone gets the column that shipped.
-                        AdaptiveItemGrid(minimumItemWidth: 300, spacing: 20, maximumColumns: 2) {
+                        // The spec's `spacing: 20` is the stack spacing they
+                        // had, so a phone in PORTRAIT gets the column that
+                        // shipped. A phone in LANDSCAPE clears the reading
+                        // measure and does group two-up; that is intentional
+                        // and separately tested.
+                        AdaptiveItemGrid(.onboardingTiles) {
                             VStack(alignment: .leading, spacing: 20) {
                                 tile(
                                     number: 1,

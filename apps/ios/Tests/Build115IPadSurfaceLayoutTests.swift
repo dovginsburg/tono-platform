@@ -149,6 +149,9 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
     /// Real window sizes, points. Portrait and landscape for each family.
     private static let phonePortrait = CGSize(width: 393, height: 852)
     private static let phoneLandscape = CGSize(width: 852, height: 393)
+    /// The 17 Pro's landscape geometry, so the landscape claim is not about one
+    /// device either. Both clear the 700pt reading measure.
+    private static let phoneLandscapeWide = CGSize(width: 874, height: 402)
     private static let iPadPortrait = CGSize(width: 1032, height: 1376)
     private static let iPadLandscape = CGSize(width: 1376, height: 1032)
     /// The 11-inch family, so the claim is not about one device.
@@ -186,7 +189,7 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
     private func measureContent<V: View>(
         _ view: V, size: CGSize, typeSize: DynamicTypeSize = .large,
         style: UIUserInterfaceStyle = .dark
-    ) -> (extent: Extent, controller: UIHostingController<AnyView>) {
+    ) -> (extent: Extent, controller: UIHostingController<AnyView>, background: Background) {
         let controller = UIHostingController(rootView: AnyView(view.dynamicTypeSize(typeSize)))
         controller.overrideUserInterfaceStyle = style
         controller.view.frame = CGRect(origin: .zero, size: size)
@@ -206,18 +209,33 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
             controller.view.layer.render(in: context.cgContext)
         }
         window.isHidden = true
-        return (Self.extent(in: image, size: size), controller)
+        let measured = Self.extent(in: image, size: size)
+        return (measured.extent, controller, measured.background)
     }
 
-    private static func extent(in image: UIImage, size: CGSize) -> Extent {
-        guard let cg = image.cgImage else { return Extent(left: 0, right: 0) }
+    /// The surface's own background, read off the raster.
+    ///
+    /// Returned so that a light-versus-dark comparison can prove the appearance
+    /// override actually took effect. Without it, "light and dark lay out
+    /// identically" would also be true of a harness that quietly ignored the
+    /// style it was handed.
+    private struct Background: Equatable {
+        let red: Int
+        let green: Int
+        let blue: Int
+        var luminance: Int { red + green + blue }
+    }
+
+    private static func extent(in image: UIImage, size: CGSize) -> (extent: Extent, background: Background) {
+        let unknown = Background(red: -1, green: -1, blue: -1)
+        guard let cg = image.cgImage else { return (Extent(left: 0, right: 0), unknown) }
         let width = cg.width, height = cg.height
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
         guard let context = CGContext(
             data: &pixels, width: width, height: height, bitsPerComponent: 8,
             bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return Extent(left: 0, right: 0) }
+        ) else { return (Extent(left: 0, right: 0), unknown) }
         context.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
 
         func sample(_ x: Int, _ y: Int) -> (Int, Int, Int) {
@@ -228,6 +246,7 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
         // measurement works on the black Coach field and the grouped Settings
         // background.
         let background = sample(2, height - 3)
+        let sampled = Background(red: background.0, green: background.1, blue: background.2)
         func differs(_ p: (Int, Int, Int)) -> Bool {
             abs(p.0 - background.0) + abs(p.1 - background.1) + abs(p.2 - background.2) > 24
         }
@@ -239,9 +258,9 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
             while y < height { if differs(sample(x, y)) { hit = true; break }; y += 2 }
             if hit { if left < 0 { left = x }; right = x }
         }
-        guard left >= 0 else { return Extent(left: 0, right: 0) }
+        guard left >= 0 else { return (Extent(left: 0, right: 0), sampled) }
         let scale = size.width / CGFloat(width)
-        return Extent(left: CGFloat(left) * scale, right: CGFloat(right + 1) * scale)
+        return (Extent(left: CGFloat(left) * scale, right: CGFloat(right + 1) * scale), sampled)
     }
 
     /// Every accessibility element in the laid-out hierarchy, in traversal
@@ -314,7 +333,7 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
     func testNoSurfaceIsPulledInAtPhoneWidths() {
         for size in [CGSize(width: 320, height: 800), Self.phonePortrait] {
             for surface in Self.surfaces() where Self.fillsOnPhone.contains(surface.name) {
-                let (extent, _) = measureContent(surface.make(), size: size)
+                let (extent, _, _) = measureContent(surface.make(), size: size)
                 XCTAssertFalse(extent.isEmpty, "\(surface.name) rendered nothing at \(size.width)pt")
                 XCTAssertGreaterThanOrEqual(
                     extent.width, size.width - 2 * surface.phonePadding - 1,
@@ -333,7 +352,7 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
     @MainActor
     func testNoSurfaceIsPulledInOnAPhoneAtTheLargestAccessibilitySize() {
         for surface in Self.surfaces() where Self.fillsOnPhone.contains(surface.name) {
-            let (extent, _) = measureContent(
+            let (extent, _, _) = measureContent(
                 surface.make(), size: Self.phonePortrait, typeSize: .accessibility5
             )
             XCTAssertFalse(extent.isEmpty, "\(surface.name) rendered nothing at accessibility5")
@@ -361,7 +380,7 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
     func testNoSurfaceRunsTheFullWidthOfAnIPadInEitherOrientation() {
         for size in [Self.iPadPortrait, Self.iPadLandscape, Self.iPadAirPortrait, Self.iPadAirLandscape] {
             for surface in Self.surfaces() {
-                let (extent, _) = measureContent(surface.make(), size: size)
+                let (extent, _, _) = measureContent(surface.make(), size: size)
                 XCTAssertFalse(extent.isEmpty, "\(surface.name) rendered nothing at \(size)")
                 let cap = TonoAdaptiveLayout.cap(surface.measure, dynamicTypeSize: .large)
                 XCTAssertLessThanOrEqual(
@@ -382,7 +401,7 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
     func testEverySurfaceIsCentredOnIPad() {
         for size in [Self.iPadPortrait, Self.iPadLandscape] {
             for surface in Self.surfaces() {
-                let (extent, _) = measureContent(surface.make(), size: size)
+                let (extent, _, _) = measureContent(surface.make(), size: size)
                 XCTAssertEqual(
                     extent.left, size.width - extent.right, accuracy: 4,
                     "\(surface.name) is not centred at \(size.width)pt: \(extent.left) left vs \(size.width - extent.right) right"
@@ -396,8 +415,8 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
     @MainActor
     func testLandscapeDoesNotWidenTheMeasure() {
         for surface in Self.surfaces() {
-            let (portrait, _) = measureContent(surface.make(), size: Self.iPadPortrait)
-            let (landscape, _) = measureContent(surface.make(), size: Self.iPadLandscape)
+            let (portrait, _, _) = measureContent(surface.make(), size: Self.iPadPortrait)
+            let (landscape, _, _) = measureContent(surface.make(), size: Self.iPadLandscape)
             XCTAssertEqual(
                 landscape.width, portrait.width, accuracy: 6,
                 "\(surface.name) grew from \(portrait.width)pt to \(landscape.width)pt in landscape"
@@ -415,7 +434,7 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
         for size in sizes {
             for typeSize in [DynamicTypeSize.large, .accessibility3, .accessibility5] {
                 for surface in Self.surfaces() {
-                    let (extent, controller) = measureContent(surface.make(), size: size, typeSize: typeSize)
+                    let (extent, controller, _) = measureContent(surface.make(), size: size, typeSize: typeSize)
                     XCTAssertGreaterThanOrEqual(
                         extent.left, -0.5,
                         "\(surface.name) draws left of the window at \(size.width)pt / \(typeSize)"
@@ -474,7 +493,7 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
     @MainActor
     func testNoInteractiveElementShrinksBecauseOfTheIPadComposition() {
         for surface in Self.surfaces() {
-            let (_, phone) = measureContent(surface.make(), size: Self.phonePortrait)
+            let (_, phone, _) = measureContent(surface.make(), size: Self.phonePortrait)
             let phoneHeights = Dictionary(
                 accessibilityElements(of: phone.view)
                     .filter { $0.traits.contains(.button) && !$0.frame.isEmpty }
@@ -482,7 +501,7 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
                 uniquingKeysWith: max
             )
             for size in [Self.iPadPortrait, Self.iPadLandscape] {
-                let (_, pad) = measureContent(surface.make(), size: size)
+                let (_, pad, _) = measureContent(surface.make(), size: size)
                 for element in accessibilityElements(of: pad.view)
                 where element.traits.contains(.button) && !element.frame.isEmpty {
                     guard let onPhone = phoneHeights[element.label],
@@ -508,7 +527,7 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
         var judged = 0
         for size in [Self.phonePortrait, Self.iPadPortrait, Self.iPadLandscape] {
             for surface in Self.surfaces() {
-                let (_, controller) = measureContent(surface.make(), size: size)
+                let (_, controller, _) = measureContent(surface.make(), size: size)
                 for element in accessibilityElements(of: controller.view)
                 where element.traits.contains(.button) && !element.frame.isEmpty && element.frame.width > 1 {
                     judged += 1
@@ -543,8 +562,8 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
     @MainActor
     func testTheGridSurfacesReadInTheSameOrderOnPhoneAndIPad() {
         for surface in Self.surfaces() where Self.gridSurfaces.contains(surface.name) {
-            let (_, phone) = measureContent(surface.make(), size: Self.phonePortrait)
-            let (_, pad) = measureContent(surface.make(), size: Self.iPadPortrait)
+            let (_, phone, _) = measureContent(surface.make(), size: Self.phonePortrait)
+            let (_, pad, _) = measureContent(surface.make(), size: Self.iPadPortrait)
             let phoneLabels = accessibilityElements(of: phone.view).map(\.label).filter { !$0.isEmpty }
             let padLabels = accessibilityElements(of: pad.view).map(\.label).filter { !$0.isEmpty }
             XCTAssertGreaterThan(phoneLabels.count, 5, "\(surface.name): too few elements to compare")
@@ -558,8 +577,8 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
     @MainActor
     func testTheGridSurfacesReadTheSameAfterRotation() {
         for surface in Self.surfaces() where Self.gridSurfaces.contains(surface.name) {
-            let (_, portrait) = measureContent(surface.make(), size: Self.iPadPortrait)
-            let (_, landscape) = measureContent(surface.make(), size: Self.iPadLandscape)
+            let (_, portrait, _) = measureContent(surface.make(), size: Self.iPadPortrait)
+            let (_, landscape, _) = measureContent(surface.make(), size: Self.iPadLandscape)
             let portraitLabels = accessibilityElements(of: portrait.view).map(\.label).filter { !$0.isEmpty }
             let landscapeLabels = accessibilityElements(of: landscape.view).map(\.label).filter { !$0.isEmpty }
             XCTAssertGreaterThan(portraitLabels.count, 5, "\(surface.name): too few elements to compare")
@@ -576,8 +595,8 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
     @MainActor
     func testNoSurfaceLosesContentOnAnIPad() {
         for surface in Self.surfaces() {
-            let (_, phone) = measureContent(surface.make(), size: Self.phonePortrait)
-            let (_, pad) = measureContent(surface.make(), size: Self.iPadPortrait)
+            let (_, phone, _) = measureContent(surface.make(), size: Self.phonePortrait)
+            let (_, pad, _) = measureContent(surface.make(), size: Self.iPadPortrait)
             let phoneLabels = Set(accessibilityElements(of: phone.view).map(\.label).filter { !$0.isEmpty })
             let padLabels = Set(accessibilityElements(of: pad.view).map(\.label).filter { !$0.isEmpty })
             XCTAssertFalse(phoneLabels.isEmpty, "\(surface.name) exposed nothing on a phone")
@@ -598,7 +617,7 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
         var readingWidths: [CGFloat] = []
         var formWidths: [CGFloat] = []
         for surface in Self.surfaces() {
-            let (extent, _) = measureContent(surface.make(), size: Self.iPadPortrait)
+            let (extent, _, _) = measureContent(surface.make(), size: Self.iPadPortrait)
             if surface.measure == .form { formWidths.append(extent.width) } else { readingWidths.append(extent.width) }
         }
         let widestForm = formWidths.max() ?? 0
@@ -606,6 +625,139 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
         XCTAssertGreaterThan(
             widestReading, widestForm + 80,
             "form surfaces (\(widestForm)pt) and reading surfaces (\(widestReading)pt) resolved to one blanket cap"
+        )
+    }
+
+    // MARK: - Phone landscape: capped on purpose
+
+    /// A phone in LANDSCAPE is 844–956pt wide, so it clears the 700pt reading
+    /// measure and takes the capped, centred composition — including the
+    /// two-column groupings on Coach and the onboarding tiles.
+    ///
+    /// This is a deliberate decision, and it is the reason "no iPhone
+    /// regression" is a claim about PORTRAIT. Landscape gets the readable
+    /// measure that iOS gives long-form content on a wide window, and it is
+    /// pinned here rather than left to a comment: capped, centred, inside the
+    /// window, on both landscape geometries. The suite previously used
+    /// `phoneLandscape` for the clipping test only, so nothing asserted what
+    /// landscape was supposed to look like.
+    @MainActor
+    func testPhoneLandscapeIsCappedAndCentredOnPurpose() {
+        for size in [Self.phoneLandscape, Self.phoneLandscapeWide] {
+            for surface in Self.surfaces() {
+                let (extent, _, _) = measureContent(surface.make(), size: size)
+                XCTAssertFalse(extent.isEmpty, "\(surface.name) rendered nothing at \(size.width)pt landscape")
+                let cap = TonoAdaptiveLayout.cap(surface.measure, dynamicTypeSize: .large)
+                XCTAssertLessThanOrEqual(
+                    extent.width, cap + 2,
+                    "\(surface.name) ran \(extent.width)pt of a \(size.width)pt landscape phone — wider than its measure"
+                )
+                XCTAssertLessThan(
+                    extent.width, size.width - 100,
+                    "\(surface.name) is effectively full-bleed on a \(size.width)pt landscape phone"
+                )
+                XCTAssertEqual(
+                    extent.left, size.width - extent.right, accuracy: 4,
+                    "\(surface.name) is not centred at \(size.width)pt landscape: \(extent.left) left vs \(size.width - extent.right) right"
+                )
+                XCTAssertGreaterThanOrEqual(
+                    extent.left, -0.5,
+                    "\(surface.name) draws left of a \(size.width)pt landscape window"
+                )
+                XCTAssertLessThanOrEqual(
+                    extent.right, size.width + 0.5,
+                    "\(surface.name) draws past the right edge of a \(size.width)pt landscape window"
+                )
+            }
+        }
+    }
+
+    /// The grouping a landscape phone gains must not change what VoiceOver
+    /// reads or the order it reads it in — the same defect that the two-column
+    /// iPad grouping had, on the device where it is easiest to miss.
+    @MainActor
+    func testTheGridSurfacesReadInTheSameOrderOnAPhoneInEitherOrientation() {
+        for surface in Self.surfaces() where Self.gridSurfaces.contains(surface.name) {
+            let (_, portrait, _) = measureContent(surface.make(), size: Self.phonePortrait)
+            let (_, landscape, _) = measureContent(surface.make(), size: Self.phoneLandscape)
+            let portraitLabels = accessibilityElements(of: portrait.view).map(\.label).filter { !$0.isEmpty }
+            let landscapeLabels = accessibilityElements(of: landscape.view).map(\.label).filter { !$0.isEmpty }
+            XCTAssertGreaterThan(portraitLabels.count, 5, "\(surface.name): too few elements to compare")
+            XCTAssertEqual(
+                portraitLabels, landscapeLabels,
+                "\(surface.name): turning the phone sideways changed the accessibility run"
+            )
+        }
+    }
+
+    // MARK: - Appearance
+
+    /// Both appearances, on every surface.
+    ///
+    /// Every other measurement in this file is taken in forced dark — the
+    /// parameter existed and no caller ever passed it — while Settings, Memory,
+    /// Recipients, Setup Doctor and the onboarding screens ship a LIGHT
+    /// appearance. So the core claims are restated here in light: nothing is
+    /// pulled in on a phone, nothing runs the full width of an iPad, everything
+    /// is centred. And beyond restating them, the stronger property is pinned:
+    /// the composition does not depend on the appearance at all.
+    ///
+    /// One test rather than a second copy of the suite, deliberately. Layout is
+    /// the only thing an appearance could plausibly change, and the
+    /// accessibility-order and touch-target assertions read frames, which are
+    /// appearance-independent by construction — so doubling those would double
+    /// the runtime and add nothing. This keeps the added cost to one bounded
+    /// pass.
+    @MainActor
+    func testEverySurfaceComposesIdenticallyInLightAndDark() {
+        var appearanceWasVisible: Set<String> = []
+        for size in [Self.phonePortrait, Self.iPadPortrait, Self.iPadLandscape] {
+            for surface in Self.surfaces() {
+                let (dark, _, darkBackground) = measureContent(surface.make(), size: size, style: .dark)
+                let (light, _, lightBackground) = measureContent(surface.make(), size: size, style: .light)
+                if darkBackground != lightBackground { appearanceWasVisible.insert(surface.name) }
+
+                XCTAssertFalse(
+                    light.isEmpty, "\(surface.name) rendered nothing in light at \(size.width)pt"
+                )
+                XCTAssertEqual(
+                    light.left, dark.left, accuracy: 0.5,
+                    "\(surface.name) starts at \(light.left)pt in light and \(dark.left)pt in dark at \(size.width)pt"
+                )
+                XCTAssertEqual(
+                    light.width, dark.width, accuracy: 0.5,
+                    "\(surface.name) is \(light.width)pt wide in light and \(dark.width)pt in dark at \(size.width)pt"
+                )
+
+                if size == Self.phonePortrait {
+                    guard Self.fillsOnPhone.contains(surface.name) else { continue }
+                    XCTAssertLessThanOrEqual(
+                        light.left, surface.phonePadding + 1,
+                        "\(surface.name) is inset from the left on a phone in light"
+                    )
+                    XCTAssertGreaterThanOrEqual(
+                        light.width, size.width - 2 * surface.phonePadding - 1,
+                        "\(surface.name) narrowed on a phone in light: \(light.width)pt of \(size.width)pt"
+                    )
+                } else {
+                    XCTAssertLessThanOrEqual(
+                        light.width, TonoAdaptiveLayout.cap(surface.measure, dynamicTypeSize: .large) + 2,
+                        "\(surface.name) ran \(light.width)pt of a \(size.width)pt window in light"
+                    )
+                    XCTAssertEqual(
+                        light.left, size.width - light.right, accuracy: 4,
+                        "\(surface.name) is not centred at \(size.width)pt in light"
+                    )
+                }
+            }
+        }
+        // Non-vacuity: without this, "identical in both" would also be true of a
+        // harness that quietly ignored the style it was handed. Not every
+        // surface has to differ — Coach is a black field in either appearance —
+        // but the ones that ship a light appearance must.
+        XCTAssertGreaterThanOrEqual(
+            appearanceWasVisible.count, 3,
+            "only \(appearanceWasVisible) rendered differently in light and dark, so the appearance override may never have taken effect"
         )
     }
 }

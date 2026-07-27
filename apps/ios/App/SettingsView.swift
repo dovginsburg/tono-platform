@@ -1320,7 +1320,14 @@ struct AccountDeletionView: View {
     private var warningHeader: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label("This cannot be undone", systemImage: "exclamationmark.triangle.fill")
-                .tonoFont(size: 17, weight: .semibold, relativeTo: .body)
+                // Declared in `TonoTextStyle.accountDeletionWarning`, which
+                // carries `face: .standard` because this label shipped
+                // `.font(.system(size: 17, weight: .semibold))` with no
+                // `design:` argument, i.e. SF Pro — and the account-deletion
+                // phase of Build 115 is LAYOUT ONLY, so a typeface change here
+                // would be outside its own declared scope. Only the Dynamic
+                // Type scaling is new.
+                .tonoFont(.accountDeletionWarning)
                 .foregroundColor(.red)
             Text("Deleting your account permanently deletes your account and everything saved with it: your style memory, recipient profiles, and usage history. Your subscription is not automatically cancelled — cancel it separately in Apple ID settings before deleting.")
                 .font(.callout)

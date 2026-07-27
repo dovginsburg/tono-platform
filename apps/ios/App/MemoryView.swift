@@ -55,7 +55,13 @@ struct MemoryView: View {
                         ToolbarItem(placement: .navigationBarLeading) {
                             Button("Clear all") { showClearConfirm = true }
                                 .foregroundColor(.red)
-                                .tonoFont(size: 14, relativeTo: .subheadline)
+                                // Declared in `TonoTextStyle.memoryClearAll`,
+                                // which carries `face: .standard` because this
+                                // button shipped `.font(.system(size: 14))`
+                                // with no `design:` argument, i.e. SF Pro. Only
+                                // the Dynamic Type scaling is new; the typeface
+                                // is the one that was approved.
+                                .tonoFont(.memoryClearAll)
                         }
                     }
                 }
