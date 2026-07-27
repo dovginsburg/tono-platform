@@ -973,14 +973,14 @@ Payment will be charged to your Apple ID account at confirmation of purchase. Th
     private var headerSection: some View {
         VStack(spacing: 12) {
             Image(systemName: "brain")
-                .font(.system(size: 44))
+                .tonoGlyphFont(size: 44, relativeTo: .largeTitle)
                 .foregroundColor(.purple)
             Text("Stop second-guessing what you just sent.")
-                .font(.system(size: 26, weight: .bold, design: .rounded))
+                .tonoFont(size: 26, weight: .bold, relativeTo: .title)
                 .foregroundColor(.white)
                 .multilineTextAlignment(.center)
             Text("Tono remembers how you write to each person and gets better every session.")
-                .font(.system(size: 14, design: .rounded))
+                .tonoFont(size: 14, relativeTo: .subheadline)
                 .foregroundColor(.white.opacity(0.6))
                 .multilineTextAlignment(.center)
             VStack(spacing: 6) {
@@ -1002,13 +1002,13 @@ Payment will be charged to your Apple ID account at confirmation of purchase. Th
             if !store.isIdentifiedAccount {
                 VStack(spacing: 8) {
                     Image(systemName: "envelope.badge.shield.half.filled")
-                        .font(.system(size: 28))
+                        .tonoGlyphFont(size: 28, relativeTo: .title)
                         .foregroundColor(.purple)
                     Text("Sign in to subscribe")
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .tonoFont(size: 15, weight: .semibold, relativeTo: .subheadline)
                         .foregroundColor(.white)
                     Text("A verified email keeps your subscription recoverable if you reinstall or switch devices.")
-                        .font(.system(size: 12, design: .rounded))
+                        .tonoFont(size: 12, relativeTo: .caption)
                         .foregroundColor(.white.opacity(0.6))
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 8)
@@ -1016,7 +1016,7 @@ Payment will be charged to your Apple ID account at confirmation of purchase. Th
                         showSignInForPurchase = true
                     } label: {
                         Text("Sign in with email")
-                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .tonoFont(size: 14, weight: .semibold, relativeTo: .subheadline)
                             .padding(.horizontal, 20)
                             .padding(.vertical, 10)
                             .background(Color.purple)
@@ -1061,7 +1061,7 @@ Payment will be charged to your Apple ID account at confirmation of purchase. Th
         Button("Restore purchases") {
             Task { await store.restorePurchases() }
         }
-        .font(.system(size: 14, design: .rounded))
+        .tonoFont(size: 14, relativeTo: .subheadline)
         .foregroundColor(.white.opacity(0.5))
         .padding(.bottom, 12)
         .disabled(store.isLoading)
@@ -1074,10 +1074,10 @@ private struct FeatureLine: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "checkmark")
-                .font(.system(size: 12, weight: .semibold))
+                .tonoGlyphFont(size: 12, weight: .semibold, relativeTo: .caption)
                 .foregroundColor(.purple)
             Text(text)
-                .font(.system(size: 14, design: .rounded))
+                .tonoFont(size: 14, relativeTo: .subheadline)
                 .foregroundColor(.white.opacity(0.8))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1146,7 +1146,7 @@ private struct ProductRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(isYearly ? "Annual" : "Monthly")
-                            .font(.system(size: 16, weight: .semibold, design: .rounded))
+                            .tonoFont(size: 16, weight: .semibold, relativeTo: .callout)
                     }
                     // Show Apple's real intro offer only when StoreKit reports
                     // this account is eligible for it.
@@ -1165,14 +1165,14 @@ private struct ProductRow: View {
                            intro.paymentMode == .freeTrial,
                            isEligibleForFreeTrial {
                             Text(intro.displayPrice)
-                                .font(.system(size: 16, weight: .bold, design: .rounded))
+                                .tonoFont(size: 16, weight: .bold, relativeTo: .callout)
                                 .foregroundColor(.white)
                             Text("then \(product.displayPrice)")
-                                .font(.system(size: 10, design: .rounded))
+                                .tonoFont(size: 10, relativeTo: .caption2)
                                 .foregroundColor(.white.opacity(0.7))
                         } else {
                             Text(product.displayPrice)
-                                .font(.system(size: 16, weight: .bold, design: .rounded))
+                                .tonoFont(size: 16, weight: .bold, relativeTo: .callout)
                                 .foregroundColor(.white)
                         }
                     }
@@ -1197,7 +1197,7 @@ private struct ProductRow: View {
             // the actual duration). The text below is the standard Apple boilerplate
             // per App Store guideline 3.1.2.
             Text("Free for \(intro.period.value) \(intro.period.unit.description), then auto-renews at \(product.displayPrice) unless cancelled")
-                .font(.system(size: 11, design: .rounded))
+                .tonoFont(size: 11, relativeTo: .caption2)
                 .foregroundColor(.white.opacity(0.7))
                 .fixedSize(horizontal: false, vertical: true)
                 .multilineTextAlignment(.leading)
@@ -1207,7 +1207,7 @@ private struct ProductRow: View {
             // post-trial price clearly so Apple reviewers don't flag it as
             // bait-and-switch.
             Text("Billed \(isYearly ? "yearly" : "monthly") at \(product.displayPrice), auto-renews unless cancelled")
-                .font(.system(size: 11, design: .rounded))
+                .tonoFont(size: 11, relativeTo: .caption2)
                 .foregroundColor(.white.opacity(0.7))
                 .fixedSize(horizontal: false, vertical: true)
                 .multilineTextAlignment(.leading)
@@ -1292,7 +1292,7 @@ struct AccountDeletionView: View {
     private var warningHeader: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label("This cannot be undone", systemImage: "exclamationmark.triangle.fill")
-                .font(.system(size: 17, weight: .semibold))
+                .tonoFont(size: 17, weight: .semibold, relativeTo: .body)
                 .foregroundColor(.red)
             Text("Deleting your account permanently deletes your account and everything saved with it: your style memory, recipient profiles, and usage history. Your subscription is not automatically cancelled — cancel it separately in Apple ID settings before deleting.")
                 .font(.callout)
@@ -1338,7 +1338,7 @@ struct AccountDeletionView: View {
             HStack {
                 if isDeleting { ProgressView().tint(.white) }
                 Text(isDeleting ? "Deleting…" : "Permanently delete my account")
-                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .tonoFont(size: 16, weight: .semibold, relativeTo: .callout)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)

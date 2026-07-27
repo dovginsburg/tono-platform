@@ -82,6 +82,12 @@ struct SetupDoctorView: View {
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
+            // Build 115 — iPad. Deliberately ONE column at every width. The
+            // four cards are a numbered SEQUENCE — add the keyboard, allow
+            // Full Access, sign in, try it once — and a two-column grid would
+            // put step 3 beside step 1 and invite people to read them out of
+            // order. Width is spent on the measure, not on a second column.
+            .tonoReadableColumn(.reading)
         }
         .navigationTitle("Setup Doctor")
         .navigationBarTitleDisplayMode(.inline)
@@ -137,7 +143,7 @@ struct SetupDoctorView: View {
                         .fill(step.status.isComplete ? Color.green : Color.purple)
                         .frame(width: 32, height: 32)
                     Image(systemName: step.status.isComplete ? "checkmark" : icon)
-                        .font(.system(size: 14, weight: .semibold))
+                        .tonoGlyphFont(size: 14, weight: .semibold, relativeTo: .subheadline)
                         .foregroundColor(.white)
                 }
                 .accessibilityHidden(true)
@@ -149,7 +155,7 @@ struct SetupDoctorView: View {
                     // VoiceOver, monochrome, and colour-blind viewing.
                     HStack(spacing: 5) {
                         Image(systemName: badge.symbol)
-                            .font(.system(size: 12, weight: .semibold))
+                            .tonoGlyphFont(size: 12, weight: .semibold, relativeTo: .caption)
                         Text(badge.label)
                             .font(.system(.caption, design: .rounded).weight(.semibold))
                     }
@@ -202,7 +208,7 @@ struct SetupDoctorView: View {
                             Text(title)
                                 .font(.system(.footnote, design: .rounded).weight(.semibold))
                             Image(systemName: "arrow.up.right")
-                                .font(.system(size: 11))
+                                .tonoGlyphFont(size: 11, relativeTo: .caption2)
                         }
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
@@ -271,6 +277,7 @@ struct SetupDoctorView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
                 .padding(20)
+                .tonoReadableColumn(.reading)
             }
             .navigationTitle(FullAccessExplainer.headline)
             .navigationBarTitleDisplayMode(.inline)

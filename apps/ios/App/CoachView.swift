@@ -64,6 +64,13 @@ struct CoachView: View {
                     Spacer(minLength: 20)
                 }
                 .padding(20)
+                // Build 115 — iPad. Everything above is one authored column:
+                // hero, editor, action, results. Reading and writing are a
+                // single focused task, so the column stays one column at every
+                // width and simply stops growing past a readable measure. On a
+                // phone this is the identity (see AdaptiveLayout.swift), which
+                // is why the approved iPhone screen is untouched.
+                .tonoReadableColumn(.reading)
             }
             .background(Color.black.ignoresSafeArea())
             .navigationTitle("Coach this")
@@ -108,10 +115,10 @@ struct CoachView: View {
     private var hero: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Paste a message. Get a coach.")
-                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .tonoFont(size: 22, weight: .bold, relativeTo: .title2)
                 .foregroundColor(.white)
             Text("Tono rewrites your draft warmer, clearer, funnier, or safer — so it lands how you intend.")
-                .font(.system(size: 13, design: .rounded))
+                .tonoFont(size: 13, relativeTo: .footnote)
                 .foregroundColor(.white.opacity(0.65))
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -133,7 +140,7 @@ struct CoachView: View {
                     if draft.isEmpty {
                         Text("e.g. \"hey can u send me the file tmrw thanks\"")
                             .foregroundColor(.white.opacity(0.35))
-                            .font(.system(size: 15, design: .rounded))
+                            .tonoFont(size: 15, relativeTo: .subheadline)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 18)
                             .allowsHitTesting(false)
@@ -150,7 +157,7 @@ struct CoachView: View {
                 }
                 Image(systemName: loading ? "hourglass" : "sparkles")
                 Text(loading ? "Coaching…" : "Coach")
-                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                    .tonoFont(size: 17, weight: .semibold, relativeTo: .body)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
@@ -170,11 +177,11 @@ struct CoachView: View {
             HStack(spacing: 8) {
                 Image(systemName: "lightbulb")
                 Text("How it works")
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .tonoFont(size: 14, weight: .semibold, relativeTo: .subheadline)
             }
             .foregroundColor(.white.opacity(0.7))
             Text("1. Type or paste a draft above.\n2. Tap Coach.\n3. Read the rewrite, copy it, send it.")
-                .font(.system(size: 13, design: .rounded))
+                .tonoFont(size: 13, relativeTo: .footnote)
                 .foregroundColor(.white.opacity(0.55))
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -190,7 +197,7 @@ struct CoachView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundColor(.yellow)
             Text(message)
-                .font(.system(size: 13, design: .rounded))
+                .tonoFont(size: 13, relativeTo: .footnote)
                 .foregroundColor(.white)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
@@ -220,11 +227,11 @@ struct CoachView: View {
                 riskBadge(for: parsedRisk)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(parsedRisk.displayName)
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .tonoFont(size: 15, weight: .semibold, relativeTo: .subheadline)
                         .foregroundColor(.white)
                     if !a.perception.isEmpty {
                         Text(a.perception)
-                            .font(.system(size: 13, design: .rounded))
+                            .tonoFont(size: 13, relativeTo: .footnote)
                             .foregroundColor(.white.opacity(0.7))
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -245,7 +252,7 @@ struct CoachView: View {
                                     Image(systemName: axis.glyph)
                                     Text(axis.displayName)
                                 }
-                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                .tonoFont(size: 12, weight: .semibold, relativeTo: .caption)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 6)
                                 .background(selectedAxis == axis ? Color.purple : Color.white.opacity(hasSuggestion ? 0.10 : 0.04))
@@ -264,17 +271,17 @@ struct CoachView: View {
                     HStack(spacing: 6) {
                         Image(systemName: s.axis.glyph)
                         Text("\(s.axis.displayName) rewrite")
-                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .tonoFont(size: 12, weight: .semibold, relativeTo: .caption)
                             .foregroundColor(.white.opacity(0.6))
                     }
                     Text(s.text)
-                        .font(.system(size: 17, weight: .medium, design: .rounded))
+                        .tonoFont(size: 17, weight: .medium, relativeTo: .body)
                         .foregroundColor(.white)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                     if let rationale = s.rationale, !rationale.isEmpty {
                         Text(rationale)
-                            .font(.system(size: 12, design: .rounded))
+                            .tonoFont(size: 12, relativeTo: .caption)
                             .foregroundColor(.white.opacity(0.55))
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -286,7 +293,7 @@ struct CoachView: View {
                                 Image(systemName: "doc.on.doc")
                                 Text("Copy")
                             }
-                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .tonoFont(size: 13, weight: .semibold, relativeTo: .footnote)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
                             .background(Color.white.opacity(0.10))
@@ -295,7 +302,7 @@ struct CoachView: View {
                         }
                         if let after = s.riskAfter {
                             Label(after.displayName, systemImage: after.systemIcon)
-                                .font(.system(size: 12, design: .rounded))
+                                .tonoFont(size: 12, relativeTo: .caption)
                                 .foregroundColor(.white.opacity(0.6))
                         }
                     }
@@ -310,10 +317,21 @@ struct CoachView: View {
                 Divider().background(Color.white.opacity(0.08))
                 VStack(alignment: .leading, spacing: 8) {
                     Text("All rewrites")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .tonoFont(size: 12, weight: .semibold, relativeTo: .caption)
                         .foregroundColor(.white.opacity(0.6))
-                    ForEach(mapped) { s in
-                        rewriteRow(s)
+                    // Build 115 — iPad. These are PARALLEL alternatives, not a
+                    // sequence: warmer, clearer, funnier and safer are four
+                    // answers to the same draft, and comparing them is the
+                    // whole point. Two columns where there is room lets a
+                    // person read two side by side instead of scrolling
+                    // between them. At every phone width this resolves to one
+                    // column and is frame-for-frame the stack it replaced.
+                    AdaptiveItemGrid(
+                        minimumItemWidth: 260, spacing: 8, maximumColumns: 2
+                    ) {
+                        ForEach(mapped) { s in
+                            rewriteRow(s)
+                        }
                     }
                 }
             }
@@ -324,7 +342,7 @@ struct CoachView: View {
                     Image(systemName: u.isPro ? "checkmark.seal.fill" : "circle.dotted")
                         .foregroundColor(u.isPro ? .green : .white.opacity(0.5))
                     Text(u.isPro ? "Pro · unlimited" : "Subscribe for unlimited rewrites")
-                        .font(.system(size: 11, design: .rounded))
+                        .tonoFont(size: 11, relativeTo: .caption2)
                         .foregroundColor(.white.opacity(0.45))
                     Spacer()
                 }
@@ -339,13 +357,13 @@ struct CoachView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Image(systemName: s.axis.glyph)
-                    .font(.system(size: 11))
+                    .tonoGlyphFont(size: 11, relativeTo: .caption2)
                 Text(s.axis.displayName)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .tonoFont(size: 12, weight: .semibold, relativeTo: .caption)
             }
             .foregroundColor(.white.opacity(0.7))
             Text(s.text)
-                .font(.system(size: 14, design: .rounded))
+                .tonoFont(size: 14, relativeTo: .subheadline)
                 .foregroundColor(.white.opacity(0.85))
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -361,7 +379,7 @@ struct CoachView: View {
             }
         }()
         return Image(systemName: level.systemIcon)
-            .font(.system(size: 22))
+            .tonoGlyphFont(size: 22, relativeTo: .title2)
             .foregroundColor(tint)
     }
 
@@ -486,10 +504,10 @@ struct CoachView: View {
     private var explainerOverlay: some View {
         VStack(spacing: 16) {
             Image(systemName: "sparkles")
-                .font(.system(size: 36))
+                .tonoGlyphFont(size: 36, relativeTo: .largeTitle)
                 .foregroundColor(.purple)
             Text("How Coach works")
-                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .tonoFont(size: 22, weight: .bold, relativeTo: .title2)
                 .foregroundColor(.white)
             VStack(alignment: .leading, spacing: 10) {
                 explainerLine(number: "1", text: "Type or paste a draft message.")
@@ -513,7 +531,7 @@ struct CoachView: View {
                     }
                 } label: {
                     Text("Got it")
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .tonoFont(size: 15, weight: .semibold, relativeTo: .subheadline)
                         .padding(.horizontal, 18)
                         .padding(.vertical, 10)
                         .background(Color.purple)
@@ -524,13 +542,17 @@ struct CoachView: View {
                     explainerDismissed = true
                     showExplainer = false
                 }
-                .font(.system(size: 14, design: .rounded))
+                .tonoFont(size: 14, relativeTo: .subheadline)
                 .foregroundColor(.white.opacity(0.6))
             }
             .padding(.top, 6)
         }
         .padding(28)
-        .frame(maxWidth: 340)
+        // Build 115 — iPad. A hard 340pt card is right on a phone and is the
+        // "tiny island" on an iPad: the same card marooned in a 1,032pt field.
+        // The compact branch returns exactly the approved 340 (and, unlike the
+        // frame it replaces, still fits a 320pt iPhone SE).
+        .tonoDialogWidth()
         .background(Color(white: 0.08))
         .clipShape(RoundedRectangle(cornerRadius: 22))
         .overlay(
@@ -543,13 +565,13 @@ struct CoachView: View {
     private func explainerLine(number: String, text: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Text(number)
-                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .tonoFont(size: 13, weight: .bold, relativeTo: .footnote)
                 .foregroundColor(.purple)
                 .frame(width: 22, height: 22)
                 .background(Color.purple.opacity(0.18))
                 .clipShape(Circle())
             Text(text)
-                .font(.system(size: 14, design: .rounded))
+                .tonoFont(size: 14, relativeTo: .subheadline)
                 .foregroundColor(.white.opacity(0.85))
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)

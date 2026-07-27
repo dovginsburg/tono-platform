@@ -16,6 +16,10 @@ struct DigestView: View {
     // cached `proUnlocked` Bool is never consulted for gating.
     private var isPro: Bool { store.isPro || TonePreferences().isProAuthoritative }
 
+    // Build 115 — read so the axis rows can stop being a row when the words
+    // no longer fit beside each other. See `axisRow`.
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     var body: some View {
         NavigationStack {
             Group {
@@ -25,7 +29,7 @@ struct DigestView: View {
                 } else if let err = errorMessage {
                     VStack(spacing: 12) {
                         Image(systemName: "exclamationmark.triangle")
-                            .font(.system(size: 32))
+                            .tonoGlyphFont(size: 32, relativeTo: .largeTitle)
                             .foregroundColor(.yellow)
                         Text(err)
                             .foregroundColor(.secondary)
@@ -62,11 +66,11 @@ struct DigestView: View {
                 if let top = d.topAxis {
                     VStack(spacing: 6) {
                         Text("Your go-to this week")
-                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .tonoFont(size: 13, weight: .semibold, relativeTo: .footnote)
                             .foregroundColor(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Text(top.capitalized)
-                            .font(.system(size: 28, weight: .bold, design: .rounded))
+                            .tonoFont(size: 28, weight: .bold, relativeTo: .title)
                             .foregroundColor(.purple)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -77,7 +81,7 @@ struct DigestView: View {
 
                 if d.rewrites == 0 {
                     Text("No rewrites this week yet — tap Coach on any draft to get started.")
-                        .font(.system(size: 14, design: .rounded))
+                        .tonoFont(size: 14, relativeTo: .subheadline)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 16)
@@ -85,18 +89,29 @@ struct DigestView: View {
 
                 // Depth features — Pro only
                 if isPro {
-                    if !d.axisBreakdown.isEmpty {
-                        axisBars(d.axisBreakdown, prevBreakdown: d.prevAxisBreakdown)
-                    }
-
-                    if d.daysActive >= 5 {
-                        streakCard(days: d.daysActive)
+                    // Build 115 — iPad. The breakdown and the streak are peer
+                    // depth cards about the same week, so where there is room
+                    // they sit beside each other rather than pushing the second
+                    // one below the fold. `spacing: 20` is the spacing of the
+                    // stack they were direct children of, so at a phone width
+                    // this is frame-for-frame what shipped.
+                    AdaptiveItemGrid(minimumItemWidth: 300, spacing: 20, maximumColumns: 2) {
+                        if !d.axisBreakdown.isEmpty {
+                            axisBars(d.axisBreakdown, prevBreakdown: d.prevAxisBreakdown)
+                        }
+                        if d.daysActive >= 5 {
+                            streakCard(days: d.daysActive)
+                        }
                     }
                 } else {
                     DigestDepthTeaser(onUpgrade: { showPaywall = true })
                 }
             }
             .padding(20)
+            // Build 115 — iPad. A weekly report is a reading surface: the
+            // tiles, the go-to card and the depth cards all belong to one
+            // column that stops growing at a readable measure.
+            .tonoReadableColumn(.reading)
         }
     }
 
@@ -108,35 +123,22 @@ struct DigestView: View {
 
         return VStack(alignment: .leading, spacing: 12) {
             Text("Axis breakdown")
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .tonoFont(size: 13, weight: .semibold, relativeTo: .footnote)
                 .foregroundColor(.secondary)
 
             ForEach(sorted, id: \.key) { axis, count in
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 10) {
-                        Text(axis.capitalized)
-                            .font(.system(size: 14, design: .rounded))
-                            .frame(width: 64, alignment: .leading)
-                        GeometryReader { geo in
-                            Capsule()
-                                .fill(Color.purple.opacity(0.3))
-                                .frame(width: geo.size.width * CGFloat(count) / CGFloat(maxCount), height: 12)
-                                .frame(maxHeight: .infinity)
-                        }
-                        .frame(height: 12)
-                        Text("\(count)")
-                            .font(.system(size: 13, weight: .semibold, design: .rounded))
-                            .foregroundColor(.secondary)
-                            .frame(width: 28, alignment: .trailing)
-                    }
+                    axisRow(axis: axis, count: count, maxCount: maxCount)
                     if let trendText = weekOverWeekTrend(
                         axis: axis, currCount: count, currTotal: currTotal,
                         prevBreakdown: prevBreakdown, prevTotal: prevTotal
                     ) {
                         Text(trendText)
-                            .font(.system(size: 11, design: .rounded))
+                            .tonoFont(size: 11, relativeTo: .caption2)
                             .foregroundColor(.secondary)
-                            .padding(.leading, 74)
+                            // Tracks the label gutter, so the trend keeps
+                            // hanging under the bar rather than under the word.
+                            .padding(.leading, dynamicTypeSize.isAccessibilitySize ? 0 : 74)
                     }
                 }
             }
@@ -144,6 +146,50 @@ struct DigestView: View {
         .padding(16)
         .background(Color(.secondarySystemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+
+    /// One axis: its name, its bar, its count.
+    ///
+    /// Build 115 — the shipped row put the name in a fixed 64pt gutter and the
+    /// count in a fixed 28pt one. Those are the right numbers at the default
+    /// text size and they clip the moment a person turns text up, so at
+    /// accessibility sizes the row stops being a row: the words get the full
+    /// width and the bar sits under them. Nothing is dropped either way.
+    @ViewBuilder
+    private func axisRow(axis: String, count: Int, maxCount: Int) -> some View {
+        let bar = GeometryReader { geo in
+            Capsule()
+                .fill(Color.purple.opacity(0.3))
+                .frame(width: geo.size.width * CGFloat(count) / CGFloat(maxCount), height: 12)
+                .frame(maxHeight: .infinity)
+        }
+        .frame(height: 12)
+
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 10) {
+                    Text(axis.capitalized)
+                        .tonoFont(size: 14, relativeTo: .subheadline)
+                    Spacer(minLength: 8)
+                    Text("\(count)")
+                        .tonoFont(size: 13, weight: .semibold, relativeTo: .footnote)
+                        .foregroundColor(.secondary)
+                }
+                bar
+            }
+            .accessibilityElement(children: .combine)
+        } else {
+            HStack(spacing: 10) {
+                Text(axis.capitalized)
+                    .tonoFont(size: 14, relativeTo: .subheadline)
+                    .frame(width: 64, alignment: .leading)
+                bar
+                Text("\(count)")
+                    .tonoFont(size: 13, weight: .semibold, relativeTo: .footnote)
+                    .foregroundColor(.secondary)
+                    .frame(width: 28, alignment: .trailing)
+            }
+        }
     }
 
     /// Returns a human-readable trend string if there's meaningful week-over-week movement.
@@ -168,13 +214,13 @@ struct DigestView: View {
     private func streakCard(days: Int) -> some View {
         HStack(spacing: 12) {
             Image(systemName: "flame.fill")
-                .font(.system(size: 24))
+                .tonoGlyphFont(size: 24, relativeTo: .title2)
                 .foregroundColor(.orange)
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(days)-day coaching streak")
-                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .tonoFont(size: 15, weight: .semibold, relativeTo: .subheadline)
                 Text("Consistent practice is where the improvement compounds.")
-                    .font(.system(size: 12, design: .rounded))
+                    .tonoFont(size: 12, relativeTo: .caption)
                     .foregroundColor(.secondary)
             }
         }
@@ -217,19 +263,19 @@ private struct DigestDepthTeaser: View {
             // Blurred axis breakdown example
             VStack(alignment: .leading, spacing: 8) {
                 Text("Axis breakdown & trends")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .tonoFont(size: 13, weight: .semibold, relativeTo: .footnote)
                     .foregroundColor(.secondary)
                 ForEach(exampleRows, id: \.axis) { row in
                     HStack {
                         Text(row.axis)
-                            .font(.system(size: 14, design: .rounded))
+                            .tonoFont(size: 14, relativeTo: .subheadline)
                             .frame(width: 70, alignment: .leading)
                         Capsule()
                             .fill(Color.purple.opacity(0.3))
                             .frame(height: 10)
                         Spacer()
                         Text(row.trend)
-                            .font(.system(size: 12, design: .rounded))
+                            .tonoFont(size: 12, relativeTo: .caption)
                             .foregroundColor(row.trend.hasPrefix("↑") ? .green : row.trend.hasPrefix("↓") ? .orange : .secondary)
                     }
                 }
@@ -241,13 +287,17 @@ private struct DigestDepthTeaser: View {
 
             Button(action: onUpgrade) {
                 Text("Unlock axis trends & streak tracking →")
-                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .tonoFont(size: 15, weight: .semibold, relativeTo: .subheadline)
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 13)
                     .background(Color.purple)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
             }
+            // The one action under the teaser. It takes the narrower form
+            // measure so it stays a button instead of becoming a bar across
+            // the reading column.
+            .tonoReadableColumn(.form)
         }
     }
 }
@@ -261,10 +311,10 @@ private struct StatTile: View {
     var body: some View {
         VStack(spacing: 4) {
             Text(value)
-                .font(.system(size: 36, weight: .bold, design: .rounded))
+                .tonoFont(size: 36, weight: .bold, relativeTo: .largeTitle)
                 .foregroundColor(.primary)
             Text(label)
-                .font(.system(size: 13, design: .rounded))
+                .tonoFont(size: 13, relativeTo: .footnote)
                 .foregroundColor(.secondary)
         }
         .frame(maxWidth: .infinity)

@@ -48,76 +48,88 @@ struct OnboardingEntryPointsView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
                         header
-                        tile(
-                            number: 1,
-                            icon: "keyboard",
-                            title: "Set up Tono Keyboard",
-                            detail: keyboardDetail,
-                            isDone: keyboardDone,
-                            buttonLabel: "Open iOS Settings",
-                            buttonAction: { showSettingsGuidance = true }
-                        )
-                        if !keyboardDone {
-                            VStack(alignment: .leading, spacing: 8) {
-                                if let message = keyboardCheckMessage {
-                                    Text(message)
-                                        .font(.footnote)
-                                        .foregroundColor(.secondary)
+                        // Build 115 — iPad. These four are INDEPENDENT options,
+                        // not a sequence: the file's own contract is "user picks
+                        // any combination; skip allowed". So unlike the Setup
+                        // Doctor's numbered steps, they group two-up where there
+                        // is room. Tile 1 and its verification buttons are one
+                        // cell, because those buttons belong to that tile.
+                        // `spacing: 20` is the stack spacing they had, so a
+                        // phone gets the column that shipped.
+                        AdaptiveItemGrid(minimumItemWidth: 300, spacing: 20, maximumColumns: 2) {
+                            VStack(alignment: .leading, spacing: 20) {
+                                tile(
+                                    number: 1,
+                                    icon: "keyboard",
+                                    title: "Set up Tono Keyboard",
+                                    detail: keyboardDetail,
+                                    isDone: keyboardDone,
+                                    buttonLabel: "Open iOS Settings",
+                                    buttonAction: { showSettingsGuidance = true }
+                                )
+                                if !keyboardDone {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        if let message = keyboardCheckMessage {
+                                            Text(message)
+                                                .font(.footnote)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        // Preferred path: the Doctor can actually check
+                                        // the keyboard, so it beats self-declaring done.
+                                        Button("Open Setup Doctor") {
+                                            showSetupDoctor = true
+                                        }
+                                        .tonoFont(size: 13, weight: .semibold, relativeTo: .footnote)
+                                        .foregroundColor(.purple)
+                                        .accessibilityHint("Walks through adding the keyboard and confirms when it’s working.")
+                                        Button("Verify Setup Manually") {
+                                            completeKeyboardStep()
+                                        }
+                                        .tonoFont(size: 13, weight: .semibold, relativeTo: .footnote)
+                                        .foregroundColor(.purple)
+                                    }
+                                    .padding(.horizontal, 16)
                                 }
-                                // Preferred path: the Doctor can actually check
-                                // the keyboard, so it beats self-declaring done.
-                                Button("Open Setup Doctor") {
-                                    showSetupDoctor = true
-                                }
-                                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                .foregroundColor(.purple)
-                                .accessibilityHint("Walks through adding the keyboard and confirms when it’s working.")
-                                Button("Verify Setup Manually") {
-                                    completeKeyboardStep()
-                                }
-                                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                .foregroundColor(.purple)
                             }
-                            .padding(.horizontal, 16)
-                        }
-                        tile(
-                            number: 2,
-                            icon: "square.and.arrow.up",
-                            title: "Use from any app",
-                            detail: shareExtDetail,
-                            isDone: shareExtDone,
-                            buttonLabel: "Show me how",
-                            buttonAction: markShareExtDone
-                        )
-                        tile(
-                            number: 3,
-                            icon: "bolt.fill",
-                            title: "Tono Rewrite Shortcut — Coming soon",
-                            detail: shortcutDetail,
-                            isDone: false,
-                            buttonLabel: nil,
-                            buttonAction: nil
-                        )
-                        if FeatureFlags.isEnabled(.emailSignIn) {
                             tile(
-                                number: 4,
-                                icon: "envelope.fill",
-                                title: "Sign in with email",
-                                detail: emailDetail,
-                                isDone: emailDone,
-                                buttonLabel: emailDone ? "Signed in ✓" : "Sign in",
-                                buttonAction: { showEmailSheet = true }
+                                number: 2,
+                                icon: "square.and.arrow.up",
+                                title: "Use from any app",
+                                detail: shareExtDetail,
+                                isDone: shareExtDone,
+                                buttonLabel: "Show me how",
+                                buttonAction: markShareExtDone
                             )
-                        } else {
                             tile(
-                                number: 4,
-                                icon: "envelope.fill",
-                                title: "Email sign-in — Coming soon",
-                                detail: emailComingSoonDetail,
+                                number: 3,
+                                icon: "bolt.fill",
+                                title: "Tono Rewrite Shortcut — Coming soon",
+                                detail: shortcutDetail,
                                 isDone: false,
                                 buttonLabel: nil,
                                 buttonAction: nil
                             )
+                            if FeatureFlags.isEnabled(.emailSignIn) {
+                                tile(
+                                    number: 4,
+                                    icon: "envelope.fill",
+                                    title: "Sign in with email",
+                                    detail: emailDetail,
+                                    isDone: emailDone,
+                                    buttonLabel: emailDone ? "Signed in ✓" : "Sign in",
+                                    buttonAction: { showEmailSheet = true }
+                                )
+                            } else {
+                                tile(
+                                    number: 4,
+                                    icon: "envelope.fill",
+                                    title: "Email sign-in — Coming soon",
+                                    detail: emailComingSoonDetail,
+                                    isDone: false,
+                                    buttonLabel: nil,
+                                    buttonAction: nil
+                                )
+                            }
                         }
                         Spacer(minLength: 8)
                         Text("Set up any available option now, or continue and finish later in Settings.")
@@ -125,15 +137,19 @@ struct OnboardingEntryPointsView: View {
                             .foregroundColor(.secondary)
                             .frame(maxWidth: .infinity, alignment: .center)
                         Button("Continue to Tono", action: finish)
-                            .font(.system(size: 16, weight: .semibold, design: .rounded))
+                            .tonoFont(size: 16, weight: .semibold, relativeTo: .callout)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
                             .background(Color.purple)
                             .foregroundColor(.white)
                             .clipShape(Capsule())
+                            // One capsule spanning a tablet is the exact defect
+                            // this repair exists to remove.
+                            .tonoReadableColumn(.form)
                     }
                     .padding(.horizontal, 24)
                     .padding(.vertical, 12)
+                    .tonoReadableColumn(.reading)
                 }
                 .onChange(of: scrollTarget) { target in
                     guard let target else { return }
@@ -186,9 +202,9 @@ struct OnboardingEntryPointsView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Tono works with your keyboard, not instead of it.")
-                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .tonoFont(size: 22, weight: .bold, relativeTo: .title2)
             Text("Set up the keyboard or Share Sheet now. Shortcut and email sign-in are clearly marked until they are available, and you can finish any step later in Settings.")
-                .font(.system(size: 14, design: .rounded))
+                .tonoFont(size: 14, relativeTo: .subheadline)
                 .foregroundColor(.secondary)
         }
         .padding(.bottom, 4)
@@ -244,19 +260,19 @@ struct OnboardingEntryPointsView: View {
                         .frame(width: 32, height: 32)
                     if isDone {
                         Image(systemName: "checkmark")
-                            .font(.system(size: 14, weight: .bold))
+                            .tonoGlyphFont(size: 14, weight: .bold, relativeTo: .subheadline)
                             .foregroundColor(.white)
                     } else {
                         Image(systemName: icon)
-                            .font(.system(size: 14, weight: .semibold))
+                            .tonoGlyphFont(size: 14, weight: .semibold, relativeTo: .subheadline)
                             .foregroundColor(.white)
                     }
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title)
-                        .font(.system(size: 17, weight: .semibold, design: .rounded))
+                        .tonoFont(size: 17, weight: .semibold, relativeTo: .body)
                     Text(detail)
-                        .font(.system(size: 13, design: .rounded))
+                        .tonoFont(size: 13, relativeTo: .footnote)
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -265,9 +281,9 @@ struct OnboardingEntryPointsView: View {
                 Button(action: buttonAction) {
                     HStack(spacing: 6) {
                         Text(buttonLabel)
-                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .tonoFont(size: 13, weight: .semibold, relativeTo: .footnote)
                         Image(systemName: "arrow.up.right")
-                            .font(.system(size: 11))
+                            .tonoGlyphFont(size: 11, relativeTo: .caption2)
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
@@ -513,7 +529,7 @@ struct EmailSignInSheet: View {
     private var confirmSentStep: some View {
         VStack(alignment: .leading, spacing: 16) {
             Image(systemName: "envelope.badge")
-                .font(.system(size: 34))
+                .tonoGlyphFont(size: 34, relativeTo: .largeTitle)
                 .foregroundColor(.purple)
                 .accessibilityHidden(true)
             noticeView
@@ -573,7 +589,7 @@ struct EmailSignInSheet: View {
         Button(action: action) {
             HStack(spacing: 8) {
                 if isWorking { ProgressView().controlSize(.small) }
-                Text(title).font(.system(size: 16, weight: .semibold, design: .rounded))
+                Text(title).tonoFont(size: 16, weight: .semibold, relativeTo: .callout)
             }
             .frame(maxWidth: .infinity, minHeight: 44)
             .background(enabled && !isWorking ? Color.purple : Color.gray.opacity(0.3))

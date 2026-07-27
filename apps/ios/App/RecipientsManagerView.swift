@@ -108,6 +108,11 @@ struct RecipientsManagerView: View {
             privacyFooterSection
         }
         .listStyle(.insetGrouped)
+        // Build 115 — iPad. Same treatment as the memory list: the roster keeps
+        // its full-bleed grouped background and its rows take a readable
+        // measure instead of a name floating alone across a tablet.
+        .tonoReadableColumn(.reading)
+        .background(Color(.systemGroupedBackground))
         .searchable(
             text: $query,
             placement: .navigationBarDrawer(displayMode: .always),
@@ -293,6 +298,8 @@ struct RecipientEditorView: View {
                 TextField("How they read", text: $voiceHint, axis: .vertical)
                 Toggle("Always weight Safer", isOn: $preferSafer)
             }
+            .tonoReadableColumn(.form)
+            .background(Color(.systemGroupedBackground))
             .navigationTitle(recipient == nil ? "Add Recipient" : "Edit Recipient")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

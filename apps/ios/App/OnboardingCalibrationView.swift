@@ -34,6 +34,10 @@ struct OnboardingCalibrationView: View {
                 nextButton
                     .padding(.horizontal, 24)
                     .padding(.bottom, 40)
+                    // Build 115 — iPad. A single Next button is not prose; it
+                    // takes the form measure so it stays a button rather than
+                    // becoming a bar across the window.
+                    .tonoReadableColumn(.form)
             }
             .navigationTitle("Quick setup")
             .navigationBarTitleDisplayMode(.inline)
@@ -59,6 +63,9 @@ struct OnboardingCalibrationView: View {
         .padding(.horizontal, 24)
         .padding(.top, 16)
         .padding(.bottom, 32)
+        // The progress bar sits over the card it belongs to, so it takes the
+        // same measure rather than running the width of a tablet.
+        .tonoReadableColumn(.form)
     }
 
     // MARK: - Input steps (1–3)
@@ -126,7 +133,7 @@ struct OnboardingCalibrationView: View {
     private var nextButton: some View {
         Button(action: advance) {
             Text(step == totalSteps - 1 ? "Get started" : "Next")
-                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .tonoFont(size: 17, weight: .semibold, relativeTo: .body)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
                 .background(Color.purple)
@@ -176,11 +183,11 @@ private struct StepCard: View {
     var body: some View {
         VStack(spacing: 24) {
             Image(systemName: icon)
-                .font(.system(size: 40))
+                .tonoGlyphFont(size: 40, relativeTo: .largeTitle)
                 .foregroundColor(.purple)
 
             Text(question)
-                .font(.system(size: 22, weight: .semibold, design: .rounded))
+                .tonoFont(size: 22, weight: .semibold, relativeTo: .title2)
                 .multilineTextAlignment(.center)
 
             TextField(placeholder, text: $answer, axis: .vertical)
@@ -188,9 +195,12 @@ private struct StepCard: View {
                 .padding(14)
                 .background(Color(.secondarySystemBackground))
                 .clipShape(RoundedRectangle(cornerRadius: 12))
-                .font(.system(size: 16, design: .rounded))
+                .tonoFont(size: 16, relativeTo: .callout)
         }
         .padding(.horizontal, 28)
+        // Build 115 — iPad. One question and one field: a form, not a column
+        // of prose, so it takes the narrower measure and stays centred.
+        .tonoReadableColumn(.form)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 }
@@ -205,23 +215,23 @@ private struct InfoCard: View {
     var body: some View {
         VStack(spacing: 28) {
             Image(systemName: icon)
-                .font(.system(size: 44))
+                .tonoGlyphFont(size: 44, relativeTo: .largeTitle)
                 .foregroundColor(.purple)
 
             Text(headline)
-                .font(.system(size: 22, weight: .semibold, design: .rounded))
+                .tonoFont(size: 22, weight: .semibold, relativeTo: .title2)
                 .multilineTextAlignment(.center)
 
             VStack(alignment: .leading, spacing: 14) {
                 ForEach(bullets, id: \.self) { bullet in
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: "checkmark")
-                            .font(.system(size: 12, weight: .semibold))
+                            .tonoGlyphFont(size: 12, weight: .semibold, relativeTo: .caption)
                             .foregroundColor(.purple)
                             .frame(width: 16, height: 16)
                             .padding(.top, 2)
                         Text(bullet)
-                            .font(.system(size: 15, design: .rounded))
+                            .tonoFont(size: 15, relativeTo: .subheadline)
                             .foregroundColor(.primary.opacity(0.85))
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -230,6 +240,8 @@ private struct InfoCard: View {
             .padding(.horizontal, 4)
         }
         .padding(.horizontal, 28)
+        // Build 115 — iPad. Four bullets of prose: the reading measure.
+        .tonoReadableColumn(.reading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 }
