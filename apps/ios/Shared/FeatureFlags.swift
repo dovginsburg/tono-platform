@@ -31,17 +31,36 @@ public enum FeatureFlag: String, CaseIterable {
     case slackEnabled      = "slack_enabled"     // B2B/Slack stays off in consumer builds
 
     // ── On-device Apple Intelligence rewrite ─────────────────────────────
-    // `appleIntelligenceRewriteEnabled` is a REMOTE KILL SWITCH and, since
-    // Build 115, defaults ON. It is not the person's switch and is no longer
-    // user-controllable: the Build 115 contract is that on-device rewriting
-    // defaults ON wherever runtime availability is `.available`, with an
-    // explicit opt-out, and a flag living in this cache could not carry that
-    // opt-out — `update(from:)` REPLACES the whole dictionary on every
-    // `/v1/features` fetch, so any user-set value here survives only until the
-    // next launch. The opt-out therefore lives in `LocalRewritePreferenceStore`
-    // (its own App Group key, never written by the refresh path) and this flag
-    // remains what it can actually be: a way to force the route off for
-    // everyone if the on-device model ever misbehaves in the field.
+    // `appleIntelligenceRewriteEnabled` is the operator switch for the
+    // on-device route and, since Build 115, defaults ON. It is not the
+    // person's switch and is not user-controllable: the Build 115 contract is
+    // that on-device rewriting defaults ON wherever runtime availability is
+    // `.available`, with an explicit opt-out, and a flag living in this cache
+    // could not carry that opt-out — `update(from:)` REPLACES the whole
+    // dictionary on every `/v1/features` fetch, so any user-set value here
+    // survives only until the next launch. The opt-out therefore lives in
+    // `LocalRewritePreferenceStore` (its own App Group key, never written by
+    // the refresh path).
+    //
+    // HOW FAR "REMOTE" ACTUALLY REACHES — read this before relying on it as a
+    // field mitigation. `isEnabled` resolves `cached()[key] ?? defaultValue`,
+    // and the cache holds exactly what `/v1/features` returned. That endpoint
+    // returns exactly the rows in the backend's `feature_flags` table, and
+    // this key was never seeded into it — so the deployed backend could not
+    // emit it, `cached()[key]` was always nil, and the resolved value was
+    // always the ON default. As written in the first cut of Build 115 the
+    // "kill switch" could not say off; only a new build could.
+    //
+    // Build 115 repair seeds the key in `apps/backend/store.py::_DEFAULT_FLAGS`
+    // (enabled, so nothing changes) and `_seed_feature_flags()` runs on every
+    // Store init with `INSERT OR IGNORE`, so both fresh and existing databases
+    // grow the row on the next boot. After that,
+    // `PATCH /admin/flags/apple_intelligence_rewrite_enabled {"enabled": false}`
+    // reaches every device on its next feature fetch.
+    //
+    // REMAINING GATE: that is a SOURCE change. Until the backend revision
+    // carrying it is deployed, this flag is a build-time default and NOT a
+    // field kill switch. Do not plan a field mitigation around it before then.
     //
     // `appleIntelligenceAllowsSaferRoute` stays DEFAULT OFF and stays the
     // corpus quality gate for the Safer axis (do not assume on-device output is

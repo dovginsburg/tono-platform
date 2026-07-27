@@ -32,6 +32,22 @@ What this checks instead, entirely against the binary:
      `SystemLanguageModel.availability`, and `performRewriteSet` branches to
      `LanguageModelSession.init` — the last link in the chain.
 
+And, since the Build 115 NO-GO repair, the three findings that are visible in a
+binary rather than only in source:
+
+  8. F1 — the response-token budget is the DERIVED
+     `LocalCoachRoutePolicy.maximumResponseTokens`, and the service's own fixed
+     `min(1_024, 180 × axisCount)` helper is gone. That constant was 540 tokens
+     for the three-tone set and threw `decodingFailure` on any draft past ~500
+     characters.
+  9. F4 — the minimum-useful-draft gate is compiled in AND reachable from the
+     engine, so a caller that bypassed the route policy still cannot hand the
+     model a two-word draft it will answer rather than rewrite.
+ 10. F2 — no `KeyboardViewController` symbol branches to `TonoAnalytics`, and
+     `completeLocalCoach` reaches no analytics or `URLSession` symbol.
+     `TonoAnalytics.track` ends in `URLSession.shared.dataTask(…).resume()`, and
+     43628d3 called it from both arms of the on-device delivery path.
+
 Run against a Release build. Point it at the .appex or its executable:
 
     Scripts/verify_build115_binary_reachability.py <TonoKeyboard.appex>
@@ -195,6 +211,71 @@ def main() -> None:
     generate = branches_from(calls, "OnDeviceAppleRewriteServiceC07performF3Set")
     check(any("LanguageModelSessionC5model" in target for target in generate),
           "OnDeviceAppleRewriteService.performRewriteSet constructs a LanguageModelSession")
+
+    # ── Build 115 NO-GO repair: the three findings that are visible in a binary ──
+    all_symbols = run("nm", str(binary)).splitlines()
+
+    # F1. The response-token budget is the DERIVED one, not the constant that
+    #     shipped in 43628d3. `min(1_024, 180 × axisCount)` = 540 tokens for the
+    #     trio threw `decodingFailure` on any draft past ~500 characters; the
+    #     budget now comes from the same option cap the validator enforces.
+    check(not any("OnDeviceAppleRewriteServiceC21maximumResponseTokens" in symbol
+                  for symbol in all_symbols),
+          "the service's own fixed maximumResponseTokens(for:) is gone")
+    check(any("LocalCoachRoutePolicyO21maximumResponseTokens" in symbol
+              for symbol in all_symbols),
+          "the derived LocalCoachRoutePolicy.maximumResponseTokens is compiled in")
+
+    # F4. The minimum-useful-draft gate is compiled in and is reachable from the
+    #     engine, not only from the route policy — so a caller that skipped the
+    #     policy still cannot hand the model a draft it will answer rather than
+    #     rewrite.
+    check(any("draftIsLongEnoughToRewrite" in symbol for symbol in all_symbols),
+          "the minimum-useful-draft gate is compiled into the extension")
+    rewrite_set = branches_from(calls, "OnDeviceAppleRewriteServiceC10rewriteSet")
+    check(any("draftIsLongEnoughToRewrite" in target for target in rewrite_set),
+          "OnDeviceAppleRewriteService.rewriteSet applies the minimum-useful-draft gate")
+
+    # F2. The on-device DELIVERY path reaches no analytics beacon.
+    #     `TonoAnalytics.track` ends in `URLSession.shared.dataTask(…).resume()`,
+    #     and 43628d3 called it from both arms of `completeLocalCoach` — so the
+    #     route whose whole claim is "this makes no request" made two. Scoped to
+    #     `KeyboardViewController`, because `KeyboardRootView` (compiled, never
+    #     mounted) legitimately carries analytics call sites.
+    #     NOTE ON THE NEEDLE. `TonoAnalytics.track` does NOT mangle to anything
+    #     containing the literal "TonoAnalytics": the module prefix is reused by
+    #     the substitution `0A`, so the symbol is
+    #     `_$s12TonoKeyboard0A9AnalyticsO5trackyy…`. Matching on "TonoAnalytics"
+    #     silently found nothing and passed on a binary that DID call the
+    #     beacon — caught by re-running this script against a deliberately
+    #     mutated build, which is the only reason it is right now.
+    beacon = "AnalyticsO5track"
+    check(any(beacon in symbol for symbol in all_symbols),
+          "the analytics beacon symbol is present to be searched for "
+          "(otherwise the two checks below are vacuous)")
+    # `KeyboardViewController` mangles to `0B14ViewControllerC` — "Keyboard" is
+    # the `0B` substitution, so the literal class name is not in the symbol
+    # either. `0B14ViewControllerC` is the ONLY prefix matching
+    # `…ViewControllerC` in this binary, so this scopes to exactly that class.
+    controller_prefix = "0B14ViewControllerC"
+    controller_symbols = [symbol for symbol in calls if controller_prefix in symbol]
+    check(bool(controller_symbols),
+          f"KeyboardViewController symbols are matchable as {controller_prefix} "
+          f"(found {len(controller_symbols)})")
+    beacons = sorted({
+        target
+        for symbol in controller_symbols
+        for target in calls[symbol]
+        if beacon in target
+    })
+    check(not beacons,
+          f"KeyboardViewController reaches no analytics beacon (found {beacons or 'none'})")
+    delivery = branches_from(calls, "ViewControllerC18completeLocalCoach")
+    check(bool(delivery), "completeLocalCoach survives optimisation as its own symbol")
+    leaks = sorted(target for target in delivery
+                   if beacon in target or "URLSession" in target)
+    check(not leaks,
+          f"completeLocalCoach reaches no analytics or URLSession symbol (found {leaks or 'none'})")
 
     print()
     if FAILURES:

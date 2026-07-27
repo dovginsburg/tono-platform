@@ -163,6 +163,10 @@ public enum LocalCoachUnavailableReason: String, Codable, Sendable, Equatable, C
     // Input bounds
     case emptyDraft
     case draftTooLong
+    /// Build 115 repair — the draft is too short for the local model to rewrite
+    /// rather than reply to. Its own reason, because "type more" and "type
+    /// less" are opposite instructions and must never share a sentence.
+    case draftTooShort
     // Runtime failures
     case memoryPressure
     case busy
@@ -170,6 +174,12 @@ public enum LocalCoachUnavailableReason: String, Codable, Sendable, Equatable, C
     case guardrail
     case refusal
     case generationFailed
+    /// Build 115 repair — guided decoding threw on an incomplete object: the
+    /// model was still writing when the response budget ran out, or it looped.
+    /// Distinct from `generationFailed` because it is the ONE failure that says
+    /// the device was producing an answer, which makes "check your connection"
+    /// the wrong thing to tell the person.
+    case rewriteDidNotFinish
     case noValidRewrite
     // Axis policy
     case saferNeedsReview
@@ -229,6 +239,8 @@ public enum LocalCoachCopy {
             return "Type a message first."
         case .draftTooLong:
             return "That message is too long to rewrite on this iPhone. Shorten it and try again."
+        case .draftTooShort:
+            return "That message is too short to rewrite on this iPhone. Write a bit more and try again."
         case .memoryPressure:
             return "Not enough free memory to rewrite on this iPhone. Close a few apps and try again."
         case .busy:
@@ -240,7 +252,9 @@ public enum LocalCoachCopy {
         case .refusal:
             return "Apple Intelligence declined this rewrite. Your message is unchanged."
         case .generationFailed:
-            return "The on-device rewrite didn't finish. Your message is unchanged."
+            return "The on-device rewrite didn't work out. Your message is unchanged."
+        case .rewriteDidNotFinish:
+            return "This iPhone ran out of room finishing that rewrite. Try a shorter message."
         case .noValidRewrite:
             return "Nothing usable came back. Your message is unchanged."
         case .saferNeedsReview:
@@ -347,17 +361,206 @@ public enum LocalCoachRoute: Sendable, Equatable {
 /// never depends on ambient state, so the whole matrix is unit-testable without
 /// a device, a model, or a network.
 public enum LocalCoachRoutePolicy {
-    /// Bounded input. Longer than any message a person types into a keyboard
-    /// field, short enough that one request stays inside the model's context.
-    public static let maximumDraftCharacters = 1_200
+    // MARK: Bounds — one measured chain, not three independent numbers
+    //
+    // Build 115 as first written declared three bounds that contradicted each
+    // other: drafts up to 1,200 characters were admitted, each option was
+    // capped at 1,200 characters, and the generation was given
+    // `min(1_024, 180 × axisCount)` = 540 response tokens for the three-tone
+    // set. Measured on the iOS 26.5 Simulator with the shipping call shape
+    // (`sampling: .greedy`, `includeSchemaInPrompt: true`):
+    //
+    //   | draft | tokens | outcome                                        |
+    //   |-------|--------|------------------------------------------------|
+    //   |   400 |    540 | ok                                             |
+    //   |   545 |    540 | THREW decodingFailure (16–18 s)                |
+    //   |   919 |    540 | THREW decodingFailure, 3/3 runs                |
+    //   |   919 |   none | ok — 977/951/979 chars out                     |
+    //   |   545 |   none | ok, but a mid-word-truncated 550 ran 80 s and  |
+    //   |       |        | died on exceededContextWindowSize              |
+    //   |  1197 |  1,173 | ok — and 1221/1221/1222 chars out, so ALL      |
+    //   |       |        | THREE options fail the 1,200-char option cap   |
+    //   |   991 |  1,576 | ok once (1199/1120/1154 out), and once the     |
+    //   |       |        | model returned the draft VERBATIM three times  |
+    //   |       |        | (991/991/991) — every option dropped as a      |
+    //   |       |        | no-op, whole request failed noValidRewrite     |
+    //   |  1197 |  1,556 | 4 tones: 1222 × 4 out, and 30.9 s — past the   |
+    //   |       |        | 30 s on-device watchdog                        |
+    //
+    // Guided decoding does not truncate gracefully: the emitted JSON object
+    // stops mid-field and the decode throws. So the token budget was not a
+    // safety margin, it was a defect for any message beyond a couple of
+    // sentences — and in airplane mode it produced exactly the founder-reported
+    // symptom (a long shimmer, then "Coach needs internet", on a phone that
+    // could have answered).
+    //
+    // The three numbers below are now ONE chain, derived in one direction:
+    //
+    //     admitted draft  ──×expansion──▶  option cap  ──÷chars-per-token──▶  token budget
+    //
+    // so raising or lowering any of them moves the others with it and they
+    // cannot drift apart again. Both ends are pinned by tests, and the middle
+    // is pinned against the real model by
+    // `testTheRealModelServesEveryAdmittedDraftLength`.
 
-    /// Bounded output per option.
-    public static let maximumOptionCharacters = 1_200
+    /// How much longer than the draft a rewrite may legitimately be.
+    ///
+    /// Measured worst case across clean drafts of 545 / 919 / 996 / 1,197
+    /// characters: 1.18× (the short drafts expand most, because a warmer
+    /// rewrite of two sentences adds proportionally more). 1.4 is that with
+    /// room, and it is deliberately an ALLOWANCE rather than a prediction —
+    /// anything beyond it is a runaway and is meant to be refused.
+    public static let outputExpansionAllowance = 1.4
+
+    /// Bounded input, per requested tone count.
+    ///
+    /// Scaled by tone count because the cost is per tone, in both directions:
+    /// the four-tone (gated Safer) generation writes a third more text than the
+    /// three-tone one and takes a third longer, and at 1,197 characters it
+    /// measured 30.9 s — past `coachLocalVisibleDeadline`. The bound is what
+    /// the model can actually serve inside the watchdog with output that
+    /// survives validation, not what a keyboard field can hold.
+    ///
+    /// HONEST LIMIT, and the whole reason this is 930 rather than the 1,200
+    /// first declared. Two independent things break above it, and only the
+    /// first is a token-budget problem:
+    ///
+    ///   * At ~1,200 characters the model writes ~1,222 characters per option
+    ///     and takes 30.9 s for the four-tone set — past
+    ///     `coachLocalVisibleDeadline`, so the watchdog would cancel a
+    ///     generation the model actually completed.
+    ///   * At ~1,000 characters the model becomes BISTABLE: measured twice on
+    ///     the same ~991-character draft it returned three genuine rewrites
+    ///     once, and all three tones as the draft VERBATIM the other time
+    ///     (991/991/991 characters out). A verbatim echo is not a rewrite, so
+    ///     `LocalCoachValidator` drops all three as no-ops and the whole
+    ///     request fails `.noValidRewrite`. No token budget fixes that; it is
+    ///     what the model does with a message that long.
+    ///
+    /// 930 is the longest length measured to deliver a usable answer on every
+    /// observation (3/3 survivors twice, 2/3 once). Sweeping 300 → 930 in eight
+    /// steps, every length delivered at least one validated rewrite. A draft
+    /// longer than this goes to the connected route, which handles it exactly
+    /// as it always has.
+    ///
+    /// The four-tone bound is lower again for latency: 749 characters × 4 tones
+    /// measured 23.7 s against a 30 s watchdog, which is not enough margin for
+    /// hardware slower than an M-series simulator.
+    public static func maximumDraftCharacters(forAxisCount axisCount: Int) -> Int {
+        axisCount >= 4 ? 700 : 930
+    }
+
+    /// The largest draft ANY local plan admits — the three-tone bound, because
+    /// the base plan is three tones. Checked first so an over-long draft is
+    /// refused before anything is claimed about Apple Intelligence.
+    public static let maximumDraftCharacters = maximumDraftCharacters(forAxisCount: 3)
+
+    /// Bounded output per option, derived from the input bound rather than
+    /// chosen beside it. A rewrite may be up to 40% longer than the message it
+    /// rewrites; beyond that it is not a rewrite of that message.
+    public static let maximumOptionCharacters =
+        Int((Double(LocalCoachRoutePolicy.maximumDraftCharacters(forAxisCount: 3))
+             * LocalCoachRoutePolicy.outputExpansionAllowance).rounded(.up))
+
+    // MARK: The response-token budget
+    //
+    // Third link in the chain, and the one that was broken. Sized from the
+    // option cap and the tone count so it can never again be a number chosen
+    // independently of the input it has to serve, and scaled by the ACTUAL
+    // draft so a short message gets a small budget — which is what bounds a
+    // runaway generation in time. (A mid-word-truncated 550-character draft
+    // reproducibly sends the model into a loop; uncapped it ran 80 s and died
+    // on `exceededContextWindowSize`, which is worse for the person than a
+    // bounded refusal. The cap is a safety device and stays.)
+
+    /// Conservative characters-per-token for guided JSON output.
+    ///
+    /// English prose runs ~3.5–4 characters per token; structured output pays
+    /// extra for field names, quotes and escapes. 2.8 under-counts on purpose:
+    /// under-counting characters per token OVER-counts the tokens budgeted,
+    /// and the failure this bound exists to prevent is running out of them.
+    public static let charactersPerResponseToken = 2.8
+
+    /// Absolute ceiling. The on-device context window is shared between prompt
+    /// and completion; the largest admitted request (750 characters × 4 tones)
+    /// budgets ~1,876 tokens against roughly 440 of prompt, so this leaves the
+    /// window comfortable while still ending a runaway.
+    public static let responseTokenCeiling = 2_048
+
+    /// The bounded output budget for one request.
+    public static func maximumResponseTokens(axisCount: Int, draftCharacters: Int) -> Int {
+        let axes = max(axisCount, 1)
+        // Even a very short draft needs room for a complete sentence per tone.
+        let perOptionCharacters = min(
+            maximumOptionCharacters,
+            Int((Double(max(draftCharacters, 0)) * outputExpansionAllowance).rounded(.up)) + 200
+        )
+        let perOptionTokens = Int((Double(perOptionCharacters) / charactersPerResponseToken).rounded(.up))
+        // The JSON object itself: braces, four field names, quoting, escapes.
+        let scaffolding = 40 + 12 * axes
+        return min(responseTokenCeiling, scaffolding + axes * perOptionTokens)
+    }
+
+    // MARK: The minimum useful draft
+    //
+    // The instructions tell the model "never answer the message, never reply to
+    // it". Measured on iOS 26.5 with those exact instructions, that holds for
+    // messages that say something and fails for messages that do not: a draft
+    // of `ok` came back as `Hey there!`, `no` came back as a 165-character
+    // apology, and `Thanks!` came back as `You're welcome! I'm glad I could
+    // help.` — the model answered the message because there was nothing in it
+    // to rewrite. Validation checks emptiness, length, fences and no-op
+    // identity; none of those catch an invented reply, and `Use rewrite` would
+    // have replaced the person's `no` with an apology.
+    //
+    // The gate below is deliberately a LENGTH gate and not a fidelity check.
+    // A fidelity check on the device would have to claim two texts mean the
+    // same thing, and the only tools available locally are lexical — a
+    // legitimate rewrite of "send it now" as "could you get that over to me
+    // right away?" shares no content word with its draft, so lexical overlap
+    // would reject good rewrites while claiming a semantic guarantee it cannot
+    // make. A truthful bound on the INPUT is worth more than a false claim
+    // about the output.
+    //
+    // Trade-off, stated rather than hidden: this route declines to rewrite
+    // one- and two-word messages, including real ones like "call me". The
+    // person is told plainly, and the connected route — which has the tone
+    // corpus behind it — still takes them.
+
+    /// Fewer characters than this and there is nothing to rewrite.
+    public static let minimumDraftCharacters = 12
+
+    /// Fewer words than this and the model answers instead of rewriting.
+    public static let minimumDraftWords = 3
+
+    /// Whether a draft carries enough for the local model to rewrite rather
+    /// than reply to. Both bounds must hold: `Thanks!!!!!!` clears the
+    /// character bound on punctuation alone, and `ok sure` clears the word
+    /// bound on nothing at all.
+    public static func draftIsLongEnoughToRewrite(_ draft: String) -> Bool {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= minimumDraftCharacters else { return false }
+        let words = trimmed
+            .components(separatedBy: CharacterSet.whitespacesAndNewlines)
+            .filter { !$0.trimmingCharacters(in: CharacterSet.alphanumerics.inverted).isEmpty }
+        return words.count >= minimumDraftWords
+    }
 
     /// Axes the connected route owns outright. `custom` is a free-text
     /// instruction the backend validates and bounds; reproducing that policy on
     /// the device would be a second copy of it, so the local route declines.
     public static let connectedOnlyAxes: Set<String> = ["custom"]
+
+    /// Build a local route only when the plan's own tone count admits the
+    /// draft. The four-tone (gated Safer) generation writes a third more text
+    /// and takes a third longer than the three-tone one, so it admits less —
+    /// and the check belongs where the axes are known, not before.
+    private static func localRoute(_ plan: LocalCoachPlan, draft: String) -> LocalCoachRoute {
+        guard draft.count <= maximumDraftCharacters(forAxisCount: plan.axes.count) else {
+            return .cloud(.draftTooLong)
+        }
+        return .local(plan)
+    }
 
     public static func decide(
         requestedAxis: String,
@@ -375,6 +578,11 @@ public enum LocalCoachRoutePolicy {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .cloud(.emptyDraft) }
         guard draft.count <= maximumDraftCharacters else { return .cloud(.draftTooLong) }
+        // …including the bound at the other end. A message with nothing in it
+        // to rewrite is answered rather than rewritten (see §"minimum useful
+        // draft"), and an invented reply is a worse outcome than a truthful
+        // decline — `Use rewrite` would put it in the person's message.
+        guard draftIsLongEnoughToRewrite(draft) else { return .cloud(.draftTooShort) }
 
         // 2. Remote kill switch. Force-off for everyone, and not a preference.
         guard remoteKillSwitchAllows else { return .cloud(.remoteKillSwitch) }
@@ -398,14 +606,14 @@ public enum LocalCoachRoutePolicy {
         //    phone that could have answered.
         if connectedOnlyAxes.contains(axis) {
             guard connectivityKnownAbsent else { return .cloud(.customStyleNeedsConnection) }
-            return .local(LocalCoachPlan(
+            return localRoute(LocalCoachPlan(
                 axes: LocalCoachAxis.base,
                 substitutionNote: LocalCoachCopy.substitutionNote(
                     requested: axis,
                     reason: .customStyleNeedsConnection,
                     produced: LocalCoachAxis.base
                 )
-            ))
+            ), draft: draft)
         }
 
         // 6. Safer keeps its corpus-quality gate, which is closed by default.
@@ -419,33 +627,33 @@ public enum LocalCoachRoutePolicy {
         //                 it does today, and produces the reviewed Safer answer.
         if axis == LocalCoachAxis.safer.rawValue {
             if saferCorpusGateOpen {
-                return .local(LocalCoachPlan(
+                return localRoute(LocalCoachPlan(
                     axes: LocalCoachAxis.base + [.safer], substitutionNote: nil
-                ))
+                ), draft: draft)
             }
             guard connectivityKnownAbsent else { return .cloud(.saferNeedsReview) }
-            return .local(LocalCoachPlan(
+            return localRoute(LocalCoachPlan(
                 axes: LocalCoachAxis.base,
                 substitutionNote: LocalCoachCopy.substitutionNote(
                     requested: LocalCoachAxis.safer.rawValue,
                     reason: .saferNeedsReview,
                     produced: LocalCoachAxis.base
                 )
-            ))
+            ), draft: draft)
         }
 
         // 7. Everything else runs locally and produces the base three. When the
         //    tapped tone is not one of them — Affectionate, Professional,
         //    Concise — the substitution is stated rather than implied.
         let requestedIsProduced = LocalCoachAxis.base.contains { $0.rawValue == axis }
-        return .local(LocalCoachPlan(
+        return localRoute(LocalCoachPlan(
             axes: LocalCoachAxis.base,
             substitutionNote: requestedIsProduced ? nil : LocalCoachCopy.substitutionNote(
                 requested: axis,
                 reason: .toneNeedsConnection,
                 produced: LocalCoachAxis.base
             )
-        ))
+        ), draft: draft)
     }
 }
 

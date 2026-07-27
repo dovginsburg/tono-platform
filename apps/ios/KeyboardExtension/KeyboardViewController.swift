@@ -3523,6 +3523,25 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     /// Intelligence, an unready model, an unsupported language, a draft that is
     /// too long — and none of those become false just because the network is
     /// also gone. Retrying them would produce the same refusal a second time.
+    /// Which on-device refusals say something truer than "Coach needs internet"
+    /// once the transport has proved there is no route.
+    ///
+    /// Exactly one, and only because it is a statement about the person's own
+    /// draft that they can act on with the radio still off. Everything else is
+    /// either about the model — an ineligible device, an unready model, an
+    /// unsupported language — where "no connection" is the more useful of two
+    /// true statements because the connected route is genuinely the way out; or
+    /// about a draft the cloud can serve better than this iPhone
+    /// (`.draftTooLong`), where waiting for a connection IS the next step.
+    static func localRefusalOutranksTheOfflineMessage(
+        _ reason: LocalCoachUnavailableReason
+    ) -> Bool {
+        switch reason {
+        case .draftTooShort: return true
+        default: return false
+        }
+    }
+
     static func localSubstitutionIsOffered(for reason: LocalCoachUnavailableReason) -> Bool {
         switch reason {
         case .saferNeedsReview, .customStyleNeedsConnection: return true
@@ -3642,6 +3661,30 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
                 tapTime: tapTime, availability: availability,
                 connectivityKnownAbsent: true
             )
+            return
+        }
+
+        // Build 115 repair — the local route declined on the DRAFT, and the
+        // transport has just proved there is no connection either. "Coach needs
+        // internet" would be true and useless: waiting for a connection is not
+        // the next step, and the person can act on the real reason right now.
+        // Terminal, because no substitution is possible — a message with
+        // nothing in it to rewrite is exactly what makes the model invent a
+        // reply, which is the defect this refusal exists to prevent.
+        if let refusal = coachPendingLocalRefusal,
+           Self.localRefusalOutranksTheOfflineMessage(refusal) {
+            NSLog("TONO_KB BUILD115 coach: no route — local refusal is the truer answer axis=\(axis) reason=\(refusal.rawValue)")
+            coachTask?.cancel()
+            coachTask = nil
+            coachDeadline?.cancel()
+            coachDeadline = nil
+            coachRequestID = nil
+            coachBusy = false
+            coachWaitingForConnectivity = false
+            coachButton?.isEnabled = true
+            coachPendingLocalRefusal = nil
+            coachClockTapTime = nil
+            presentLocalCoachRefusal(refusal, replacingLoadingFor: requestID)
             return
         }
 
@@ -3843,17 +3886,17 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             NSLog(
                 "TONO_KB BUILD115 clock: phase=on_device_render axis=\(axis) options=\(result.options.count) model_ms=\(Int(result.metrics.completionMilliseconds)) dt_ms=\(Self.coachElapsedMs(since: tapTime))"
             )
-            TonoAnalytics.track(.onDeviceRewriteRoute(
+            // Build 115 repair — the breadcrumb is LOCAL, and that is the whole
+            // point. See `logOnDeviceRoute` for why nothing here may be sent.
+            logOnDeviceRoute(
                 axis: axis,
                 route: "onDevice",
                 reason: "success",
                 availabilityReason: result.metrics.availabilityReason,
                 bytesIn: result.metrics.bytesIn,
                 bytesOut: result.metrics.bytesOut,
-                firstTokenMs: nil,
-                completionMs: result.metrics.completionMilliseconds,
-                hasFullAccess: hasFullAccess
-            ))
+                completionMs: result.metrics.completionMilliseconds
+            )
             presentCoachResults(
                 TonoCoachClient.CoachResponse(
                     riskLevel: "medium",
@@ -3874,22 +3917,40 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
         case .failure(let declined):
             let reason = declined.reason
-            NSLog("TONO_KB BUILD115 coach: on-device declined axis=\(axis) reason=\(reason.rawValue)")
-            TonoAnalytics.track(.onDeviceRewriteRoute(
+            logOnDeviceRoute(
                 axis: axis,
-                route: "cloudFallback",
+                route: "declined",
                 reason: reason.rawValue,
                 availabilityReason: cachedLocalAvailability?.rawValue,
                 bytesIn: draft.utf8.count,
                 bytesOut: nil,
-                firstTokenMs: nil,
-                completionMs: nil,
-                hasFullAccess: hasFullAccess
-            ))
+                completionMs: nil
+            )
             switch reason {
             case .cancelled:
                 return
-            case .guardrail, .refusal:
+            case .guardrail, .refusal, .rewriteDidNotFinish:
+                // Build 115 repair — `.rewriteDidNotFinish` joins the terminal
+                // set, for a different reason than the other two.
+                //
+                // Guardrail and refusal are terminal because re-posting text
+                // Apple's model declined would route around a safety decision.
+                // `.rewriteDidNotFinish` is terminal because it is the one
+                // failure that PROVES the device was writing the answer: the
+                // model emitted a partial object and the decode threw. Handing
+                // that to the connected route spends the connectivity budget
+                // and, in airplane mode, ends on "Coach needs internet" — after
+                // ~17–27 s in which this iPhone was producing the rewrite. That
+                // sentence would be the most misleading thing the keyboard
+                // could say, so the person is told what actually happened and
+                // what to do about it instead.
+                //
+                // The cost, stated: a CONNECTED person loses the cloud rewrite
+                // for this class. It is bounded — with the response budget now
+                // derived from the admitted draft length, every admitted length
+                // is served (measured at 545 / 919 / 996 characters × 3 tones
+                // and 749 × 4), and this fires only on input that sends the
+                // model into a loop.
                 coachDeadline?.cancel()
                 coachDeadline = nil
                 coachRequestID = nil
@@ -3908,6 +3969,48 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
                 )
             }
         }
+    }
+
+    /// The on-device route's ONLY record of itself: a local log line.
+    ///
+    /// Build 115 as first written called `TonoAnalytics.track` from both arms of
+    /// `completeLocalCoach`, and `TonoAnalytics.track` ends in
+    /// `URLSession.shared.dataTask(with:).resume()` — a POST to `/v1/events`.
+    /// So the delivery path of a feature whose whole promise is "this never
+    /// leaves your phone" made an outbound request on every success AND every
+    /// failure. The payload carried no message text, so nothing leaked; the
+    /// CLAIM leaked, and for a privacy-positioned feature the claim is the
+    /// product. The invariant is now true rather than argued: a local route
+    /// reaches the URL loading system zero times, and the connected route —
+    /// which fires no analytics either — keeps exactly the shape it had.
+    ///
+    /// What is kept: the same fields, in the same vocabulary, written where
+    /// only this device can read them. `NSLog` neither transmits nor persists
+    /// beyond the system log, and every value below is an enum name, a byte
+    /// COUNT or a duration. No draft, no rewrite, no identifier.
+    ///
+    /// Deliberately NOT deferred-and-flushed-later either. A queue would mean
+    /// writing route records to the App Group from the keyboard and posting
+    /// them from the app, which trades a false claim for a durable one; the
+    /// route these events describe is the one the person was promised nothing
+    /// is collected about.
+    private func logOnDeviceRoute(
+        axis: String,
+        route: String,
+        reason: String,
+        availabilityReason: String?,
+        bytesIn: Int?,
+        bytesOut: Int?,
+        completionMs: Double?
+    ) {
+        NSLog(
+            "TONO_KB BUILD115 route: axis=\(axis) route=\(route) reason=\(reason) "
+                + "availability=\(availabilityReason ?? "unknown") "
+                + "bytes_in=\(bytesIn.map(String.init) ?? "-") "
+                + "bytes_out=\(bytesOut.map(String.init) ?? "-") "
+                + "completion_ms=\(completionMs.map { String(Int($0)) } ?? "-") "
+                + "full_access=\(hasFullAccess)"
+        )
     }
 
     // Internal so the XCTest target can drive the real UIKit loading state
@@ -4126,9 +4229,28 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         } else {
             // A set of tones is not a version sequence. `Try another`, the
             // "2 of 3" cue and the version steppers all describe successive
-            // wordings of ONE tone, so a multi-tone card set must not offer
-            // them — every alternative is already on screen.
-            let offersSequence = shown.count == 1
+            // wordings of ONE tone, so a card set must not offer them — every
+            // alternative is already on screen.
+            //
+            // Build 115 repair — this asks whether a SEQUENCE exists, not how
+            // many cards there are. Keying on `shown.count == 1` was wrong in
+            // exactly one direction, and it was reachable: `validateSet` drops
+            // options that are empty, over-long, identical to the draft or
+            // duplicates of each other, so a local trio can collapse to a
+            // single card (in a 7-draft probe on iOS 26.5, 4 of 7 already
+            // collapsed from three options to two — one more drop is one
+            // card). `completeLocalCoach` sets `coachSequence = nil` for every
+            // local delivery, so that single card got the full sequence UI with
+            // no sequence behind it: `applySequencePresentation` hid the cue and
+            // both steppers but left `Try another` ENABLED, and
+            // `tryAnotherTapped` returns immediately on the same nil. A visible,
+            // enabled, inert control — precisely the thing the rule below bans.
+            //
+            // Every other caller of `presentCoachResults` already binds a
+            // non-nil sequence before rendering (`completeCoach`,
+            // `completeAlternativeCoach`, both steppers), so the connected path
+            // is unchanged by construction rather than by coincidence.
+            let offersSequence = coachSequence != nil
             for (idx, s) in shown.enumerated() {
                 stack.addArrangedSubview(
                     makeRewriteChip(suggestion: s, index: idx, offersSequence: offersSequence)
@@ -4497,7 +4619,22 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private func applySequencePresentation(
         cue: UILabel, tryAnother: UIButton, back: UIButton, forward: UIButton
     ) {
-        guard let sequence = coachSequence, sequence.displayedVersion > 0 else {
+        guard let sequence = coachSequence else {
+            // Build 115 repair — defence in depth behind `offersSequence`. With
+            // no sequence at all there is nothing for `Try another` to ask for:
+            // `tryAnotherTapped` guards on the same nil and returns. Leaving it
+            // enabled here is what made the one-option local card offer a dead
+            // button, so the nil case now hides the whole control group instead
+            // of enabling one member of it.
+            cue.isHidden = true
+            back.isHidden = true
+            forward.isHidden = true
+            tryAnother.isHidden = true
+            tryAnother.isEnabled = false
+            tryAnother.accessibilityLabel = Const.tryAnotherLabel
+            return
+        }
+        guard sequence.displayedVersion > 0 else {
             cue.isHidden = true
             back.isHidden = true
             forward.isHidden = true

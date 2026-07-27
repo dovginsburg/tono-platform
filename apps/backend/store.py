@@ -452,6 +452,25 @@ _DEFAULT_FLAGS = [
     # Collective improvement signal — content-free behavioral outcomes only.
     # k-anonymity floor (COLLECTIVE_MIN_DEVICES) enforced at aggregation query level.
     ("improve_tono",           1, None, 100, 1, "Share anonymous outcome signals to improve Tono for everyone"),
+    # Build 115 — the on-device Apple Intelligence rewrite route's kill switch.
+    #
+    # `get_features` returns exactly the rows in this table, so a key that was
+    # never seeded can never appear in a `/v1/features` response. The iOS client
+    # resolves the cached value or its own default, and that default is ON —
+    # which meant the "remote kill switch" documented in `FeatureFlags.swift`
+    # had no way to say OFF: the only way to disable the route in the field was
+    # a new build. Seeded ENABLED, so the resolved value is exactly what it
+    # already was and no behaviour changes. What changes is that
+    # `PATCH /admin/flags/apple_intelligence_rewrite_enabled` with enabled false
+    # now matches a row, and takes effect on every device's next feature fetch.
+    #
+    # NOT user-controllable: it is an operator switch, and the person's own
+    # opt-out deliberately lives elsewhere (iOS `LocalRewritePreferenceStore`,
+    # its own App Group key), because `FeatureFlags.update(from:)` replaces this
+    # whole dictionary on every fetch and would evaporate a preference stored
+    # here. `plan_required` is None — the route is not a Pro feature.
+    ("apple_intelligence_rewrite_enabled", 1, None, 100, 0,
+     "Master switch for the on-device Apple Intelligence rewrite route (operator kill switch)"),
 ]
 
 

@@ -399,8 +399,19 @@ public actor OnDeviceAppleRewriteService {
         guard !request.axes.isEmpty else { throw LocalCoachFailure(.noValidRewrite) }
         let trimmed = request.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw LocalCoachFailure(.emptyDraft) }
-        guard request.draft.count <= policy.maximumInputCharacters else {
+        // Both ends of the admitted range, enforced by the engine as well as by
+        // the route policy — a caller that skipped the policy still cannot ask
+        // the model for something it has been measured to get wrong. The upper
+        // bound is per tone count, because the four-tone generation writes a
+        // third more text and takes a third longer than the three-tone one.
+        guard request.draft.count <= min(
+            policy.maximumInputCharacters,
+            LocalCoachRoutePolicy.maximumDraftCharacters(forAxisCount: request.axes.count)
+        ) else {
             throw LocalCoachFailure(.draftTooLong)
+        }
+        guard LocalCoachRoutePolicy.draftIsLongEnoughToRewrite(request.draft) else {
+            throw LocalCoachFailure(.draftTooShort)
         }
         guard LocalCoachMemoryBudget.hasHeadroom(residentBytes: OnDeviceMemoryProbe.residentBytes())
         else { throw LocalCoachFailure(.memoryPressure) }
@@ -441,7 +452,10 @@ public actor OnDeviceAppleRewriteService {
             """))
         let options = GenerationOptions(
             sampling: .greedy,
-            maximumResponseTokens: Self.maximumResponseTokens(for: request.axes.count)
+            maximumResponseTokens: LocalCoachRoutePolicy.maximumResponseTokens(
+                axisCount: request.axes.count,
+                draftCharacters: request.draft.count
+            )
         )
         let prompt = Prompt("Message to rewrite: \(request.draft)")
         let wantsSafer = request.axes.contains(.safer)
@@ -501,11 +515,34 @@ public actor OnDeviceAppleRewriteService {
             throw LocalCoachFailure(.cancelled)
         } catch LanguageModelSession.GenerationError.exceededContextWindowSize {
             throw LocalCoachFailure(.draftTooLong)
+        } catch LanguageModelSession.GenerationError.decodingFailure {
+            // Build 115 repair — the failure the first cut of this build could
+            // not see. Guided decoding does not truncate: when the response
+            // budget runs out (or the model loops) the emitted JSON object
+            // stops mid-field and the decode throws here, NOT in any of the
+            // cases enumerated above. It landed in the generic `catch` below as
+            // `.generationFailed`, which `completeLocalCoach` hands to the
+            // connected route — so in airplane mode a 930-character draft spent
+            // ~17 s on the device, then waited out the connectivity budget, and
+            // told the person to check their internet. The device had been
+            // writing the answer the whole time.
+            //
+            // Its own reason, and terminal at the controller: "check your
+            // connection" is the one thing that is definitely not the problem.
+            throw LocalCoachFailure(.rewriteDidNotFinish)
         } catch LanguageModelSession.GenerationError.guardrailViolation {
             throw LocalCoachFailure(.guardrail)
         } catch LanguageModelSession.GenerationError.refusal {
             throw LocalCoachFailure(.refusal)
         } catch LanguageModelSession.GenerationError.rateLimited {
+            throw LocalCoachFailure(.modelNotReady)
+        } catch LanguageModelSession.GenerationError.concurrentRequests {
+            // Another request already owns the session. Also previously
+            // unmapped, and `.busy` is what it means.
+            throw LocalCoachFailure(.busy)
+        } catch LanguageModelSession.GenerationError.assetsUnavailable {
+            // The model's assets are not on the device yet — the same condition
+            // `probeAvailability` reports as `.modelNotReady`, arriving late.
             throw LocalCoachFailure(.modelNotReady)
         } catch LanguageModelSession.GenerationError.unsupportedLanguageOrLocale {
             throw LocalCoachFailure(.unsupportedLocale)
@@ -530,12 +567,13 @@ public actor OnDeviceAppleRewriteService {
         }
     }
 
-    /// Bounded output, scaled to how many tones were asked for. Generous enough
-    /// for a long message rewritten four ways, small enough that a runaway
-    /// generation ends rather than filling the extension's context.
-    private static func maximumResponseTokens(for axisCount: Int) -> Int {
-        min(1_024, 180 * max(axisCount, 1))
-    }
+    // The response-token budget used to live here as
+    // `min(1_024, 180 × axisCount)` — a number chosen beside the input bound
+    // rather than derived from it, and 540 tokens for the three-tone set was
+    // not enough for any draft past ~500 characters. It now comes from
+    // `LocalCoachRoutePolicy.maximumResponseTokens(axisCount:draftCharacters:)`,
+    // which derives it from the same option cap the validator enforces, so the
+    // two cannot disagree again. See the bounds chain in `LocalCoachRewrite.swift`.
 }
 
 // MARK: - Memory probe (Darwin-only, optional observability)
