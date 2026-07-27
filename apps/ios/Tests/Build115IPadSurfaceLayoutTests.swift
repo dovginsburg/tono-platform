@@ -76,6 +76,76 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
         var value = TonePreferences()
     }
 
+    // MARK: - Process hygiene
+
+    /// The shipped surfaces hosted here are real: Coach, Settings and This Week
+    /// call `registerIfNeeded` and refresh the account on appear, and
+    /// registration WRITES the device ID into the shared keychain.
+    ///
+    /// Left in flight, those requests and those writes land inside the NEXT
+    /// test class's window — and `Build115LocalCoachTests`, which runs
+    /// immediately after this one alphabetically, both counts requests
+    /// process-globally and provisions its own device ID before firing one
+    /// deliberate analytics event. That is the Build 109 attribution debt this
+    /// repository already carries, and a class that starts real network work
+    /// should not add to it. So this file quiesces and puts back what it found
+    /// before yielding the process.
+    ///
+    /// Stated precisely, because the temptation is to claim more: this was
+    /// added as hygiene, not as a fix. The one failure seen in a full unsigned
+    /// run was that F2 test's own non-vacuity precondition, and it reproduces
+    /// with this class absent AND at the pre-change commit `7a1bdf5` —
+    /// `SharedKeychain` needs the app-group entitlement, which an unsigned
+    /// simulator build does not get, so the whole suite must be run signed.
+    private var restoreCredentials: (deviceID: String?, apiToken: String?)?
+
+    override func setUp() {
+        super.setUp()
+        if restoreCredentials == nil {
+            restoreCredentials = (
+                Tono.SharedKeychain.get(Tono.KeychainKeys.deviceID),
+                Tono.SharedKeychain.get(Tono.KeychainKeys.apiToken)
+            )
+        }
+    }
+
+    override func tearDown() {
+        quiesceURLSession()
+        if let restore = restoreCredentials {
+            if let deviceID = restore.deviceID {
+                Tono.SharedKeychain.set(deviceID, forKey: Tono.KeychainKeys.deviceID)
+            } else {
+                Tono.SharedKeychain.delete(Tono.KeychainKeys.deviceID)
+            }
+            if let apiToken = restore.apiToken {
+                Tono.SharedKeychain.set(apiToken, forKey: Tono.KeychainKeys.apiToken)
+            } else {
+                Tono.SharedKeychain.delete(Tono.KeychainKeys.apiToken)
+            }
+        }
+        super.tearDown()
+    }
+
+    /// Cancel and drain everything this test started before yielding the
+    /// process to the next class.
+    private func quiesceURLSession() {
+        let deadline = Date().addingTimeInterval(10)
+        var outstanding = -1
+        while outstanding != 0 && Date() < deadline {
+            let group = DispatchGroup()
+            group.enter()
+            URLSession.shared.getAllTasks { tasks in
+                tasks.forEach { $0.cancel() }
+                outstanding = tasks.count
+                group.leave()
+            }
+            _ = group.wait(timeout: .now() + 3)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        }
+        // One more turn so any `catch` arm that writes has already run.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+    }
+
     /// Real window sizes, points. Portrait and landscape for each family.
     private static let phonePortrait = CGSize(width: 393, height: 852)
     private static let phoneLandscape = CGSize(width: 852, height: 393)
@@ -380,6 +450,12 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
     /// fixing them means changing spacing on screens that are already approved.
     /// They are reported as pre-existing debt in the Build 115 handoff. The
     /// list may not GROW: a new sub-44pt control fails the test below.
+    /// A 44pt control measured through the layout engine lands on
+    /// 43.99999999999994 in a Release build — six parts in 10^14 below the
+    /// guideline, which is float arithmetic and not a small button. Compared
+    /// with a sub-point tolerance so the suite judges pixels, not epsilons.
+    private static let touchTargetTolerance: CGFloat = 0.5
+
     private static let knownSubMinimumTargets: Set<String> = [
         "Skip for now", "Restore purchases", "Check again", "Sign in",
         "Why Coach needs Full Access", "Open Setup Doctor", "Verify Setup Manually",
@@ -409,13 +485,14 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
                 let (_, pad) = measureContent(surface.make(), size: size)
                 for element in accessibilityElements(of: pad.view)
                 where element.traits.contains(.button) && !element.frame.isEmpty {
-                    guard let onPhone = phoneHeights[element.label], onPhone >= 44 else { continue }
+                    guard let onPhone = phoneHeights[element.label],
+                          onPhone >= 44 - Self.touchTargetTolerance else { continue }
                     // A wider column wraps text to fewer lines, so a row that
                     // was 79pt on a phone legitimately becomes 66pt here. What
                     // may NOT happen is a control that cleared the guideline on
                     // a phone falling under it because of the composition.
                     XCTAssertGreaterThanOrEqual(
-                        element.frame.height, 44,
+                        element.frame.height, 44 - Self.touchTargetTolerance,
                         "\(surface.name): “\(element.label)” went from \(onPhone)pt on a phone to \(element.frame.height)pt at \(size.width)pt, under the guideline"
                     )
                 }
@@ -435,7 +512,9 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
                 for element in accessibilityElements(of: controller.view)
                 where element.traits.contains(.button) && !element.frame.isEmpty && element.frame.width > 1 {
                     judged += 1
-                    if element.frame.height < 44 { offenders.insert(element.label) }
+                    if element.frame.height < 44 - Self.touchTargetTolerance {
+                        offenders.insert(element.label)
+                    }
                 }
             }
         }
