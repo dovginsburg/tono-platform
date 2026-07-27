@@ -28,9 +28,12 @@
 //      prior taken from the word actually preceding the caret.
 //   4. NEXT WORD / CONTINUATION — `LocalNextWordModel`, a small fixed English
 //      bigram table, offers continuations at a word boundary.
-//   5. VISIBILITY — `LocalIntelligenceCopy` supplies the keyboard badge label,
-//      the VoiceOver provenance string on every candidate, and the host-app
-//      settings copy, so the local lane is inspectable rather than implied.
+//   5. VISIBILITY — `LocalIntelligenceCopy` supplies the VoiceOver provenance
+//      string on every candidate and the host-app settings copy, so the local
+//      lane is inspectable rather than implied. (Build 106 also lit a small
+//      green dot on the strip for this; Build 115 deleted it — an unlabelled
+//      coloured dot on a keyboard reads as a status light, which is a claim it
+//      was never making. Visibility is carried in words now, not in a colour.)
 //   6. SELF-TEST — `LocalIntelligenceSelfTest` runs the real shipping resolver
 //      and ranker over fixed fixtures with no network and no text mutation, and
 //      returns pass / fail / disabled.
@@ -153,11 +156,10 @@ final class SystemSpellingChecker: SpellingChecking {
 /// implying a capability the extension does not have.
 public enum LocalIntelligenceCopy {
 
-    /// Accessibility label of the keyboard's on-device dot.
-    public static let badgeAccessibilityLabel =
-        "On-device suggestions active. Spelling runs on this iPhone."
-
-    /// Read after each suggestion by VoiceOver.
+    /// Read after each suggestion by VoiceOver. Build 115 deleted the keyboard's
+    /// green dot and the label that went with it; this is now the only place the
+    /// suggestion row states where it was computed, so it is load-bearing rather
+    /// than supplementary.
     public static let candidateProvenance = "on-device suggestion"
 
     /// Settings: what works with no connection.

@@ -74,9 +74,6 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         static let keyBorderWidth: CGFloat = 0.5
         static let referencePortraitWidth: CGFloat = 367.5
 
-        /// Diameter of the non-interactive on-device-intelligence dot.
-        static let localBadgeDiameter: CGFloat = 6
-
         static func letterKeyWidth(availableWidth: CGFloat) -> CGFloat {
             let usable = max(availableWidth - edgePadding * 2, 320)
             return (usable - rowSpacing * 9) / 10
@@ -213,8 +210,6 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         // actually touching — the Build-105 defect was invisible precisely
         // because both roles wore one identifier.
         static let idToneChips        = "TonoKB.toneChips"
-        /// Subtle on-device-intelligence indicator (see `LocalIntelligence`).
-        static let idLocalBadge       = "TonoKB.localBadge"
 
         // Build 114 — the three rewrite-card actions and the version cue.
         static let idUseRewrite       = "TonoKB.useRewrite"
@@ -258,7 +253,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             idCoachBack, idCoachRetry, idCoachError,
             idCoachErrorDetail, idRiskBadge, idRewrites,
             idEmojiPanel, idEmojiCategory, idEmojiRecents, idEmojiFooter,
-            idToneChips, idLocalBadge,
+            idToneChips,
             idUseRewrite, idTryAnother, idDismissRewrite, idVersionCue,
             idAlternativeNotice, idVersionBack, idVersionForward,
             idCoachRoute, idLocalNote,
@@ -791,7 +786,6 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private var autocorrectionRecord: AutoCorrectionRecord?
     private weak var candidateStack: UIStackView?
     private weak var toneChipStack: UIStackView?
-    private weak var localBadge: UIView?
     private weak var coachButton: TonoCoachButton?
     private var candidateValues: [String] = []
 
@@ -1146,23 +1140,18 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             in: bar
         )
 
-        // Subtle, non-interactive "running on device" signal. Never a touch
-        // target, so it cannot participate in any hit-region collision.
-        let badge = UIView()
-        badge.translatesAutoresizingMaskIntoConstraints = false
-        badge.isUserInteractionEnabled = false
-        badge.backgroundColor = .systemGreen
-        badge.layer.cornerRadius = Const.localBadgeDiameter / 2
-        badge.accessibilityIdentifier = Const.idLocalBadge
-        badge.isAccessibilityElement = true
-        badge.accessibilityTraits = [.staticText]
-        badge.accessibilityLabel = LocalIntelligenceCopy.badgeAccessibilityLabel
-        badge.isHidden = true
-        bar.addSubview(badge)
-
         // TONO is the leading anchor of the strip; the active row reads to its
         // right. Accessibility order matches the visual order.
-        bar.accessibilityElements = [coach, badge] + candidates.arrangedSubviews
+        //
+        // Build 115 removed the six-point green dot that used to sit between
+        // TONO and the row. A bare coloured dot is a shape people already read
+        // as a status light, so next to a keyboard it invited exactly the
+        // reading it could not support — "connected", "recording", "listening".
+        // The row's provenance is still stated, where it can be said in words:
+        // every suggestion carries `LocalIntelligenceCopy.candidateProvenance`
+        // as its accessibility value, and the Coach card carries the route
+        // badge. Nothing replaces the dot, and its space goes back to the row.
+        bar.accessibilityElements = [coach] + candidates.arrangedSubviews
         // A Coach control narrower than the 44pt minimum touch target would
         // have its hit rect expanded outward by `TonoMinimumHitTargetButton`,
         // pushing it under the first suggestion. Flooring the width at the
@@ -1186,21 +1175,16 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             coach.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
             coach.heightAnchor.constraint(equalToConstant: Const.baselineMetrics.coachControlHeight),
             coach.widthAnchor.constraint(equalToConstant: approvedCoachWidth),
-
-            badge.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            badge.widthAnchor.constraint(equalToConstant: Const.localBadgeDiameter),
-            badge.heightAnchor.constraint(equalToConstant: Const.localBadgeDiameter),
-            badge.leadingAnchor.constraint(
-                equalTo: coach.trailingAnchor,
-                constant: TonoStripGeometry.coachSeparation
-            ),
         ]
         // Both rows occupy the identical frame; visibility, not geometry,
-        // selects between them.
+        // selects between them. Each now hangs off TONO directly, one
+        // `coachSeparation` away — the reviewed minimum, and the same gap the
+        // disjointness test measures. The dot used to sit inside that gap and
+        // double it; the row is that much wider without it.
         for stack in [candidates, chips] {
             constraints += [
                 stack.leadingAnchor.constraint(
-                    equalTo: badge.trailingAnchor,
+                    equalTo: coach.trailingAnchor,
                     constant: TonoStripGeometry.coachSeparation
                 ),
                 stack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -3),
@@ -1213,7 +1197,6 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         self.topBar = bar
         self.candidateStack = candidates
         self.toneChipStack = chips
-        self.localBadge = badge
         self.coachButton = coach
         applyStripMode(.suggestions)
     }
@@ -1262,11 +1245,10 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         candidateStack?.isUserInteractionEnabled = showSuggestions
         toneChipStack?.isHidden = showSuggestions
         toneChipStack?.isUserInteractionEnabled = !showSuggestions
-        if let bar = topBar, let coach = coachButton, let badge = localBadge {
+        if let bar = topBar, let coach = coachButton {
             let active = showSuggestions ? candidateStack : toneChipStack
-            bar.accessibilityElements = [coach, badge] + (active?.arrangedSubviews ?? [])
+            bar.accessibilityElements = [coach] + (active?.arrangedSubviews ?? [])
         }
-        updateLocalBadge()
     }
 
     /// Record and log a refused strip dispatch. Counts only — the refused
@@ -2273,15 +2255,6 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             button.accessibilityValue = LocalIntelligenceCopy.candidateProvenance
             button.accessibilityTraits = isOriginal ? [.button, .selected] : [.button]
         }
-        updateLocalBadge()
-    }
-
-    /// Show the on-device indicator whenever the suggestion row is the live row
-    /// and is actually offering locally-computed values. It is a statement about
-    /// where the computation happened, not a network reachability light, so it
-    /// never lies about connectivity.
-    private func updateLocalBadge() {
-        localBadge?.isHidden = !(stripMode == .suggestions && !candidateValues.isEmpty)
     }
 
     /// Accept one spelling/autocorrect suggestion.

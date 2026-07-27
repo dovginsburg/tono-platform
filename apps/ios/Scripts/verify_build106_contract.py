@@ -101,10 +101,16 @@ check("URLSession" not in local and "URLRequest" not in local,
       "B: the local lane must contain no network I/O")
 
 # Visibility: the keyboard states it, and the host app states it.
-check("idLocalBadge" in controller and "badgeAccessibilityLabel" in controller,
-      "B: the keyboard must carry an accessible on-device indicator")
+#
+# Build 106 spent this claim on a green dot AND on per-suggestion provenance.
+# Build 115 deleted the dot: an unlabelled coloured dot on a keyboard reads as a
+# status light, which is a claim it was never making. The provenance half is what
+# actually carries the contract now, so it is checked here and the dot is checked
+# for absence rather than presence.
 check("candidateProvenance" in controller,
       "B: each suggestion must state its on-device provenance to VoiceOver")
+check("idLocalBadge" not in controller and "badgeAccessibilityLabel" not in controller,
+      "B: the Build-115 deletion must stay deleted — no green dot may come back")
 check("localIntelligenceSection" in settings
       and "LocalIntelligenceSelfTest.run(" in settings
       and "SystemSpellingChecker()" in settings,

@@ -740,27 +740,118 @@ final class Build109StripRoleAndDocumentIntegrityTests: XCTestCase {
         )
     }
 
-    /// The on-device badge is a statement about where computation happened. It
-    /// must be shown for locally-produced candidates and hidden the moment the
-    /// suggestion row stops being the live row.
+    // MARK: - Build 115 — the on-device green dot is deleted
+
+    /// Build 106 put a six-point `systemGreen` dot between TONO and the
+    /// suggestion row to signal "this was computed on device". On a keyboard an
+    /// unlabelled coloured dot is read as a status light — connected, recording,
+    /// listening — and it never meant any of those. Build 115 deletes it rather
+    /// than relabelling it.
+    ///
+    /// Absence is asserted four independent ways, because any one of them alone
+    /// would be satisfied by the same dot returning under a different name.
     @MainActor
-    func testLocalBadgeTracksTheLiveLocalRow() throws {
+    func testTheOnDeviceGreenDotIsGoneFromTheLiveStrip() throws {
         let controller = Self.makeController()
+        let bar = try XCTUnwrap(Self.view(Const.topBar, in: controller.view))
         let coach = try XCTUnwrap(Self.control(Const.coachButton, in: controller.view) as? UIButton)
-        let badge = try XCTUnwrap(Self.view(Const.localBadge, in: controller.view))
+        let candidateStack = try XCTUnwrap(Self.view(Const.candidates, in: controller.view))
+        let chipStack = try XCTUnwrap(Self.view(Const.toneChips, in: controller.view))
 
+        // The exact state that used to raise the dot: the suggestion row live,
+        // with locally-produced values on it.
         controller.updateCandidateStrip(values: ["teh", "the"])
         controller.view.layoutIfNeeded()
-        XCTAssertFalse(badge.isHidden, "local candidates must carry the on-device signal")
+
+        // 1. The identifier resolves to nothing.
+        XCTAssertNil(
+            Self.view(Const.deletedLocalBadge, in: controller.view),
+            "local candidates must no longer raise an on-device dot"
+        )
+
+        // 2. The strip holds exactly three things, so a dot cannot be hiding
+        //    under an identifier this test does not know to look for.
+        XCTAssertEqual(
+            Set(bar.subviews.map(ObjectIdentifier.init)),
+            Set(([coach, candidateStack, chipStack] as [UIView]).map(ObjectIdentifier.init)),
+            "the strip is TONO plus the two role rows and nothing else"
+        )
+
+        // 3. No descendant announces the deleted sentence, so VoiceOver has no
+        //    orphan stop left behind by the view's removal.
+        let announcements = Self.descendants(of: controller.view)
+            .filter(\.isAccessibilityElement)
+            .compactMap(\.accessibilityLabel)
+        XCTAssertFalse(
+            announcements.contains(Const.deletedBadgeAnnouncement),
+            "the dot's accessibility label must not survive its view"
+        )
+        XCTAssertFalse(
+            announcements.contains { $0.localizedCaseInsensitiveContains("on-device suggestions active") },
+            "no element may inherit the dot's announcement under another label"
+        )
+
+        // 4. The row still does the job the dot was decoration for: real
+        //    candidates, each stating its own provenance in words.
+        let suggestions = Self.suggestionButtons(in: controller.view)
+        XCTAssertEqual(
+            suggestions.prefix(2).map(\.isHidden), [false, false],
+            "removing the dot must not remove the candidates it sat next to"
+        )
+        XCTAssertEqual(suggestions.prefix(2).compactMap { $0.title(for: .normal) }, ["teh", "the"])
+        XCTAssertEqual(
+            suggestions.prefix(2).compactMap(\.accessibilityValue),
+            [LocalIntelligenceCopy.candidateProvenance, LocalIntelligenceCopy.candidateProvenance],
+            "per-suggestion provenance is now the only on-device claim, so it must hold"
+        )
+    }
+
+    /// VoiceOver's swipe order through the strip. The dot used to be the second
+    /// stop; after the deletion TONO must be followed directly by the live row,
+    /// in both roles, with no gap and no leftover element.
+    @MainActor
+    func testStripAccessibilityOrderHasNoOrphanStopInEitherRole() throws {
+        let controller = Self.makeController()
+        let bar = try XCTUnwrap(Self.view(Const.topBar, in: controller.view))
+        let coach = try XCTUnwrap(Self.control(Const.coachButton, in: controller.view) as? UIButton)
+
+        controller.updateCandidateStrip(values: ["teh", "the", "ten"])
+        controller.view.layoutIfNeeded()
+        XCTAssertEqual(
+            (bar.accessibilityElements as? [UIView]).map { $0.map(ObjectIdentifier.init) },
+            ([coach] + Self.suggestionButtons(in: controller.view)).map(ObjectIdentifier.init),
+            "suggestions: TONO then the candidates, nothing between them"
+        )
 
         coach.sendActions(for: .touchUpInside)
         controller.view.layoutIfNeeded()
-        XCTAssertTrue(badge.isHidden, "the badge must not claim local work while Coach chips are live")
+        XCTAssertEqual(
+            (bar.accessibilityElements as? [UIView]).map { $0.map(ObjectIdentifier.init) },
+            ([coach] + Self.toneChipButtons(in: controller.view)).map(ObjectIdentifier.init),
+            "tone chips: TONO then the chips, nothing between them"
+        )
+    }
 
-        coach.sendActions(for: .touchUpInside)
-        controller.updateCandidateStrip(values: ["teh", "the"])
-        controller.view.layoutIfNeeded()
-        XCTAssertFalse(badge.isHidden, "returning to the local row restores the signal")
+    /// The source-level half. A dot is a view plus a colour plus a string; the
+    /// runtime tests above cover the view, and these cover the other two, so the
+    /// deletion cannot be quietly undone in a state no test happens to drive.
+    func testTheDotsColourIdentifierAndCopyAreGoneFromSource() throws {
+        let controller = try Self.keyboardControllerSource()
+        for token in ["systemGreen", "localBadge", "idLocalBadge", "badgeAccessibilityLabel"] {
+            XCTAssertFalse(
+                controller.contains(token),
+                "the keyboard must carry no on-device dot, found \(token)"
+            )
+        }
+        let copy = try Self.keyboardSource("LocalIntelligence.swift")
+        XCTAssertFalse(
+            copy.contains("badgeAccessibilityLabel"),
+            "the dot's copy constant must not outlive the dot it labelled"
+        )
+        XCTAssertTrue(
+            copy.contains("candidateProvenance"),
+            "per-suggestion provenance must be preserved by the deletion"
+        )
     }
 
     // MARK: - Founder finding #4 — wrapped caret movement never changes text
@@ -844,6 +935,7 @@ final class Build109StripRoleAndDocumentIntegrityTests: XCTestCase {
     // MARK: - Helpers
 
     private enum Const {
+        static let topBar = "TonoKB.topBar"
         static let coachButton = "TonoKB.coachButton"
         static let coachLoading = "TonoKB.coachLoading"
         static let coachResults = "TonoKB.coachResults"
@@ -851,8 +943,14 @@ final class Build109StripRoleAndDocumentIntegrityTests: XCTestCase {
         static let coachBack = "TonoKB.coachBack"
         static let candidates = "TonoKB.candidates"
         static let toneChips = "TonoKB.toneChips"
-        static let localBadge = "TonoKB.localBadge"
         static let surfaces: Set<String> = [coachLoading, coachResults, coachError]
+
+        /// Build 115 deleted these two. They are held here as historical
+        /// literals — the shipping constants they used to mirror are gone, so
+        /// the absence tests must spell them out rather than import them.
+        static let deletedLocalBadge = "TonoKB.localBadge"
+        static let deletedBadgeAnnouncement =
+            "On-device suggestions active. Spelling runs on this iPhone."
     }
 
     @MainActor

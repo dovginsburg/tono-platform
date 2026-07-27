@@ -341,6 +341,107 @@ final class Build106SuggestionRoutingTests: XCTestCase {
         )
     }
 
+    // MARK: - Build 115 — the strip after the on-device dot was deleted
+
+    /// Build 115 removed the six-point dot that sat between TONO and the row,
+    /// and the row moved left onto TONO's own `coachSeparation`. That is a
+    /// genuinely smaller gap — 10pt where 26pt used to be — so the touch
+    /// contract has to be re-proved at the narrowest widths rather than assumed
+    /// to have survived the deletion.
+    ///
+    /// The gap is pinned from BOTH sides: at least `coachSeparation`, so the
+    /// hit regions stay apart, and at most `coachSeparation`, so the dot's 16pt
+    /// goes back to the candidates instead of staying behind as a dead gutter.
+    @MainActor
+    func testStripGeometrySurvivesTheDotRemovalAtNarrowWidths() throws {
+        let minimum = TonoKeyboardMetrics.ControlGeometry.minimumTouchTarget
+        for width in [320.0, 375.0, 390.0] as [CGFloat] {
+            let controller = Self.makeController(width: width)
+            controller.updateCandidateStrip(values: ["one", "two", "three"])
+            controller.view.layoutIfNeeded()
+
+            let bar = try XCTUnwrap(Self.view(Const.topBar, in: controller.view))
+            let coach = try XCTUnwrap(Self.control(Const.coachButton, in: controller.view) as? UIButton)
+            let coachFrame = coach.convert(coach.bounds, to: bar)
+
+            XCTAssertGreaterThanOrEqual(
+                coachFrame.width, minimum - 0.5,
+                "TONO must stay a full 44pt-wide target at \(width)pt"
+            )
+            XCTAssertGreaterThanOrEqual(
+                coachFrame.height, minimum - 0.5,
+                "TONO must stay a full 44pt-tall target at \(width)pt"
+            )
+
+            // Both rows are constrained identically and both must follow TONO
+            // directly — the hidden one too, since toggling TONO makes it live
+            // without re-running layout from scratch.
+            for identifier in [Const.candidates, Const.toneChips] {
+                let stack = try XCTUnwrap(Self.view(identifier, in: controller.view))
+                let gap = stack.convert(stack.bounds, to: bar).minX - coachFrame.maxX
+                XCTAssertEqual(
+                    gap, TonoStripGeometry.coachSeparation, accuracy: 0.5,
+                    """
+                    \(identifier) at \(width)pt must sit exactly one reviewed \
+                    separation from TONO — a larger gap means the deleted dot's \
+                    space was never given back
+                    """
+                )
+            }
+
+            // The reclaimed width lands on the candidates, and they still clear
+            // the minimum target once expanded.
+            var frames = [coachFrame]
+            frames += Self.suggestionButtons(in: controller.view).map { $0.convert($0.bounds, to: bar) }
+            XCTAssertTrue(
+                TonoStripGeometry.hitRectsAreDisjoint(frames, minimumTouchTarget: minimum),
+                "at \(width)pt the tightened gap must still keep TONO and the candidates apart"
+            )
+            for frame in frames.dropFirst() {
+                let expanded = TonoStripGeometry.expandedHitRect(for: frame, minimumTouchTarget: minimum)
+                XCTAssertGreaterThanOrEqual(expanded.width, minimum - 0.5)
+                XCTAssertGreaterThanOrEqual(expanded.height, minimum - 0.5)
+            }
+        }
+    }
+
+    /// The two roles were kept apart by separate hierarchies, not by the dot
+    /// that used to sit between them — so removing it must change nothing about
+    /// which handler a tap reaches, including at the narrowest width where the
+    /// controls are now closest together.
+    @MainActor
+    func testRoleIsolationIsUnaffectedByTheDotRemovalAtTheNarrowestWidth() throws {
+        let controller = Self.makeController(width: 320)
+        let coach = try XCTUnwrap(Self.control(Const.coachButton, in: controller.view) as? UIButton)
+
+        controller.updateCandidateStrip(values: ["teh", "the", "ten"])
+        controller.view.layoutIfNeeded()
+        for button in Self.suggestionButtons(in: controller.view) {
+            XCTAssertEqual(
+                button.actions(forTarget: controller, forControlEvent: .touchUpInside) ?? [],
+                ["candidateTapped:"]
+            )
+            button.sendActions(for: .touchUpInside)
+        }
+        XCTAssertEqual(
+            controller.coachRequestsStarted, 0,
+            "a candidate tap must still never reach Coach at 320pt"
+        )
+
+        coach.sendActions(for: .touchUpInside)
+        controller.view.layoutIfNeeded()
+        for chip in Self.toneChipButtons(in: controller.view) {
+            XCTAssertEqual(
+                chip.actions(forTarget: controller, forControlEvent: .touchUpInside) ?? [],
+                ["toneChipTapped:"]
+            )
+        }
+        XCTAssertEqual(
+            controller.stripRefusals[.roleMismatch, default: 0], 0,
+            "no dispatch may be refused for a role mismatch after the deletion"
+        )
+    }
+
     /// A deliberately overlapping layout must be caught by the geometry gate,
     /// proving the disjointness assertion can actually fail.
     func testRollbackRed_overlappingHitRegionsAreDetected() {

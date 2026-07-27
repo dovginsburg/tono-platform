@@ -356,7 +356,6 @@ final class Build106LocalIntelligenceTests: XCTestCase {
     /// The build must never claim Apple Intelligence or QuickType parity.
     func testCopyMakesNoAppleIntelligenceClaim() {
         let all = [
-            LocalIntelligenceCopy.badgeAccessibilityLabel,
             LocalIntelligenceCopy.candidateProvenance,
             LocalIntelligenceCopy.offlineCapabilitySummary,
             LocalIntelligenceCopy.onlineRequirementSummary,
