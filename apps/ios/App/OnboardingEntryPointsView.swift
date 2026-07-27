@@ -91,6 +91,12 @@ struct OnboardingEntryPointsView: View {
                                     .padding(.horizontal, 16)
                                 }
                             }
+                            // The whole CELL is one unit: tile 1 and the two
+                            // buttons that verify it. Without this the buttons
+                            // sit lower than tile 2's card, so geometric
+                            // ordering read them after tile 2 — the tile's own
+                            // actions, announced under the wrong tile.
+                            .accessibilityElement(children: .contain)
                             tile(
                                 number: 2,
                                 icon: "square.and.arrow.up",
@@ -297,6 +303,13 @@ struct OnboardingEntryPointsView: View {
         .padding(16)
         .background(Color(.secondarySystemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 14))
+        // Build 115 — iPad. Two tiles side by side sit on the same visual rows,
+        // and UIKit orders accessibility by geometry, so without this VoiceOver
+        // read "tile 1 title, tile 2 title, tile 1 detail, tile 2 detail…"
+        // straight across the row. Containing each tile keeps a tile's own
+        // words together in both layouts. Caught by
+        // Build115IPadSurfaceLayoutTests, not by inspection.
+        .accessibilityElement(children: .contain)
         .id(number)
     }
 

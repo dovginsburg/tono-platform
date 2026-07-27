@@ -146,6 +146,9 @@ struct DigestView: View {
         .padding(16)
         .background(Color(.secondarySystemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 14))
+        // Build 115 — iPad. Beside the streak card, the breakdown must stay one
+        // stop rather than interleaving with it row by row.
+        .accessibilityElement(children: .contain)
     }
 
     /// One axis: its name, its bar, its count.
@@ -228,6 +231,7 @@ struct DigestView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.orange.opacity(0.1))
         .clipShape(RoundedRectangle(cornerRadius: 14))
+        .accessibilityElement(children: .contain)
     }
 
     // MARK: - Data

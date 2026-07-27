@@ -10,6 +10,7 @@
 		B115C0FFEE0000000000F015 /* LocalCoachRewrite.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */; };
 		B115C0FFEE0000000000F021 /* Build115LocalCoachTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F002 /* Build115LocalCoachTests.swift */; };
 		B115ADA7000000000000F022 /* Build115AdaptiveLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115ADA7000000000000F002 /* Build115AdaptiveLayoutTests.swift */; };
+		B115ADA7000000000000F044 /* Build115IPadSurfaceLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115ADA7000000000000F004 /* Build115IPadSurfaceLayoutTests.swift */; };
 		B115C0FFEE0000000000F011 /* LocalCoachRewrite.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */; };
 		B115C0FFEE0000000000F012 /* LocalCoachRewrite.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */; };
 		B115C0FFEE0000000000F013 /* LocalCoachRewrite.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */; };
@@ -258,6 +259,7 @@
 /* Begin PBXFileReference section */
 		B115C0FFEE0000000000F002 /* Build115LocalCoachTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build115LocalCoachTests.swift; sourceTree = "<group>"; };
 		B115ADA7000000000000F002 /* Build115AdaptiveLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build115AdaptiveLayoutTests.swift; sourceTree = "<group>"; };
+		B115ADA7000000000000F004 /* Build115IPadSurfaceLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build115IPadSurfaceLayoutTests.swift; sourceTree = "<group>"; };
 		B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalCoachRewrite.swift; sourceTree = "<group>"; };
 		045FE2F8B15471B8BFD56595 /* ContactsAccessTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ContactsAccessTests.swift; sourceTree = "<group>"; };
 		1590C6120760B6DE05CC4AB9 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
@@ -435,6 +437,7 @@
 			isa = PBXGroup;
 			children = (
 				B115ADA7000000000000F002 /* Build115AdaptiveLayoutTests.swift */,
+				B115ADA7000000000000F004 /* Build115IPadSurfaceLayoutTests.swift */,
 				B115C0FFEE0000000000F002 /* Build115LocalCoachTests.swift */,
 				045FE2F8B15471B8BFD56595 /* ContactsAccessTests.swift */,
 				860000000000000000000003 /* CoachContractTests.swift */,
@@ -905,6 +908,7 @@
 			files = (
 				B115C0FFEE0000000000F015 /* LocalCoachRewrite.swift in Sources */,
 				B115ADA7000000000000F022 /* Build115AdaptiveLayoutTests.swift in Sources */,
+				B115ADA7000000000000F044 /* Build115IPadSurfaceLayoutTests.swift in Sources */,
 				B115C0FFEE0000000000F021 /* Build115LocalCoachTests.swift in Sources */,
 				A6000000000000000000000C /* Build106LocalIntelligenceTests.swift in Sources */,
 				A6000000000000000000000A /* Build106MultilineCursorTests.swift in Sources */,

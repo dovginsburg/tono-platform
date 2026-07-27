@@ -368,6 +368,9 @@ struct CoachView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.vertical, 4)
+        // Build 115 — iPad. Two rewrites side by side would otherwise be read
+        // axis-name, axis-name, text, text. Each rewrite stays one stop.
+        .accessibilityElement(children: .contain)
     }
 
     private func riskBadge(for level: RiskLevel) -> some View {
