@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		B115C0FFEE0000000000F015 /* LocalCoachRewrite.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */; };
 		B115C0FFEE0000000000F021 /* Build115LocalCoachTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F002 /* Build115LocalCoachTests.swift */; };
+		B115ADA7000000000000F022 /* Build115AdaptiveLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115ADA7000000000000F002 /* Build115AdaptiveLayoutTests.swift */; };
 		B115C0FFEE0000000000F011 /* LocalCoachRewrite.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */; };
 		B115C0FFEE0000000000F012 /* LocalCoachRewrite.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */; };
 		B115C0FFEE0000000000F013 /* LocalCoachRewrite.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */; };
@@ -58,6 +59,7 @@
 		255C57EC2FEFADD136CC95C4 /* MessagesViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C15A6D1DB3DF8DFB596C677 /* MessagesViewController.swift */; };
 		2A1053919D15380BA5597C24 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9B37E5A81C027DBCC41C8EA9 /* Assets.xcassets */; };
 		2F986D1C30D60DF7044A1827 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FCE9DA4E023C12BADC4BC12 /* HomeView.swift */; };
+		B115ADA7000000000000F011 /* AdaptiveLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115ADA7000000000000F001 /* AdaptiveLayout.swift */; };
 		3445E8532232C012E7274043 /* CoachDraftIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3861F3AF2390477CF4D567E /* CoachDraftIntent.swift */; };
 		3636B8D05701682C16720B5A /* SharedUserDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 772DD67FA1CD9CF09D426AF5 /* SharedUserDefaults.swift */; };
 		3781BE8282934F1F04FC4365 /* ContactsSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E33B6F18B213E414885CCCA /* ContactsSync.swift */; };
@@ -255,6 +257,7 @@
 
 /* Begin PBXFileReference section */
 		B115C0FFEE0000000000F002 /* Build115LocalCoachTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build115LocalCoachTests.swift; sourceTree = "<group>"; };
+		B115ADA7000000000000F002 /* Build115AdaptiveLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build115AdaptiveLayoutTests.swift; sourceTree = "<group>"; };
 		B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalCoachRewrite.swift; sourceTree = "<group>"; };
 		045FE2F8B15471B8BFD56595 /* ContactsAccessTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ContactsAccessTests.swift; sourceTree = "<group>"; };
 		1590C6120760B6DE05CC4AB9 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
@@ -302,6 +305,7 @@
 		772DD67FA1CD9CF09D426AF5 /* SharedUserDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedUserDefaults.swift; sourceTree = "<group>"; };
 		78AA6203719949C25622DA78 /* StyleMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StyleMemory.swift; sourceTree = "<group>"; };
 		7FCE9DA4E023C12BADC4BC12 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		B115ADA7000000000000F001 /* AdaptiveLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveLayout.swift; sourceTree = "<group>"; };
 		CE0000000000000000000001 /* ConsumerErrorCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsumerErrorCopy.swift; sourceTree = "<group>"; };
 		80AB8E621E4EDC9A59A7258D /* TonoBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoBackend.swift; sourceTree = "<group>"; };
 		822A94BEAD307E044D2E1547 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
@@ -430,6 +434,7 @@
 		7CCA65BB1F5C2B14CEB12B39 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				B115ADA7000000000000F002 /* Build115AdaptiveLayoutTests.swift */,
 				B115C0FFEE0000000000F002 /* Build115LocalCoachTests.swift */,
 				045FE2F8B15471B8BFD56595 /* ContactsAccessTests.swift */,
 				860000000000000000000003 /* CoachContractTests.swift */,
@@ -547,6 +552,7 @@
 		ACBF71996DDD904FF659BD91 /* App */ = {
 			isa = PBXGroup;
 			children = (
+				B115ADA7000000000000F001 /* AdaptiveLayout.swift */,
 				B3861F3AF2390477CF4D567E /* CoachDraftIntent.swift */,
 				B88FDB62F52944069CC31478 /* CoachView.swift */,
 				6EDBB4F550AF48643771E5BF /* DigestView.swift */,
@@ -898,6 +904,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B115C0FFEE0000000000F015 /* LocalCoachRewrite.swift in Sources */,
+				B115ADA7000000000000F022 /* Build115AdaptiveLayoutTests.swift in Sources */,
 				B115C0FFEE0000000000F021 /* Build115LocalCoachTests.swift in Sources */,
 				A6000000000000000000000C /* Build106LocalIntelligenceTests.swift in Sources */,
 				A6000000000000000000000A /* Build106MultilineCursorTests.swift in Sources */,
@@ -1026,6 +1033,7 @@
 				8E0000000000000000000002 /* LiveToneOpportunitySession.swift in Sources */,
 				8E0000000000000000000003 /* LiveToneOpportunityCounters.swift in Sources */,
 				8E0000000000000000000004 /* LiveToneOpportunityFixtures.swift in Sources */,
+				B115ADA7000000000000F011 /* AdaptiveLayout.swift in Sources */,
 				2F986D1C30D60DF7044A1827 /* HomeView.swift in Sources */,
 				5A3F5B2DEE787882EB6A04AC /* MemoryView.swift in Sources */,
 				BCE86246C1AA22B4751B06C8 /* MetricKitReporter.swift in Sources */,

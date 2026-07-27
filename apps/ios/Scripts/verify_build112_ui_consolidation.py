@@ -71,6 +71,10 @@ SHIPPED_TARGETS = ["Tono", "TonoKeyboard", "TonoShare", "TonoMessagesExtension"]
 # is complete against the Xcode project, so a new screen cannot ship
 # unjudged.
 RENDERING_SURFACES = [
+    # Build 115 — the shared adaptive-layout primitive. It declares a
+    # `ViewModifier`, so `discover_consumer_surfaces` sees it as a surface; it
+    # renders no copy of its own, which is what the contract requires of it.
+    "App/AdaptiveLayout.swift",
     "App/CoachView.swift",
     "App/DigestView.swift",
     "App/HomeView.swift",

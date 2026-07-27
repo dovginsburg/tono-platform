@@ -65,6 +65,11 @@ final class Build112UISurfaceContractTests: XCTestCase {
     /// copy those pixels show. Proved complete by
     /// `testEveryShippedSurfaceThatRendersUIIsUnderContract`.
     private static let renderingSurfaces = [
+        // Build 115 — the shared adaptive-layout primitive. It declares a
+        // `ViewModifier`, so the discovery test below sees it as a surface; it
+        // renders no copy of its own, which is exactly what the contract
+        // requires of it.
+        "App/AdaptiveLayout.swift",
         "App/CoachView.swift",
         "App/DigestView.swift",
         "App/HomeView.swift",
