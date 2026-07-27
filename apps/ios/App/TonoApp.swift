@@ -9,6 +9,11 @@ import WidgetKit
 @main
 struct TonoApp: App {
     init() {
+        // Build 116 — one connectivity observer, started once, for the life of
+        // the process. Started here rather than by a view so that no surface's
+        // appearance, recreation or teardown can decide whether the app is able
+        // to notice a connection coming or going.
+        TonoConnectivity.shared.start()
         StoreKitManager.shared.start()
         // A1: crash + OOM reporting (no-op until FIREBASE_ENABLED is set in build flags).
         CrashReporter.configure()
@@ -48,6 +53,12 @@ struct RootView: View {
         }
         .tint(.purple)
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            // Build 116 — the observer keeps running while backgrounded, so
+            // this is a re-assertion rather than the primary path. It makes the
+            // foreground transition deterministic instead of dependent on
+            // whether an update happened to be delivered off screen — which is
+            // exactly the trip the person takes to reach Airplane Mode.
+            TonoConnectivity.shared.refresh()
             promptReviewIfEarned()
             NotificationManager.shared.ensureNudgeScheduled()
             WidgetCenter.shared.reloadAllTimelines()

@@ -16,6 +16,21 @@
 import SwiftUI
 
 struct CoachView: View {
+    // Build 116 — what the app KNOWS about having a connection, observed for
+    // the life of the process instead of inferred from the last request's
+    // outcome. Before this, a rewrite on screen with no request in flight left
+    // the surface with no connectivity input at all: turning on Airplane Mode
+    // changed nothing, the Coach control stayed as available as it had looked a
+    // second earlier, and finding out cost a doomed request AND the rewrite.
+    //
+    // Injectable so the lifecycle can be driven exactly in tests — a simulator
+    // has no radio to switch off. Production always gets the shared observer.
+    @ObservedObject private var connectivity: TonoConnectivity
+
+    init(connectivity: TonoConnectivity = .shared) {
+        _connectivity = ObservedObject(wrappedValue: connectivity)
+    }
+
     @State private var prefs = TonePreferences()
 
     @State private var draft: String = ""
@@ -53,7 +68,13 @@ struct CoachView: View {
                     hero
                     draftEditor
                     coachButton
-                    if let err = errorMessage {
+                    // Build 116 — the current fact outranks the stale one. An
+                    // error sentence describes an attempt made in a network
+                    // world that no longer exists; while there is no
+                    // connection, the connection is the thing to say.
+                    if isOffline {
+                        offlineNotice
+                    } else if let err = errorMessage {
                         errorBanner(err)
                     }
                     if let a = analysis {
@@ -96,6 +117,13 @@ struct CoachView: View {
             }
         }
         .animation(.easeOut(duration: 0.18), value: showExplainer)
+        // Build 116 — a failure sentence is about one attempt under one set of
+        // conditions. When the conditions change, it stops being current, so it
+        // goes rather than sitting under a contradicting notice. The rewrite
+        // and the draft are untouched: they are the person's, not the network's.
+        .onChange(of: connectivity.status) { _, _ in
+            errorMessage = nil
+        }
         .task {
             await bootstrap()
             // Onboarding polish: first time the user sees Coach without a
@@ -166,10 +194,45 @@ struct CoachView: View {
             .clipShape(RoundedRectangle(cornerRadius: 14))
         }
         .disabled(!canSubmit)
+        // Gated rather than inert: the control reports that it cannot act AND
+        // the notice below it says why, in the same breath. VoiceOver gets the
+        // reason too, because a dimmed capsule is not a sentence.
+        .accessibilityLabel(isOffline ? "Coach, unavailable without a connection" : "Coach")
     }
 
+    /// Build 116 — the app's own connectivity fact. `checking` is not offline:
+    /// nothing is claimed and nothing is gated until something is known.
+    private var isOffline: Bool { connectivity.isOffline }
+
     private var canSubmit: Bool {
-        !loading && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !loading
+            && !isOffline
+            && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// The plain-language statement of the only fact the person needs. Two
+    /// forms, because "your rewrite is still here" is true only when there is
+    /// one, and a reassurance that is false is worse than none.
+    ///
+    /// Says nothing about how Tono works, what it talks to, or why a request
+    /// would have failed — this is not a failure, it is a condition.
+    private var offlineNotice: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "wifi.slash")
+                .foregroundColor(.white.opacity(0.7))
+            Text(
+                analysis == nil
+                    ? "No internet connection. Check Wi-Fi or cellular to coach a draft."
+                    : "No internet connection. Your rewrite is still here — check Wi-Fi or cellular to coach again."
+            )
+            .tonoFont(size: 13, relativeTo: .footnote)
+            .foregroundColor(.white)
+            .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     private var emptyState: some View {
@@ -411,11 +474,22 @@ struct CoachView: View {
     private func runCoach() async {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        // Build 116 — Coach is an online-only action, so it is gated on the
+        // connectivity the app OBSERVES, before a request is built. The
+        // disabled control is the visible half of the gate; this is the half
+        // that makes "zero egress" true no matter how the action is reached —
+        // an accessibility activation, a hardware keyboard, a future caller.
+        guard !connectivity.isOffline else { return }
 
         await MainActor.run {
             loading = true
             errorMessage = nil
-            analysis = nil
+            // Build 116 — the delivered rewrite is deliberately NOT cleared
+            // here. Clearing it meant every attempt destroyed the answer the
+            // person already had before it knew whether it could produce
+            // another one, so the first tap after losing connection cost them
+            // the rewrite they were reading. A result is replaced by a better
+            // result, never by the hope of one.
             hasCoachedOnce = true
         }
 
