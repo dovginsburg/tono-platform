@@ -21,13 +21,18 @@ What this checks instead, entirely against the binary:
   2. Its symbols are imported `weak external`, including `SystemLanguageModel`
      and `LanguageModelSession`, so an older OS resolves them to null.
   3. `KeyboardViewController` DEFINES the Build 115 route functions.
-  4. `startLocalCoach` builds a `LocalCoachSetRequest` and dispatches it through
-     a `LocalCoachRewriteEngine` existential — i.e. the live controller really
-     does hand a request to the on-device engine.
+  4. `startLocalCoach` builds a `LocalCoachSetRequest` and dispatches
+     `rewriteSet` through a `LocalCoachRewriteEngine` existential's protocol
+     witness table — i.e. the live controller really does hand a request to the
+     on-device engine. Proved by dataflow, not by a symbol name; see the long
+     comment at the check itself for why the name-matching version was wrong.
   5. The controller's DEFAULT engine is `AppleRewriteBridge`: its stored-property
      initialiser branches to that class's metadata accessor.
-  6. `AppleRewriteBridge` is the only type in the binary that witnesses
-     `LocalCoachRewriteEngine`, so (4) can only land on (5).
+  6. The engine protocol is witnessed by exactly two types — the shipped
+     `AppleRewriteBridge` and the declared `UnavailableLocalCoachEngine` null
+     object — and by no unreviewed third, so (4) can only land on (5). This
+     used to claim the bridge was the ONLY witness; it never was, and the check
+     was green because it could not see the other one. See the comment there.
   7. `OnDeviceAppleRewriteService.probeAvailability` branches to
      `SystemLanguageModel.availability`, and `performRewriteSet` branches to
      `LanguageModelSession.init` — the last link in the chain.
@@ -62,8 +67,9 @@ from pathlib import Path
 FAILURES: list[str] = []
 
 
-def run(*args: str) -> str:
-    return subprocess.run(args, capture_output=True, text=True, check=True).stdout
+def run(*args: str, stdin: str = "") -> str:
+    return subprocess.run(args, capture_output=True, text=True, check=True,
+                          input=stdin).stdout
 
 
 def check(condition: bool, message: str) -> None:
@@ -133,6 +139,309 @@ def branches_from(calls: dict[str, set[str]], needle: str) -> set[str]:
     return out
 
 
+# ── reading the protocol witness table out of the binary ────────────────────
+#
+# The engine call is register-indirect, so the only way to say WHICH protocol
+# requirement `startLocalCoach` dispatches is to know the byte offset of that
+# requirement inside the witness table — and the only honest source for that
+# offset is this binary. Hard-coding it would go stale the moment a requirement
+# is added to `LocalCoachRewriteEngine`, and would silently start proving the
+# wrong thing rather than failing.
+
+def rebase_targets(binary: Path) -> dict[int, int]:
+    """address -> rebase target, for every fixup in the binary's data segments.
+
+    A linked witness table is a run of rebased pointers, so its slots are not
+    readable as literal bytes; `dyld_info` is what resolves them."""
+    out: dict[int, int] = {}
+    try:
+        raw = run("dyld_info", "-fixups", str(binary))
+    except (OSError, subprocess.CalledProcessError):
+        return out
+    for line in raw.splitlines():
+        match = re.match(r"\s*\S+\s+\S+\s+(0x[0-9A-Fa-f]+)\s+rebase\s+(0x[0-9A-Fa-f]+)", line)
+        if match:
+            out[int(match.group(1), 16)] = int(match.group(2), 16)
+    return out
+
+
+def symbol_addresses(binary: Path) -> tuple[dict[int, list[str]], dict[str, int]]:
+    by_address: dict[int, list[str]] = {}
+    by_name: dict[str, int] = {}
+    for line in run("nm", "-n", str(binary)).splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and re.fullmatch(r"[0-9a-f]+", parts[0]):
+            address = int(parts[0], 16)
+            by_address.setdefault(address, []).append(parts[2])
+            by_name.setdefault(parts[2], address)
+    return by_address, by_name
+
+
+def witness_types(binary: Path, protocol: str) -> set[str]:
+    """Every type in this binary that witnesses `protocol`, found by DEMANGLING.
+
+    Matching mangled substrings does not work here and the failure is silent.
+    `AppleRewriteBridge`'s conformance mangles the protocol as
+    `LocalCoachD6EngineA2aDP`, but `UnavailableLocalCoachEngine`'s mangles the
+    SAME protocol as `0de7RewriteF0A2aDP`, because the conforming type's own
+    name changes which substitutions are available. Any needle spelled for one
+    conformer is blind to the other — the same trap the F2 needles fell into.
+    `WP` (protocol witness table) is a structural suffix, not a substitution, so
+    collecting those and asking the demangler is the instrument that cannot go
+    quietly blind."""
+    tables = [symbol for symbol in run("nm", str(binary)).split()
+              if symbol.startswith("_$s") and symbol.endswith("WP")]
+    if not tables:
+        return set()
+    demangled = run("xcrun", "swift-demangle", "--compact", stdin="\n".join(tables))
+    found: set[str] = set()
+    for line in demangled.splitlines():
+        match = re.match(r"protocol witness table for (\S+) : (\S+) in ", line)
+        if match and match.group(2).split(".")[-1] == protocol:
+            found.add(match.group(1).split(".")[-1])
+    return found
+
+
+def witness_requirements(binary: Path) -> dict[int, str]:
+    """Byte offset -> requirement witness, for AppleRewriteBridge's conformance
+    to `LocalCoachRewriteEngine`.
+
+    Slot 0 of a witness table is the protocol conformance descriptor and the
+    requirements follow it in declaration order. Walking stops at the first slot
+    that does not belong to this conformance, which is where the table ends."""
+    by_address, by_name = symbol_addresses(binary)
+    table = next((address for name, address in by_name.items()
+                  if "AppleRewriteBridgeC" in name and "LocalCoachD6EngineAAWP" in name), None)
+    if table is None:
+        return {}
+    fixups = rebase_targets(binary)
+    found: dict[int, str] = {}
+    for index in range(1, 32):
+        target = fixups.get(table + 8 * index)
+        if target is None:
+            break
+        witness = next((symbol for symbol in by_address.get(target, [])
+                        if "LocalCoachD6EngineA2aDP" in symbol), None)
+        if witness is None:
+            break
+        found[8 * index] = witness
+    return found
+
+
+# ── a very small symbolic interpreter over the arm64 text ───────────────────
+#
+# Enough of one to follow a value from a memory load to the branch that calls
+# it. Every instruction the interpreter does not model turns its destination
+# into a fresh unknown, so the analysis can lose a chain but can never invent
+# one — it fails closed.
+
+REGISTER = re.compile(r"^(?:[xw](?:[12]?\d|3[01])|sp|[xw]zr)$")
+Value = tuple
+
+
+def canonical(register: str) -> str:
+    if register in ("wzr", "xzr"):
+        return "zr"
+    if register.startswith("w"):
+        return "x" + register[1:]
+    return register
+
+
+class Frame:
+    """What each register and stack slot holds, symbolically."""
+
+    def __init__(self) -> None:
+        self.reg: dict[str, Value] = {}
+        self.stack: dict[int, Value] = {}
+        self.sp = 0
+        self.counter = 0
+
+    def fresh(self) -> Value:
+        self.counter += 1
+        return ("?", self.counter)
+
+    def get(self, register: str) -> Value:
+        name = canonical(register)
+        if name == "sp":
+            return ("sp", self.sp)
+        if name == "zr":
+            return ("zero",)
+        if name not in self.reg:
+            self.reg[name] = self.fresh()
+        return self.reg[name]
+
+    def set(self, register: str, value: Value) -> None:
+        name = canonical(register)
+        if name not in ("sp", "zr"):
+            self.reg[name] = value
+
+    def kill(self, register: str) -> None:
+        self.set(register, self.fresh())
+
+
+def load(base: Value, offset: int) -> Value:
+    return ("mem", base, offset)
+
+
+def memory_operand(text: str) -> tuple[str | None, int, str | None]:
+    """`[x0, #0x18]`, `[sp]`, `[sp, #-0x20]!`, `[x0], #16` -> base, offset, writeback."""
+    match = re.match(r"^\[(\w+)(?:,\s*#(-?0x[0-9a-f]+|-?\d+))?\](!)?$", text)
+    if match:
+        return match.group(1), int(match.group(2), 0) if match.group(2) else 0, \
+            ("pre" if match.group(3) else None)
+    match = re.match(r"^\[(\w+)\],\s*#(-?0x[0-9a-f]+|-?\d+)$", text)
+    if match:
+        return match.group(1), int(match.group(2), 0), "post"
+    return None, 0, None
+
+
+def instructions(body: list[str]):
+    for line in body:
+        text = re.sub(r"^[0-9a-f]{16}\t", "", line).split(";")[0].strip()
+        if not text:
+            continue
+        parts = re.split(r"[\t ]+", text, 1)
+        operands: list[str] = []
+        for operand in (o.strip() for o in parts[1].split(",")) if len(parts) > 1 else []:
+            # a comma split breaks `[x0, #8]` in half; put it back together
+            if operands and operands[-1].count("[") > operands[-1].count("]"):
+                operands[-1] += ", " + operand
+            else:
+                operands.append(operand)
+        yield parts[0], operands
+
+
+def derives_from(value: Value, root: Value, depth: int = 0) -> bool:
+    """Is `value` data-dependent on `root`?"""
+    if value == root:
+        return True
+    if depth > 8 or not isinstance(value, tuple):
+        return False
+    return any(derives_from(operand, root, depth + 1) for operand in value[1:]
+               if isinstance(operand, tuple))
+
+
+def prove_witness_dispatch(body: list[str], slot: int) -> str | None:
+    """Prove that this symbol calls the requirement at `slot` on an opaque
+    existential, and return the evidence.
+
+    The shape the Swift calling convention forces, and which no amount of ARC
+    outlining or inlining can remove, is:
+
+        ldp  xM, xW, [xE, #k]   ; the existential's type metadata and its
+                                ; protocol witness table, side by side
+        bl   __swift_project_boxed_opaque_existential_N(xE, xM)
+        ldr  xC, [xW, #slot]    ; THE requirement's entry in THAT witness table
+        …                       ; resolve the async function pointer
+        br   xF                 ; and call it
+
+    Both halves matter: the witness table has to come out of the very
+    existential that was projected, and the branch has to be data-dependent on
+    the slot that was loaded from it."""
+    frame = Frame()
+    projections: list[tuple[Value, Value]] = []
+    branches: list[tuple[str, Value]] = []
+
+    for mnemonic, operands in instructions(body):
+        if mnemonic in ("bl", "b") and operands:
+            if "project_boxed_opaque_existential" in operands[0]:
+                projections.append((frame.get("x0"), frame.get("x1")))
+            if mnemonic == "bl":
+                for index in range(19):          # x0-x18 are caller-saved
+                    frame.kill("x%d" % index)
+            continue
+
+        if mnemonic.rstrip("az") in ("blr", "br") and operands and REGISTER.match(operands[0]):
+            branches.append((mnemonic, frame.get(operands[0])))
+            continue
+
+        if mnemonic in ("ldr", "ldur", "ldrsw") and len(operands) == 2:
+            base, offset, writeback = memory_operand(operands[1])
+            if base is None:
+                frame.kill(operands[0])
+                continue
+            if canonical(base) == "sp":
+                value = frame.stack.get(frame.sp + (0 if writeback == "post" else offset),
+                                        frame.fresh())
+            else:
+                value = load(frame.get(base), offset)
+            frame.set(operands[0], ("sxtw", value) if mnemonic == "ldrsw" else value)
+            if writeback and canonical(base) == "sp":
+                frame.sp += offset
+            continue
+
+        if mnemonic == "ldp" and len(operands) == 3:
+            base, offset, writeback = memory_operand(operands[2])
+            width = 4 if operands[0].startswith("w") else 8
+            if base is None:
+                frame.kill(operands[0])
+                frame.kill(operands[1])
+                continue
+            for index, register in enumerate(operands[:2]):
+                if canonical(base) == "sp":
+                    value = frame.stack.get(frame.sp + offset + index * width, frame.fresh())
+                else:
+                    value = load(frame.get(base), offset + index * width)
+                frame.set(register, value)
+            if writeback == "pre" and canonical(base) == "sp":
+                frame.sp += offset
+            continue
+
+        if mnemonic in ("str", "stur", "stp") and len(operands) in (2, 3):
+            base, offset, writeback = memory_operand(operands[-1])
+            if base is None:
+                frame.stack.clear()
+                continue
+            if canonical(base) != "sp":
+                continue
+            if writeback == "pre":
+                frame.sp += offset
+                offset = 0
+            width = 4 if operands[0].startswith("w") else 8
+            for index, register in enumerate(operands[:-1]):
+                frame.stack[frame.sp + offset + index * width] = frame.get(register)
+            continue
+
+        if mnemonic == "mov" and len(operands) == 2:
+            if REGISTER.match(operands[1]):
+                frame.set(operands[0], frame.get(operands[1]))
+            else:
+                frame.kill(operands[0])
+            continue
+
+        if mnemonic in ("sxtw", "uxtw") and len(operands) == 2:
+            frame.set(operands[0], ("sxtw", frame.get(operands[1])))
+            continue
+
+        if mnemonic in ("add", "sub") and len(operands) == 3:
+            immediate = re.match(r"^#(-?0x[0-9a-f]+|-?\d+)$", operands[2])
+            if canonical(operands[0]) == canonical(operands[1]) == "sp":
+                if immediate:
+                    frame.sp += int(immediate.group(1), 0) * (1 if mnemonic == "add" else -1)
+                continue
+            if mnemonic == "add" and REGISTER.match(operands[1]) and REGISTER.match(operands[2]):
+                frame.set(operands[0], ("add", frame.get(operands[1]), frame.get(operands[2])))
+            else:
+                frame.kill(operands[0])
+            continue
+
+        if operands and REGISTER.match(operands[0]):
+            frame.kill(operands[0])
+            if mnemonic.startswith("st"):
+                frame.stack.clear()
+
+    for existential, metadata in projections:
+        # the witness table sits one word above the metadata in the box
+        if not (len(metadata) == 3 and metadata[0] == "mem" and metadata[1] == existential):
+            continue
+        entry = load(load(existential, metadata[2] + 8), slot)
+        for mnemonic, target in branches:
+            if derives_from(target, entry):
+                return (f"existential metadata +{metadata[2]:#x} / witness table "
+                        f"+{metadata[2] + 8:#x}, slot +{slot:#x}, called by `{mnemonic}`")
+    return None
+
+
 def main() -> None:
     if len(sys.argv) != 2:
         print(__doc__)
@@ -166,7 +475,7 @@ def main() -> None:
               f"NSExtensionPrincipalClass is KeyboardViewController (got {plist})")
 
     # 3-7. Call graph.
-    calls, _bodies = disassemble(binary)
+    calls, bodies = disassemble(binary)
 
     # Only the functions that survive optimisation are asserted by symbol.
     # `startCoachRoute` and `LocalCoachRoutePolicy.decide` are private and small,
@@ -183,24 +492,82 @@ def main() -> None:
     local_request = branches_from(calls, "ViewControllerC15startLocalCoach")
     check(any("LocalCoachSetRequest" in target for target in local_request),
           "startLocalCoach builds a LocalCoachSetRequest")
-    check(any("LocalCoachRewriteEngine_p" in target for target in local_request),
-          "startLocalCoach dispatches through a LocalCoachRewriteEngine existential")
 
+    # The engine call is `try await engine.rewriteSet(request)` on an
+    # `any LocalCoachRewriteEngine`, so it is register-indirect through the
+    # protocol witness table and carries NO name in the instruction stream.
+    #
+    # WHAT USED TO BE HERE, AND WHY IT WAS WRONG. This check looked for a `bl`
+    # out of `startLocalCoach` whose target contained `LocalCoachRewriteEngine_p`.
+    # It was wrong twice over:
+    #
+    #   * It could never have seen the dispatch. `rewriteSet` is not a `bl`
+    #     target in ANY build of this binary — witness dispatch is `blr`/`br`
+    #     through a register — so the check never proved the thing it named.
+    #   * What it actually matched was `…LocalCoachRewriteEngine_pWOb`, the
+    #     OUTLINED INIT-WITH-TAKE of the existential: an ARC helper. Whether
+    #     that helper is outlined or inlined is the optimiser's choice, and it
+    #     differs between two commits whose Swift source for this function is
+    #     byte-identical. 1dca05d outlines it, so the check went green; 7631f2d
+    #     inlines it and outlines the DESTROY instead, under the protocol-
+    #     agnostic name `__swift_destroy_boxed_opaque_existential_1`, so the
+    #     check went red on a candidate with 33 identical indirect calls and an
+    #     unchanged call graph. Build 114's lesson was that a check can be true
+    #     and worthless as evidence; this one was worthless in both directions,
+    #     and a gate that flips on the optimiser's mood is a gate that gets
+    #     waived.
+    #
+    # So prove the dispatch itself, by dataflow: the witness table is taken out
+    # of the same existential that gets projected, the `rewriteSet` slot is read
+    # from that table, and the branch target is data-dependent on what that slot
+    # held. None of those three steps is an ARC artifact, and none of them can be
+    # optimised away without removing the call.
+    requirements = witness_requirements(binary)
+    rewrite_slots = [offset for offset, witness in requirements.items()
+                     if "10rewriteSet" in witness]
+    other_slots = sorted(offset for offset in requirements if offset not in rewrite_slots)
+    # Non-vacuity, in front of the proof exactly as the F2 needles carry theirs:
+    # without a slot offset read out of THIS binary there is nothing to match on,
+    # and unless the table holds another requirement too, matching a slot would
+    # not discriminate between `rewriteSet` and anything else on the protocol.
+    check(len(rewrite_slots) == 1 and bool(other_slots),
+          f"the rewriteSet witness slot is derivable from this binary "
+          f"(rewriteSet at {[hex(o) for o in rewrite_slots] or 'none'}, "
+          f"{len(other_slots)} other requirement(s) at {[hex(o) for o in other_slots]})")
+
+    evidence = None
+    if len(rewrite_slots) == 1:
+        for symbol in symbols_matching(calls, "ViewControllerC15startLocalCoach"):
+            evidence = evidence or prove_witness_dispatch(bodies[symbol], rewrite_slots[0])
+    check(evidence is not None,
+          "startLocalCoach dispatches rewriteSet through a LocalCoachRewriteEngine "
+          f"existential's witness table ({evidence or 'NO SUCH DATAFLOW'})")
+
+    # Which type the dispatched-through existential actually IS. The default is
+    # produced in exactly one place, so this is the whole story for shipped code.
+    engines = witness_types(binary, "LocalCoachRewriteEngine")
     initialiser = branches_from(calls, "localCoachEngine") | branches_from(
         calls, "ViewControllerC16localCoachEngine")
     check(any("AppleRewriteBridge" in target for target in initialiser),
           "the controller's default localCoachEngine is AppleRewriteBridge")
 
-    # Only one type may witness the engine protocol, so the existential above
-    # can only be the bridge.
-    witnesses = {
-        re.match(r"_\$s12TonoKeyboard(\d+)([A-Za-z]+)C", symbol).group(2)
-        for symbol in calls
-        if "LocalCoachD6EngineA2aDP" in symbol
-        and re.match(r"_\$s12TonoKeyboard(\d+)([A-Za-z]+)C", symbol)
-    }
-    check(witnesses == {"AppleRewriteBridge"},
-          f"AppleRewriteBridge is the only LocalCoachRewriteEngine witness (found {witnesses or 'none'})")
+    # WHAT THIS USED TO CLAIM, AND WHY IT WAS FALSE. This asserted that
+    # AppleRewriteBridge is the ONLY `LocalCoachRewriteEngine` witness in the
+    # binary. It is not, and never was: `UnavailableLocalCoachEngine`, the null
+    # object, is compiled into the extension too and witnesses the same
+    # protocol. The check passed anyway, for two independent reasons — its
+    # needle was spelled with AppleRewriteBridge's substitutions (see
+    # `witness_types`), and its regex ended in `C`, so it could only ever count
+    # CLASS conformers and the null object is a struct. It was a check that was
+    # green because it could not see, which is precisely the Build 114 failure
+    # mode it was written to prevent.
+    #
+    # The truthful invariant is a closed world: these two conformers and no
+    # third. A new engine type appearing — the way a second, unreviewed
+    # implementation would — flips this, and so does the bridge disappearing.
+    check(engines == {"AppleRewriteBridge", "UnavailableLocalCoachEngine"},
+          f"the engine protocol is witnessed by exactly the shipped bridge and the "
+          f"declared null object (found {engines or 'none'})")
 
     probe = branches_from(calls, "OnDeviceAppleRewriteServiceC17probeAvailability")
     check(any("SystemLanguageModelC12availability" in target for target in probe),
