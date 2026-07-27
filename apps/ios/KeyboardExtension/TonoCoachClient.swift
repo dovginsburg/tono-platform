@@ -103,12 +103,25 @@ struct CoachAlternativeSequence: Equatable {
     /// Successfully displayed versions, oldest first. Only a delivered,
     /// accepted result appends here.
     private(set) var versions: [String]
+    /// Build 116 — which route actually produced each version, indexed
+    /// alongside `versions`.
+    ///
+    /// It exists because Build 116 makes a MIXED sequence possible for the
+    /// first time: version 1 can be written on this iPhone and version 2
+    /// fetched from Tono online. The card carries one provenance label, and a
+    /// single controller-level "current route" could only describe the most
+    /// recent delivery — so stepping back to the on-device version 1 would have
+    /// left an "Checked with Tono" badge sitting over text that never left the
+    /// device. Recording the route WITH the version makes the label a property
+    /// of what is on screen instead of a memory of what happened last.
+    private(set) var routes: [String?]
 
     init(axis: String, sourceDraft: String, host: HostSessionIdentity) {
         self.axis = axis
         self.sourceDraft = sourceDraft
         self.host = host
         self.versions = []
+        self.routes = []
     }
 
     /// True when `other` addresses the exact same source message, host session
@@ -180,17 +193,29 @@ struct CoachAlternativeSequence: Equatable {
     /// nothing — when the sequence is already full or the text duplicates the
     /// version already on screen, so a duplicate provider answer can neither
     /// consume a slot nor silently replace an identical card.
+    ///
+    /// - Parameter route: Build 116 — the route that actually delivered this
+    ///   version, as a `CoachDeliveredRoute` raw value. Optional so the pure
+    ///   text-math contracts can exercise the sequence without inventing a
+    ///   provenance; every production caller passes one, and the card shows no
+    ///   badge at all for a version whose route is unknown rather than guessing.
     @discardableResult
-    mutating func recordDisplayed(_ text: String) -> Bool {
+    mutating func recordDisplayed(_ text: String, route: String? = nil) -> Bool {
         guard canRequestAnother else { return false }
         let normalized = Self.normalized(text)
         guard !normalized.isEmpty else { return false }
         if versions.contains(where: { Self.normalized($0) == normalized }) { return false }
         versions.append(text)
+        routes.append(route)
         // A newly generated version is the one to show — the person asked for
         // it. The earlier ones stay reachable behind the back control.
         cursor = versions.count - 1
         return true
+    }
+
+    /// Build 116 — the route that produced the version currently on screen.
+    var currentRoute: String? {
+        routes.indices.contains(cursor) ? routes[cursor] : routes.last ?? nil
     }
 
     /// Whether `text` repeats a version already shown. The response-boundary

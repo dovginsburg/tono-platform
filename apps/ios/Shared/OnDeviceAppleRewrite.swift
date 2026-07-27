@@ -173,12 +173,82 @@ private struct GuidedRewrite {
 @available(iOS 26.0, macOS 26.0, visionOS 26.0, *)
 @Generable(description: "Three rewrites of the sender's own message, one per tone")
 private struct GuidedRewriteTrio {
-    @Guide(description: "The same message rewritten to sound warmer and more considerate. Message text only.")
+    @Guide(description: "The same message rewritten so it sounds warmer and more considerate. Message text only.")
     var warmer: String
-    @Guide(description: "The same message rewritten to be clearer and more direct. Message text only.")
+    @Guide(description: "The same message rewritten so it is clearer and more direct. Message text only.")
     var clearer: String
     @Guide(description: "The same message rewritten with light, good-natured humour. Message text only.")
     var funnier: String
+}
+
+// Build 116 — ONE tone, asked for on its own.
+//
+// This is the shape the live keyboard now uses for every generation: Stage 1
+// asks for the tone the person tapped and nothing else, and each Stage 2 tone
+// is its own later request. The trio and quartet below are kept because the
+// engine still honours a multi-tone request — the corpus runner and the
+// real-model bounds tests use it — but the keyboard no longer issues one.
+//
+// Why the change is worth a slower total: measured on the iOS 26.5 Simulator,
+// the three-tone generation returns everything at ~10 s, and Build 115 then
+// rendered the three cards in a fixed palette order. Tapping Funnier therefore
+// meant ~10 s of shimmer followed by hunting for the tapped tone in third
+// place. One tone alone is roughly a third of the text, so the tone that was
+// actually asked for lands first and the rest arrive behind it. Nothing is
+// generated concurrently — the actor's in-flight lock still admits exactly one
+// generation at a time, and the caller awaits each before starting the next.
+//
+// ONE TYPE PER TONE, and the reason is measured rather than stylistic.
+//
+// The first cut of this used a single `GuidedRewriteSingle` with a generic
+// `@Guide(description: "The rewritten message text only")` and put the tone in
+// the instructions alone. Run against the real model on the iOS 26.5 Simulator
+// with the draft "hey I really need that report today, you keep pushing it
+// back", that produced:
+//
+//   warmer  → "Hey, I really need that report today. Could you please let me
+//              know if there's anything I can do to help you get it done
+//              sooner?"                                            — a rewrite
+//   clearer → "Hey, I really need that report today. You keep pushing it back"
+//                                    — the draft, with punctuation added
+//
+// The Clearer echo normalises to the draft exactly, so `LocalCoachValidator`
+// dropped it as a no-op and the whole request failed `.noValidRewrite`. On the
+// live keyboard that is a Clearer tap producing nothing and falling through to
+// the connected route on a device that was asked to work offline.
+//
+// The trio does not have this problem, and the difference is where the tone
+// lives: in the trio each FIELD is described with its tone, so the schema
+// itself carries the instruction. `@Guide` takes a literal, so replicating that
+// for a single-field generation means one type per tone. Each description below
+// is character-for-character the one the trio uses for the same tone, so a tone
+// cannot come out differently depending on which stage produced it.
+@available(iOS 26.0, macOS 26.0, visionOS 26.0, *)
+@Generable(description: "One rewrite of the sender's own message")
+private struct GuidedWarmerRewrite {
+    @Guide(description: "The same message rewritten so it sounds warmer and more considerate. Message text only.")
+    var text: String
+}
+
+@available(iOS 26.0, macOS 26.0, visionOS 26.0, *)
+@Generable(description: "One rewrite of the sender's own message")
+private struct GuidedClearerRewrite {
+    @Guide(description: "The same message rewritten so it is clearer and more direct. Message text only.")
+    var text: String
+}
+
+@available(iOS 26.0, macOS 26.0, visionOS 26.0, *)
+@Generable(description: "One rewrite of the sender's own message")
+private struct GuidedFunnierRewrite {
+    @Guide(description: "The same message rewritten with light, good-natured humour. Message text only.")
+    var text: String
+}
+
+@available(iOS 26.0, macOS 26.0, visionOS 26.0, *)
+@Generable(description: "One rewrite of the sender's own message")
+private struct GuidedSaferRewrite {
+    @Guide(description: "The same message rewritten to lower the chance of causing offence, without changing what it asks for. Message text only.")
+    var text: String
 }
 
 // The Safer variant, reachable ONLY when the corpus-quality gate is explicitly
@@ -187,9 +257,9 @@ private struct GuidedRewriteTrio {
 @available(iOS 26.0, macOS 26.0, visionOS 26.0, *)
 @Generable(description: "Four rewrites of the sender's own message, one per tone")
 private struct GuidedRewriteQuartet {
-    @Guide(description: "The same message rewritten to sound warmer and more considerate. Message text only.")
+    @Guide(description: "The same message rewritten so it sounds warmer and more considerate. Message text only.")
     var warmer: String
-    @Guide(description: "The same message rewritten to be clearer and more direct. Message text only.")
+    @Guide(description: "The same message rewritten so it is clearer and more direct. Message text only.")
     var clearer: String
     @Guide(description: "The same message rewritten with light, good-natured humour. Message text only.")
     var funnier: String
@@ -442,14 +512,9 @@ public actor OnDeviceAppleRewriteService {
         // it the model reads the draft as a message TO it and answers the
         // message instead of rewriting it — observed directly while measuring
         // this path on the iOS 26.5 Simulator.
-        let session = LanguageModelSession(model: model, instructions: Instructions("""
-            You rewrite a message that the user is about to send to someone else.
-            The user is the sender. Keep the user as the speaker: never answer \
-            the message, never reply to it, and never change who is talking.
-            Preserve the user's meaning, intent, facts, names, links and language.
-            Do not add commentary, labels, quotation marks, markdown or new facts.
-            Return only the rewritten message for each tone.
-            """))
+        let session = LanguageModelSession(
+            model: model, instructions: Instructions(Self.instructions(for: request))
+        )
         let options = GenerationOptions(
             sampling: .greedy,
             maximumResponseTokens: LocalCoachRoutePolicy.maximumResponseTokens(
@@ -457,13 +522,41 @@ public actor OnDeviceAppleRewriteService {
                 draftCharacters: request.draft.count
             )
         )
-        let prompt = Prompt("Message to rewrite: \(request.draft)")
+        let prompt = Prompt(Self.promptText(for: request))
         let wantsSafer = request.axes.contains(.safer)
 
         var peak = OnDeviceMemoryProbe.residentBytes()
         do {
             var raw: [(axis: LocalCoachAxis, text: String)] = []
-            if wantsSafer {
+            if request.axes.count == 1, let only = request.axes.first {
+                // Build 116 — the staged path the keyboard uses. The schema is
+                // chosen by tone, so the tone is in the guided description
+                // exactly as it is for the corresponding field of the trio.
+                let text: String
+                switch only {
+                case .warmer:
+                    text = try await session.respond(
+                        to: prompt, generating: GuidedWarmerRewrite.self,
+                        includeSchemaInPrompt: true, options: options
+                    ).content.text
+                case .clearer:
+                    text = try await session.respond(
+                        to: prompt, generating: GuidedClearerRewrite.self,
+                        includeSchemaInPrompt: true, options: options
+                    ).content.text
+                case .funnier:
+                    text = try await session.respond(
+                        to: prompt, generating: GuidedFunnierRewrite.self,
+                        includeSchemaInPrompt: true, options: options
+                    ).content.text
+                case .safer:
+                    text = try await session.respond(
+                        to: prompt, generating: GuidedSaferRewrite.self,
+                        includeSchemaInPrompt: true, options: options
+                    ).content.text
+                }
+                raw = [(only, text)]
+            } else if wantsSafer {
                 let response = try await session.respond(
                     to: prompt, generating: GuidedRewriteQuartet.self,
                     includeSchemaInPrompt: true, options: options
@@ -494,7 +587,12 @@ public actor OnDeviceAppleRewriteService {
             guard let validated = LocalCoachValidator.validateSet(
                 requested,
                 draft: request.draft,
-                maximumCharacters: policy.maximumOutputCharacters
+                maximumCharacters: policy.maximumOutputCharacters,
+                // Build 116 — a "different wording" that is not different is
+                // not a version. Dropped here, so `Try another` on the
+                // on-device-only route fails honestly instead of re-showing
+                // what the person just turned down.
+                rejecting: request.rejectedVersions
             ) else { throw LocalCoachFailure(.noValidRewrite) }
 
             return LocalCoachSetResult(
@@ -552,6 +650,70 @@ public actor OnDeviceAppleRewriteService {
         #else
         throw LocalCoachFailure(.unsupportedOS)
         #endif
+    }
+
+    // MARK: - Build 116 · what the model is told
+    //
+    // Pure string builders, and `static` + `internal` so the exact words are
+    // readable in a unit test on any machine — including a machine where Apple
+    // Intelligence is unavailable and the generation itself cannot be run.
+    // The rules a test can therefore pin: the tone is named when one tone is
+    // asked for, the person's own draft never appears in the instructions, and
+    // a rejected wording travels in the prompt rather than in the developer
+    // instructions.
+
+    /// The developer instructions for one request. Contains NO user text.
+    static func instructions(for request: LocalCoachSetRequest) -> String {
+        var text = """
+            You rewrite a message that the user is about to send to someone else.
+            The user is the sender. Keep the user as the speaker: never answer \
+            the message, never reply to it, and never change who is talking.
+            Preserve the user's meaning, intent, facts, names, links and language.
+            Do not add commentary, labels, quotation marks, markdown or new facts.
+            """
+        if request.axes.count == 1, let only = request.axes.first {
+            // One tone, said here as well as in the guided field description.
+            text += "\nRewrite the message \(only.instructionClause)."
+            // Measured requirement, not decoration. Asked for Clearer alone on
+            // "hey I really need that report today, you keep pushing it back",
+            // iOS 26.5 returned the draft back with punctuation tidied — which
+            // normalises to the draft exactly, so `LocalCoachValidator` drops it
+            // as a no-op and the request fails. The trio does not hit this
+            // because writing three variants at once forces them apart. A
+            // single-tone generation has nothing pushing it away from the
+            // input, so the requirement the validator enforces has to be stated
+            // to the model rather than only checked afterwards.
+            text += """
+
+                Your rewrite must not repeat the message word for word. Change \
+                the wording — the sentence structure and the word choices — \
+                while keeping the meaning, the facts and the language the same. \
+                Rewrite it even if you think it already reads well.
+                """
+            text += "\nReturn only the rewritten message."
+        } else {
+            text += "\nReturn only the rewritten message for each tone."
+        }
+        if !request.rejectedVersions.isEmpty {
+            text += """
+
+                The prompt lists rewrites the user has already read and turned \
+                down. Your rewrite must differ from every one of them in \
+                sentence structure and word choice while keeping the same \
+                meaning and the same tone. Do not repeat them.
+                """
+        }
+        return text
+    }
+
+    /// The prompt for one request. Carries the user's own text — the draft, and
+    /// (for an explicit `Try another`) the wordings they have already declined.
+    static func promptText(for request: LocalCoachSetRequest) -> String {
+        var text = "Message to rewrite: \(request.draft)"
+        for (index, rejected) in request.rejectedVersions.enumerated() {
+            text += "\n\nAlready tried, do not repeat (\(index + 1)): \(rejected)"
+        }
+        return text
     }
 
     private func checkCancellation() throws {

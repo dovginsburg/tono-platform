@@ -575,6 +575,67 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     /// on in Settings and comes straight back is not told the stale answer.
     private var cachedLocalAvailability: LocalRewriteAvailability?
 
+    // MARK: Build 116 — Stage 2, the tones behind the one that was tapped
+    //
+    // Stage 1 asks the device for the SELECTED tone alone and renders it. Only
+    // once that card is on screen does Stage 2 begin, asking for the remaining
+    // tones one at a time and appending each as it lands. The selected card is
+    // never moved, rebuilt or replaced by any of this.
+
+    /// Identifies the delivered set the appended cards belong to. Taken fresh
+    /// at every Stage 1 delivery and cleared by every teardown, so a Stage 2
+    /// answer that arrives after the person moved on fails a plain identity
+    /// check rather than needing a rule of its own.
+    private var coachSetDeliveryID: UUID?
+
+    /// The in-flight Stage 2 work. ONE task for the whole tail, which is what
+    /// makes the generations sequential: it awaits each tone before asking for
+    /// the next, so two Foundation Models generations can never overlap.
+    private var coachSecondaryTask: Task<Void, Never>?
+
+    /// Bounds Stage 2 in time. It has no visible surface of its own — the
+    /// person already has their answer — so nothing else would ever end it if
+    /// the model stopped answering.
+    private var coachSecondaryDeadline: DispatchWorkItem?
+
+    /// The tones Stage 2 will ask for, in the plan's order.
+    private var coachSecondaryPlan: [LocalCoachAxis] = []
+
+    /// The secondary cards actually delivered for the set on screen. Retained
+    /// so a version step can put them back: stepping back to the on-device
+    /// version 1 restores exactly the set the person was looking at rather than
+    /// stranding them on a lone card.
+    private var coachSecondaryOptions: [LocalCoachOption] = []
+
+    /// The request that has already been handed to the connected route.
+    ///
+    /// The contract is "hand off exactly once". Two paths can reach
+    /// `startConnectedCoach` for one request — the routing decision and a
+    /// recoverable on-device failure — and they are mutually exclusive today.
+    /// This makes that a structural fact instead of an argument, so no future
+    /// arrangement of those branches can bill the person for two provider calls.
+    private var coachHandoffRequestID: UUID?
+
+    /// Build 116 — privacy-safe stage clocks for the request on screen, in
+    /// milliseconds from the tap. Durations only; no axis text, no draft, no
+    /// identifiers. Read by the acceptance tests so "the skeleton is up before
+    /// any model work" and "Stage 1 rendered before Stage 2 started" are
+    /// measured against the real controller rather than asserted about it.
+    private(set) var coachStageClockMilliseconds: [String: Int] = [:]
+
+    /// Clock keys. Named constants so the log line and the test read the same
+    /// spelling.
+    enum CoachStageClock {
+        static let skeleton = "skeleton"
+        static let selectedResult = "selected_result"
+        static let secondaryStarted = "secondary_started"
+        static let secondaryResult = "secondary_result"
+    }
+
+    private func recordStageClock(_ key: String, since start: DispatchTime) {
+        coachStageClockMilliseconds[key] = Self.coachElapsedMs(since: start)
+    }
+
     enum CoachDeliveredRoute: String {
         case onDevice
         case connected
@@ -585,6 +646,21 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
     /// Test seam: whether an on-device request is in flight.
     var coachLocalRequestInFlightForTesting: Bool { coachLocalTask != nil }
+
+    /// Build 116 test seams. Read-only; production never reads them.
+    ///
+    /// The secondary tones DELIVERED so far, in the order they were appended —
+    /// so "the selected card stays first while the rest arrive behind it" is
+    /// measured rather than inferred from the view tree alone.
+    var coachSecondaryAxesForTesting: [String] { coachSecondaryOptions.map(\.axis.rawValue) }
+    /// Whether Stage 2 is still working.
+    var coachSecondaryInFlightForTesting: Bool { coachSecondaryTask != nil }
+    /// The identity of the delivered set on screen; nil once it is torn down.
+    var coachSetDeliveryIDForTesting: UUID? { coachSetDeliveryID }
+    /// The request already handed to the connected route, if any.
+    var coachHandoffRequestIDForTesting: UUID? { coachHandoffRequestID }
+    /// The route recorded against the version currently displayed.
+    var coachDisplayedVersionRouteForTesting: String? { coachSequence?.currentRoute }
 
     /// Test seam: the network client is built lazily and ONLY on the branch
     /// that needs it, so "the successful offline route made zero network calls"
@@ -1062,12 +1138,22 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         // teardown reaches nothing either way.
         coachLocalTask?.cancel()
         coachLocalTask = nil
+        // Build 116: Stage 2 is work too, and it is the longest-lived kind —
+        // it outlives the request that started it by design, because it runs
+        // BEHIND a delivered answer. Every teardown ends it here, so a tone
+        // still being written when the person walks away cannot keep the model
+        // busy or arrive on somebody else's card.
+        cancelSecondaryLocalCoach()
+        coachSecondaryPlan = []
+        coachSecondaryOptions = []
         coachPendingLocalRefusal = nil
         coachSubstitutedRequestID = nil
+        coachHandoffRequestID = nil
         coachDeliveredRoute = nil
         coachLocalNote = nil
         coachRequestID = nil
         coachLoadingRequestID = nil
+        coachStageClockMilliseconds = [:]
         // Disarm the visible deadline and drop the clock anchor: a cancelled
         // or superseded request must never leave a watchdog armed against a
         // stale requestID, and must not leak its tap anchor into the next one.
@@ -3263,6 +3349,11 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         coachErrorContainer = nil
         coachErrorLabel = nil
         coachLoadingRequestID = nil
+        // Build 116: the appended secondary cards went with the surface, so the
+        // set they belonged to no longer exists. Dropping the identity here —
+        // in the one place every surface change goes through — is what makes a
+        // late Stage 2 answer unable to attach itself to whatever replaced it.
+        coachSetDeliveryID = nil
     }
 
     /// Atomically install `panel` as the one and only coach surface: every
@@ -3321,6 +3412,11 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         // before any network work, so this proves the result-shaped surface
         // lands within ~100ms of the tap. Privacy-safe: axis + duration only.
         NSLog("TONO_KB BUILD107 clock: phase=loading axis=\(axis) dt_ms=\(Self.coachElapsedMs(since: tapTime))")
+        // Build 116 — recorded, not merely logged, so an acceptance test can
+        // measure that the skeleton was up before any model or network work
+        // rather than reading a log line and believing it.
+        coachStageClockMilliseconds = [:]
+        recordStageClock(CoachStageClock.skeleton, since: tapTime)
         NSLog("TONO_KB BUILD95 coach: begin selected variant axis=\(axis) len=\(draft.count)")
 
         // Build 115 — THE repair. The route is chosen here, before any network
@@ -3402,22 +3498,81 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
                 requestID: requestID, draft: draft, axis: axis,
                 tapTime: tapTime, localRefusal: reason
             )
+        case .terminal(let reason):
+            // Build 116 — the person asked that Tono rewrite only on this
+            // iPhone, and this iPhone cannot serve this request. There is no
+            // second route to try: ending here IS the promise being kept.
+            // Nothing is sent, the draft is untouched, and one sentence says
+            // both what went wrong and why nothing was sent.
+            endCoachRequestWithoutNetwork(requestID: requestID, axis: axis, reason: reason)
         }
     }
 
-    /// Run the on-device model. Touches no network type, by construction.
+    /// Finish the active request without any network work at all, showing one
+    /// truthful terminal sentence.
+    ///
+    /// Deliberately shaped like `handleCoachDeadlineFired`'s tail rather than
+    /// like a new lifecycle: the same fields are cleared, in the same order, so
+    /// there is no state a terminal on-device-only refusal can leave behind
+    /// that a timeout would not.
+    private func endCoachRequestWithoutNetwork(
+        requestID: UUID, axis: String, reason: LocalCoachUnavailableReason
+    ) {
+        guard coachRequestID == requestID else { return }
+        NSLog(
+            "TONO_KB BUILD116 coach: on-device-only terminal axis=\(axis) reason=\(reason.rawValue)"
+        )
+        logOnDeviceRoute(
+            axis: axis,
+            route: "onDeviceOnlyTerminal",
+            reason: reason.rawValue,
+            availabilityReason: cachedLocalAvailability?.rawValue,
+            bytesIn: nil, bytesOut: nil, completionMs: nil
+        )
+        coachLocalTask?.cancel()
+        coachLocalTask = nil
+        cancelSecondaryLocalCoach()
+        coachDeadline?.cancel()
+        coachDeadline = nil
+        coachRequestID = nil
+        coachBusy = false
+        coachWaitingForConnectivity = false
+        coachButton?.isEnabled = true
+        coachPendingLocalRefusal = nil
+        coachClockTapTime = nil
+        coachDeliveredRoute = nil
+        coachSequence = nil
+        presentCoachFailureSurface(
+            detail: LocalCoachCopy.onDeviceOnlySentence(for: reason),
+            replacingLoadingFor: requestID
+        )
+    }
+
+    /// Build 116 — Stage 1. Ask the device for the SELECTED tone, alone.
+    ///
+    /// Touches no network type, by construction. The rest of the plan is parked
+    /// in `coachSecondaryPlan` and does not become work until this answer is on
+    /// screen, which is the whole of "the selected tone arrives first": there is
+    /// no ordering rule to get wrong downstream, because nothing else has been
+    /// asked for yet.
     private func startLocalCoach(
         requestID: UUID, draft: String, axis: String,
         tapTime: DispatchTime, plan: LocalCoachPlan
     ) {
-        // Privacy: tone count and a character count. Never the message.
+        // Privacy: tone names from a closed vocabulary and a character count.
+        // Never the message.
         NSLog(
-            "TONO_KB BUILD115 coach: on-device axis=\(axis) tones=\(plan.axes.count) len=\(draft.count)"
+            "TONO_KB BUILD116 coach: on-device stage1 axis=\(axis) primary=\(plan.primaryAxis.rawValue) "
+                + "secondary=\(plan.secondaryAxes.count) len=\(draft.count)"
         )
         coachLocalNote = plan.substitutionNote
         coachPendingLocalRefusal = nil
+        coachSecondaryPlan = plan.secondaryAxes
+        coachSecondaryOptions = []
         let engine = localCoachEngine
-        let request = LocalCoachSetRequest(draft: draft, axes: plan.axes, locale: Locale.current)
+        let request = LocalCoachSetRequest(
+            draft: draft, axes: [plan.primaryAxis], locale: Locale.current
+        )
         coachLocalTask = Task { [weak self] in
             let outcome: Result<LocalCoachSetResult, LocalCoachFailure>
             do {
@@ -3454,6 +3609,15 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         tapTime: DispatchTime, localRefusal: LocalCoachUnavailableReason?
     ) {
         guard coachRequestID == requestID else { return }
+        // Build 116 — hand off EXACTLY once. Two paths lead here for a single
+        // request (the routing decision, and a recoverable on-device failure)
+        // and today they are mutually exclusive; this makes that structural, so
+        // no future arrangement of those branches can bill one tap twice.
+        guard coachHandoffRequestID != requestID else {
+            NSLog("TONO_KB BUILD116 coach: refused a second hand-off for one request axis=\(axis)")
+            return
+        }
+        coachHandoffRequestID = requestID
         coachPendingLocalRefusal = localRefusal
         if let localRefusal {
             NSLog("TONO_KB BUILD115 coach: connected axis=\(axis) local_declined=\(localRefusal.rawValue)")
@@ -3763,7 +3927,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
                    sourceDraft: target.draft,
                    host: currentHostSession
                ) {
-                sequence.recordDisplayed(response.text)
+                sequence.recordDisplayed(
+                    response.text, route: CoachDeliveredRoute.connected.rawValue
+                )
                 coachSequence = sequence
             }
             let rewrite = TonoCoachClient.CoachRewrite(
@@ -3843,22 +4009,58 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
 
         switch outcome {
         case .success(let result):
+            // Stage 1 asked for one tone, so one validated option is what comes
+            // back. An empty set cannot reach here — the engine throws
+            // `.noValidRewrite` when nothing survives validation — but reading
+            // it as an optional means a future engine that returns an empty
+            // success degrades into the ordinary recoverable path rather than
+            // rendering a card with no text in it.
+            guard let selected = result.options.first else {
+                startConnectedCoach(
+                    requestID: requestID, draft: draft, axis: axis,
+                    tapTime: tapTime, localRefusal: .noValidRewrite
+                )
+                return
+            }
             coachDeadline?.cancel()
             coachDeadline = nil
             coachRequestID = nil
             coachBusy = false
             coachWaitingForConnectivity = false
             coachButton?.isEnabled = true
-            // A local set is its own alternative set: three tones arrive at
-            // once, so there is no version sequence to step through and the
-            // card must not offer one.
-            coachSequence = nil
             coachDeliveredRoute = .onDevice
+            // Build 116 — the selected tone is version 1 of its own sequence,
+            // on this route exactly as on the connected one.
+            //
+            // Build 115 set `coachSequence = nil` for every local delivery,
+            // because a local delivery WAS the whole set: three tones arrived
+            // together, so there was no second version to ask for and offering
+            // `Try another` would have been offering a control that could not
+            // act. Staging removes that reason. The card now holds one tone —
+            // the tone that was asked for — and "give me a different wording of
+            // this one" is exactly as meaningful here as it is online.
+            //
+            // The sequence is bound to the tone ON THE CARD, which is the tone
+            // that was tapped in every case where it could be served. In the two
+            // substitution cases the card is a stand-in and says so, and binding
+            // to the tapped tone instead would let `Try another` return a Safer
+            // rewrite under a Warmer label.
+            var sequence = CoachAlternativeSequence(
+                axis: selected.axis.rawValue,
+                sourceDraft: target.draft,
+                host: currentHostSession
+            )
+            sequence.recordDisplayed(
+                selected.text, route: CoachDeliveredRoute.onDevice.rawValue
+            )
+            coachSequence = sequence
+            coachAlternativeRequestID = nil
             // Privacy: counts and durations. `bytesIn`/`bytesOut` are sizes,
             // not content, and nothing here writes the draft anywhere.
             NSLog(
-                "TONO_KB BUILD115 clock: phase=on_device_render axis=\(axis) options=\(result.options.count) model_ms=\(Int(result.metrics.completionMilliseconds)) dt_ms=\(Self.coachElapsedMs(since: tapTime))"
+                "TONO_KB BUILD116 clock: phase=selected_result axis=\(axis) tone=\(selected.axis.rawValue) model_ms=\(Int(result.metrics.completionMilliseconds)) dt_ms=\(Self.coachElapsedMs(since: tapTime))"
             )
+            recordStageClock(CoachStageClock.selectedResult, since: tapTime)
             // Build 115 repair — the breadcrumb is LOCAL, and that is the whole
             // point. See `logOnDeviceRoute` for why nothing here may be sent.
             logOnDeviceRoute(
@@ -3876,17 +4078,26 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
                     perception: "",
                     subtext: "",
                     reason: nil,
-                    suggestions: result.options.map {
+                    suggestions: [
                         TonoCoachClient.CoachRewrite(
-                            axis: $0.axis.rawValue, text: $0.text,
+                            axis: selected.axis.rawValue, text: selected.text,
                             rationale: nil, riskAfter: nil
                         )
-                    },
+                    ],
                     flags: []
                 ),
                 replacingLoadingFor: requestID
             )
             coachClockTapTime = nil
+            // AFTER the render, never before: `presentCoachResults` tears down
+            // every prior surface, which clears this identity, so taking it
+            // here is what ties the appended cards to the surface they will be
+            // appended to.
+            let deliveryID = UUID()
+            coachSetDeliveryID = deliveryID
+            startSecondaryLocalCoach(
+                deliveryID: deliveryID, draft: draft, tapTime: tapTime
+            )
 
         case .failure(let declined):
             let reason = declined.reason
@@ -3942,6 +4153,194 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
                 )
             }
         }
+    }
+
+    // MARK: - Build 116 · Stage 2 · the tones behind the selected one
+
+    /// Begin Stage 2 for the set just delivered.
+    ///
+    /// Strictly after Stage 1 has rendered, and strictly one tone at a time.
+    /// The single `Task` with an `await` per tone is what makes that true
+    /// rather than intended: there is no second task to overlap with, so two
+    /// Foundation Models generations cannot be in flight together. (The engine
+    /// would refuse the second with `.busy` anyway — but a design that relies
+    /// on the callee refusing is a design that produces a visible failure the
+    /// first time the callee changes.)
+    ///
+    /// A warmed session is deliberately NOT reused between tones. `LanguageModelSession`
+    /// carries a transcript, so reusing one would feed each tone the previous
+    /// tone's answer, and nothing here has measured what that does to the
+    /// result. Serializing fresh sessions is the cheaper claim to keep true.
+    private func startSecondaryLocalCoach(
+        deliveryID: UUID, draft: String, tapTime: DispatchTime
+    ) {
+        let axes = coachSecondaryPlan
+        coachSecondaryPlan = []
+        guard !axes.isEmpty else { return }
+        NSLog(
+            "TONO_KB BUILD116 clock: phase=secondary_started tones=\(axes.count) dt_ms=\(Self.coachElapsedMs(since: tapTime))"
+        )
+        recordStageClock(CoachStageClock.secondaryStarted, since: tapTime)
+        let engine = localCoachEngine
+        let locale = Locale.current
+        // Bounded in time. Stage 2 has no surface of its own to time out, so
+        // without this a model that stopped answering would hold a generation
+        // open for the life of the keyboard presentation.
+        let watchdog = DispatchWorkItem { [weak self] in
+            guard let self, self.coachSetDeliveryID == deliveryID else { return }
+            NSLog("TONO_KB BUILD116 coach: stage2 deadline — remaining tones abandoned")
+            self.cancelSecondaryLocalCoach()
+        }
+        coachSecondaryDeadline = watchdog
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Const.coachLocalVisibleDeadline * Double(axes.count),
+            execute: watchdog
+        )
+        coachSecondaryTask = Task { [weak self] in
+            for axis in axes {
+                if Task.isCancelled { break }
+                let outcome: Result<LocalCoachSetResult, LocalCoachFailure>
+                do {
+                    outcome = .success(try await engine.rewriteSet(
+                        LocalCoachSetRequest(draft: draft, axes: [axis], locale: locale)
+                    ))
+                } catch let declined as LocalCoachFailure {
+                    outcome = .failure(declined)
+                } catch {
+                    outcome = .failure(LocalCoachFailure(.generationFailed))
+                }
+                if Task.isCancelled { break }
+                DispatchQueue.main.async { [weak self] in
+                    self?.appendSecondaryLocalCoach(
+                        deliveryID: deliveryID, axis: axis,
+                        outcome: outcome, tapTime: tapTime
+                    )
+                }
+            }
+            DispatchQueue.main.async { [weak self] in
+                self?.finishSecondaryLocalCoach(deliveryID: deliveryID)
+            }
+        }
+    }
+
+    /// Deliver one Stage 2 tone.
+    ///
+    /// Fail-closed on the same shape every other completion uses: the set it
+    /// belongs to must still be the set on screen, and the draft must still be
+    /// the one it was written for. A stale answer returns without touching
+    /// anything — it cannot append to a newer set, a version step, an error
+    /// surface, or a keyboard the person went back to.
+    ///
+    /// A Stage 2 FAILURE is silent and terminal for that tone. It must not hand
+    /// over to the connected route: the person already has the answer they
+    /// asked for, and quietly spending a provider call to fill in an extra they
+    /// never requested is exactly the duplicate work the contract forbids.
+    private func appendSecondaryLocalCoach(
+        deliveryID: UUID,
+        axis: LocalCoachAxis,
+        outcome: Result<LocalCoachSetResult, LocalCoachFailure>,
+        tapTime: DispatchTime
+    ) {
+        guard coachSetDeliveryID == deliveryID else { return }
+        guard let target = coachRewriteTarget,
+              target.isCurrent(
+                liveBefore: documentProxy.documentContextBeforeInput ?? "",
+                liveAfter: documentProxy.documentContextAfterInput ?? "",
+                host: currentHostSession
+              ) else {
+            // The draft moved under the set. Nothing further belongs on this
+            // screen, so the remaining tones are abandoned rather than queued
+            // up behind a card the person can no longer use.
+            cancelSecondaryLocalCoach()
+            return
+        }
+        switch outcome {
+        case .success(let result):
+            guard let option = result.options.first(where: { $0.axis == axis }) else { return }
+            // Two tones that produced the same sentence are one choice. The
+            // engine already deduplicates WITHIN a request; staging means each
+            // tone is its own request, so the comparison has to happen here as
+            // well — against the selected card and every secondary already
+            // appended.
+            let onScreen = [coachSequence?.currentVersion].compactMap { $0 }
+                + coachSecondaryOptions.map(\.text)
+            let normalized = LocalCoachValidator.normalizedForNoOp(option.text)
+            guard !onScreen.contains(where: {
+                LocalCoachValidator.normalizedForNoOp($0) == normalized
+            }) else {
+                NSLog("TONO_KB BUILD116 coach: stage2 duplicate dropped tone=\(axis.rawValue)")
+                return
+            }
+            coachSecondaryOptions.append(option)
+            appendSecondaryRewriteCard(option, index: coachSecondaryOptions.count)
+            NSLog(
+                "TONO_KB BUILD116 clock: phase=secondary_result tone=\(axis.rawValue) "
+                    + "model_ms=\(Int(result.metrics.completionMilliseconds)) "
+                    + "dt_ms=\(Self.coachElapsedMs(since: tapTime))"
+            )
+            recordStageClock(
+                "\(CoachStageClock.secondaryResult).\(axis.rawValue)", since: tapTime
+            )
+            logOnDeviceRoute(
+                axis: axis.rawValue,
+                route: "onDeviceSecondary",
+                reason: "success",
+                availabilityReason: result.metrics.availabilityReason,
+                bytesIn: result.metrics.bytesIn,
+                bytesOut: result.metrics.bytesOut,
+                completionMs: result.metrics.completionMilliseconds
+            )
+
+        case .failure(let declined):
+            // Silent by design. The selected answer is already on screen and
+            // unaffected; an extra tone that could not be written is not a
+            // failure of anything the person asked for, and putting an error
+            // over their result would be.
+            NSLog("TONO_KB BUILD116 coach: stage2 tone=\(axis.rawValue) declined=\(declined.reason.rawValue)")
+            logOnDeviceRoute(
+                axis: axis.rawValue,
+                route: "onDeviceSecondaryDeclined",
+                reason: declined.reason.rawValue,
+                availabilityReason: cachedLocalAvailability?.rawValue,
+                bytesIn: nil, bytesOut: nil, completionMs: nil
+            )
+        }
+    }
+
+    private func finishSecondaryLocalCoach(deliveryID: UUID) {
+        guard coachSetDeliveryID == deliveryID else { return }
+        coachSecondaryTask = nil
+        coachSecondaryDeadline?.cancel()
+        coachSecondaryDeadline = nil
+    }
+
+    /// End Stage 2 now. Idempotent, and safe to call from any teardown.
+    private func cancelSecondaryLocalCoach() {
+        coachSecondaryTask?.cancel()
+        coachSecondaryTask = nil
+        coachSecondaryDeadline?.cancel()
+        coachSecondaryDeadline = nil
+        coachSecondaryPlan = []
+    }
+
+    /// Append one secondary card BELOW the selected one.
+    ///
+    /// Appending to the live stack rather than re-rendering the panel is the
+    /// contract, not an optimisation: a re-render would rebuild the selected
+    /// card, drop the `Try another` control the person may be reaching for, and
+    /// reset the scroll position under their thumb. The card built here is a
+    /// SET card — Use rewrite and Dismiss — because a secondary tone is not a
+    /// version of the selected one and must not offer to iterate it.
+    private func appendSecondaryRewriteCard(_ option: LocalCoachOption, index: Int) {
+        guard let stack = coachResultsStack else { return }
+        stack.addArrangedSubview(makeRewriteChip(
+            suggestion: TonoCoachClient.CoachRewrite(
+                axis: option.axis.rawValue, text: option.text,
+                rationale: nil, riskAfter: nil
+            ),
+            index: index,
+            offersSequence: false
+        ))
     }
 
     /// The on-device route's ONLY record of itself: a local log line.
@@ -4081,6 +4480,18 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         presentCoachFailureSurface(detail: LocalCoachCopy.sentence(for: reason))
     }
 
+    /// Build 116 — the request-owned form of the one failure surface, so a
+    /// terminal on-device-only refusal replaces only the loading surface it
+    /// owns. Same gate as every other completion.
+    @discardableResult
+    func presentCoachFailureSurface(
+        detail message: String, replacingLoadingFor requestID: UUID
+    ) -> Bool {
+        guard coachLoadingRequestID == requestID else { return false }
+        presentCoachFailureSurface(detail: message)
+        return true
+    }
+
     // Internal so the XCTest target can exercise the real UIKit results state.
     // This is not API surface outside the keyboard module.
     func presentCoachResults(_ response: TonoCoachClient.CoachResponse) {
@@ -4122,10 +4533,26 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         route.textColor = .secondaryLabel
         route.numberOfLines = 1
         route.translatesAutoresizingMaskIntoConstraints = false
-        switch coachDeliveredRoute {
+        // Build 116 — the route of the VERSION on screen, not of the most
+        // recent delivery.
+        //
+        // A sequence can now be mixed: version 1 written on this iPhone,
+        // version 2 fetched from Tono online. `coachDeliveredRoute` remembers
+        // the last thing that happened, so stepping back to version 1 would
+        // have left "Checked with Tono" over text that never left the device.
+        // Reading the route recorded WITH the displayed version makes the badge
+        // a fact about what is being looked at. The fallback keeps every
+        // pre-existing caller — which records no per-version route — behaving
+        // exactly as it did.
+        let displayedRoute = coachSequence?.currentRoute
+            .flatMap(CoachDeliveredRoute.init(rawValue:)) ?? coachDeliveredRoute
+        switch displayedRoute {
         case .onDevice:
             route.text = LocalCoachCopy.onDeviceRouteLabel
-            route.accessibilityLabel = "Written on this iPhone"
+            // Build 116 — platform-neutral, for the same reason the visible
+            // label is: Tono runs on iPad, and a VoiceOver user is no less
+            // entitled to a true sentence than a sighted one.
+            route.accessibilityLabel = "Written on this device"
         case .connected:
             route.text = LocalCoachCopy.cloudRouteLabel
             route.accessibilityLabel = "Checked with Tono"
@@ -4166,12 +4593,24 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         stack.accessibilityIdentifier = Const.idRewrites
         scroll.addSubview(stack)
 
-        let suggestionsByAxis = Dictionary(
-            response.suggestions.map { ($0.axis.lowercased(), $0) },
-            uniquingKeysWith: { first, _ in first }
-        )
-        let shown = TonoCoachPalette.orderedAxes.compactMap {
-            suggestionsByAxis[$0.rawValue]
+        // Build 116 — DELIVERY order, not palette order.
+        //
+        // Build 115 sorted the cards into `TonoCoachPalette.orderedAxes`, which
+        // is fine for a set that arrives all at once and wrong for a set whose
+        // first member is the answer: tapping Funnier put Warmer and Clearer
+        // above the tone that was actually asked for. The caller now decides
+        // the order, and the caller always puts the selected tone first, so the
+        // rule is "show them as they were delivered" and there is no second
+        // ordering that could disagree with the first.
+        //
+        // What is kept from the old form: unknown axes are still dropped (they
+        // have no label or accent to draw), and a repeated axis still renders
+        // once.
+        var seenAxes = Set<String>()
+        let shown = response.suggestions.filter { suggestion in
+            let key = suggestion.axis.lowercased()
+            guard TonoCoachPalette.axis(key) != nil else { return false }
+            return seenAxes.insert(key).inserted
         }
         // Build 115 — the truthful substitution note, above the cards it
         // qualifies. Present only when the tapped tone is genuinely absent from
@@ -4223,11 +4662,18 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             // non-nil sequence before rendering (`completeCoach`,
             // `completeAlternativeCoach`, both steppers), so the connected path
             // is unchanged by construction rather than by coincidence.
+            //
+            // Build 116 narrows it one step further: the sequence belongs to
+            // the SELECTED card, so only the first card may offer it. Later
+            // cards are secondary tones — a different tone is not a different
+            // wording of this one — and they now take the set-card path, which
+            // never builds a cue, a stepper or a `Try another` at all rather
+            // than building them and hiding them.
             let offersSequence = coachSequence != nil
             for (idx, s) in shown.enumerated() {
-                stack.addArrangedSubview(
-                    makeRewriteChip(suggestion: s, index: idx, offersSequence: offersSequence)
-                )
+                stack.addArrangedSubview(makeRewriteChip(
+                    suggestion: s, index: idx, offersSequence: offersSequence && idx == 0
+                ))
             }
         }
 
@@ -4713,10 +5159,35 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
                     TonoCoachClient.CoachRewrite(
                         axis: sequence.axis, text: text, rationale: nil, riskAfter: nil
                     )
-                ],
+                ] + secondaryCardsForDisplayedVersion(),
                 flags: []
             )
         )
+    }
+
+    /// Build 116 — the secondary tones that belong beside the version now on
+    /// screen.
+    ///
+    /// They belong beside the on-device version 1 and nowhere else, for one
+    /// reason: the card carries a SINGLE provenance badge. The secondaries were
+    /// written on this iPhone, so showing them under a "Checked with Tono"
+    /// badge — which is what an online version 2 must display — would make the
+    /// badge false for two of the three cards on screen.
+    ///
+    /// So asking for a different wording hides them and stepping back brings
+    /// them straight back. Nothing is regenerated and nothing is discarded:
+    /// `coachSecondaryOptions` still holds the exact text, which is what makes
+    /// "preserve the secondary choices" true rather than "re-derive them".
+    private func secondaryCardsForDisplayedVersion() -> [TonoCoachClient.CoachRewrite] {
+        guard let sequence = coachSequence,
+              sequence.displayedVersion == 1,
+              sequence.currentRoute == CoachDeliveredRoute.onDevice.rawValue
+        else { return [] }
+        return coachSecondaryOptions.map {
+            TonoCoachClient.CoachRewrite(
+                axis: $0.axis.rawValue, text: $0.text, rationale: nil, riskAfter: nil
+            )
+        }
     }
 
     /// Step forward to an already-generated version.
@@ -4745,7 +5216,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
                     TonoCoachClient.CoachRewrite(
                         axis: sequence.axis, text: text, rationale: nil, riskAfter: nil
                     )
-                ],
+                ] + secondaryCardsForDisplayedVersion(),
                 flags: []
             )
         )
@@ -4792,6 +5263,12 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             return
         }
 
+        // Build 116 — Stage 2 is superseded by this tap. The tones still being
+        // written belong beside version 1; an alternative replaces version 1,
+        // so a tone that landed afterwards would attach itself to a card it was
+        // never generated for.
+        cancelSecondaryLocalCoach()
+
         let requestID = UUID()
         coachAlternativeRequestID = requestID
         coachBusy = true
@@ -4801,6 +5278,21 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         let tapTime = DispatchTime.now()
         coachClockTapTime = tapTime
         let axis = sequence.axis
+
+        // Build 116 — the person's explicit on-device-only choice binds here
+        // too, and this is the branch that proves it.
+        //
+        // `Try another` is the ONE control in this keyboard that reaches the
+        // network on a route that otherwise never does. Somebody who asked that
+        // Tono rewrite only on this iPhone must not have their draft posted
+        // because they tapped a button labelled "Try another" — so the request
+        // is asked of the device instead, with the wording they just turned
+        // down carried in the prompt so the model has something to differ from.
+        if LocalRewritePreferenceStore().load().prohibitsNetwork {
+            requestLocalAlternative(requestID: requestID, sequence: sequence, target: target)
+            return
+        }
+
         let customPrompt = axis == "custom" ? coachVariantSettings.customInstruction : nil
         NSLog(
             "TONO_KB BUILD114 coach: try-another axis=\(axis) version=\(sequence.displayedVersion + 1) of \(sequence.versionLimit)"
@@ -4829,6 +5321,177 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         // consumed only when one is actually delivered and displayed, in
         // `completeCoachAlternative` — so a failed, timed-out, cancelled or
         // superseded request costs the person nothing.
+    }
+
+    /// Build 116 — one `Try another`, answered by the device, for a person who
+    /// has ruled the connected route out.
+    ///
+    /// Everything the connected alternative guarantees is guaranteed here, and
+    /// for the same reasons: the current card stays on screen and readable, no
+    /// loading surface is installed, exactly one generation is issued, and a
+    /// failure — including the failure where the device simply writes the same
+    /// sentence again — restores the card and consumes no allowance.
+    ///
+    /// It is honest about its own odds. Greedy sampling on an unchanged prompt
+    /// is deterministic, so the ONLY thing that can make this differ from
+    /// version 1 is the prompt itself: the rejected wording travels with it and
+    /// the instructions ask for a materially different one. When the model
+    /// ignores that, `LocalCoachValidator` drops the repeat and the person is
+    /// told plainly that this iPhone writes this one the same way every time —
+    /// which is a truthful answer, and better than a second identical card
+    /// numbered "2 of 2".
+    private func requestLocalAlternative(
+        requestID: UUID, sequence: CoachAlternativeSequence, target: CoachRewriteTarget
+    ) {
+        guard let axis = LocalCoachAxis(rawValue: sequence.axis) else {
+            // The card is a tone the local route cannot write — it can only
+            // have arrived over the connection, which this person has ruled
+            // out. Nothing to ask, and nothing untrue to say about it.
+            coachAlternativeRequestID = nil
+            coachBusy = false
+            coachButton?.isEnabled = true
+            coachClockTapTime = nil
+            endAlternativeBusyPresentation(
+                notice: LocalCoachCopy.onDeviceOnlySentence(for: .toneNeedsConnection)
+            )
+            return
+        }
+        NSLog(
+            "TONO_KB BUILD116 coach: try-another on-device axis=\(axis.rawValue) "
+                + "version=\(sequence.displayedVersion + 1) of \(sequence.versionLimit)"
+        )
+        let engine = localCoachEngine
+        let request = LocalCoachSetRequest(
+            draft: target.draft,
+            axes: [axis],
+            locale: Locale.current,
+            rejectedVersions: sequence.priorVersions
+        )
+        coachLocalTask = Task { [weak self] in
+            let outcome: Result<LocalCoachSetResult, LocalCoachFailure>
+            do {
+                outcome = .success(try await engine.rewriteSet(request))
+            } catch let declined as LocalCoachFailure {
+                outcome = .failure(declined)
+            } catch {
+                outcome = .failure(LocalCoachFailure(.generationFailed))
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.completeLocalCoachAlternative(
+                    requestID: requestID,
+                    liveBefore: self.documentProxy.documentContextBeforeInput ?? "",
+                    liveAfter: self.documentProxy.documentContextAfterInput ?? "",
+                    outcome: outcome
+                )
+            }
+        }
+        scheduleAlternativeDeadline(
+            requestID: requestID, tapTime: coachClockTapTime ?? .now(),
+            axis: axis.rawValue, after: Const.coachLocalVisibleDeadline
+        )
+    }
+
+    /// Deliver one on-device alternative. Internal, and taking the live document
+    /// context, so the XCTest target drives the real guard.
+    ///
+    /// Shares `endAlternativeBusyPresentation` and the sequence rules with the
+    /// connected alternative, so the two cannot drift on what a failure costs.
+    func completeLocalCoachAlternative(
+        requestID: UUID,
+        liveBefore: String,
+        liveAfter: String,
+        outcome: Result<LocalCoachSetResult, LocalCoachFailure>
+    ) {
+        guard acceptsAlternative(requestID) else { return }
+        coachLocalTask = nil
+        guard let target = coachRewriteTarget,
+              target.isCurrent(
+                liveBefore: liveBefore, liveAfter: liveAfter, host: currentHostSession
+              ) else {
+            coachAlternativeRequestID = nil
+            coachBusy = false
+            coachButton?.isEnabled = true
+            coachDeadline?.cancel()
+            coachDeadline = nil
+            endAlternativeBusyPresentation(notice: nil)
+            presentCoachError(.staleDraft)
+            return
+        }
+        coachDeadline?.cancel()
+        coachDeadline = nil
+        coachAlternativeRequestID = nil
+        coachBusy = false
+        coachButton?.isEnabled = true
+
+        switch outcome {
+        case .success(let result):
+            guard var sequence = coachSequence,
+                  let option = result.options.first,
+                  sequence.recordDisplayed(
+                    option.text, route: CoachDeliveredRoute.onDevice.rawValue
+                  )
+            else {
+                // Either nothing usable came back or it repeats what is already
+                // on the card. No slot consumed, card untouched, one sentence.
+                //
+                // Both arrive here for the same underlying reason, which is why
+                // they share a sentence: the ONLY thing that differed between
+                // this request and the one that produced version 1 was the
+                // rejected wording travelling with it, so "nothing survived
+                // validation" on an alternative means the model wrote the same
+                // thing again and the validator dropped it. Saying "nothing
+                // usable came back" here would suggest something is broken; the
+                // truth is narrower and more useful.
+                endAlternativeBusyPresentation(
+                    notice: LocalCoachCopy.sentence(for: .noLocalAlternative)
+                )
+                return
+            }
+            coachSequence = sequence
+            coachDeliveredRoute = .onDevice
+            logOnDeviceRoute(
+                axis: option.axis.rawValue,
+                route: "onDeviceAlternative",
+                reason: "success",
+                availabilityReason: result.metrics.availabilityReason,
+                bytesIn: result.metrics.bytesIn,
+                bytesOut: result.metrics.bytesOut,
+                completionMs: result.metrics.completionMilliseconds
+            )
+            presentCoachResults(
+                TonoCoachClient.CoachResponse(
+                    riskLevel: "medium",
+                    perception: "",
+                    subtext: "",
+                    reason: nil,
+                    suggestions: [
+                        TonoCoachClient.CoachRewrite(
+                            axis: option.axis.rawValue, text: option.text,
+                            rationale: nil, riskAfter: nil
+                        )
+                    ] + secondaryCardsForDisplayedVersion(),
+                    flags: []
+                )
+            )
+        case .failure(let declined):
+            // No slot consumed; version 1 is still on the card behind this.
+            // `.cancelled` alone is silent — something newer already owns the
+            // surface — and matches the initial route's treatment of it.
+            guard declined.reason != .cancelled else { return }
+            // `.noValidRewrite` on an ALTERNATIVE is the same fact as the guard
+            // above, arriving from the engine instead of from the sequence: the
+            // model wrote the same wording again and validation dropped it.
+            // Told as itself rather than as a generic failure.
+            let reason: LocalCoachUnavailableReason =
+                declined.reason == .noValidRewrite ? .noLocalAlternative : declined.reason
+            endAlternativeBusyPresentation(
+                notice: reason == .noLocalAlternative
+                    ? LocalCoachCopy.sentence(for: reason)
+                    : LocalCoachCopy.onDeviceOnlySentence(for: reason)
+            )
+        }
+        coachClockTapTime = nil
     }
 
     private func beginAlternativeBusyPresentation() {
@@ -4896,6 +5559,11 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         guard acceptsAlternative(requestID) else { return }
         coachTask?.cancel()
         coachTask = nil
+        // Build 116: an on-device alternative has no transport to cancel it, so
+        // the watchdog ends it explicitly — the same treatment the initial
+        // on-device route already gets.
+        coachLocalTask?.cancel()
+        coachLocalTask = nil
         coachAlternativeRequestID = nil
         coachBusy = false
         coachButton?.isEnabled = true
@@ -4957,7 +5625,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             // new version. Record nothing, keep the card, and say so plainly —
             // the bounded retry already happened server-side, so looping here
             // would be exactly the retry storm the contract forbids.
-            guard sequence.recordDisplayed(response.text) else {
+            guard sequence.recordDisplayed(
+                response.text, route: CoachDeliveredRoute.connected.rawValue
+            ) else {
                 endAlternativeBusyPresentation(
                     notice: "That's the same wording. Try a different tone, or use this one."
                 )
@@ -4969,6 +5639,11 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
                 return
             }
             coachSequence = sequence
+            // Build 116 — an answer arrived over the connection, so the badge
+            // may say so. Set at delivery and nowhere earlier, exactly as the
+            // initial connected route sets it. Before this, a version 2 fetched
+            // online after an on-device version 1 inherited the on-device badge.
+            coachDeliveredRoute = .connected
             let rewrite = TonoCoachClient.CoachRewrite(
                 axis: response.axis,
                 text: response.text,
@@ -4981,7 +5656,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
                     perception: "",
                     subtext: "",
                     reason: nil,
-                    suggestions: [rewrite],
+                    suggestions: [rewrite] + secondaryCardsForDisplayedVersion(),
                     flags: []
                 )
             )
@@ -5061,6 +5736,12 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         }
         coachRewriteTarget = nil
         coachRequestGuard = nil
+        // Build 116 — the person has chosen. The remaining tones are answers to
+        // a question that is now settled, and the draft they were written for
+        // no longer exists in the document, so Stage 2 ends here rather than
+        // finishing into a card set nobody is looking at.
+        cancelSecondaryLocalCoach()
+        coachSetDeliveryID = nil
         NSLog("TONO_KB BUILD86 rewrite: inserted len=\(rewrite.count) (deleted \(plan.deleteCount))")
     }
 

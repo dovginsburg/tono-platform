@@ -79,19 +79,43 @@ public enum LocalRewritePreference: String, Codable, Sendable, Equatable, CaseIt
     case on
     /// Explicitly off. Honoured even when the model is available.
     case off
+    /// Build 116 — explicitly on, AND explicitly the only route the person
+    /// permits.
+    ///
+    /// A fourth case rather than a second boolean, for the same reason the
+    /// first three exist: "on" and "on, and nothing else" are different
+    /// answers to different questions, and a build that stored them separately
+    /// could represent "off, but only on-device", which means nothing. Raw
+    /// values are the persisted form, so a store written by Build 115 still
+    /// decodes — `unset` / `on` / `off` are untouched.
+    ///
+    /// The contract it carries: with this chosen, NOTHING in the Coach flow may
+    /// reach the network — not the initial rewrite, not `Try another`, not a
+    /// fallback after the on-device model declines. When the device cannot
+    /// serve the request the person is told, once, in plain words, and their
+    /// draft is left exactly as they typed it.
+    case onlyOnDevice
 
     /// The effective switch for a given runtime availability.
     public func resolved(availability: LocalRewriteAvailability) -> Bool {
         switch self {
-        case .on:    return true
-        case .off:   return false
-        case .unset: return availability.isAvailable
+        case .on, .onlyOnDevice: return true
+        case .off:               return false
+        case .unset:             return availability.isAvailable
         }
     }
 
     /// Whether the person has made a choice. Settings shows the derived state
     /// for `.unset` rather than pretending they picked it.
     public var isExplicit: Bool { self != .unset }
+
+    /// Build 116 — whether this choice forbids the connected route outright.
+    ///
+    /// Read at the routing decision AND at every later branch that could issue
+    /// a request (`Try another`, the hand-off after a local refusal), so the
+    /// prohibition is enforced everywhere a request could be born rather than
+    /// only where the first one is.
+    public var prohibitsNetwork: Bool { self == .onlyOnDevice }
 }
 
 /// App Group persistence for the opt-out.
@@ -135,8 +159,24 @@ public struct LocalRewritePreferenceStore: Sendable {
 
     /// The Settings toggle writes an explicit choice in both directions, so
     /// turning it back on is a real `.on` rather than a return to `.unset`.
+    ///
+    /// Build 116: turning the feature back ON must not silently WIDEN an
+    /// existing on-device-only choice into "the cloud is fine again". Flipping
+    /// the outer switch off and on again is not the person saying they now want
+    /// their drafts sent somewhere, so the narrower choice survives it.
     public func setEnabled(_ enabled: Bool) {
-        save(enabled ? .on : .off)
+        guard enabled else {
+            save(.off)
+            return
+        }
+        save(load() == .onlyOnDevice ? .onlyOnDevice : .on)
+    }
+
+    /// Build 116 — the on-device-only choice, written explicitly in both
+    /// directions. Turning it off returns to `.on` (rewriting stays on, the
+    /// connected route is permitted again), never to `.unset`.
+    public func setOnDeviceOnly(_ only: Bool) {
+        save(only ? .onlyOnDevice : .on)
     }
 }
 
@@ -181,6 +221,11 @@ public enum LocalCoachUnavailableReason: String, Codable, Sendable, Equatable, C
     /// the wrong thing to tell the person.
     case rewriteDidNotFinish
     case noValidRewrite
+    /// Build 116 — `Try another` was asked for while the person's explicit
+    /// on-device-only choice is in force, and the device produced the same
+    /// wording again. Its own reason because it is the ONE outcome where
+    /// nothing went wrong: there is simply no second way to say it here.
+    case noLocalAlternative
     // Axis policy
     case saferNeedsReview
     case toneNeedsConnection
@@ -226,23 +271,23 @@ public enum LocalCoachCopy {
         case .unsupportedOS:
             return "On-device rewriting needs iOS 26 or later."
         case .deviceNotEligible:
-            return "This iPhone doesn't support Apple Intelligence."
+            return "This device doesn't support Apple Intelligence."
         case .appleIntelligenceNotEnabled:
-            return "Turn on Apple Intelligence in Settings to rewrite on this iPhone."
+            return "Turn on Apple Intelligence in Settings to rewrite on this device."
         case .modelNotReady:
-            return "Apple Intelligence is still getting ready on this iPhone. Try again in a moment."
+            return "Apple Intelligence is still getting ready on this device. Try again in a moment."
         case .unsupportedLocale:
             return "Apple Intelligence doesn't handle this language yet."
         case .unspecifiedUnavailable:
-            return "Apple Intelligence can't rewrite on this iPhone right now."
+            return "Apple Intelligence can't rewrite on this device right now."
         case .emptyDraft:
             return "Type a message first."
         case .draftTooLong:
-            return "That message is too long to rewrite on this iPhone. Shorten it and try again."
+            return "That message is too long to rewrite on this device. Shorten it and try again."
         case .draftTooShort:
-            return "That message is too short to rewrite on this iPhone. Write a bit more and try again."
+            return "That message is too short to rewrite on this device. Write a bit more and try again."
         case .memoryPressure:
-            return "Not enough free memory to rewrite on this iPhone. Close a few apps and try again."
+            return "Not enough free memory to rewrite on this device. Close a few apps and try again."
         case .busy:
             return "A rewrite is already running."
         case .cancelled:
@@ -254,9 +299,11 @@ public enum LocalCoachCopy {
         case .generationFailed:
             return "The on-device rewrite didn't work out. Your message is unchanged."
         case .rewriteDidNotFinish:
-            return "This iPhone ran out of room finishing that rewrite. Try a shorter message."
+            return "This device ran out of room finishing that rewrite. Try a shorter message."
         case .noValidRewrite:
             return "Nothing usable came back. Your message is unchanged."
+        case .noLocalAlternative:
+            return "This device writes this one the same way every time. Use this rewrite, or try a different tone."
         case .saferNeedsReview:
             return "Safer needs a connection — Tono checks it against a sensitive-language review."
         case .toneNeedsConnection:
@@ -283,12 +330,24 @@ public enum LocalCoachCopy {
         default:
             head = "\(requested.capitalized) needs a connection."
         }
-        return "\(head) \(tones) were written on this iPhone."
+        return "\(head) \(tones) were written on this device."
+    }
+
+    /// Build 116 — the ONE terminal sentence for a request that the device
+    /// could not serve while the person's explicit on-device-only choice is in
+    /// force.
+    ///
+    /// It states the real reason first (so the person knows what to change) and
+    /// then names their own setting as the reason nothing was sent — because
+    /// the alternative, staying silent about it, reads as Tono being broken
+    /// rather than as Tono keeping the promise they asked it to keep.
+    public static func onDeviceOnlySentence(for reason: LocalCoachUnavailableReason) -> String {
+        "\(sentence(for: reason)) Tono is set to rewrite only on this device, so nothing was sent."
     }
 
     /// The route label. Only ever set from a result that actually executed
     /// where it claims to have executed.
-    public static let onDeviceRouteLabel = "On this iPhone"
+    public static let onDeviceRouteLabel = "On this device"
     public static let cloudRouteLabel = "Checked with Tono"
 }
 
@@ -321,6 +380,31 @@ public enum LocalCoachAxis: String, Codable, Sendable, Equatable, CaseIterable {
         }
     }
 
+    /// Build 116 — how this tone is described to the on-device model when it is
+    /// asked for ON ITS OWN.
+    ///
+    /// Word-for-word the `@Guide` description the multi-tone schema uses for
+    /// the same field, because a single-field generation has no field name to
+    /// carry the tone: with one `text` field the ONLY place the tone can live
+    /// is the instructions. Keeping the two spellings identical means the
+    /// staged request asks for exactly what the one-shot request asked for, so
+    /// a tone cannot come out differently depending on which stage produced it.
+    ///
+    /// Lives here, in the pure-Foundation half, so the wording is readable and
+    /// testable without FoundationModels.
+    public var instructionClause: String {
+        switch self {
+        case .warmer:
+            return "so it sounds warmer and more considerate"
+        case .clearer:
+            return "so it is clearer and more direct"
+        case .funnier:
+            return "with light, good-natured humour"
+        case .safer:
+            return "to lower the chance of causing offence, without changing what it asks for"
+        }
+    }
+
     /// "Warmer, Clearer and Funnier" — for the substitution note.
     public static func spokenList(_ axes: [LocalCoachAxis]) -> String {
         let names = axes.map(\.displayName)
@@ -332,16 +416,48 @@ public enum LocalCoachAxis: String, Codable, Sendable, Equatable, CaseIterable {
 
 // MARK: - The route decision
 
-/// What one local request will ask for, plus anything the person must be told
-/// about a tone that will NOT be in the answer.
+/// What the local route will ask for, in two stages, plus anything the person
+/// must be told about a tone that will NOT be in the answer.
+///
+/// Build 116 splits what Build 115 held as one flat `axes` list. Build 115
+/// asked for Warmer, Clearer and Funnier in ONE generation and rendered them in
+/// a fixed palette order, so tapping Funnier meant waiting for all three and
+/// then finding the tapped tone in third place. The tone the person chose is
+/// the answer they asked for; everything else is an extra. Making that a
+/// structural property of the plan — one primary, then the rest — is what makes
+/// "the selected tone arrives first" true by architecture rather than by a
+/// sorting step that a later change could quietly reorder.
 public struct LocalCoachPlan: Sendable, Equatable {
-    public let axes: [LocalCoachAxis]
-    /// Non-nil when the tapped tone is absent from `axes`. Rendered beside the
-    /// results so the substitution is visible rather than silent.
+    /// Stage 1. The single tone the request is FOR, generated on its own and
+    /// rendered the moment it validates.
+    ///
+    /// Normally the tone the person tapped. In the two substitution cases —
+    /// Safer behind its corpus gate, or a Custom style — with no route to the
+    /// reviewed answer, it is the first tone that CAN be written here, and
+    /// `substitutionNote` says so above the cards.
+    public let primaryAxis: LocalCoachAxis
+
+    /// Stage 2. The remaining tones, in the deterministic order the local set
+    /// has always used, each generated after the primary has rendered and
+    /// appended as it lands. Empty is legitimate: a plan may be one tone.
+    public let secondaryAxes: [LocalCoachAxis]
+
+    /// Non-nil when the tapped tone is absent from the plan. Rendered above the
+    /// cards so the substitution is visible rather than silent.
     public let substitutionNote: String?
 
-    public init(axes: [LocalCoachAxis], substitutionNote: String?) {
-        self.axes = axes
+    /// Every tone the plan will eventually ask for, primary first. The bounds
+    /// checks read this, so a plan's admitted draft length still scales with the
+    /// total amount of text it will produce.
+    public var axes: [LocalCoachAxis] { [primaryAxis] + secondaryAxes }
+
+    public init(
+        primaryAxis: LocalCoachAxis,
+        secondaryAxes: [LocalCoachAxis],
+        substitutionNote: String?
+    ) {
+        self.primaryAxis = primaryAxis
+        self.secondaryAxes = secondaryAxes
         self.substitutionNote = substitutionNote
     }
 }
@@ -353,6 +469,15 @@ public enum LocalCoachRoute: Sendable, Equatable {
     /// The on-device route declined; the connected route is the one to use, and
     /// `reason` is why local was not used.
     case cloud(LocalCoachUnavailableReason)
+    /// Build 116 — the local route declined AND the person has explicitly asked
+    /// that Tono rewrite only on this device, so there is no connected route to
+    /// hand to. Terminal: nothing is sent, the draft is left as typed, and one
+    /// truthful sentence is shown.
+    ///
+    /// A separate case rather than `.cloud` with a flag, because the two demand
+    /// opposite behaviour from the caller — one issues a request, one must
+    /// never — and a caller that forgets to check a flag would silently send.
+    case terminal(LocalCoachUnavailableReason)
 }
 
 /// The single authority for "may this run locally, and with which tones".
@@ -555,6 +680,12 @@ public enum LocalCoachRoutePolicy {
     /// draft. The four-tone (gated Safer) generation writes a third more text
     /// and takes a third longer than the three-tone one, so it admits less —
     /// and the check belongs where the axes are known, not before.
+    ///
+    /// Build 116 keeps this bound against the plan's TOTAL tone count even
+    /// though the tones are now generated one at a time. Staging makes each
+    /// individual generation smaller, so the bound is now conservative rather
+    /// than tight — and a bound that was measured is worth more than a bound
+    /// that was relaxed on the argument that it could be.
     private static func localRoute(_ plan: LocalCoachPlan, draft: String) -> LocalCoachRoute {
         guard draft.count <= maximumDraftCharacters(forAxisCount: plan.axes.count) else {
             return .cloud(.draftTooLong)
@@ -562,7 +693,74 @@ public enum LocalCoachRoutePolicy {
         return .local(plan)
     }
 
+    /// Build 116 — a staged plan whose primary is the tone the person tapped,
+    /// with the rest of the local set behind it in the order it has always
+    /// used. `LocalCoachAxis.base` is that order; the primary is removed from
+    /// the tail rather than reordered into it, so the secondary sequence is the
+    /// existing one with a hole in it, not a new ranking.
+    private static func stagedPlan(
+        primary: LocalCoachAxis,
+        from set: [LocalCoachAxis] = LocalCoachAxis.base,
+        substitutionNote: String? = nil
+    ) -> LocalCoachPlan {
+        LocalCoachPlan(
+            primaryAxis: primary,
+            secondaryAxes: set.filter { $0 != primary },
+            substitutionNote: substitutionNote
+        )
+    }
+
+    /// The tones this route can write here.
+    ///
+    /// Deliberately the Build 115 vocabulary and no wider. The keyboard's chip
+    /// strip can also offer Affectionate, Professional and Concise, and the
+    /// on-device model would certainly produce SOMETHING for each of them — but
+    /// nothing has measured whether what it produces is that tone, and Build
+    /// 115 gated Safer behind a corpus review for exactly that reason. A tone
+    /// this route cannot vouch for goes to the connected route, which has the
+    /// tone corpus behind it, and the person gets the tone they asked for.
+    public static func localSetIsCapableOf(_ axis: String, saferCorpusGateOpen: Bool) -> Bool {
+        guard let known = LocalCoachAxis(rawValue: axis.lowercased()) else { return false }
+        return known == .safer ? saferCorpusGateOpen : LocalCoachAxis.base.contains(known)
+    }
+
+    /// Build 116 — the whole decision, including the person's explicit
+    /// on-device-only choice.
+    ///
+    /// That choice enters in exactly two places, and both are here rather than
+    /// scattered through the caller:
+    ///
+    ///   1. it makes the connected route ABSENT for routing purposes, which is
+    ///      the same fact `connectivityKnownAbsent` carries — so the reviewed
+    ///      substitution behaviour (write the tones that CAN be written here,
+    ///      and name the one that cannot) applies immediately rather than after
+    ///      a pointless wait for a request that must never be sent;
+    ///   2. it turns every remaining `.cloud` answer into `.terminal`, so a
+    ///      caller cannot issue the request the person forbade.
     public static func decide(
+        requestedAxis: String,
+        draft: String,
+        remoteKillSwitchAllows: Bool,
+        preference: LocalRewritePreference,
+        availability: LocalRewriteAvailability,
+        saferCorpusGateOpen: Bool,
+        connectivityKnownAbsent: Bool
+    ) -> LocalCoachRoute {
+        let networkProhibited = preference.prohibitsNetwork
+        let route = decideLocalFirst(
+            requestedAxis: requestedAxis,
+            draft: draft,
+            remoteKillSwitchAllows: remoteKillSwitchAllows,
+            preference: preference,
+            availability: availability,
+            saferCorpusGateOpen: saferCorpusGateOpen,
+            connectivityKnownAbsent: connectivityKnownAbsent || networkProhibited
+        )
+        guard networkProhibited, case .cloud(let reason) = route else { return route }
+        return .terminal(reason)
+    }
+
+    private static func decideLocalFirst(
         requestedAxis: String,
         draft: String,
         remoteKillSwitchAllows: Bool,
@@ -606,8 +804,8 @@ public enum LocalCoachRoutePolicy {
         //    phone that could have answered.
         if connectedOnlyAxes.contains(axis) {
             guard connectivityKnownAbsent else { return .cloud(.customStyleNeedsConnection) }
-            return localRoute(LocalCoachPlan(
-                axes: LocalCoachAxis.base,
+            return localRoute(stagedPlan(
+                primary: LocalCoachAxis.base[0],
                 substitutionNote: LocalCoachCopy.substitutionNote(
                     requested: axis,
                     reason: .customStyleNeedsConnection,
@@ -627,13 +825,16 @@ public enum LocalCoachRoutePolicy {
         //                 it does today, and produces the reviewed Safer answer.
         if axis == LocalCoachAxis.safer.rawValue {
             if saferCorpusGateOpen {
-                return localRoute(LocalCoachPlan(
-                    axes: LocalCoachAxis.base + [.safer], substitutionNote: nil
+                // Build 116: Safer is the tone that was tapped, so Safer is the
+                // one that is generated and rendered first. The base three
+                // follow it as secondaries.
+                return localRoute(stagedPlan(
+                    primary: .safer, from: [.safer] + LocalCoachAxis.base
                 ), draft: draft)
             }
             guard connectivityKnownAbsent else { return .cloud(.saferNeedsReview) }
-            return localRoute(LocalCoachPlan(
-                axes: LocalCoachAxis.base,
+            return localRoute(stagedPlan(
+                primary: LocalCoachAxis.base[0],
                 substitutionNote: LocalCoachCopy.substitutionNote(
                     requested: LocalCoachAxis.safer.rawValue,
                     reason: .saferNeedsReview,
@@ -642,18 +843,38 @@ public enum LocalCoachRoutePolicy {
             ), draft: draft)
         }
 
-        // 7. Everything else runs locally and produces the base three. When the
-        //    tapped tone is not one of them — Affectionate, Professional,
-        //    Concise — the substitution is stated rather than implied.
-        let requestedIsProduced = LocalCoachAxis.base.contains { $0.rawValue == axis }
-        return localRoute(LocalCoachPlan(
-            axes: LocalCoachAxis.base,
-            substitutionNote: requestedIsProduced ? nil : LocalCoachCopy.substitutionNote(
-                requested: axis,
-                reason: .toneNeedsConnection,
-                produced: LocalCoachAxis.base
-            )
-        ), draft: draft)
+        // 7. Build 116 — the selected tone decides the route, not the other way
+        //    around.
+        //
+        //    Build 115 answered EVERY tap with the same three tones and, when
+        //    the tapped one was not among them, a note explaining the
+        //    substitution. That was truthful, and it was still the wrong
+        //    answer: someone who taps Professional is shown Warmer first and
+        //    told, in small grey type, that Professional needs a connection.
+        //    The tone they picked is the request; a set that does not contain
+        //    it is not a smaller version of that request, it is a different
+        //    one.
+        //
+        //    So a tone this route cannot vouch for now goes to the connected
+        //    route, which produces exactly the tone that was tapped. Only when
+        //    the transport has PROVED there is no route (or the person has
+        //    ruled the connected route out themselves) does the substitution
+        //    reappear — because then the alternative is not a better answer,
+        //    it is no answer at all.
+        guard localSetIsCapableOf(axis, saferCorpusGateOpen: saferCorpusGateOpen),
+              let selected = LocalCoachAxis(rawValue: axis)
+        else {
+            guard connectivityKnownAbsent else { return .cloud(.toneNeedsConnection) }
+            return localRoute(stagedPlan(
+                primary: LocalCoachAxis.base[0],
+                substitutionNote: LocalCoachCopy.substitutionNote(
+                    requested: axis,
+                    reason: .toneNeedsConnection,
+                    produced: LocalCoachAxis.base
+                )
+            ), draft: draft)
+        }
+        return localRoute(stagedPlan(primary: selected), draft: draft)
     }
 }
 
@@ -703,11 +924,16 @@ public enum LocalCoachValidator {
         "safe:", "safer:", "rewrite:", "rewritten:", "message:",
     ]
 
+    /// - Parameter rejecting: Build 116 — wordings the person has already seen
+    ///   and turned down. A result that repeats one of them is not a new
+    ///   version, so it is DROPPED here rather than shown again under a
+    ///   different version number.
     public static func validate(
         _ raw: String,
         axis: LocalCoachAxis,
         draft: String,
-        maximumCharacters: Int = LocalCoachRoutePolicy.maximumOptionCharacters
+        maximumCharacters: Int = LocalCoachRoutePolicy.maximumOptionCharacters,
+        rejecting: [String] = []
     ) -> LocalCoachOption? {
         var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
@@ -719,7 +945,9 @@ public enum LocalCoachValidator {
 
         guard !text.isEmpty, text.count <= maximumCharacters else { return nil }
         // A rewrite that IS the draft is not a rewrite.
-        guard normalizedForNoOp(text) != normalizedForNoOp(draft) else { return nil }
+        let normalized = normalizedForNoOp(text)
+        guard normalized != normalizedForNoOp(draft) else { return nil }
+        guard !rejecting.contains(where: { normalizedForNoOp($0) == normalized }) else { return nil }
 
         return LocalCoachOption(axis: axis, text: text)
     }
@@ -730,14 +958,15 @@ public enum LocalCoachValidator {
     public static func validateSet(
         _ raw: [(axis: LocalCoachAxis, text: String)],
         draft: String,
-        maximumCharacters: Int = LocalCoachRoutePolicy.maximumOptionCharacters
+        maximumCharacters: Int = LocalCoachRoutePolicy.maximumOptionCharacters,
+        rejecting: [String] = []
     ) -> [LocalCoachOption]? {
         var seen = Set<String>()
         var options: [LocalCoachOption] = []
         for candidate in raw {
             guard let option = validate(
                 candidate.text, axis: candidate.axis, draft: draft,
-                maximumCharacters: maximumCharacters
+                maximumCharacters: maximumCharacters, rejecting: rejecting
             ) else { continue }
             // Two tones that produced the identical sentence are one choice,
             // not two. Keep the first and drop the duplicate rather than
@@ -873,11 +1102,31 @@ public struct LocalCoachSetRequest: Sendable, Equatable {
     public let draft: String
     public let axes: [LocalCoachAxis]
     public let locale: Locale
+    /// Build 116 — wordings this person has already read and turned down for
+    /// this exact draft and tone.
+    ///
+    /// Used by the on-device `Try another`, which exists only for someone who
+    /// has chosen on-device-only rewriting: the connected variant endpoint is
+    /// forbidden for them, so the second wording has to come from here or not
+    /// at all. It changes the PROMPT (never the persisted state, never a log),
+    /// and the validator drops a result that repeats one of these — so a model
+    /// that ignores the request costs the person nothing rather than showing
+    /// them the same sentence twice.
+    ///
+    /// Empty for every initial request, which is why the wire shape of a Stage
+    /// 1 or Stage 2 generation is unchanged.
+    public let rejectedVersions: [String]
 
-    public init(draft: String, axes: [LocalCoachAxis], locale: Locale = .current) {
+    public init(
+        draft: String,
+        axes: [LocalCoachAxis],
+        locale: Locale = .current,
+        rejectedVersions: [String] = []
+    ) {
         self.draft = draft
         self.axes = axes
         self.locale = locale
+        self.rejectedVersions = rejectedVersions
     }
 }
 

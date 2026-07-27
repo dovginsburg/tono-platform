@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		B115C0FFEE0000000000F015 /* LocalCoachRewrite.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */; };
 		B115C0FFEE0000000000F021 /* Build115LocalCoachTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F002 /* Build115LocalCoachTests.swift */; };
+		B116C0FFEE0000000000F021 /* Build116SelectedFirstTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B116C0FFEE0000000000F002 /* Build116SelectedFirstTests.swift */; };
 		B115ADA7000000000000F022 /* Build115AdaptiveLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115ADA7000000000000F002 /* Build115AdaptiveLayoutTests.swift */; };
 		B115ADA7000000000000F044 /* Build115IPadSurfaceLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115ADA7000000000000F004 /* Build115IPadSurfaceLayoutTests.swift */; };
 		B115C0FFEE0000000000F011 /* LocalCoachRewrite.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */; };
@@ -258,6 +259,7 @@
 
 /* Begin PBXFileReference section */
 		B115C0FFEE0000000000F002 /* Build115LocalCoachTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build115LocalCoachTests.swift; sourceTree = "<group>"; };
+		B116C0FFEE0000000000F002 /* Build116SelectedFirstTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build116SelectedFirstTests.swift; sourceTree = "<group>"; };
 		B115ADA7000000000000F002 /* Build115AdaptiveLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build115AdaptiveLayoutTests.swift; sourceTree = "<group>"; };
 		B115ADA7000000000000F004 /* Build115IPadSurfaceLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build115IPadSurfaceLayoutTests.swift; sourceTree = "<group>"; };
 		B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalCoachRewrite.swift; sourceTree = "<group>"; };
@@ -439,6 +441,7 @@
 				B115ADA7000000000000F002 /* Build115AdaptiveLayoutTests.swift */,
 				B115ADA7000000000000F004 /* Build115IPadSurfaceLayoutTests.swift */,
 				B115C0FFEE0000000000F002 /* Build115LocalCoachTests.swift */,
+				B116C0FFEE0000000000F002 /* Build116SelectedFirstTests.swift */,
 				045FE2F8B15471B8BFD56595 /* ContactsAccessTests.swift */,
 				860000000000000000000003 /* CoachContractTests.swift */,
 				950000000000000000000002 /* Build95CoachContractTests.swift */,
@@ -910,6 +913,7 @@
 				B115ADA7000000000000F022 /* Build115AdaptiveLayoutTests.swift in Sources */,
 				B115ADA7000000000000F044 /* Build115IPadSurfaceLayoutTests.swift in Sources */,
 				B115C0FFEE0000000000F021 /* Build115LocalCoachTests.swift in Sources */,
+				B116C0FFEE0000000000F021 /* Build116SelectedFirstTests.swift in Sources */,
 				A6000000000000000000000C /* Build106LocalIntelligenceTests.swift in Sources */,
 				A6000000000000000000000A /* Build106MultilineCursorTests.swift in Sources */,
 				A60000000000000000000008 /* Build106SuggestionRoutingTests.swift in Sources */,

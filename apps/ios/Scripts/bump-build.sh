@@ -16,7 +16,7 @@ set -eo pipefail
 
 SRCROOT="${SRCROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
-EXPECTED_BUILD="115"
+EXPECTED_BUILD="116"
 PLISTS=(
   "App/Info.plist"
   "KeyboardExtension/Info.plist"

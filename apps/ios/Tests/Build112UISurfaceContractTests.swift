@@ -938,7 +938,10 @@ final class Build112UISurfaceContractTests: XCTestCase {
     /// catches a wholesale one). A real release edits the literal here on
     /// purpose, which is the point — release identity should not be able to
     /// change without somebody saying so.
-    func testAllFourShippedBundlesAreBuild115AtVersion11() throws {
+    /// BUILD 116 UPDATE — the number moves because the build number is a
+    /// reviewed release input and this is a new release object. The marketing
+    /// version stays at 1.1; nothing here is a new product version.
+    func testAllFourShippedBundlesAreBuild116AtVersion11() throws {
         let root = Self.sourceRoot()
         let guardScript = try Self.source("Scripts/bump-build.sh")
         let expected = try XCTUnwrap(
@@ -946,7 +949,7 @@ final class Build112UISurfaceContractTests: XCTestCase {
             "Scripts/bump-build.sh must pin EXPECTED_BUILD — it is the release authority"
         )
         XCTAssertEqual(
-            expected, "115",
+            expected, "116",
             "the single build guard authority must pin the reviewed build number"
         )
         for relative in Self.shippedPlists {

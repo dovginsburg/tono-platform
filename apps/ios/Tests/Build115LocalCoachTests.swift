@@ -182,9 +182,19 @@ final class Build115LocalCoachTests: XCTestCase {
     /// Default ON, but only where the model actually is available. Every other
     /// availability state routes to the connected path with its OWN reason —
     /// this is the "exact user-facing reasons" half of the contract.
+    /// BUILD 116 UPDATE — the expected plan, and only the expected plan.
+    ///
+    /// Build 115 answered every tap with one flat `LocalCoachAxis.base` set.
+    /// Build 116 asks for the SELECTED tone first and the rest behind it, so
+    /// the plan for a Clearer tap is Clearer, then Warmer and Funnier. The
+    /// contract this test is actually about — every availability state reports
+    /// itself rather than a generic failure — is unchanged and still exhaustive.
     func testEveryAvailabilityStateMapsToItsOwnReason() {
         XCTAssertEqual(decide(availability: .available), .local(
-            LocalCoachPlan(axes: LocalCoachAxis.base, substitutionNote: nil)
+            LocalCoachPlan(
+                primaryAxis: .clearer, secondaryAxes: [.warmer, .funnier],
+                substitutionNote: nil
+            )
         ))
         let expected: [LocalRewriteAvailability: LocalCoachUnavailableReason] = [
             .unsupportedOS: .unsupportedOS,
@@ -266,6 +276,11 @@ final class Build115LocalCoachTests: XCTestCase {
         XCTAssertFalse(LocalRewritePreference.unset.isExplicit)
         XCTAssertTrue(LocalRewritePreference.on.isExplicit)
         XCTAssertTrue(LocalRewritePreference.off.isExplicit)
+        // BUILD 116 — the fourth case is an explicit ON, so it resolves the
+        // switch exactly as `.on` does. What it adds is asserted separately in
+        // `Build116SelectedFirstTests`.
+        XCTAssertTrue(LocalRewritePreference.onlyOnDevice.isExplicit)
+        XCTAssertTrue(LocalRewritePreference.onlyOnDevice.resolved(availability: .available))
     }
 
     func testRemoteKillSwitchForcesTheConnectedRoute() {
@@ -296,19 +311,32 @@ final class Build115LocalCoachTests: XCTestCase {
             return XCTFail("offline Safer must still produce the on-device tones")
         }
         XCTAssertEqual(plan.axes, LocalCoachAxis.base)
+        // BUILD 116 — and the substitute is staged like any other plan: the
+        // first tone that CAN be written here leads, the rest follow it.
+        XCTAssertEqual(plan.primaryAxis, .warmer)
+        XCTAssertEqual(plan.secondaryAxes, [.clearer, .funnier])
         XCTAssertFalse(plan.axes.contains(.safer), "unvetted Safer must never be generated")
         let note = try XCTUnwrap(plan.substitutionNote, "the substitution must be stated")
         XCTAssertTrue(note.contains("Safer"), "the note must name the missing tone")
         XCTAssertTrue(note.contains("Warmer"), "the note must name what IS below")
-        XCTAssertTrue(note.contains("this iPhone"))
+        // BUILD 116 (physical-iPad correction) — platform-neutral. Dov read
+        // "this iPhone" on an iPad; the copy now says "this device", which is
+        // true everywhere Tono runs.
+        XCTAssertTrue(note.contains("this device"))
+        XCTAssertFalse(note.contains("iPhone"), "no device-name wording may remain")
     }
 
     /// Gate explicitly open → and only then — Safer joins the set.
+    ///
+    /// BUILD 116 UPDATE — and it joins it FIRST, because it is the tone that
+    /// was tapped. Build 115 appended it after the base three.
     func testSaferIsGeneratedLocallyOnlyWhenTheGateIsOpen() throws {
         guard case .local(let plan) = decide(axis: "safer", saferGate: true) else {
             return XCTFail("an open gate must permit the on-device Safer route")
         }
-        XCTAssertEqual(plan.axes, LocalCoachAxis.base + [.safer])
+        XCTAssertEqual(plan.primaryAxis, .safer, "the tapped tone leads")
+        XCTAssertEqual(plan.secondaryAxes, LocalCoachAxis.base)
+        XCTAssertEqual(plan.axes, [.safer] + LocalCoachAxis.base)
         XCTAssertNil(plan.substitutionNote, "nothing is missing, so nothing is claimed missing")
     }
 
@@ -319,12 +347,29 @@ final class Build115LocalCoachTests: XCTestCase {
 
     // ── Tones the local set does not contain ───────────────────────────
 
-    func testATappedToneThatIsNotProducedIsNamedRatherThanImplied() throws {
+    /// BUILD 116 UPDATE — this test encoded the superseded answer, and the
+    /// change is the point of the build rather than a side effect of it.
+    ///
+    /// Build 115 ran Affectionate, Professional and Concise on the device
+    /// anyway, produced Warmer/Clearer/Funnier, and named the substitution in a
+    /// caption. Truthful, and still the wrong answer: the tone someone picked
+    /// IS the request, and a set that does not contain it is a different
+    /// request rather than a smaller one. Build 116 sends those tones to the
+    /// connected route, which produces the tone that was actually tapped — and
+    /// keeps the Build 115 substitution for the case where the transport has
+    /// PROVED there is no route, because then the alternative is no answer at
+    /// all. Both halves are asserted here.
+    func testATappedToneThatIsNotProducedGoesToTheRouteThatCanProduceIt() throws {
         for axis in ["affectionate", "professional", "concise"] {
-            guard case .local(let plan) = decide(axis: axis) else {
-                return XCTFail("\(axis) should still run on the device")
+            XCTAssertEqual(
+                decide(axis: axis), .cloud(.toneNeedsConnection),
+                "\(axis) must be fetched as \(axis), not substituted for"
+            )
+            guard case .local(let plan) = decide(axis: axis, offline: true) else {
+                return XCTFail("with no route at all, \(axis) should still get the local tones")
             }
             XCTAssertEqual(plan.axes, LocalCoachAxis.base)
+            XCTAssertEqual(plan.primaryAxis, .warmer)
             let note = try XCTUnwrap(plan.substitutionNote, "\(axis) is absent and must be named")
             XCTAssertTrue(note.lowercased().contains(axis), "the note must name \(axis)")
         }
@@ -332,6 +377,7 @@ final class Build115LocalCoachTests: XCTestCase {
             guard case .local(let plan) = decide(axis: axis) else {
                 return XCTFail("\(axis) should run on the device")
             }
+            XCTAssertEqual(plan.primaryAxis.rawValue, axis, "the tapped tone leads its own plan")
             XCTAssertNil(plan.substitutionNote, "\(axis) is present, so there is nothing to explain")
         }
     }
@@ -342,6 +388,7 @@ final class Build115LocalCoachTests: XCTestCase {
             return XCTFail("with no route, Custom should still offer the on-device tones")
         }
         XCTAssertEqual(plan.axes, LocalCoachAxis.base)
+        XCTAssertEqual(plan.primaryAxis, .warmer)
         XCTAssertNotNil(plan.substitutionNote)
     }
 
@@ -511,7 +558,7 @@ final class Build115LocalCoachTests: XCTestCase {
                       "Settings must carry the on-device rewriting control")
         XCTAssertTrue(settings.contains("LocalRewritePreferenceStore().setEnabled("),
                       "the toggle must write the durable preference, not a feature flag")
-        XCTAssertTrue(settings.contains("Rewrite on this iPhone"),
+        XCTAssertTrue(settings.contains("Rewrite on this device"),
                       "the control must be named in the person's terms")
     }
 
@@ -856,6 +903,14 @@ final class Build115LocalCoachTests: XCTestCase {
     ///
     /// Red at c0aba9d: `runCoach` went straight to `coachClient.variant(...)`,
     /// so this rendered a connected failure and no cards at all.
+    ///
+    /// BUILD 116 UPDATE — same scenario, same three tones, same zero network.
+    /// Two things changed and both are the build's purpose: the TAPPED tone is
+    /// now the first card rather than the second, and the three tones arrive as
+    /// three sequential requests rather than one. Everything this test was
+    /// written to protect — a fresh controller, one action, locally-written
+    /// rewrites, and nothing reaching the URL loading system — is asserted
+    /// exactly as before.
     @MainActor
     func testFreshOfflineCoachProducesWarmClearAndFunnyWithZeroNetwork() throws {
         let engine = StubEngine()
@@ -865,6 +920,10 @@ final class Build115LocalCoachTests: XCTestCase {
             before: "hey I really need that report today", after: "", axis: "clearer"
         )
         waitUntil({ controller.coachDeliveredRouteForTesting != nil }, "no route ever delivered")
+        waitUntil(
+            { controller.coachSecondaryAxesForTesting.count == 2 },
+            "the two secondary tones never arrived"
+        )
         controller.view.layoutIfNeeded()
 
         // 1. It ran on the device, and says so.
@@ -874,17 +933,17 @@ final class Build115LocalCoachTests: XCTestCase {
         )
         XCTAssertEqual(badge.text, LocalCoachCopy.onDeviceRouteLabel)
 
-        // 2. Warm, Clear and Funny are all on screen.
+        // 2. Warm, Clear and Funny are all on screen — with the tapped tone
+        //    first, which is the Build 116 contract.
         let cards = Self.findViews(controller.view, prefix: "TonoKB.rewrite.")
         XCTAssertEqual(
             cards.compactMap { $0.accessibilityIdentifier },
-            ["TonoKB.rewrite.warmer.0", "TonoKB.rewrite.clearer.1", "TonoKB.rewrite.funnier.2"]
+            ["TonoKB.rewrite.clearer.0", "TonoKB.rewrite.warmer.1", "TonoKB.rewrite.funnier.2"]
         )
 
-        // 3. ONE request, for exactly the three base tones.
-        XCTAssertEqual(engine.requests.count, 1, "one action must issue one request")
-        XCTAssertEqual(engine.requests[0].axes, LocalCoachAxis.base)
-        XCTAssertFalse(engine.requests[0].axes.contains(.safer))
+        // 3. One request per tone, the selected one first, and never Safer.
+        XCTAssertEqual(engine.requests.map(\.axes), [[.clearer], [.warmer], [.funnier]])
+        XCTAssertFalse(engine.requests.contains { $0.axes.contains(.safer) })
 
         // 4. ZERO network. Two independent measurements: the injected spy
         //    transport saw nothing, and the client dispatched nothing.
@@ -934,26 +993,63 @@ final class Build115LocalCoachTests: XCTestCase {
         use.sendActions(for: .touchUpInside)
 
         XCTAssertEqual(proxy.insertions.count, 1, "exactly one insertion")
-        XCTAssertEqual(proxy.text, "Would you mind sending the report over today?")
+        // BUILD 116 — the FIRST `Use rewrite` belongs to the tone that was
+        // tapped. Build 115 sorted Warmer to the top whatever was asked for, so
+        // this reached for the Warmer text; tapping Clearer now inserts the
+        // Clearer rewrite, which is the whole point of the build.
+        XCTAssertEqual(proxy.text, "Please send the report today.")
     }
 
-    /// A multi-tone set is not a version sequence, so it must not offer version
-    /// controls that would do nothing.
+    /// BUILD 116 UPDATE — this is the Apple-terminal-era contract the founder
+    /// asked to be superseded, and the reason it existed is gone.
+    ///
+    /// Build 115 delivered the whole set in one request, so a local answer was
+    /// never a version sequence and `Try another` on it would have been a
+    /// control that could not act. Build 116 delivers ONE tone — the tone that
+    /// was tapped — and the extras are appended behind it, so "give me a
+    /// different wording of this one" means exactly what it means online.
+    ///
+    /// What survives verbatim is the rule the old test was really protecting: a
+    /// control that cannot act must not exist. Version controls belong to the
+    /// SELECTED card only. The secondary cards must have none of them, and the
+    /// steppers must be absent on version 1 because there is nothing to step to.
     @MainActor
-    func testAnOnDeviceSetOffersNoVersionSequenceControls() {
-        let (controller, _) = makeController(engine: StubEngine(), before: "please send it")
-        controller.beginCoachRewrite(before: "please send it", after: "", axis: "clearer")
+    func testOnlyTheSelectedCardCarriesTheVersionControls() throws {
+        let (controller, _) = makeController(
+            engine: StubEngine(), before: "hey I really need that report today"
+        )
+        controller.beginCoachRewrite(
+            before: "hey I really need that report today", after: "", axis: "clearer"
+        )
         waitUntil({ controller.coachDeliveredRouteForTesting == "onDevice" })
+        waitUntil({ controller.coachSecondaryAxesForTesting.count == 2 })
         controller.view.layoutIfNeeded()
 
-        for identifier in ["TonoKB.tryAnother", "TonoKB.versionCue",
-                           "TonoKB.versionBack", "TonoKB.versionForward"] {
-            XCTAssertNil(
-                Self.findView(controller.view, identifier: identifier),
-                "\(identifier) has no meaning for a set of tones and must not render"
+        // The selected card offers exactly one Try another, and it can act.
+        let tryAnothers = Self.findViews(controller.view, prefix: "TonoKB.tryAnother")
+        XCTAssertEqual(tryAnothers.count, 1, "only the selected card may offer Try another")
+        let another = try XCTUnwrap(tryAnothers.first as? UIControl)
+        XCTAssertTrue(another.isEnabled)
+        XCTAssertFalse(another.isHidden)
+
+        // …and it belongs to the selected card, not to a secondary one.
+        let cards = Self.findViews(controller.view, prefix: "TonoKB.rewrite.")
+        XCTAssertEqual(cards.first?.accessibilityIdentifier, "TonoKB.rewrite.clearer.0")
+        XCTAssertTrue(
+            another.isDescendant(of: try XCTUnwrap(cards.first)),
+            "Try another must sit on the selected tone's card"
+        )
+
+        // Nothing to step to yet, so no stepper exists in either direction.
+        for identifier in ["TonoKB.versionBack", "TonoKB.versionForward"] {
+            let control = Self.findView(controller.view, identifier: identifier) as? UIControl
+            XCTAssertTrue(
+                control == nil || control?.isHidden == true,
+                "\(identifier) has nowhere to go on version 1 and must not be actionable"
             )
         }
-        XCTAssertNil(controller.coachSequenceStateForTesting)
+        XCTAssertEqual(controller.coachSequenceStateForTesting?.displayed, 1)
+        XCTAssertEqual(controller.coachSequenceStateForTesting?.canRequestAnother, true)
     }
 
     /// …while the connected single-card path keeps Try another exactly as
@@ -1075,9 +1171,12 @@ final class Build115LocalCoachTests: XCTestCase {
                   "with no route, Safer must still be answerable on the device")
         controller.view.layoutIfNeeded()
 
-        XCTAssertEqual(engine.requests.count, 1)
+        // BUILD 116 — the substituted set is staged like any other, so Warmer
+        // is asked for first and the rest follow. What has NOT changed, and is
+        // what this test exists for: nothing ever asks for Safer.
+        XCTAssertEqual(engine.requests.first?.axes, [.warmer])
         XCTAssertFalse(
-            engine.requests[0].axes.contains(.safer),
+            engine.requests.contains { $0.axes.contains(.safer) },
             "unvetted Safer must never be generated, whatever the connection state"
         )
         XCTAssertNil(
@@ -1104,7 +1203,14 @@ final class Build115LocalCoachTests: XCTestCase {
             controller.handleCoachWaitingForConnectivity(requestID: id, tapTime: .now(), axis: "safer")
         }
         waitUntil({ controller.coachDeliveredRouteForTesting == "onDevice" })
-        XCTAssertEqual(engine.requests.count, 1, "five notifications, one on-device request")
+        // BUILD 116 — counted per PRIMARY request. Stage 2 adds one request per
+        // remaining tone behind the answer, so the invariant "five notifications
+        // produced one substitution" is now measured as "the primary tone was
+        // asked for exactly once".
+        XCTAssertEqual(
+            engine.requests.filter { $0.axes == [.warmer] }.count, 1,
+            "five notifications, one substituted on-device request"
+        )
         XCTAssertNotEqual(
             controller.activeCoachRequestIDForTesting, id,
             "the substituted leg takes a fresh identity, so the cancelled connected "
@@ -1138,8 +1244,10 @@ final class Build115LocalCoachTests: XCTestCase {
         waitUntil({ controller.coachDeliveredRouteForTesting == "onDevice" })
         controller.view.layoutIfNeeded()
 
+        // BUILD 116 — the tapped tone is the first card, so that is the card a
+        // stale completion must fail to disturb.
         let before = try XCTUnwrap(
-            Self.findView(controller.view, identifier: "TonoKB.rewrite.warmer.0")
+            Self.findView(controller.view, identifier: "TonoKB.rewrite.clearer.0")
         ).accessibilityLabel
 
         // A completion for a request that is not the active one.
@@ -1162,7 +1270,7 @@ final class Build115LocalCoachTests: XCTestCase {
             "a superseded completion must not install its own card"
         )
         XCTAssertEqual(
-            try XCTUnwrap(Self.findView(controller.view, identifier: "TonoKB.rewrite.warmer.0"))
+            try XCTUnwrap(Self.findView(controller.view, identifier: "TonoKB.rewrite.clearer.0"))
                 .accessibilityLabel,
             before,
             "the surface the person is looking at must be untouched"
@@ -1328,8 +1436,12 @@ final class Build115LocalCoachTests: XCTestCase {
         XCTAssertLessThanOrEqual(LocalCoachRoutePolicy.maximumOptionCharacters, 4_000)
     }
 
-    /// Every shipped bundle is Build 115 and the marketing version is unchanged.
-    func testAllFourShippedBundlesAreBuild115() throws {
+    /// Every shipped bundle is Build 116 and the marketing version is unchanged.
+    ///
+    /// BUILD 116 UPDATE — the number moves because the build number is a
+    /// reviewed release input and this is a new release object. The marketing
+    /// version does not: nothing here is a new product version.
+    func testAllFourShippedBundlesAreBuild116() throws {
         let guardScript = try Self.source("Scripts/bump-build.sh")
         var expected: String?
         for line in guardScript.split(separator: "\n") {
@@ -1338,14 +1450,14 @@ final class Build115LocalCoachTests: XCTestCase {
             expected = trimmed.dropFirst("EXPECTED_BUILD=".count)
                 .trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
         }
-        XCTAssertEqual(expected, "115", "the build guard must pin the reviewed number")
+        XCTAssertEqual(expected, "116", "the build guard must pin the reviewed number")
         for relative in ["App/Info.plist", "KeyboardExtension/Info.plist",
                          "ShareExtension/Info.plist", "TonoMessagesExtension/Info.plist"] {
             let data = try Data(contentsOf: Self.sourceRoot().appendingPathComponent(relative))
             let plist = try PropertyListSerialization.propertyList(
                 from: data, options: [], format: nil
             ) as? [String: Any]
-            XCTAssertEqual(plist?["CFBundleVersion"] as? String, "115", "\(relative)")
+            XCTAssertEqual(plist?["CFBundleVersion"] as? String, "116", "\(relative)")
             XCTAssertEqual(plist?["CFBundleShortVersionString"] as? String, "1.1", "\(relative)")
         }
     }
@@ -1451,7 +1563,7 @@ final class Build115LocalCoachTests: XCTestCase {
         XCTAssertLessThanOrEqual(between.count, LocalCoachRoutePolicy.maximumDraftCharacters(forAxisCount: 3))
 
         XCTAssertEqual(
-            Self.localAxes(axis: "clearer", draft: between), LocalCoachAxis.base,
+            Self.localAxisSet(axis: "clearer", draft: between), Set(LocalCoachAxis.base),
             "the three-tone plan still admits it"
         )
         guard case .cloud(let reason) = LocalCoachRoutePolicy.decide(
@@ -1682,10 +1794,19 @@ final class Build115LocalCoachTests: XCTestCase {
     /// satisfy `shown.count == 1` and get the full version UI with
     /// `coachSequence == nil` behind it — `Try another` visible, enabled, and
     /// inert, because `tryAnotherTapped` returns on the same nil.
+    ///
+    /// BUILD 116 UPDATE — the F3 RULE is unchanged and still what is asserted:
+    /// no control may be visible and enabled with nothing behind it to act on.
+    /// What changed is which side of the rule this case falls on. Build 115's
+    /// local delivery set `coachSequence = nil`, so `Try another` was inert and
+    /// had to be absent. Build 116 delivers the selected tone as version 1 of a
+    /// real sequence, so the control is backed and must be present AND able to
+    /// act. The steppers still have nowhere to go on version 1, and must still
+    /// not be actionable.
     @MainActor
-    func testAOneOptionLocalSetOffersNoSequenceControls() throws {
-        // Two of the three tones come back as the draft itself, so the
-        // validator drops them as no-ops and exactly one option survives.
+    func testAOneOptionLocalSetOffersAWorkingTryAnotherAndNoDeadSteppers() throws {
+        // The two secondary tones come back as the draft itself, so the
+        // validator drops them as no-ops and exactly one card survives.
         let draft = "hey I really need that report today"
         let engine = StubEngine(outcome: .success([
             .warmer: draft,
@@ -1695,31 +1816,41 @@ final class Build115LocalCoachTests: XCTestCase {
         let (controller, _) = makeController(engine: engine, before: draft)
         controller.beginCoachRewrite(before: draft, after: "", axis: "clearer")
         waitUntil({ controller.coachDeliveredRouteForTesting == "onDevice" })
+        waitUntil({ !controller.coachSecondaryInFlightForTesting }, "Stage 2 never finished")
         controller.view.layoutIfNeeded()
 
         // PRECONDITION: it really is a one-card set, or this proves nothing.
         let cards = Self.findViews(controller.view, prefix: "TonoKB.rewrite.")
         XCTAssertEqual(
             cards.count, 1,
-            "precondition: the validator must have collapsed the set to one option"
+            "precondition: the validator must have dropped both secondary tones"
         )
-        XCTAssertNil(controller.coachSequenceStateForTesting, "a local set has no sequence")
+        XCTAssertEqual(controller.coachSecondaryAxesForTesting, [])
 
-        for identifier in ["TonoKB.tryAnother", "TonoKB.versionCue",
-                           "TonoKB.versionBack", "TonoKB.versionForward"] {
-            XCTAssertNil(
-                Self.findView(controller.view, identifier: identifier),
-                "\(identifier) must not exist on a one-option local set — there is no "
-                    + "sequence behind it, so it could only be a control that cannot act"
+        // The control that IS backed: one sequence, one enabled Try another.
+        XCTAssertEqual(controller.coachSequenceStateForTesting?.displayed, 1)
+        XCTAssertEqual(controller.coachSequenceStateForTesting?.canRequestAnother, true)
+        let another = try XCTUnwrap(
+            Self.findView(controller.view, identifier: "TonoKB.tryAnother") as? UIControl
+        )
+        XCTAssertTrue(another.isEnabled, "the selected tone's Try another must be able to act")
+        XCTAssertFalse(another.isHidden)
+
+        // The controls that are NOT backed: nowhere to step on version 1.
+        for identifier in ["TonoKB.versionBack", "TonoKB.versionForward"] {
+            let control = Self.findView(controller.view, identifier: identifier) as? UIControl
+            XCTAssertTrue(
+                control == nil || control?.isHidden == true,
+                "\(identifier) has nowhere to go on version 1 and must not be actionable"
             )
         }
     }
 
-    /// The rule stated directly: no enabled control may exist without a
-    /// sequence, whatever the card count. Drives `applySequencePresentation`'s
-    /// nil branch — the one that used to set `tryAnother.isEnabled = true`.
+    /// The F3 rule stated directly, at every card count Build 116 can produce:
+    /// exactly ONE `Try another` exists, it belongs to the selected card, and it
+    /// is backed by a real sequence. A secondary card never carries one.
     @MainActor
-    func testNoSequenceControlIsEverEnabledWithoutASequence() throws {
+    func testExactlyOneBackedTryAnotherExistsAtEveryCardCount() throws {
         for optionCount in 1...3 {
             let draft = "hey I really need that report today"
             var texts: [LocalCoachAxis: String] = [.clearer: "Please send the report today."]
@@ -1732,16 +1863,21 @@ final class Build115LocalCoachTests: XCTestCase {
             )
             controller.beginCoachRewrite(before: draft, after: "", axis: "clearer")
             waitUntil({ controller.coachDeliveredRouteForTesting == "onDevice" })
+            waitUntil({ !controller.coachSecondaryInFlightForTesting })
             controller.view.layoutIfNeeded()
 
             XCTAssertEqual(
                 Self.findViews(controller.view, prefix: "TonoKB.rewrite.").count, optionCount,
                 "precondition: expected \(optionCount) card(s)"
             )
-            let tryAnother = Self.findView(controller.view, identifier: "TonoKB.tryAnother") as? UIControl
-            XCTAssertNil(
-                tryAnother,
-                "\(optionCount)-card local set rendered Try another with no sequence behind it"
+            let controls = Self.findViews(controller.view, prefix: "TonoKB.tryAnother")
+            XCTAssertEqual(
+                controls.count, 1,
+                "\(optionCount)-card set: exactly one Try another, on the selected card"
+            )
+            XCTAssertNotNil(
+                controller.coachSequenceStateForTesting,
+                "\(optionCount)-card set: the control must be backed by a real sequence"
             )
             MainActor.assumeIsolated { controller.invalidateCoachWorkForTesting() }
         }
@@ -1808,7 +1944,7 @@ final class Build115LocalCoachTests: XCTestCase {
                 "‘\(draft)’ is a real message and must still be rewritten on the device"
             )
             XCTAssertEqual(
-                Self.localAxes(axis: "clearer", draft: draft), LocalCoachAxis.base,
+                Self.localAxisSet(axis: "clearer", draft: draft), Set(LocalCoachAxis.base),
                 "‘\(draft)’ must take the local route"
             )
         }
@@ -1950,6 +2086,18 @@ final class Build115LocalCoachTests: XCTestCase {
     private static func localAxes(axis: String, draft: String) -> [LocalCoachAxis]? {
         guard case .local(let plan) = decision(axis: axis, draft: draft) else { return nil }
         return plan.axes
+    }
+
+    /// BUILD 116 — the same question asked without regard to order.
+    ///
+    /// The two callers below ask "does the local route ADMIT this draft, and
+    /// with which tones", which is what they have always been about. Build 116
+    /// makes the ORDER of those tones depend on which one was tapped, and that
+    /// is a different contract with its own tests in
+    /// `Build116SelectedFirstTests`. Comparing as a set keeps each test asking
+    /// one question.
+    private static func localAxisSet(axis: String, draft: String) -> Set<LocalCoachAxis>? {
+        localAxes(axis: axis, draft: draft).map(Set.init)
     }
 
     /// Spin the run loop until `condition` holds, or the budget runs out.

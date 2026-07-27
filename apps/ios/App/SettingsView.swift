@@ -71,7 +71,25 @@ struct SettingsView: View {
     // build 115 — on-device rewriting. `localRewriteAvailability` is what the
     // model reported on this appearance, never a stored guess.
     @State private var localRewriteEnabled: Bool = false
-    @State private var localRewriteAvailability: LocalRewriteAvailability = .modelNotReady
+    /// Build 116 — the explicit on-device-only choice. Loaded from the same
+    /// durable store as `localRewriteEnabled`, never from a feature flag.
+    @State private var localRewriteOnly: Bool = false
+    /// Build 116 physical-iPad correction — OPTIONAL, and nil means "still
+    /// asking", not "unavailable".
+    ///
+    /// This was `= .modelNotReady`, which is a real terminal reason with a real
+    /// sentence attached to it. `AppleRewriteBridge.availability` is a
+    /// cross-process hop, so on every appearance the section rendered a
+    /// definite verdict about the person's hardware BEFORE anything had been
+    /// asked — and on a device where the eventual answer is
+    /// `.deviceNotEligible`, what they read was an incompatibility notice sitting
+    /// directly above a typing-assistance check that passes. Dov reported
+    /// exactly that from a physical iPad.
+    ///
+    /// An optional makes the unresolved state unrepresentable as a verdict:
+    /// there is no availability case that means "unknown", so the absence of a
+    /// value has to be it.
+    @State private var localRewriteAvailability: LocalRewriteAvailability?
     @State private var accountState:      SettingsAccountState = .needsSetup
     @State private var accountNotice:     String?
     @State private var coachVariants = CoachVariantSettings()
@@ -601,26 +619,91 @@ struct SettingsView: View {
     // The row states what is TRUE of this device, not what would be true of a
     // supported one: on hardware that cannot run Apple Intelligence the toggle
     // is disabled and the caption says which condition is unmet.
+    //
+    // BUILD 116 — Dov's physical-iPad report, and the two things it found.
+    //
+    //   1. Every sentence here said "iPhone". On an iPad that is simply false,
+    //      and it is false in the one place a person looks to find out what
+    //      their hardware can do. There is no device-name branching below:
+    //      "this device" is true everywhere Tono runs, and a phrase that is
+    //      true everywhere beats two phrases that each have to be kept correct.
+    //   2. The section announced a verdict before it had one. See
+    //      `localRewriteAvailability` — it is now optional, and this section
+    //      renders a neutral "checking" state until the real probe answers.
+    //      Nothing here may say a device is ineligible on the strength of a
+    //      placeholder.
     @ViewBuilder
     private var onDeviceRewritingSection: some View {
         Section("On-device rewriting") {
-            Toggle("Rewrite on this iPhone", isOn: localRewriteBinding)
-                .disabled(!localRewriteAvailability.isAvailable)
+            Toggle("Rewrite on this device", isOn: localRewriteBinding)
+                .disabled(!localRewriteIsAvailable)
             Text(localRewriteCaption)
                 .font(.caption)
                 .foregroundColor(.secondary)
+                .accessibilityIdentifier("Tono.localRewriteCaption")
+            // Build 116 — the stronger promise, and it is deliberately a
+            // SECOND switch rather than a stricter reading of the first.
+            //
+            // "Rewrite on this device" says where rewrites are written when
+            // they can be; it still lets Coach ask Tono when this device
+            // cannot. That is the right default — it is the difference between
+            // a rewrite and no rewrite. But it is not what somebody means when
+            // they say nothing may leave the device, and inferring the stricter
+            // promise from the looser switch would silently change what the
+            // people already using it agreed to. So the stricter one is its
+            // own, explicit, and off unless chosen.
+            //
+            // Nested under the first: with rewriting off there is no on-device
+            // route to be exclusive about, so the row is hidden rather than
+            // shown as a dead control.
+            if localRewriteEnabled {
+                Toggle("Only rewrite on this device", isOn: localRewriteOnlyBinding)
+                    .disabled(!localRewriteIsAvailable)
+                Text(localRewriteOnlyCaption)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
         }
     }
 
+    /// The neutral state the section shows while the Foundation Models probe is
+    /// still running. Not a reason, not a verdict, and not a claim about the
+    /// hardware — just what is actually happening.
+    static let localRewriteCheckingCaption =
+        "Checking whether Apple Intelligence can write rewrites on this device…"
+
+    /// Whether the completed probe said the model is usable here. Unresolved is
+    /// NOT available — the controls stay safely disabled while the answer is
+    /// unknown, so a tap cannot start work the device may not be able to do.
+    private var localRewriteIsAvailable: Bool {
+        localRewriteAvailability?.isAvailable == true
+    }
+
     private var localRewriteCaption: String {
-        guard localRewriteAvailability.isAvailable else {
+        // Unresolved. Say so, and say nothing else — this is the exact point at
+        // which the shipped build asserted `.modelNotReady` about hardware it
+        // had not yet asked about.
+        guard let availability = localRewriteAvailability else {
+            return Self.localRewriteCheckingCaption
+        }
+        guard availability.isAvailable else {
             return LocalCoachCopy.sentence(
-                for: LocalCoachUnavailableReason(availability: localRewriteAvailability)
+                for: LocalCoachUnavailableReason(availability: availability)
             )
         }
         return localRewriteEnabled
             ? "Coach writes your rewrites here, with no connection and nothing sent anywhere. Turn this off to have Tono do it instead."
             : "Coach asks Tono for your rewrites. Turn this on to have them written here instead, with no connection needed."
+    }
+
+    /// States the cost as plainly as the benefit. Somebody choosing this is
+    /// giving something up — the tones this device cannot write, and longer
+    /// messages — and finding that out afterwards, from a refusal, would be
+    /// finding it out the wrong way.
+    private var localRewriteOnlyCaption: String {
+        localRewriteOnly
+            ? "Your message never leaves this device. When a tone can't be written here, Coach says so and leaves your message alone instead of asking Tono."
+            : "Turn this on to stop Coach asking Tono when this device can't write a rewrite. Some tones and longer messages will be declined rather than sent."
     }
 
     private var localRewriteBinding: Binding<Bool> {
@@ -629,6 +712,20 @@ struct SettingsView: View {
             set: { on in
                 localRewriteEnabled = on
                 LocalRewritePreferenceStore().setEnabled(on)
+                // Turning rewriting off drops the narrower choice with it, so
+                // the row that reappears is not pre-set to a promise the person
+                // made in a previous session and cannot currently see.
+                if !on { localRewriteOnly = false }
+            }
+        )
+    }
+
+    private var localRewriteOnlyBinding: Binding<Bool> {
+        Binding(
+            get: { localRewriteOnly },
+            set: { only in
+                localRewriteOnly = only
+                LocalRewritePreferenceStore().setOnDeviceOnly(only)
             }
         )
     }
@@ -636,13 +733,19 @@ struct SettingsView: View {
     /// Ask the model itself, once per appearance. The switch must reflect the
     /// device as it is now — somebody who just enabled Apple Intelligence in
     /// iOS Settings should find this row live when they come back.
+    ///
+    /// Build 116: the availability is cleared to nil first, so a re-appearance
+    /// shows "checking" rather than the previous appearance's answer while the
+    /// new probe runs. The old answer is not more trustworthy for being older.
     private func loadLocalRewriteState() {
         let preference = LocalRewritePreferenceStore().load()
+        localRewriteAvailability = nil
         Task {
             let availability = await AppleRewriteBridge.shared.availability(locale: Locale.current)
             await MainActor.run {
                 localRewriteAvailability = availability
                 localRewriteEnabled = preference.resolved(availability: availability)
+                localRewriteOnly = preference.prohibitsNetwork
             }
         }
     }
@@ -715,7 +818,7 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - On-device intelligence (build 106)
+    // MARK: - On-device typing assistance (build 106 · renamed in Build 116)
 
     /// Truthful, testable copy about what runs where, plus a self-test that
     /// exercises the REAL shipping resolver, checker and ranker.
@@ -723,8 +826,28 @@ struct SettingsView: View {
     /// Build 105 shipped no statement of this at all, which is why "offline
     /// mode did not visibly utilize local intelligence" was a fair reading of
     /// the product even where the local lane was working.
+    ///
+    /// BUILD 116 — the second half of Dov's physical-iPad report, and the more
+    /// serious half.
+    ///
+    /// This section used to be called "On-device intelligence" and its check
+    /// reported "On-device intelligence is working — N of N checks passed". It
+    /// sat immediately below a section saying Apple Intelligence was unavailable
+    /// on the device. Two different systems, and the names did not say so: this
+    /// one is `UITextChecker`, the person's own keyboard vocabulary and Tono's
+    /// deterministic ranker; the one above is Apple's Foundation Models. A green
+    /// tick here therefore read as a rebuttal of the notice above it, and a
+    /// person could reasonably conclude the app was contradicting itself or that
+    /// the incompatibility notice was wrong.
+    ///
+    /// The repair is naming, not deletion. Everything this section checks still
+    /// runs, still works offline, and is still worth showing — it is simply
+    /// typing assistance, and it says so. The one sentence that closes the
+    /// contradiction is `LocalIntelligenceCopy.independenceFromAppleRewriting`,
+    /// which states plainly that this can pass while Apple rewriting is
+    /// unavailable, because they are different systems.
     private var localIntelligenceSection: some View {
-        Section("On-device intelligence") {
+        Section("On-device typing assistance") {
             Text(LocalIntelligenceCopy.offlineCapabilitySummary)
                 .font(.caption).foregroundColor(.secondary)
             Text(LocalIntelligenceCopy.onlineRequirementSummary)
@@ -732,8 +855,11 @@ struct SettingsView: View {
             Text(LocalIntelligenceCopy.localModelDisclosure)
                 .font(.caption).foregroundColor(.secondary)
                 .accessibilityIdentifier("Tono.localModelDisclosure")
+            Text(LocalIntelligenceCopy.independenceFromAppleRewriting)
+                .font(.caption).foregroundColor(.secondary)
+                .accessibilityIdentifier("Tono.typingAssistanceIndependence")
 
-            Button("Check on-device intelligence") {
+            Button("Check typing assistance") {
                 localSelfTestResult = LocalIntelligenceSelfTest.run(
                     language: Locale.current.identifier,
                     availableLanguages: UITextChecker.availableLanguages,

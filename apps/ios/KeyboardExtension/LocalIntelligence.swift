@@ -174,6 +174,22 @@ public enum LocalIntelligenceCopy {
     public static let localModelDisclosure =
         "Tono's on-device suggestions use Apple's system spell checker, your own keyboard vocabulary, and Tono's local ranking. They are not Apple Intelligence or QuickType, which iOS does not make available to third-party keyboards."
 
+    /// Build 116 — the sentence that stops two true statements reading as a
+    /// contradiction.
+    ///
+    /// On a device where Apple Intelligence is unavailable, Settings shows an
+    /// unavailability notice for on-device rewriting and, directly below it, a
+    /// typing-assistance check that passes. Both are correct and they are about
+    /// different systems, but nothing said so — Dov read the pair on a physical
+    /// iPad as the app contradicting itself, which is the only reasonable
+    /// reading of an unexplained green tick under a red verdict.
+    ///
+    /// Deliberately names both sides and the direction of the independence:
+    /// this passing tells you nothing about that, and it is not a second opinion
+    /// on it.
+    public static let independenceFromAppleRewriting =
+        "Typing assistance is separate from on-device rewriting. It can pass here even when Apple Intelligence rewriting is unavailable on this device, and it does not decide whether rewriting can run."
+
     /// Shown when a Coach rewrite is attempted with no connection.
     public static let coachRequiresInternet =
         "Coach rewrites need an internet connection. Spelling and Live Tone keep working offline."
@@ -562,15 +578,24 @@ public enum LocalIntelligenceSelfTest {
         public var isPass: Bool { if case .pass = self { return true }; return false }
 
         /// One-line summary for the UI. Unmistakable by design.
+        ///
+        /// BUILD 116 — says "typing assistance", never "on-device
+        /// intelligence". The old phrasing was the load-bearing half of the
+        /// contradiction Dov found on a physical iPad: "On-device intelligence
+        /// is working" sitting under an Apple Intelligence unavailability
+        /// notice reads as a rebuttal of it, because "on-device intelligence"
+        /// is exactly what a person would call the thing the notice above is
+        /// about. This names what actually ran: spelling, personal vocabulary
+        /// and Tono's own ranking.
         public var summary: String {
             switch self {
             case .pass(let checks):
-                return "On-device intelligence is working — \(checks.count) of \(checks.count) checks passed, no network used."
+                return "Typing assistance is working — \(checks.count) of \(checks.count) checks passed, no network used."
             case .fail(let checks):
                 let failed = checks.filter { !$0.passed }
-                return "On-device intelligence FAILED — \(failed.count) of \(checks.count) checks failed."
+                return "Typing assistance FAILED — \(failed.count) of \(checks.count) checks failed."
             case .disabled(let reason):
-                return "On-device intelligence is unavailable: \(reason)"
+                return "Typing assistance is unavailable: \(reason)"
             }
         }
     }
