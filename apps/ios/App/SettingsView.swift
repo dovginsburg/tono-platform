@@ -113,6 +113,15 @@ struct SettingsView: View {
                 privacySection
                 accountManagementSection
             }
+            // Build 115 — iPad. LAYOUT ONLY. Measured before this line, the
+            // Settings form ran 992pt of a 1,032pt window: every toggle label
+            // and every row of account copy stretched the width of the tablet.
+            // The form keeps its own full-bleed grouped background and its rows
+            // take a readable measure. No section, row, order, binding, action
+            // or piece of copy is touched, and nothing about cross-device
+            // identity, entitlement, purchase, restore or deletion changes.
+            .tonoReadableColumn(.reading)
+            .background(Color(.systemGroupedBackground))
             .navigationTitle("Settings")
             .onAppear {
                 voiceField = prefs.preferredVoice ?? ""
@@ -929,6 +938,15 @@ Payment will be charged to your Apple ID account at confirmation of purchase. Th
                     .padding(.horizontal, 24)
                     .padding(.bottom, 32)
             }
+            // Build 115 — iPad. LAYOUT ONLY. Measured at 984pt of a 1,032pt
+            // window before this line. A paywall is a decision surface, not a
+            // reading surface — a headline, five feature lines and two product
+            // rows — so it takes the narrower FORM measure and the product rows
+            // stop being 1,000pt bars. The black field stays full-bleed behind
+            // it. `initiatePurchase`, the sign-in gate, the eligibility check,
+            // `store.products`, restore and every renewal-disclosure sentence
+            // are untouched.
+            .tonoReadableColumn(.form)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.black.ignoresSafeArea())
             .navigationBarTitleDisplayMode(.inline)
@@ -1104,6 +1122,8 @@ private struct AddRecipientView: View {
                     Toggle("Always include safer rewrite", isOn: $preferSafer)
                 }
             }
+            .tonoReadableColumn(.form)
+            .background(Color(.systemGroupedBackground))
             .navigationTitle("Add Recipient")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1272,6 +1292,14 @@ struct AccountDeletionView: View {
                 deleteButton
             }
             .padding(24)
+            // Build 115 — iPad. LAYOUT ONLY. The confirmation field and the
+            // destructive button were phone-width controls with no cap, so on a
+            // tablet "Permanently delete my account" became a 1,000pt red bar —
+            // the single worst control in the app to render as an easy-to-hit
+            // slab. The form measure keeps it the size of a button.
+            // `confirmDeletion`, the DELETE call, the typed-keyword gate, the
+            // 401/404/offline handling and the purge are untouched.
+            .tonoReadableColumn(.form)
             .navigationTitle("Delete account")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

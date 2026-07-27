@@ -451,6 +451,14 @@ struct EmailSignInSheet: View {
                 }
                 .padding(24)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                // Build 115 — iPad. This is the sheet the brief names: an
+                // email field, a password field and one capsule button, all
+                // written with `.frame(maxWidth: .infinity)` for a phone. In an
+                // iPad form sheet that made a ~656pt capsule, and presented any
+                // wider it made a 1,000pt one. The form measure keeps the
+                // controls the size of controls. Nothing about what this sheet
+                // DOES changes — no endpoint, no outcome mapping, no copy.
+                .tonoReadableColumn(.form)
             }
             .navigationTitle(navigationTitle)
             .navigationBarTitleDisplayMode(.inline)
