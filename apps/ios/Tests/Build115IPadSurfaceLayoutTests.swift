@@ -152,10 +152,21 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
     /// The 17 Pro's landscape geometry, so the landscape claim is not about one
     /// device either. Both clear the 700pt reading measure.
     private static let phoneLandscapeWide = CGSize(width: 874, height: 402)
-    /// Height used ONLY by `testPhoneLandscapeIsCappedAndCentredOnPurpose`, so a
+    /// Height used ONLY by `testPhoneLandscapeIsCappedAndCentredOnPurpose`, and
+    /// only for the surfaces in `needsTallerLandscapeMeasurement`, so a
     /// raster-based measurement of HORIZONTAL geometry can see the whole surface
     /// rather than the top 393pt of it. See that test for the full reasoning.
     private static let landscapeMeasurementHeight: CGFloat = 1_000
+
+    /// The surfaces whose widest element sits below a landscape phone's fold,
+    /// so a 393pt raster cannot see it.
+    ///
+    /// Exactly one, and it is named rather than inferred: Build 117 put a
+    /// top-level mode selector above Coach's draft editor, which pushed the
+    /// editor — Coach's first full-width element — off a 393pt screen. Every
+    /// other surface still measures at its real device height. If this set ever
+    /// grows, that is a design change worth arguing about, not a test detail.
+    private static let needsTallerLandscapeMeasurement: Set<String> = ["coach"]
     private static let iPadPortrait = CGSize(width: 1032, height: 1376)
     private static let iPadLandscape = CGSize(width: 1376, height: 1032)
     /// The 11-inch family, so the claim is not about one device.
@@ -672,7 +683,18 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
     func testPhoneLandscapeIsCappedAndCentredOnPurpose() {
         for size in [Self.phoneLandscape, Self.phoneLandscapeWide] {
             for surface in Self.surfaces() {
-                let viewport = CGSize(width: size.width, height: Self.landscapeMeasurementHeight)
+                // Only Coach needs the taller viewport, and only Coach gets it.
+                //
+                // The first repair raised the measurement height for EVERY
+                // surface, which was wider than the cause: re-running with the
+                // real device height fails on exactly two assertions, both
+                // `coach`. Seven other surfaces were moved off real-height
+                // centring coverage they never needed. Scoped here so the
+                // accommodation is no larger than the problem, and so a future
+                // regression in any other surface still fails at 393/402pt.
+                let viewport = Self.needsTallerLandscapeMeasurement.contains(surface.name)
+                    ? CGSize(width: size.width, height: Self.landscapeMeasurementHeight)
+                    : size
                 let (extent, _, _) = measureContent(surface.make(), size: viewport)
                 XCTAssertFalse(extent.isEmpty, "\(surface.name) rendered nothing at \(size.width)pt landscape")
                 let cap = TonoAdaptiveLayout.cap(surface.measure, dynamicTypeSize: .large)

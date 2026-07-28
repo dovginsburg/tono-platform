@@ -1419,14 +1419,92 @@ final class Build115LocalCoachTests: XCTestCase {
 
     /// The on-device wait is bounded, and bounded by no more than the longest
     /// wait this keyboard already permits.
+    ///
+    /// BUILD 117 — `local` is now the value the keyboard actually uses rather
+    /// than a number scraped out of its source. The constant delegates to
+    /// `LocalCoachRoutePolicy.visibleDeadlineSeconds`, so a source scrape reads
+    /// no digits at all; scraping was always the weaker method anyway, because
+    /// it agrees with a literal rather than with the deadline that ships. The
+    /// other two are still scraped: they ARE literals in that file, and this
+    /// test compiles the controller into its own module, so it can read the
+    /// on-device authority directly but not the keyboard's private `Const`.
     func testTheOnDeviceDeadlineIsBoundedAndDeclared() throws {
         let source = try Self.source("KeyboardExtension/KeyboardViewController.swift")
-        let local = try XCTUnwrap(Self.constant("coachLocalVisibleDeadline", in: source))
+        let local = Tono.LocalCoachRoutePolicy.visibleDeadlineSeconds
         let offline = try XCTUnwrap(Self.constant("coachOfflineVisibleDeadline", in: source))
         let visible = try XCTUnwrap(Self.constant("coachVisibleDeadline", in: source))
         XCTAssertGreaterThan(local, visible, "the on-device budget is its own, not the connected one")
         XCTAssertLessThanOrEqual(local, offline, "a keyboard must not wait longer than it already does")
         XCTAssertLessThanOrEqual(local, 60)
+
+        // And there is exactly one authority for it. A second literal here is
+        // how this bound and the test that guards it drift apart in silence —
+        // which is precisely what happened to the real-model timing assertion.
+        XCTAssertTrue(
+            source.contains("coachLocalVisibleDeadline: TimeInterval =\n            LocalCoachRoutePolicy.visibleDeadlineSeconds"),
+            "the keyboard must read the on-device deadline from LocalCoachRoutePolicy, not redeclare it"
+        )
+        XCTAssertNil(
+            Self.constant("coachLocalVisibleDeadline", in: source),
+            "the on-device deadline is declared once, in LocalCoachRoutePolicy — not as a literal here"
+        )
+    }
+
+    /// The staged watchdog scales with the number of generations, and only with
+    /// that.
+    ///
+    /// BUILD 117 — the deterministic half of the F10 repair. The real-model
+    /// test measures a live model and is therefore a *measurement*; this is the
+    /// *contract*, and it holds on any machine at any load in microseconds.
+    ///
+    /// The property that matters: N sequential generations get N budgets, so
+    /// the watchdog never cancels a model that is answering at a normal speed —
+    /// and the per-generation allowance stays FLAT as N grows, so the watchdog
+    /// cannot quietly become more permissive the more work the product asks
+    /// for. Those two together are what the flickering assertion was gesturing
+    /// at without ever checking.
+    func testTheStagedWatchdogScalesWithTheGenerationsAndNothingElse() {
+        let one = LocalCoachRoutePolicy.visibleDeadlineSeconds
+        XCTAssertEqual(LocalCoachRoutePolicy.visibleDeadline(forGenerations: 1), one)
+
+        for generations in 1...6 {
+            let deadline = LocalCoachRoutePolicy.visibleDeadline(forGenerations: generations)
+            XCTAssertEqual(
+                deadline, one * Double(generations), accuracy: 0.000_1,
+                "\(generations) sequential generations must get \(generations) budgets"
+            )
+            XCTAssertEqual(
+                deadline / Double(generations), one, accuracy: 0.000_1,
+                "the per-generation allowance grew at \(generations) axes — the watchdog got "
+                    + "more permissive the more the product asked for"
+            )
+        }
+
+        // Never zero. A watchdog scheduled at `.now()` fires immediately and
+        // cancels a request that has not been made. Stage 2 guards the empty
+        // set already, so this is defence in depth rather than a live fix.
+        XCTAssertEqual(LocalCoachRoutePolicy.visibleDeadline(forGenerations: 0), one)
+        XCTAssertEqual(LocalCoachRoutePolicy.visibleDeadline(forGenerations: -3), one)
+    }
+
+    /// Stage 2 schedules that function rather than its own arithmetic.
+    ///
+    /// The test above proves the policy is right; this proves the keyboard uses
+    /// it. Without this pair the controller could keep a private
+    /// `* Double(axes.count)` that drifts from the bound the timing test checks
+    /// — which is the exact failure mode this build was sent back for.
+    func testTheKeyboardSchedulesTheStagedWatchdogFromThePolicy() throws {
+        let source = SwiftSource.stripComments(
+            try Self.source("KeyboardExtension/KeyboardViewController.swift")
+        )
+        XCTAssertTrue(
+            source.contains("LocalCoachRoutePolicy.visibleDeadline("),
+            "Stage 2 must schedule the policy's deadline"
+        )
+        XCTAssertFalse(
+            source.contains("coachLocalVisibleDeadline * Double("),
+            "the staged watchdog is computed in one place, not re-derived in the controller"
+        )
     }
 
     func testInputAndOutputAreBounded() {
@@ -2336,10 +2414,32 @@ final class Build115LocalCoachTests: XCTestCase {
                     "\(testCase.label): \(option.axis) returned the draft rather than a rewrite"
                 )
             }
+            // What the watchdog actually bounds: ONE staged generation. See
+            // `onDeviceGenerationBudgetFraction` for why this is per-axis and
+            // not per-set.
+            let perGeneration = elapsed / Double(testCase.axes.count)
+            let perGenerationBudget =
+                Self.onDeviceVisibleDeadlineSeconds * Self.onDeviceGenerationBudgetFraction
             XCTAssertLessThan(
-                elapsed, Self.onDeviceVisibleDeadlineSeconds,
-                "\(testCase.label): \(Int(elapsed))s exceeds the on-device watchdog, so the "
-                    + "watchdog would cancel a generation the model completed"
+                perGeneration, perGenerationBudget,
+                "\(testCase.label): one staged generation took \(Int(perGeneration * 1000))ms of a "
+                    + "\(Int(perGenerationBudget * 1000))ms budget "
+                    + "(\(Int(Self.onDeviceVisibleDeadlineSeconds))s watchdog × "
+                    + "\(Self.onDeviceGenerationBudgetFraction)). The keyboard issues one axis per "
+                    + "request, so this is the time the person actually waits before the tone they "
+                    + "tapped appears — and it has lost its margin."
+            )
+            // And the whole set still has a ceiling — the REAL one: the exact
+            // deadline the keyboard schedules for a run of this many staged
+            // generations, taken from the product's own function rather than
+            // re-derived here. Re-deriving it is what went wrong in the first
+            // place. A runaway batch fails rather than passing on a flattering
+            // per-generation average.
+            XCTAssertLessThan(
+                elapsed,
+                Tono.LocalCoachRoutePolicy.visibleDeadline(forGenerations: testCase.axes.count),
+                "\(testCase.label): the whole \(testCase.axes.count)-axis set took \(Int(elapsed))s, "
+                    + "past the watchdog the keyboard would actually schedule for it"
             )
             // Lengths and durations only — never the text.
             print("BUILD115 F1 real-model \(testCase.label): draft=\(draft.count) "
@@ -2366,9 +2466,61 @@ final class Build115LocalCoachTests: XCTestCase {
         XCTAssertEqual(refusal, .draftTooLong)
     }
 
-    /// The on-device watchdog, read from the source rather than remembered, so
-    /// this assertion cannot drift away from the constant it is about.
-    static let onDeviceVisibleDeadlineSeconds: TimeInterval = 30
+    /// The on-device watchdog, now genuinely read from the source rather than
+    /// remembered — it used to be a second hardcoded `30` under this exact
+    /// comment, which is the drift the comment claimed to prevent.
+    static var onDeviceVisibleDeadlineSeconds: TimeInterval {
+        Tono.LocalCoachRoutePolicy.visibleDeadlineSeconds
+    }
+
+    /// How much of one generation's budget a single staged generation may
+    /// actually consume.
+    ///
+    /// BUILD 117 REPAIR — what this test was measuring, and why it kept
+    /// flickering.
+    ///
+    /// `coachLocalVisibleDeadline` bounds ONE generation. Build 116 stages the
+    /// tones: every shipping call site issues
+    /// `LocalCoachSetRequest(draft:axes:[oneAxis],locale:)`
+    /// (`KeyboardViewController.swift:3578`, `:4209`, `:5370`), and Stage 2
+    /// schedules `LocalCoachRoutePolicy.visibleDeadline(forGenerations:)` —
+    /// which SCALES with the number of tones, because the generations run
+    /// sequentially. This test asks for three or four axes in one call and then
+    /// compared the SUM of those generations against the ONE-generation budget.
+    /// The four-axis case was four generations charged to a one-generation
+    /// allowance.
+    ///
+    /// That is not a flake, and the product source is the proof: the keyboard
+    /// would have allowed that run 120s. The assertion invented a 30s bound the
+    /// product never applies to a four-tone run, then failed it —
+    /// `700-bound-4` at **31.344s** in the Release gate of 2026-07-27.
+    ///
+    /// So the fix is not to relax the deadline, shorten the drafts the product
+    /// admits, or skip the real model — the admission bound was measured and is
+    /// not the defect. It is to assert the two quantities that are real: the
+    /// per-generation time a person actually waits, and the whole-set deadline
+    /// the keyboard would actually schedule (asserted above from the product's
+    /// own function, not re-derived).
+    ///
+    /// MEASURED, per generation, across four full-suite runs of this object
+    /// (two Debug, two Release, same machine):
+    ///
+    ///     550        (3 axes)   6.24s  6.26s  6.55s  8.07s
+    ///     930-bound  (3 axes)   7.04s  7.46s  7.53s  7.69s
+    ///     700-bound-4(4 axes)   4.80s  6.91s  7.38s  7.84s
+    ///
+    /// So one generation costs 4.8–8.1s — a 1.7× spread that is inherent to
+    /// running a real ML model on a shared machine, which is precisely why an
+    /// assertion with 1.6% headroom could not survive. Against the real 30s
+    /// watchdog the worst observation leaves **3.7× margin**.
+    ///
+    /// 0.5 — a 15s tripwire — sits 1.86× above the worst measurement. It is a
+    /// regression bound, not a benchmark: it should fire when a generation
+    /// roughly doubles in cost, not when a machine is briefly busy. The earlier
+    /// note here claimed "6.3–7.5s, 4× headroom"; that range was taken from one
+    /// pair of runs and the very next run measured 8.07s, so it is corrected
+    /// rather than repeated.
+    static let onDeviceGenerationBudgetFraction: Double = 0.5
 
     /// Realistic, non-repetitive prose truncated at a WORD boundary.
     ///

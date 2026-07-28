@@ -9,10 +9,21 @@
 // This file sits in `Shared/` because the host app and the Share extension are
 // two processes that need the same types, and `Shared/` is where two-process
 // types live. It is NOT compiled into the keyboard or the iMessage extension,
-// and that exclusion is not a convention — it is asserted against the Xcode
-// project AND against the shipped Mach-O binaries by
-// `Build117ReadTheAskTests`. The keyboard stays rewrite-only, so not one symbol
-// or string from this feature may reach it. (`Shared/` already contains files
+// and that exclusion is not a convention — it is asserted two ways, and the
+// division of labour is stated exactly because an unbacked claim of proof is
+// how Build 115's "never match mangled substrings, demangle" lesson gets
+// un-learned:
+//
+//   * `Build117ReadTheAskTests` asserts TARGET MEMBERSHIP, by parsing
+//     `project.pbxproj`, and asserts that no keyboard or iMessage SOURCE names
+//     this feature. Both are source-level, and neither opens a binary.
+//   * `Scripts/verify_build117_read_ask_exclusion.py` asserts the SHIPPED
+//     Mach-O binaries — symbols demangled, strings matched case-sensitively as
+//     whole sentences, `*.debug.dylib` included, and with mandatory positive
+//     controls so a scan that has gone blind fails instead of reporting zero.
+//
+// The keyboard stays rewrite-only, so not one symbol or string from this
+// feature may reach it. (`Shared/` already contains files
 // with selective membership — `ToneEngineTests.swift` and
 // `OnDeviceAppleRewriteTests.swift` belong to no target at all — so this is the
 // established shape, not a new one.)
@@ -604,6 +615,142 @@ public enum ReadTheAskCopy {
     public static let settingsDisclosure =
         "Read the Ask reads only text you share or paste. It never reads your conversations, "
         + "the keyboard, or the clipboard on its own, and it never sends a reply for you."
+}
+
+// MARK: - What a surface shows, decided once
+
+/// What a Read the Ask notice IS, separate from how it is drawn.
+///
+/// The Share extension drew all three of "no request in this message",
+/// "Tono can't read this one" and "the request failed" with the same 36pt
+/// yellow warning triangle. Two of those are not warnings: `noAsk` is a
+/// *successful* reading, and `declined` is a deliberate boundary. Telling
+/// somebody their ordinary "thanks for dinner" message triggered a warning is
+/// the same class of untruth as telling them Tono couldn't coach their draft
+/// when they never wrote one.
+///
+/// Kind is decided here, once, for both surfaces — so the companion app and
+/// Share cannot drift apart again.
+public enum ReadTheAskNoticeKind: Equatable, Sendable {
+    /// It worked. There is simply nothing being asked.
+    case success
+    /// A boundary Tono chose. Not a failure, and not the person's fault.
+    case boundary
+    /// Something actually went wrong and trying again may help.
+    case failure
+}
+
+/// A notice ready to render: what to say, which glyph, whether to offer retry.
+public struct ReadTheAskNotice: Equatable, Sendable {
+
+    public let kind: ReadTheAskNoticeKind
+    public let glyph: String
+    public let message: String
+
+    /// Retry is offered only where retrying could plausibly change the answer.
+    /// Re-reading a message that asks for nothing produces the same correct
+    /// answer forever, so offering it there is an invitation to a loop.
+    public var offersRetry: Bool { kind == .failure }
+
+    public init(kind: ReadTheAskNoticeKind, glyph: String, message: String) {
+        self.kind = kind
+        self.glyph = glyph
+        self.message = message
+    }
+
+    /// The notice for a non-reading outcome, or `nil` when there IS a reading
+    /// and the surface should render it instead.
+    public static func forOutcome(_ outcome: ReadAskOutcome) -> ReadTheAskNotice? {
+        switch outcome {
+        case .reading:
+            return nil
+        case .noAsk:
+            return ReadTheAskNotice(
+                kind: .success, glyph: "checkmark.circle", message: ReadTheAskCopy.noAsk
+            )
+        case .declined:
+            return ReadTheAskNotice(
+                kind: .boundary, glyph: "hand.raised", message: ReadTheAskCopy.declined
+            )
+        }
+    }
+
+    /// The notice for a genuine failure. This is the only one that gets the
+    /// warning triangle, and the only one that offers a retry.
+    public static func forFailure(_ error: Error) -> ReadTheAskNotice {
+        ReadTheAskNotice(
+            kind: .failure,
+            glyph: "exclamationmark.triangle.fill",
+            message: ReadTheAskFailure.message(for: error)
+        )
+    }
+}
+
+/// The sentence a Read the Ask failure says.
+///
+/// One function, called by both surfaces, for one reason: every Read the Ask
+/// failure used to report itself as `.coachDraft` — *"Couldn't coach this
+/// draft."* — on a feature whose entire purpose is that a message somebody sent
+/// you is not a draft you wrote. The one confusion the feature exists to
+/// prevent was reproduced in its own error copy.
+///
+/// `.readMessage` already existed, already said *"Couldn't read this
+/// message."*, and the keyboard already used it. Nothing new was needed except
+/// picking it — and putting the choice somewhere it can only be made once.
+public enum ReadTheAskFailure {
+    public static func message(for error: Error) -> String {
+        ConsumerErrorCopy.message(for: error, action: .readMessage)
+    }
+}
+
+// MARK: - Share to Tono, as decisions rather than view state
+
+/// Which screen Share to Tono is on.
+public enum ReadTheAskShareStage: Equatable, Sendable {
+    /// Asking what the shared text IS. Only reachable with the feature on.
+    case choosing
+    /// The established rewrite path.
+    case rewrite
+    /// Reading what a received message asks.
+    case readAsk
+}
+
+/// The Share extension's flow, as pure decisions.
+///
+/// Extracted from `ShareRootView` because an `.appex`'s SwiftUI views cannot be
+/// imported by the unit-test target, which left the whole Share surface — one
+/// of the two the contract names — resting on inspection alone. The decisions
+/// are the part worth testing; what remains in the view is layout.
+public enum ReadTheAskShareFlow {
+
+    /// Where Share opens.
+    ///
+    /// With the feature off this is `.rewrite` from the first frame, so the
+    /// extension behaves exactly as it did before Build 117 — an entry point
+    /// for a feature that is off is not a dimmed entry point, it is no entry
+    /// point.
+    public static func initialStage(activationEnabled: Bool) -> ReadTheAskShareStage {
+        activationEnabled ? .choosing : .rewrite
+    }
+
+    /// Where an explicit choice leads. There is no default and no
+    /// pre-selection: text somebody shared could equally be a message they
+    /// received or a draft they are about to send, and refusing to guess is the
+    /// whole point.
+    public static func stage(choosing mode: TonoRequestMode) -> ReadTheAskShareStage {
+        switch mode {
+        case .rewrite: return .rewrite
+        case .readAsk: return .readAsk
+        }
+    }
+
+    /// Whether a stage should start work as soon as it appears.
+    ///
+    /// `.choosing` must not: it is a question, and a question that answers
+    /// itself is not one.
+    public static func runsOnAppear(_ stage: ReadTheAskShareStage) -> Bool {
+        stage == .rewrite
+    }
 }
 
 // MARK: - The transport

@@ -296,6 +296,15 @@ struct CoachView: View {
         readAskSession.clear()
     }
 
+    /// Leaving Read the Ask, or switching it off, also stops a reading that is
+    /// still in flight. The panel owns that task and cancels it in
+    /// `onDisappear`, which is what every path through here triggers.
+    ///
+    /// Clearing the buffer is NOT what stops it, though an earlier note here
+    /// said so: `run()` captures the text before it awaits, and the response
+    /// lands on the session rather than the buffer, so a cleared buffer would
+    /// have watched the reading come back anyway.
+
     // MARK: - Sub-views
 
     private var hero: some View {

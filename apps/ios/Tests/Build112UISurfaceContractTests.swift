@@ -146,8 +146,14 @@ final class Build112UISurfaceContractTests: XCTestCase {
     ]
 
     /// State rendered to the user when a request fails.
+    ///
+    /// Build 117 adds `readAskFailure`: Share to Tono keeps Read the Ask's
+    /// failure apart from the rewrite path's `errorMessage`, because the two
+    /// say different sentences. A new place to put a failure is a new way to
+    /// leak one, so it comes under the same contract on the same day it exists.
     private static let failureStateSinks = [
         #"\berrorMessage\s*=\s*(.+)"#,
+        #"\breadAskFailure\s*=\s*(.+)"#,
         #"\bpurchaseError\s*=\s*(.+)"#,
         #"\bmode\s*=\s*\.error\((.*)\)"#,
         #"\bcompletion\((.*)\)"#,
@@ -155,9 +161,21 @@ final class Build112UISurfaceContractTests: XCTestCase {
 
     /// The only functions allowed to produce a failure sentence. Each maps a
     /// failure's CASE — never its message payload — onto an action.
+    ///
+    /// Build 117's two are approved because they DELEGATE rather than author:
+    /// `ReadTheAskFailure.message(for:)` is one line that calls
+    /// `ConsumerErrorCopy.message(for:action:.readMessage)`, and
+    /// `ReadTheAskNotice.forFailure(_:)` calls that. Approval on this list is
+    /// not a promise — it is checked by
+    /// `Build117ReadTheAskTests.testTheReadTheAskMappersDelegateToTheOneApprovedMapper`,
+    /// which asserts exact equality with `ConsumerErrorCopy` rather than
+    /// trusting a name. (This suite reads source only — it has no
+    /// `@testable import` — so the behavioural half has to live where the types
+    /// do.)
     private static let approvedErrorMappers = [
         "ConsumerErrorCopy.message(", "prettyError(", "requestErrorMessage(",
         "verificationErrorMessage(", "userFacingMessage",
+        "ReadTheAskFailure.message(", "ReadTheAskNotice.forFailure(",
     ]
 
     private static let errorIdentifiers = [

@@ -16,8 +16,12 @@
 //      obvious button does not accidentally turn a feature on.
 //   3. `ReadTheAskPanel` — the reading itself, and the two drafts made from it.
 //
-// The approved direction (assets/tono-read-the-ask, 2026-07-27) covers the
-// interaction and the look. Runtime accessibility is a separate gate and is
+// The founder-approved direction of 2026-07-27 covers the interaction and the
+// look; it lives with the product contract, not in this repo, so it is named
+// rather than cited by a path nobody here can open. (The earlier citation
+// pointed at `assets/tono-read-the-ask`, which does not exist in this
+// repository — an unverifiable provenance claim is worse than none.)
+// Runtime accessibility is a separate gate and is
 // taken seriously here rather than inherited: every control states what it is
 // and what it will do, the selector reports which side is selected, both
 // segments clear the 44pt minimum at every Dynamic Type size, and the sheet
@@ -209,6 +213,19 @@ struct ReadTheAskPanel: View {
     @State private var loading = false
     @State private var errorMessage: String?
 
+    /// The reading in flight, held so it can be cancelled.
+    ///
+    /// R5 asked for cancellation "if safely local", and looking for a safe
+    /// place to put it found a defect rather than a nicety: a reading that
+    /// returned AFTER the person tapped Remove still called `session.apply`,
+    /// so the message they had just taken off the screen came back with a
+    /// reading attached. Withdrawal has to mean withdrawal, so the request is
+    /// cancelled and a late response is dropped.
+    ///
+    /// No new control: the affordances that cancel are the ones that already
+    /// mean "stop" — Remove, and leaving Read the Ask.
+    @State private var readingTask: Task<Void, Never>?
+
     init(
         receivedText: Binding<String>,
         session: ReadTheAskSession,
@@ -238,16 +255,34 @@ struct ReadTheAskPanel: View {
                 switch outcome {
                 case .reading(let result):
                     readingCard(result)
-                case .noAsk:
-                    notice(icon: "checkmark.circle", text: ReadTheAskCopy.noAsk)
-                case .declined:
-                    notice(icon: "hand.raised", text: ReadTheAskCopy.declined)
+                default:
+                    // Decided once, in `ReadTheAskNotice`, for this surface and
+                    // Share alike.
+                    if let shown = ReadTheAskNotice.forOutcome(outcome) {
+                        notice(icon: shown.glyph, text: shown.message)
+                    }
                 }
             }
             if session.draftKind != nil {
                 draftCard
             }
         }
+        // Leaving Read the Ask stops the reading too.
+        //
+        // BUILD 117 REPAIR — cancelling on Remove was only half of it. Coach
+        // switches back to Rewrite (and the Settings toggle switches the whole
+        // feature off) by calling `clearReadTheAsk()`, which empties the buffer
+        // and the session and takes this panel off screen — but a `Task` is not
+        // cancelled by the view that made it going away. The in-flight reading
+        // finished, saw an uncancelled task, and called `session.apply`, so the
+        // message the person had just left behind came back with a reading
+        // attached the next time they opened the surface.
+        //
+        // Clearing the buffer could never fix that on its own: `run()` captures
+        // the text before it awaits, and the response lands on the SESSION, not
+        // the buffer. The task itself has to be cancelled, which is what this
+        // does — for every way of leaving, including the ones Coach owns.
+        .onDisappear { cancelReading() }
     }
 
     // MARK: The message
@@ -264,6 +299,7 @@ struct ReadTheAskPanel: View {
                 // asked to do anything with it.
                 if !receivedText.isEmpty {
                     Button(ReadTheAskCopy.removeReceivedText) {
+                        cancelReading()
                         receivedText = ""
                         session.clear()
                         errorMessage = nil
@@ -318,7 +354,8 @@ struct ReadTheAskPanel: View {
 
     private var readButton: some View {
         Button {
-            Task { await run() }
+            readingTask?.cancel()
+            readingTask = Task { await run() }
         } label: {
             HStack(spacing: 8) {
                 if loading { ProgressView().tint(.white) }
@@ -524,6 +561,14 @@ struct ReadTheAskPanel: View {
 
     // MARK: Action
 
+    /// Stop an in-flight reading and forget it. Safe to call when there is
+    /// none.
+    private func cancelReading() {
+        readingTask?.cancel()
+        readingTask = nil
+        loading = false
+    }
+
     private func run() async {
         let text = receivedText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isOffline else { return }
@@ -546,13 +591,18 @@ struct ReadTheAskPanel: View {
             let outcome = try await TonoBackend.shared.readAsk(
                 receivedText: text, mode: .readAsk, route: route
             )
+            // A response that arrives after the person withdrew is not an
+            // answer to anything on screen.
+            guard !Task.isCancelled else { return }
             await MainActor.run {
                 session.apply(outcome)
                 loading = false
             }
         } catch {
+            guard !Task.isCancelled else { return }
             await MainActor.run {
-                errorMessage = ConsumerErrorCopy.message(for: error, action: .coachDraft)
+                // `.readMessage`, not `.coachDraft`. See `ReadTheAskFailure`.
+                errorMessage = ReadTheAskFailure.message(for: error)
                 loading = false
             }
         }

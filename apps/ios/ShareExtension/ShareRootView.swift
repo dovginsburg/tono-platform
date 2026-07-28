@@ -78,14 +78,10 @@ struct ShareModeChoiceView: View {
     }
 }
 
-/// Build 117 — what the Share extension shows, in order.
-enum ShareStage: Equatable {
-    /// Read the Ask is on, so the person is asked what the text is.
-    case choosing
-    /// Rewrite. The established path, reached directly when Read the Ask is off.
-    case rewrite
-    case readAsk
-}
+// Build 117 repair — the stage type now lives in `ReadTheAskShareFlow`
+// (`Shared/ReadTheAsk.swift`) together with the decisions that produce it, so
+// the unit-test target can reach both. A local copy here would be a second
+// vocabulary for one idea, and the decisions would drift back into the view.
 
 struct ShareAnalysisView: View {
     let draft: String
@@ -93,7 +89,7 @@ struct ShareAnalysisView: View {
 
     /// Build 117 — with Read the Ask off this is `.rewrite` from the first
     /// frame, so the extension opens on exactly the screen it always opened on.
-    @State private var stage: ShareStage
+    @State private var stage: ReadTheAskShareStage
 
     @State private var analysis: ToneAnalysis?
     @State private var isLoading = false
@@ -102,6 +98,10 @@ struct ShareAnalysisView: View {
     // The received message and its reading, for one flow. Never written down.
     @StateObject private var readAskSession = ReadTheAskSession()
     @State private var readAskLoading = false
+    /// Read the Ask's own failure notice. Kept apart from `errorMessage`, which
+    /// belongs to the rewrite path and correctly says "Couldn't coach this
+    /// draft."
+    @State private var readAskFailure: ReadTheAskNotice?
 
     init(
         draft: String,
@@ -110,7 +110,9 @@ struct ShareAnalysisView: View {
     ) {
         self.draft = draft
         self.onDismiss = onDismiss
-        _stage = State(initialValue: activation.isEnabled ? .choosing : .rewrite)
+        _stage = State(initialValue: ReadTheAskShareFlow.initialStage(
+            activationEnabled: activation.isEnabled
+        ))
     }
 
     var body: some View {
@@ -119,13 +121,12 @@ struct ShareAnalysisView: View {
                 switch stage {
                 case .choosing:
                     ShareModeChoiceView { mode in
+                        stage = ReadTheAskShareFlow.stage(choosing: mode)
                         switch mode {
                         case .rewrite:
-                            stage = .rewrite
                             runAnalysis()
                         case .readAsk:
                             readAskSession.setReceivedText(draft)
-                            stage = .readAsk
                             runReadAsk()
                         }
                     }
@@ -146,7 +147,7 @@ struct ShareAnalysisView: View {
         .onAppear {
             // Only the established path runs on appear. The choice screen waits
             // for the person, because it is a question.
-            if stage == .rewrite { runAnalysis() }
+            if ReadTheAskShareFlow.runsOnAppear(stage) { runAnalysis() }
         }
         .onDisappear {
             // One flow, then gone.
@@ -162,16 +163,16 @@ struct ShareAnalysisView: View {
             ProgressView("Reading…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let outcome = readAskSession.outcome {
-            switch outcome {
-            case .reading(let result):
+            // Build 117 repair — what a notice IS is decided once, in
+            // `ReadTheAskNotice`, for both surfaces. A successful "nothing is
+            // being asked of you" is no longer drawn as a warning.
+            if let notice = ReadTheAskNotice.forOutcome(outcome) {
+                ShareNoticeView(notice: notice)
+            } else if case .reading(let result) = outcome {
                 ShareReadAskResultView(result: result)
-            case .noAsk:
-                ShareNoticeView(message: ReadTheAskCopy.noAsk)
-            case .declined:
-                ShareNoticeView(message: ReadTheAskCopy.declined)
             }
-        } else if let errorMessage {
-            ShareNoticeView(message: errorMessage, retry: { runReadAsk() })
+        } else if let readAskFailure {
+            ShareNoticeView(notice: readAskFailure, retry: { runReadAsk() })
         } else {
             Color.clear
         }
@@ -192,7 +193,9 @@ struct ShareAnalysisView: View {
                 }
             } catch {
                 await MainActor.run {
-                    errorMessage = ConsumerErrorCopy.message(for: error, action: .coachDraft)
+                    // `.readMessage`, not `.coachDraft`: this failed to read a
+                    // message somebody sent, not to coach a draft nobody wrote.
+                    readAskFailure = ReadTheAskNotice.forFailure(error)
                     readAskLoading = false
                 }
             }
@@ -353,20 +356,32 @@ private struct ShareReadAskResultView: View {
     }
 }
 
-/// One neutral sentence, and — when there is something to retry — a way to.
+/// One neutral sentence, drawn as what it actually is.
+///
+/// The glyph and its tint come from `ReadTheAskNotice.kind`, so a successful
+/// reading with no request in it is no longer presented with the iconography of
+/// a failure. Retry appears only where retrying could change the answer.
 private struct ShareNoticeView: View {
-    let message: String
+    let notice: ReadTheAskNotice
     var retry: (() -> Void)?
+
+    private var tint: Color {
+        switch notice.kind {
+        case .success:  return .green
+        case .boundary: return .secondary
+        case .failure:  return .yellow
+        }
+    }
 
     var body: some View {
         VStack(spacing: 16) {
-            Image(systemName: "exclamationmark.triangle")
+            Image(systemName: notice.glyph)
                 .font(.system(size: 36))
-                .foregroundColor(.yellow)
-            Text(message)
+                .foregroundColor(tint)
+            Text(notice.message)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
-            if let retry {
+            if notice.offersRetry, let retry {
                 Button("Try again", action: retry)
                     .buttonStyle(.borderedProminent)
             }

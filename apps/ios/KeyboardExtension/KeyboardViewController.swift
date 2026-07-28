@@ -156,7 +156,11 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         // Deliberately not longer than `coachOfflineVisibleDeadline`: a
         // keyboard must not sit on a shimmer for a minute, whichever route it
         // took.
-        static let coachLocalVisibleDeadline: TimeInterval = 30
+        // Read from `LocalCoachRoutePolicy`, not declared again here. Two
+        // literals for one deadline is how a bound and the test that guards it
+        // drift apart without anybody noticing.
+        static let coachLocalVisibleDeadline: TimeInterval =
+            LocalCoachRoutePolicy.visibleDeadlineSeconds
         static let backendURL = "https://api.tonoit.com/v1/analyze"
 
         // Delete fires once immediately, then repeats with a bounded ramp.
@@ -4193,7 +4197,11 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         }
         coachSecondaryDeadline = watchdog
         DispatchQueue.main.asyncAfter(
-            deadline: .now() + Const.coachLocalVisibleDeadline * Double(axes.count),
+            // Build 117 — the same expression the timing test bounds itself
+            // with, so the watchdog and its guard cannot drift apart.
+            deadline: .now() + LocalCoachRoutePolicy.visibleDeadline(
+                forGenerations: axes.count
+            ),
             execute: watchdog
         )
         coachSecondaryTask = Task { [weak self] in

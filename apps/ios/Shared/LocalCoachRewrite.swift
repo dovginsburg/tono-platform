@@ -486,6 +486,49 @@ public enum LocalCoachRoute: Sendable, Equatable {
 /// never depends on ambient state, so the whole matrix is unit-testable without
 /// a device, a model, or a network.
 public enum LocalCoachRoutePolicy {
+
+    /// The visible deadline one on-device generation is given, in seconds.
+    ///
+    /// THE one authority. `KeyboardViewController.Const.coachLocalVisibleDeadline`
+    /// reads this rather than declaring its own `30`, and so does the real-model
+    /// timing test — which previously carried a hardcoded copy under a doc
+    /// comment claiming it was "read from the source rather than remembered".
+    /// It was not; it was a second literal that could drift silently away from
+    /// the deadline it claimed to be about.
+    ///
+    /// It bounds ONE generation, not a set. Build 116 stages the tones — every
+    /// shipping call site passes a single-element `axes` array, and the deadline
+    /// is scheduled around that one request — so this is the budget for the tone
+    /// the person actually tapped, measured from their tap.
+    public static let visibleDeadlineSeconds: TimeInterval = 30
+
+    /// The watchdog for a run of `generations` staged generations.
+    ///
+    /// BUILD 117 — the arithmetic that decides when Tono gives up on the
+    /// on-device model used to live as an expression inside the keyboard's
+    /// Stage 2 (`Const.coachLocalVisibleDeadline * Double(axes.count)`), which
+    /// meant the single most important reliability number in the local route
+    /// could only be checked by reading it. It is a function here so it can be
+    /// asserted deterministically, and so the real-model timing test can bound
+    /// itself with the SAME expression the product schedules rather than
+    /// re-deriving it by hand — the re-derivation is exactly what drifted:
+    /// that test charged a four-generation run to a one-generation budget and
+    /// failed at 31.3s against a 30s bound the product never applied to it.
+    ///
+    /// It scales because the generations are SEQUENTIAL. Stage 2 loops the
+    /// axes and awaits each one in turn, so N tones legitimately cost N budgets;
+    /// a fixed bound would cancel a model that was answering perfectly well.
+    /// What it must NOT do is grow per-generation — that would be the watchdog
+    /// quietly getting more permissive as the product asks for more.
+    ///
+    /// Clamped at one generation. Stage 2 already guards an empty set, so this
+    /// is defence rather than a live fix: a zero-generation deadline is
+    /// `.now()`, and a watchdog that fires immediately would cancel a request
+    /// nobody had made yet.
+    public static func visibleDeadline(forGenerations generations: Int) -> TimeInterval {
+        visibleDeadlineSeconds * Double(max(1, generations))
+    }
+
     // MARK: Bounds — one measured chain, not three independent numbers
     //
     // Build 115 as first written declared three bounds that contradicted each

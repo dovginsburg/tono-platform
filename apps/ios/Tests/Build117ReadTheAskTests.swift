@@ -93,6 +93,20 @@ final class Build117ReadTheAskTests: XCTestCase {
             set { lock.withLock { _readAskStatus = newValue } }
         }
 
+        /// Hold the response, so a test can act while a request is genuinely in
+        /// flight.
+        ///
+        /// Without this the stub answers inside `startLoading` before the next
+        /// line of the test runs, so "tap Remove while the reading is in
+        /// flight" was never actually in flight — and the cancellation test
+        /// passed with the cancellation deleted. A test that cannot fail is not
+        /// evidence.
+        private nonisolated(unsafe) static var _holdSeconds: TimeInterval = 0
+        static var holdSeconds: TimeInterval {
+            get { lock.withLock { _holdSeconds } }
+            set { lock.withLock { _holdSeconds = newValue } }
+        }
+
         static func reset() {
             lock.withLock {
                 _readAskCount = 0
@@ -101,6 +115,7 @@ final class Build117ReadTheAskTests: XCTestCase {
                 _lastAnalyzeBody = ""
                 _readAskJSON = Build117ReadTheAskTests.readingJSON
                 _readAskStatus = 200
+                _holdSeconds = 0
             }
         }
 
@@ -123,6 +138,9 @@ final class Build117ReadTheAskTests: XCTestCase {
 
         override func startLoading() {
             guard let url = request.url else { return }
+            if url.path == "/api/read-ask", Self.holdSeconds > 0 {
+                Thread.sleep(forTimeInterval: Self.holdSeconds)
+            }
             var status = 200
             let body: String
             switch url.path {
@@ -1647,6 +1665,46 @@ private extension URLRequest {
 /// `ReadTheAskPanel` in the composition `CoachView` gives it — same stack
 /// spacing, same padding, same readable column, same background — so the tests
 /// measure the shipping view under the shipping layout.
+/// The panel, plus the one thing Coach does that this suite otherwise cannot
+/// reach: take it off screen.
+///
+/// Switching Coach back to Rewrite, and switching the feature off in Settings,
+/// both call `clearReadTheAsk()` and remove the panel from the hierarchy. The
+/// button here does exactly that pair, so the test drives the real teardown
+/// rather than a description of it. The session is owned by the TEST, because
+/// the whole question is what lands in it after the panel is gone.
+private struct ReadTheAskLeavableHarness: View {
+    @ObservedObject var session: ReadTheAskSession
+    @State private var receivedText = ""
+    @State private var showsPanel = true
+
+    static let leaveLabel = "Leave Read the Ask"
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    if showsPanel {
+                        ReadTheAskPanel(
+                            receivedText: $receivedText, session: session, isOffline: false
+                        )
+                    }
+                    Button(Self.leaveLabel) {
+                        // `CoachView.clearReadTheAsk()`, then the mode swap.
+                        receivedText = ""
+                        session.clear()
+                        showsPanel = false
+                    }
+                    Spacer(minLength: 20)
+                }
+                .padding(20)
+                .tonoReadableColumn(.reading)
+            }
+            .background(Color.black.ignoresSafeArea())
+        }
+    }
+}
+
 private struct ReadTheAskSurfaceHarness: View {
     @State private var receivedText = ""
     @StateObject private var session = ReadTheAskSession()
@@ -1668,3 +1726,439 @@ private struct ReadTheAskSurfaceHarness: View {
     }
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BUILD 117 REPAIR — findings from the independent exact-object review of
+// 7784480e. Each section names the finding it closes.
+// ═══════════════════════════════════════════════════════════════════════════
+
+extension Build117ReadTheAskTests {
+
+    // ── F2 — a failure to READ says so ─────────────────────────────────
+
+    /// Every Read the Ask failure used to say "Couldn't coach this draft."
+    ///
+    /// On a feature whose entire purpose is that a message somebody sent you is
+    /// not a draft you wrote, that is the one confusion it exists to prevent,
+    /// reproduced in its own error copy.
+    func testAReadTheAskFailureSaysItCouldNotReadTheMessage() {
+        for failure: Error in [
+            ReadAskContractError.notActivated,
+            ReadAskContractError.askMissing,
+            ReadAskContractError.modeMismatch(expected: "read_ask", received: "read"),
+            ReadAskContractError.claimsAboutTheSender(field: "ask"),
+            TonoBackendError.network("boom"),
+            TonoBackendError.decoding("boom"),
+        ] {
+            let message = ReadTheAskFailure.message(for: failure)
+            XCTAssertTrue(
+                message.hasPrefix("Couldn't read this message."),
+                "a Read the Ask failure said: \(message)"
+            )
+            XCTAssertFalse(message.contains("coach this draft"), message)
+        }
+    }
+
+    /// The two Build 117 names on `Build112UISurfaceContractTests`'
+    /// `approvedErrorMappers` list delegate to the one approved mapper — they
+    /// do not author copy of their own.
+    ///
+    /// That list is what lets a surface assign a failure into rendered state,
+    /// so adding a name to it is adding a hole unless the name is checked.
+    /// Checked here by EXACT EQUALITY against `ConsumerErrorCopy`, not by
+    /// asserting a prefix: a mapper that hardcoded "Couldn't read this
+    /// message." would satisfy a prefix check while having quietly become a
+    /// second author of consumer copy — the precise thing
+    /// `testTheFailureMapperIsPinnedClassifiesByCaseAndShipsEverywhere` exists
+    /// to prevent.
+    func testTheReadTheAskMappersDelegateToTheOneApprovedMapper() {
+        for failure: Error in [
+            ReadAskContractError.notActivated,
+            ReadAskContractError.modeMismatch(expected: "read_ask", received: "read"),
+            TonoBackendError.network("boom"),
+            TonoBackendError.http(429, "slow down"),
+            TonoBackendError.http(402, "pay up"),
+            URLError(.notConnectedToInternet),
+        ] {
+            let approved = ConsumerErrorCopy.message(for: failure, action: .readMessage)
+            XCTAssertEqual(
+                ReadTheAskFailure.message(for: failure), approved,
+                "ReadTheAskFailure authored its own sentence instead of delegating"
+            )
+            XCTAssertEqual(
+                ReadTheAskNotice.forFailure(failure).message, approved,
+                "ReadTheAskNotice authored its own sentence instead of delegating"
+            )
+        }
+    }
+
+    /// The rewrite path's copy is untouched — `.coachDraft` is correct there,
+    /// and "fix the wrong copy" must not become "change all the copy".
+    func testTheRewritePathStillSaysItCouldNotCoachTheDraft() {
+        let message = ConsumerErrorCopy.message(
+            for: TonoBackendError.network("boom"), action: .coachDraft
+        )
+        XCTAssertTrue(message.hasPrefix("Couldn't coach this draft."), message)
+    }
+
+    /// Rendered, on the shipping surface — not just the helper in isolation.
+    @MainActor
+    func testTheCompanionSurfaceRendersTheReadFailureCopy() throws {
+        ReadAskStub.readAskStatus = 500
+        setSharedActivation(true)
+        let controller = host(ReadTheAskSurfaceHarness())
+        try type(Self.receivedWithDeadline, into: controller)
+        _ = settle(controller, until: { self.isAvailable(ReadTheAskCopy.readAction, in: controller) })
+        try activate(ReadTheAskCopy.readAction, in: controller)
+        _ = settle(controller, until: {
+            self.rendered(controller).contains("Couldn't read this message.")
+        })
+
+        let screen = rendered(controller)
+        XCTAssertTrue(screen.contains("Couldn't read this message."), screen)
+        XCTAssertFalse(screen.contains("coach this draft"), screen)
+    }
+
+    // ── F4 — a successful reading is not drawn as a warning ────────────
+
+    /// `noAsk` is a *successful* reading. `declined` is a boundary Tono chose.
+    /// Neither is a failure, and the Share extension drew all three with the
+    /// same 36pt yellow warning triangle.
+    func testEachOutcomeIsPresentedAsWhatItActuallyIs() throws {
+        let reading = ReadTheAskNotice.forOutcome(
+            .reading(ReadAskResult(ask: "Send the Q3 deck."))
+        )
+        XCTAssertNil(reading, "a reading renders as a reading, not a notice")
+
+        let noAsk = try XCTUnwrap(ReadTheAskNotice.forOutcome(.noAsk))
+        XCTAssertEqual(noAsk.kind, .success)
+        XCTAssertEqual(noAsk.glyph, "checkmark.circle")
+        XCTAssertEqual(noAsk.message, ReadTheAskCopy.noAsk)
+        XCTAssertFalse(noAsk.offersRetry, "re-reading gives the same correct answer forever")
+
+        let declined = try XCTUnwrap(ReadTheAskNotice.forOutcome(.declined))
+        XCTAssertEqual(declined.kind, .boundary)
+        XCTAssertEqual(declined.glyph, "hand.raised")
+        XCTAssertFalse(declined.offersRetry)
+
+        let failure = ReadTheAskNotice.forFailure(TonoBackendError.network("boom"))
+        XCTAssertEqual(failure.kind, .failure)
+        XCTAssertTrue(failure.offersRetry, "a failure is the one case retrying can change")
+        XCTAssertTrue(failure.message.hasPrefix("Couldn't read this message."), failure.message)
+    }
+
+    /// The warning triangle belongs to exactly one outcome.
+    func testOnlyAGenuineFailureGetsWarningIconography() throws {
+        let warning = "exclamationmark.triangle"
+        XCTAssertFalse(try XCTUnwrap(ReadTheAskNotice.forOutcome(.noAsk)).glyph.contains(warning))
+        XCTAssertFalse(try XCTUnwrap(ReadTheAskNotice.forOutcome(.declined)).glyph.contains(warning))
+        XCTAssertTrue(
+            ReadTheAskNotice.forFailure(TonoBackendError.network("x")).glyph.contains(warning)
+        )
+    }
+
+    // ── F5 — the Share surface's decisions are covered ─────────────────
+    //
+    // `ShareRootView` lives in an `.appex` and cannot be imported by the unit
+    // test target, which is why it had no coverage at all. The decisions were
+    // therefore lifted into `ReadTheAskShareFlow` — which IS compiled into both
+    // TonoShare and (via the app) this target — leaving layout in the view.
+    // These test the decisions; the surface-contract test below pins that the
+    // view still routes through them rather than re-deciding locally.
+
+    func testShareOpensOnRewriteWhileTheFeatureIsOff() {
+        XCTAssertEqual(ReadTheAskShareFlow.initialStage(activationEnabled: false), .rewrite)
+        XCTAssertTrue(
+            ReadTheAskShareFlow.runsOnAppear(.rewrite),
+            "with the feature off, Share must behave exactly as it did before Build 117"
+        )
+    }
+
+    func testShareAsksWhichModeOnlyWhenTheFeatureIsOn() {
+        XCTAssertEqual(ReadTheAskShareFlow.initialStage(activationEnabled: true), .choosing)
+        XCTAssertFalse(
+            ReadTheAskShareFlow.runsOnAppear(.choosing),
+            "the choice screen is a question; a question that answers itself is not one"
+        )
+    }
+
+    func testShareHasNoPreselectedModeAndBothChoicesLeadSomewhere() {
+        XCTAssertEqual(ReadTheAskShareFlow.stage(choosing: .rewrite), .rewrite)
+        XCTAssertEqual(ReadTheAskShareFlow.stage(choosing: .readAsk), .readAsk)
+        // Neither branch is the "default": the initial stage is `.choosing`,
+        // which is neither of them.
+        XCTAssertNotEqual(ReadTheAskShareFlow.initialStage(activationEnabled: true), .rewrite)
+        XCTAssertNotEqual(ReadTheAskShareFlow.initialStage(activationEnabled: true), .readAsk)
+    }
+
+    func testShareRunsNothingOnAppearForEitherReadTheAskStage() {
+        XCTAssertFalse(ReadTheAskShareFlow.runsOnAppear(.readAsk))
+        XCTAssertFalse(ReadTheAskShareFlow.runsOnAppear(.choosing))
+    }
+
+    /// The Share flow's one-flow context clears on the way out, exactly as the
+    /// companion app's does.
+    func testShareClearsItsOneFlowContext() {
+        let session = ReadTheAskSession()
+        session.setReceivedText(Self.receivedWithDeadline)
+        session.apply(.reading(ReadAskResult(ask: "Send the Q3 deck.", byWhen: "by Friday")))
+        XCTAssertFalse(session.isEmpty)
+        session.clear()
+        XCTAssertTrue(session.isEmpty)
+    }
+
+    /// The view still delegates rather than re-deciding.
+    ///
+    /// A source-contract test, in the shape `Build112UISurfaceContractTests`
+    /// already uses for surfaces it cannot host. It is the weaker half of this
+    /// section on purpose — the decisions above are the strong half — but it is
+    /// what stops the extension quietly growing a second copy of them.
+    func testTheShareSurfaceRoutesThroughTheSharedFlowAndNoticeModels() throws {
+        // Comments stripped first. Without that, this test matches the comment
+        // that explains why the code says `.readMessage` and not `.coachDraft`
+        // — a source scan that reads prose as code is exactly the vacuous check
+        // this build has already been caught by twice.
+        let source = SwiftSource.stripComments(try String(
+            contentsOf: sourceRoot().appendingPathComponent("ShareExtension/ShareRootView.swift"),
+            encoding: .utf8
+        ))
+        for required in [
+            "ReadTheAskShareFlow.initialStage",
+            "ReadTheAskShareFlow.stage(choosing:",
+            "ReadTheAskShareFlow.runsOnAppear",
+            "ReadTheAskNotice.forOutcome",
+            "ReadTheAskNotice.forFailure",
+        ] {
+            XCTAssertTrue(source.contains(required), "ShareRootView no longer uses \(required)")
+        }
+        // The Read the Ask path must not reach for the draft-coaching copy.
+        // Bounded at the rewrite path that follows it, because THAT one uses
+        // `.coachDraft` correctly and a scan that runs into it would fail for
+        // the wrong reason.
+        let start = try XCTUnwrap(source.range(of: "private func runReadAsk()"))
+        let end = try XCTUnwrap(
+            source.range(of: "private var rewriteBody", range: start.upperBound..<source.endIndex)
+        )
+        let readAskPath = String(source[start.lowerBound..<end.lowerBound])
+        XCTAssertFalse(
+            readAskPath.contains(".coachDraft"),
+            "the Share Read the Ask path is back on draft-coaching copy"
+        )
+        XCTAssertTrue(
+            readAskPath.contains("ReadTheAskNotice.forFailure"),
+            "the Share Read the Ask path must route its failure through the shared model"
+        )
+        // And the rewrite path below it is untouched — fixing the wrong copy
+        // must not become changing all the copy.
+        XCTAssertTrue(
+            String(source[end.lowerBound...]).contains(".coachDraft"),
+            "the Share rewrite path lost its correct draft-coaching copy"
+        )
+    }
+
+    // ── F3 — the binary claim is backed by an artefact ─────────────────
+
+    func testTheBinaryExclusionVerifierExistsAndIsExecutable() throws {
+        let verifier = sourceRoot()
+            .appendingPathComponent("Scripts/verify_build117_read_ask_exclusion.py")
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: verifier.path),
+            "ReadTheAsk.swift promises a binary verifier; it must exist"
+        )
+        let script = try String(contentsOf: verifier, encoding: .utf8)
+        // The two lessons this repo has already paid for.
+        XCTAssertTrue(script.contains("swift-demangle"), "symbols must be demangled")
+        XCTAssertTrue(
+            script.contains("POSITIVE CONTROL"),
+            "a zero-hit result means nothing without a positive control"
+        )
+        XCTAssertTrue(script.contains("debug.dylib") || script.contains("*.dylib"),
+                      "a Debug build hides the code in a sibling dylib")
+    }
+
+    /// The source comment describes the division of labour honestly: these
+    /// tests do membership and sources, the script does binaries.
+    func testTheSourceCommentDoesNotClaimThisSuiteInspectsBinaries() throws {
+        let source = try String(
+            contentsOf: sourceRoot().appendingPathComponent("Shared/ReadTheAsk.swift"),
+            encoding: .utf8
+        )
+        let header = String(source.prefix(2_400))
+        XCTAssertTrue(header.contains("verify_build117_read_ask_exclusion.py"), header)
+        XCTAssertFalse(
+            header.contains("shipped Mach-O binaries by\n//     `Build117ReadTheAskTests`"),
+            "the suite must not claim binary assertions it does not make"
+        )
+    }
+}
+
+extension Build117ReadTheAskTests {
+
+    // ── R5 — a withdrawal is a withdrawal ──────────────────────────────
+
+    /// Remove, while a reading is in flight, must not be undone by the response.
+    ///
+    /// Looking for a safe place to put cancellation found this: the reading
+    /// landed after `session.clear()` and called `session.apply`, so the
+    /// message the person had just removed came back with a reading attached.
+    /// The contract says withdrawal clears immediately; a late response that
+    /// repopulates the surface makes "immediately" mean "until the network
+    /// disagrees".
+    @MainActor
+    func testAReadingThatArrivesAfterRemoveDoesNotComeBack() throws {
+        // The response is held so the withdrawal genuinely happens mid-flight.
+        ReadAskStub.holdSeconds = 1.0
+        setSharedActivation(true)
+        let controller = host(ReadTheAskSurfaceHarness())
+        try type(Self.receivedWithDeadline, into: controller)
+        _ = settle(controller, until: { self.isAvailable(ReadTheAskCopy.readAction, in: controller) })
+
+        try activate(ReadTheAskCopy.readAction, in: controller)
+        // Withdraw while the request is still in flight.
+        try activate(ReadTheAskCopy.removeReceivedText, in: controller)
+
+        // The reading is still in flight here — proven by the stub's hold, and
+        // by this test failing when the cancellation is removed.
+        XCTAssertGreaterThan(ReadAskStub.readAskCount, 0, "no request was ever made")
+        // Give the late response every chance to land.
+        _ = settle(controller, until: { false }, seconds: 3.0)
+
+        let screen = rendered(controller)
+        XCTAssertFalse(screen.contains("Send the Q3 deck."), "a removed message came back\n\(screen)")
+        XCTAssertFalse(screen.contains(ReadTheAskCopy.askHeading), screen)
+        XCTAssertNil(
+            element(labelled: ReadTheAskCopy.removeReceivedText, in: controller),
+            "the message is gone, so its Remove control should be too"
+        )
+    }
+
+    /// Leaving Read the Ask mid-reading must not be undone by the response
+    /// either.
+    ///
+    /// BUILD 117 REPAIR — cancelling on Remove closed one door and left the
+    /// other open. Coach leaves this surface by calling `clearReadTheAsk()` and
+    /// swapping the panel out; that empties the buffer and the session, but a
+    /// `Task` outlives the view that created it, so the reading landed, found
+    /// an uncancelled task, and called `session.apply`. The message the person
+    /// had left behind was waiting for them with a reading attached.
+    ///
+    /// The assertion is on the SESSION rather than the screen, because the
+    /// panel is gone by then — the session is what survives to the next visit,
+    /// so it is the thing that must be empty.
+    @MainActor
+    func testAReadingThatArrivesAfterLeavingReadTheAskDoesNotComeBack() throws {
+        ReadAskStub.holdSeconds = 1.0
+        setSharedActivation(true)
+        let session = ReadTheAskSession()
+        let controller = host(ReadTheAskLeavableHarness(session: session))
+        try type(Self.receivedWithDeadline, into: controller)
+        _ = settle(controller, until: { self.isAvailable(ReadTheAskCopy.readAction, in: controller) })
+
+        try activate(ReadTheAskCopy.readAction, in: controller)
+        // Leave while the request is genuinely in flight — the stub is holding it.
+        try activate(ReadTheAskLeavableHarness.leaveLabel, in: controller)
+        XCTAssertGreaterThan(ReadAskStub.readAskCount, 0, "no request was ever made")
+
+        // Give the late response every chance to land.
+        _ = settle(controller, until: { false }, seconds: 3.0)
+
+        XCTAssertTrue(
+            session.isEmpty,
+            "a reading landed after the person left Read the Ask, so the message they "
+                + "withdrew is waiting for them the next time they open it"
+        )
+        XCTAssertFalse(rendered(controller).contains("Send the Q3 deck."), rendered(controller))
+    }
+
+    // ── R6 — contrast measured, not inherited ──────────────────────────
+
+    /// WCAG AA on the surfaces this build added.
+    ///
+    /// The new surfaces reuse CoachView's existing opacity idiom, and "matches
+    /// what was already there" is a provenance argument, not a measurement. The
+    /// repo's only contrast gate covers keyboard chips. These are the app
+    /// surfaces, measured against the field they are actually drawn on.
+    func testEveryNewSurfaceTextColourClearsWCAGAAOnItsOwnBackground() {
+        // Coach's field is black; cards sit on it at low white opacity, which
+        // lightens the effective background very slightly. Measuring against
+        // pure black is the conservative direction: it UNDER-states the
+        // background luminance for light text, so a pass here is a pass on the
+        // real card too.
+        let field = UIColor.black
+
+        // Every foreground the Read the Ask surfaces use, with the size class
+        // it is used at. AA is 4.5:1 for body text and 3:1 for large text
+        // (≥18pt, or ≥14pt bold).
+        let samples: [(label: String, colour: UIColor, isLargeText: Bool)] = [
+            ("The Ask value (17pt medium)", .white.withAlphaComponent(0.95), true),
+            ("field heading (12pt semibold)", .white.withAlphaComponent(0.6), false),
+            ("muted 'No deadline stated' (15pt)", .white.withAlphaComponent(0.55), false),
+            ("possible-reading body (14pt)", .white.withAlphaComponent(0.85), false),
+            ("mode caption (13pt)", .white.withAlphaComponent(0.6), false),
+            ("notice text (13pt)", .white, false),
+            ("unselected segment (15pt semibold)", .white.withAlphaComponent(0.7), false),
+            ("activation body (15pt)", .white.withAlphaComponent(0.72), false),
+            ("activation toggle detail (13pt)", .white.withAlphaComponent(0.6), false),
+        ]
+
+        for sample in samples {
+            let ratio = Self.contrastRatio(
+                foreground: sample.colour.flattened(over: field), background: field
+            )
+            let required: CGFloat = sample.isLargeText ? 3.0 : 4.5
+            XCTAssertGreaterThanOrEqual(
+                ratio, required,
+                "\(sample.label): \(String(format: "%.2f", ratio)):1 is below WCAG AA "
+                    + "(\(required):1) on the surface's own background"
+            )
+        }
+    }
+
+    /// The selected segment is white on the app's purple — the one place a new
+    /// surface puts text on a filled control rather than on the field.
+    func testTheSelectedModeSegmentClearsWCAGAAOnItsFill() {
+        let purple = UIColor(Color.purple)
+        let ratio = Self.contrastRatio(foreground: .white, background: purple)
+        XCTAssertGreaterThanOrEqual(
+            ratio, 3.0,
+            "the selected segment's label is \(String(format: "%.2f", ratio)):1 on its fill"
+        )
+    }
+
+    /// Relative luminance and contrast per WCAG 2.1, on resolved sRGB
+    /// components. Same formula the keyboard's gate uses; duplicated rather
+    /// than shared because that one is `private` to its own suite and a test
+    /// helper is not worth widening an API for.
+    private static func contrastRatio(foreground: UIColor, background: UIColor) -> CGFloat {
+        let bright = max(luminance(foreground), luminance(background))
+        let dark = min(luminance(foreground), luminance(background))
+        return (bright + 0.05) / (dark + 0.05)
+    }
+
+    private static func luminance(_ colour: UIColor) -> CGFloat {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        colour.getRed(&r, green: &g, blue: &b, alpha: &a)
+        func channel(_ value: CGFloat) -> CGFloat {
+            value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+    }
+}
+
+private extension UIColor {
+    /// The colour a translucent foreground actually resolves to once composited
+    /// over its background. Measuring the unflattened colour would score the
+    /// alpha channel rather than the pixels a person sees.
+    func flattened(over background: UIColor) -> UIColor {
+        var fr: CGFloat = 0, fg: CGFloat = 0, fb: CGFloat = 0, fa: CGFloat = 0
+        var br: CGFloat = 0, bg: CGFloat = 0, bb: CGFloat = 0, ba: CGFloat = 0
+        getRed(&fr, green: &fg, blue: &fb, alpha: &fa)
+        background.getRed(&br, green: &bg, blue: &bb, alpha: &ba)
+        return UIColor(
+            red: fr * fa + br * (1 - fa),
+            green: fg * fa + bg * (1 - fa),
+            blue: fb * fa + bb * (1 - fa),
+            alpha: 1
+        )
+    }
+}

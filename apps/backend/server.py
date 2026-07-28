@@ -1921,10 +1921,21 @@ async def api_read_ask(
         )
         raise HTTPException(500, "read the ask failed") from e
 
-    # A declined reading is silence, and silence is not an event. Nothing is
-    # counted, logged or measured for it — not even a character count, which is
-    # still derived from the message.
-    if result["status"] == "ok":
+    # Recorded when a provider was actually reached; silent when one was not.
+    #
+    # `ok` and `no_ask` both cost a generation — `no_ask` is what a real model
+    # returns for "thanks for dinner last night", which is an ordinary message,
+    # so leaving it out made provider spend on a whole common class of message
+    # invisible to telemetry.
+    #
+    # `declined` stays silent, and that is a different kind of decision: the
+    # crisis preflight returns BEFORE any provider call, so there is nothing to
+    # bill — and counting it would be measuring how often a person shared
+    # something Tono has no business reading. Silence is not an event.
+    #
+    # `drafts_chars=0` throughout: a character count is still derived from the
+    # message.
+    if result["status"] in ("ok", "no_ask"):
         store.log_usage(
             user.device_id, "/api/read-ask", 200, provider=provider, drafts_chars=0,
         )
