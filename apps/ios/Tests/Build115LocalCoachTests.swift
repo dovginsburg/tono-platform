@@ -1505,6 +1505,66 @@ final class Build115LocalCoachTests: XCTestCase {
             source.contains("coachLocalVisibleDeadline * Double("),
             "the staged watchdog is computed in one place, not re-derived in the controller"
         )
+
+        // BUILD 117 REPAIR — and the scaling function is used in exactly ONE
+        // place, which is the only place that performs N sequential requests.
+        //
+        // The hazard this closes is the mirror image of the one above: not a
+        // second copy of the arithmetic, but the SAME arithmetic reaching a
+        // user-visible action that makes one request. Stage 1 and `Try another`
+        // each issue a single-axis `rewriteSet`, so each gets exactly one
+        // budget; if either ever scheduled `visibleDeadline(forGenerations:)`,
+        // the promise "the tone you tapped appears within 30 seconds" would
+        // have been quietly widened to a multiple of it without a single test
+        // going red.
+        XCTAssertEqual(
+            source.components(separatedBy: "LocalCoachRoutePolicy.visibleDeadline(").count - 1, 1,
+            "the scaling deadline is scheduled once — by Stage 2, which is the only site that "
+                + "loops the axes and awaits a separate request for each one"
+        )
+        XCTAssertEqual(
+            source.components(separatedBy: "Const.coachLocalVisibleDeadline").count - 1, 2,
+            "the two user-visible one-generation actions — Stage 1 and Try another — must each "
+                + "schedule ONE budget"
+        )
+
+        // And the shipping call shape those two sites use really is one axis.
+        // A `LocalCoachSetRequest` with more than one axis is ONE
+        // `session.respond`, so scheduling N budgets around it would be granting
+        // a single uninterruptible call N deadlines.
+        for site in ["axes: [plan.primaryAxis]", "axes: [axis]"] {
+            XCTAssertTrue(
+                source.contains(site),
+                "the user-visible on-device request must ask for exactly one tone (\(site))"
+            )
+        }
+    }
+
+    /// `rewriteSet` is ONE model call, whatever it is asked to produce.
+    ///
+    /// BUILD 117 REPAIR — the F10 repair's premise was that a four-axis
+    /// `rewriteSet` is four generations, and it is not. This pins the fact the
+    /// premise got wrong, in the engine's own source, so a future reader cannot
+    /// re-derive "N axes means N budgets" from the shape of the API.
+    func testAMultiAxisRewriteSetIsOneModelCallNotN() throws {
+        let source = SwiftSource.stripComments(
+            try Self.source("Shared/OnDeviceAppleRewrite.swift")
+        )
+        // One `respond` per branch: four single-tone schemas (one per axis,
+        // mutually exclusive), one quartet, one trio.
+        let responds = source.components(separatedBy: "await session.respond(").count - 1
+        XCTAssertEqual(
+            responds, 6,
+            "performRewriteSet's branches changed. It must remain ONE `session.respond` per "
+                + "call — four mutually exclusive single-tone branches plus the trio and the "
+                + "quartet — because the watchdog arithmetic in LocalCoachRoutePolicy depends "
+                + "on a multi-axis set being one uninterruptible generation, not N."
+        )
+        XCTAssertFalse(
+            source.contains("for axis in request.axes"),
+            "a loop over the requested axes would make one rewriteSet N generations, which is "
+                + "the premise the Build 117 timing repair was wrongly built on"
+        )
     }
 
     func testInputAndOutputAreBounded() {
@@ -1711,8 +1771,14 @@ final class Build115LocalCoachTests: XCTestCase {
     final class ProcessWideRequestLog: URLProtocol {
         private static let lock = NSLock()
         private nonisolated(unsafe) static var _urls: [String] = []
+        /// Every URL seen since the process started, which `reset()` does NOT
+        /// clear. The per-arm list is what the counting assertions use; this one
+        /// is what the production-host guard uses, because an escape that
+        /// happens between two `reset()` calls is still an escape.
+        private nonisolated(unsafe) static var _allURLs: [String] = []
 
         static var urls: [String] { lock.withLock { _urls } }
+        static var allURLs: [String] { lock.withLock { _allURLs } }
         static func reset() { lock.withLock { _urls = [] } }
         static func urls(containing needle: String) -> [String] {
             urls.filter { $0.contains(needle) }
@@ -1720,7 +1786,7 @@ final class Build115LocalCoachTests: XCTestCase {
 
         override class func canInit(with request: URLRequest) -> Bool {
             let url = request.url?.absoluteString ?? "<nil>"
-            lock.withLock { _urls.append(url) }
+            lock.withLock { _urls.append(url); _allURLs.append(url) }
             return true
         }
         override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -1740,6 +1806,20 @@ final class Build115LocalCoachTests: XCTestCase {
     /// an empty one — which is exactly why the shipped suite could not see this.
     @MainActor
     func testTheCompleteOnDeviceRouteIssuesZeroRequestsOnSuccessAndOnFailure() throws {
+        // BUILD 117 REPAIR (N5) — where this test's beacon is aimed is now
+        // stated, not inherited.
+        //
+        // The precondition below fires a REAL analytics event, on purpose, to
+        // prove the instrument works. Its URL came from `TonoBackend.baseURL`,
+        // whose last-resort fallback is `127.0.0.1` under DEBUG and
+        // `https://api.tonoit.com` — the live production host — otherwise. So
+        // the same test aimed at localhost in a Debug gate and at production in
+        // a Release gate, and an independent reviewer observed exactly that:
+        // one real outbound attempt at production per Release run. Nothing was
+        // exchanged and the request timed out, but a test suite must never aim
+        // at production by default, and "which host" must not be a property of
+        // the build configuration.
+        useLocalBackendForTesting()
         URLProtocol.registerClass(ProcessWideRequestLog.self)
         defer { URLProtocol.unregisterClass(ProcessWideRequestLog.self) }
         let restoreDeviceID = Self.provisionDeviceIDForTesting()
@@ -1836,6 +1916,68 @@ final class Build115LocalCoachTests: XCTestCase {
             )
             MainActor.assumeIsolated { controller.invalidateCoachWorkForTesting() }
         }
+
+        // Nothing this test caused — including the deliberate positive-control
+        // beacon — may have been addressed to a host real people use.
+        Self.assertNoProductionHostWasTargeted(ProcessWideRequestLog.allURLs)
+    }
+
+    // MARK: N5 — no test aims at production
+
+    /// Hosts that serve real people. A test that reaches one of these is a test
+    /// that can affect somebody's data, bill somebody's account, or show up in
+    /// production telemetry as traffic nobody sent.
+    static let productionHosts = ["api.tonoit.com", "tonoit.com", "parentscript.app"]
+
+    /// Point every backend URL this test can cause at a local address, whatever
+    /// the build configuration would otherwise fall back to.
+    ///
+    /// `TonoBackend.baseURL` resolves the runtime override FIRST, so writing it
+    /// here is the same lever the shipping app uses for staging — not a stub
+    /// standing in for the resolution logic.
+    @MainActor
+    func useLocalBackendForTesting(_ address: String = "http://127.0.0.1:8765") {
+        let defaults = Tono.SharedStore.defaults
+        let previous = defaults.string(forKey: Tono.SharedKeys.backendURL)
+        addTeardownBlock {
+            if let previous {
+                defaults.set(previous, forKey: Tono.SharedKeys.backendURL)
+            } else {
+                defaults.removeObject(forKey: Tono.SharedKeys.backendURL)
+            }
+        }
+        defaults.set(address, forKey: Tono.SharedKeys.backendURL)
+        XCTAssertEqual(
+            Tono.TonoBackend.shared.baseURL.absoluteString, address,
+            "the local backend override did not take, so this test is still aimed "
+                + "wherever the build configuration points"
+        )
+    }
+
+    /// The guard. Fails if any URL in `urls` names a production host.
+    static func assertNoProductionHostWasTargeted(
+        _ urls: [String], file: StaticString = #filePath, line: UInt = #line
+    ) {
+        let escaped = urls.filter { url in productionHosts.contains { url.contains($0) } }
+        XCTAssertTrue(
+            escaped.isEmpty,
+            "a test put \(escaped.count) request(s) on a production host: "
+                + "\(Set(escaped).sorted().prefix(5).joined(separator: ", ")). "
+                + "Inject a local backend explicitly; never let the build "
+                + "configuration decide which host a test talks to.",
+            file: file, line: line
+        )
+    }
+
+    /// The standing guard, independent of any one test.
+    ///
+    /// The test above proves its OWN traffic is local. This proves it for every
+    /// request any test in this class caused, because `ProcessWideRequestLog`
+    /// keeps an all-time list — and because the escape an independent reviewer
+    /// found was a fire-and-forget beacon that could land outside the window
+    /// any single test was watching.
+    func testNoRequestFromThisSuiteWasEverAddressedToProduction() {
+        Self.assertNoProductionHostWasTargeted(ProcessWideRequestLog.allURLs)
     }
 
     /// The source-level half, covering the WHOLE delivery path rather than the
@@ -2414,38 +2556,37 @@ final class Build115LocalCoachTests: XCTestCase {
                     "\(testCase.label): \(option.axis) returned the draft rather than a rewrite"
                 )
             }
-            // What the watchdog actually bounds: ONE staged generation. See
-            // `onDeviceGenerationBudgetFraction` for why this is per-axis and
-            // not per-set.
-            let perGeneration = elapsed / Double(testCase.axes.count)
-            let perGenerationBudget =
-                Self.onDeviceVisibleDeadlineSeconds * Self.onDeviceGenerationBudgetFraction
-            XCTAssertLessThan(
-                perGeneration, perGenerationBudget,
-                "\(testCase.label): one staged generation took \(Int(perGeneration * 1000))ms of a "
-                    + "\(Int(perGenerationBudget * 1000))ms budget "
-                    + "(\(Int(Self.onDeviceVisibleDeadlineSeconds))s watchdog × "
-                    + "\(Self.onDeviceGenerationBudgetFraction)). The keyboard issues one axis per "
-                    + "request, so this is the time the person actually waits before the tone they "
-                    + "tapped appears — and it has lost its margin."
-            )
-            // And the whole set still has a ceiling — the REAL one: the exact
-            // deadline the keyboard schedules for a run of this many staged
-            // generations, taken from the product's own function rather than
-            // re-derived here. Re-deriving it is what went wrong in the first
-            // place. A runaway batch fails rather than passing on a flattering
-            // per-generation average.
-            XCTAssertLessThan(
-                elapsed,
-                Tono.LocalCoachRoutePolicy.visibleDeadline(forGenerations: testCase.axes.count),
-                "\(testCase.label): the whole \(testCase.axes.count)-axis set took \(Int(elapsed))s, "
-                    + "past the watchdog the keyboard would actually schedule for it"
-            )
+            // NO WALL-CLOCK ASSERTION HERE, AND THAT IS THE REPAIR.
+            //
+            // BUILD 117 — this block used to divide `elapsed` by `axes.count`
+            // and call the result "one staged generation", then bound the whole
+            // call by `visibleDeadline(forGenerations: axes.count)`. Both rest
+            // on the same false premise: that a multi-axis `rewriteSet` is N
+            // generations. It is not. `OnDeviceAppleRewrite.performRewriteSet`
+            // issues exactly ONE `session.respond` per call in every branch —
+            // one guided trio for three axes, one quartet for four — so the
+            // division understated the measured generation by 3–4×, and the
+            // whole-set bound handed a single uninterruptible call four
+            // watchdog budgets.
+            //
+            // No shipping site issues this call shape. Stage 1, Stage 2's loop
+            // body and `Try another` all pass a single-element `axes` array, so
+            // there is no product deadline that applies to a trio or a quartet
+            // and inventing one is what went wrong the first time. What this
+            // case is for is the TOKEN BUDGET — F1 — and that is asserted
+            // above, in full. The wall clock is REPORTED, honestly, per call.
+            //
+            // The deadline that a person actually waits on is measured by
+            // `testTheRealModelMeetsTheVisibleDeadlineOnEveryShippingGeneration`
+            // against the real, unchanged 30s watchdog and the real shipping
+            // call shape.
+            //
             // Lengths and durations only — never the text.
             print("BUILD115 F1 real-model \(testCase.label): draft=\(draft.count) "
-                  + "axes=\(testCase.axes.count) ms=\(Int(elapsed * 1000)) "
+                  + "axes=\(testCase.axes.count) ONE-generation-total-ms=\(Int(elapsed * 1000)) "
                   + "kept=\(result.options.count)/\(testCase.axes.count) "
-                  + "out=\(result.options.map { $0.text.count })")
+                  + "out=\(result.options.map { $0.text.count }) "
+                  + "[not a shipping call shape — no product deadline applies]")
         }
 
         // The 1,200-character boundary, in the form that is actually true: the
@@ -2466,61 +2607,174 @@ final class Build115LocalCoachTests: XCTestCase {
         XCTAssertEqual(refusal, .draftTooLong)
     }
 
-    /// The on-device watchdog, now genuinely read from the source rather than
-    /// remembered — it used to be a second hardcoded `30` under this exact
-    /// comment, which is the drift the comment claimed to prevent.
-    static var onDeviceVisibleDeadlineSeconds: TimeInterval {
-        Tono.LocalCoachRoutePolicy.visibleDeadlineSeconds
+    /// THE SHIPPING-SHAPE ACCEPTANCE TEST — added in Build 117.
+    ///
+    /// Every user-visible on-device action issues ONE `rewriteSet` with ONE
+    /// axis, and is given `visibleDeadlineSeconds` — 30s — to produce it:
+    ///
+    ///   * Stage 1 (`KeyboardViewController.startLocalCoach`) — the tone the
+    ///     person tapped, `axes: [plan.primaryAxis]`;
+    ///   * `Try another` (`startLocalCoachAlternative`) — `axes: [axis]`;
+    ///   * Stage 2's loop body — `axes: [axis]`, once per secondary tone, each
+    ///     awaited in turn.
+    ///
+    /// Nothing in the suite measured that shape. The only real-model timing
+    /// test asked for three or four tones in ONE call, which no shipping site
+    /// does, and the only test that did perform real single-axis generations
+    /// (`Build116SelectedFirstTests.testTheRealModelServesEachSelectedToneOn‐
+    /// ItsOwn`) used ~60-character drafts and asserted no timing at all. So the
+    /// number the product actually promises a person was never checked.
+    ///
+    /// This checks it: every axis a shipping action can select, at the longest
+    /// draft the single-axis route ADMITS, against the real unchanged 30s
+    /// watchdog. No fraction, no tripwire, no derived allowance — the bound is
+    /// the deadline the keyboard schedules, so a failure here means a real
+    /// person really would see the watchdog fire.
+    ///
+    /// WHAT IT ASSERTS, AND WHAT IT DELIBERATELY DOES NOT.
+    ///
+    /// The promise attached to the watchdog is that the person is ANSWERED
+    /// before it fires — with a rewrite, or with a truthful refusal. So every
+    /// axis is held to the deadline whichever way it ends, and a refusal must
+    /// additionally be one of the bounded generation outcomes rather than a
+    /// hang. What is NOT asserted is "every tone delivers every time": the
+    /// validator dropping a runaway is the validator working, and measured on
+    /// this object two of the four tones do end in a bounded refusal at this
+    /// length (see `boundedLocalRefusals`, which carries the numbers and the
+    /// evidence that loosening the token budget makes it strictly worse). What
+    /// IS asserted is that the route can still do its job at the length it
+    /// admits — a bound that admits a draft no tone can serve is a bound that
+    /// is lying.
+    ///
+    /// Slow on purpose: four real generations at the admitted bound.
+    func testTheRealModelMeetsTheVisibleDeadlineOnEveryShippingGeneration() async throws {
+        let bridge = AppleRewriteBridge.shared
+        let availability = await bridge.availability(locale: Locale(identifier: "en_US"))
+        try XCTSkipUnless(
+            availability.isAvailable,
+            "SystemLanguageModel reports \(availability.rawValue) on this machine — "
+                + "the real-model path cannot be exercised here"
+        )
+        let flagsBefore = Self.captureFeatureFlagCache()
+        addTeardownBlock { Self.restoreFeatureFlagCache(flagsBefore) }
+        FeatureFlags.update(from: ["apple_intelligence_rewrite_enabled": true])
+
+        // The bound the single-axis route admits, from the policy rather than
+        // from memory. 930 at the time of writing, and the assertion is that
+        // this is the same number the trio is held to — a single-axis request
+        // is admitted at the widest bound there is.
+        let singleAxisBound = Tono.LocalCoachRoutePolicy.maximumDraftCharacters(forAxisCount: 1)
+        XCTAssertEqual(singleAxisBound, 930, "the admitted single-axis bound moved")
+        let draft = Self.realisticDraft(ofAtMost: singleAxisBound)
+        XCTAssertGreaterThan(draft.count, singleAxisBound - 20, "the fixture must be that long")
+
+        let deadline = Tono.LocalCoachRoutePolicy.visibleDeadlineSeconds
+        var measured: [(axis: String, seconds: Double)] = []
+        var delivered: [String] = []
+        var refused: [(axis: String, reason: String, seconds: Double)] = []
+
+        // Every axis a shipping action can ask for on its own: the three base
+        // tones Stage 1 and Stage 2 select between, plus Safer, which the
+        // gated four-tone plan and `Try another` can both reach.
+        // Every axis is measured and REPORTED even when one of them fails.
+        // Returning on the first refusal threw away the measurements already
+        // taken and left the log with nothing to read, which is the opposite of
+        // reporting the total per call honestly.
+        for axis in Tono.LocalCoachAxis.base + [.safer] {
+            let started = Date()
+            let result: Tono.LocalCoachSetResult
+            do {
+                result = try await bridge.rewriteSet(Tono.LocalCoachSetRequest(
+                    draft: draft, axes: [axis], locale: Locale(identifier: "en_US")
+                ))
+            } catch let failure as Tono.LocalCoachFailure {
+                let elapsed = Date().timeIntervalSince(started)
+                measured.append((axis.rawValue, elapsed))
+                refused.append((axis.rawValue, failure.reason.rawValue, elapsed))
+                print("BUILD117 shipping-shape real-model axis=\(axis.rawValue) "
+                      + "draft=\(draft.count) total_ms=\(Int(elapsed * 1000)) "
+                      + "deadline_s=\(Int(deadline)) "
+                      + "margin=\(String(format: "%.2f", deadline / elapsed))x "
+                      + "REFUSED=\(failure.reason.rawValue)")
+                // A refusal is not automatically a failure of THIS test. What
+                // the watchdog promises is that the person is answered — one way
+                // or the other — before it fires. What a refusal must be is
+                // BOUNDED and truthful, and inside the deadline. See
+                // `boundedLocalRefusals` for why loosening the budget to remove
+                // these refusals is the wrong repair, with the measurement.
+                XCTAssertTrue(
+                    Self.boundedLocalRefusals.contains(failure.reason.rawValue),
+                    "\(axis): refused with \(failure.reason.rawValue), which is not one of the "
+                        + "bounded generation outcomes this route may end in at a draft it ADMITS"
+                )
+                XCTAssertLessThan(
+                    elapsed, deadline,
+                    "\(axis): the route took \(String(format: "%.1f", elapsed))s to refuse a "
+                        + "draft it ADMITS — past its own \(Int(deadline))s watchdog, so the "
+                        + "person watched a spinner get cancelled instead of being answered"
+                )
+                continue
+            }
+            let elapsed = Date().timeIntervalSince(started)
+            measured.append((axis.rawValue, elapsed))
+            delivered.append(axis.rawValue)
+            print("BUILD117 shipping-shape real-model axis=\(axis.rawValue) "
+                  + "draft=\(draft.count) total_ms=\(Int(elapsed * 1000)) "
+                  + "deadline_s=\(Int(deadline)) "
+                  + "margin=\(String(format: "%.2f", deadline / elapsed))x "
+                  + "out=\(result.options.map { $0.text.count })")
+
+            XCTAssertGreaterThanOrEqual(
+                result.options.count, 1,
+                "\(axis): a single-axis request must yield the tone it asked for"
+            )
+            // The whole point. One call, one budget, the real number.
+            XCTAssertLessThan(
+                elapsed, deadline,
+                "\(axis): the tone the person tapped took \(String(format: "%.1f", elapsed))s of "
+                    + "its \(Int(deadline))s watchdog at a \(draft.count)-character draft the "
+                    + "route ADMITS. The watchdog would have fired and the person would have been "
+                    + "told the rewrite did not finish. Fix the generation or stop admitting the "
+                    + "draft — do not raise the deadline."
+            )
+        }
+
+        // The worst call, called out, so the margin is a number somebody can
+        // read rather than a claim. Lengths and durations only, never the text.
+        let worst = measured.max(by: { $0.seconds < $1.seconds })
+        if let worst {
+            print("BUILD117 shipping-shape real-model WORST axis=\(worst.axis) "
+                  + "total_ms=\(Int(worst.seconds * 1000)) "
+                  + "margin=\(String(format: "%.2f", deadline / worst.seconds))x")
+        }
+        print("BUILD117 shipping-shape real-model delivered=\(delivered) "
+              + "refused=\(refused.map { "\($0.axis):\($0.reason)" })")
+
+        // The route must still be able to do its job at the length it admits.
+        // Not "every tone every time" — the validator dropping a runaway is the
+        // validator working — but a bound that admits a draft no tone can serve
+        // is a bound that is lying about what this route does.
+        XCTAssertFalse(
+            delivered.isEmpty,
+            "no tone produced a local rewrite at the \(draft.count)-character draft this "
+                + "route ADMITS: \(refused.map { "\($0.axis)=\($0.reason)" })"
+        )
     }
 
-    /// How much of one generation's budget a single staged generation may
-    /// actually consume.
+    /// The generation outcomes a bounded on-device request is allowed to end in.
     ///
-    /// BUILD 117 REPAIR — what this test was measuring, and why it kept
-    /// flickering.
-    ///
-    /// `coachLocalVisibleDeadline` bounds ONE generation. Build 116 stages the
-    /// tones: every shipping call site issues
-    /// `LocalCoachSetRequest(draft:axes:[oneAxis],locale:)`
-    /// (`KeyboardViewController.swift:3578`, `:4209`, `:5370`), and Stage 2
-    /// schedules `LocalCoachRoutePolicy.visibleDeadline(forGenerations:)` —
-    /// which SCALES with the number of tones, because the generations run
-    /// sequentially. This test asks for three or four axes in one call and then
-    /// compared the SUM of those generations against the ONE-generation budget.
-    /// The four-axis case was four generations charged to a one-generation
-    /// allowance.
-    ///
-    /// That is not a flake, and the product source is the proof: the keyboard
-    /// would have allowed that run 120s. The assertion invented a 30s bound the
-    /// product never applies to a four-tone run, then failed it —
-    /// `700-bound-4` at **31.344s** in the Release gate of 2026-07-27.
-    ///
-    /// So the fix is not to relax the deadline, shorten the drafts the product
-    /// admits, or skip the real model — the admission bound was measured and is
-    /// not the defect. It is to assert the two quantities that are real: the
-    /// per-generation time a person actually waits, and the whole-set deadline
-    /// the keyboard would actually schedule (asserted above from the product's
-    /// own function, not re-derived).
-    ///
-    /// MEASURED, per generation, across four full-suite runs of this object
-    /// (two Debug, two Release, same machine):
-    ///
-    ///     550        (3 axes)   6.24s  6.26s  6.55s  8.07s
-    ///     930-bound  (3 axes)   7.04s  7.46s  7.53s  7.69s
-    ///     700-bound-4(4 axes)   4.80s  6.91s  7.38s  7.84s
-    ///
-    /// So one generation costs 4.8–8.1s — a 1.7× spread that is inherent to
-    /// running a real ML model on a shared machine, which is precisely why an
-    /// assertion with 1.6% headroom could not survive. Against the real 30s
-    /// watchdog the worst observation leaves **3.7× margin**.
-    ///
-    /// 0.5 — a 15s tripwire — sits 1.86× above the worst measurement. It is a
-    /// regression bound, not a benchmark: it should fire when a generation
-    /// roughly doubles in cost, not when a machine is briefly busy. The earlier
-    /// note here claimed "6.3–7.5s, 4× headroom"; that range was taken from one
-    /// pair of runs and the very next run measured 8.07s, so it is corrected
-    /// rather than repeated.
-    static let onDeviceGenerationBudgetFraction: Double = 0.5
+    /// `rewriteDidNotFinish` is in this list on purpose, and it is the whole
+    /// reason the response-token cap exists. Measured on this object: at the
+    /// admitted 919-character bound the `clearer` single-axis generation runs
+    /// away. Capped, it stops at **17.7s** (Debug) / **17.9s** (Release) with a
+    /// truthful refusal, inside the 30s watchdog. With the cap lifted to the
+    /// 2,048-token ceiling it ran **45.3s** and STILL did not close its JSON
+    /// object — past the watchdog, so the person would have watched a spinner
+    /// until it was cancelled. Loosening the budget makes this worse, not
+    /// better, which is exactly why the cap is a safety device and stays.
+    static let boundedLocalRefusals: Set<String> = [
+        "rewriteDidNotFinish", "noValidRewrite", "generationFailed",
+    ]
 
     /// Realistic, non-repetitive prose truncated at a WORD boundary.
     ///

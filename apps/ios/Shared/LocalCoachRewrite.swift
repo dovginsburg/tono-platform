@@ -509,17 +509,27 @@ public enum LocalCoachRoutePolicy {
     /// Stage 2 (`Const.coachLocalVisibleDeadline * Double(axes.count)`), which
     /// meant the single most important reliability number in the local route
     /// could only be checked by reading it. It is a function here so it can be
-    /// asserted deterministically, and so the real-model timing test can bound
-    /// itself with the SAME expression the product schedules rather than
-    /// re-deriving it by hand — the re-derivation is exactly what drifted:
-    /// that test charged a four-generation run to a one-generation budget and
-    /// failed at 31.3s against a 30s bound the product never applied to it.
+    /// asserted deterministically instead of only being read.
     ///
-    /// It scales because the generations are SEQUENTIAL. Stage 2 loops the
-    /// axes and awaits each one in turn, so N tones legitimately cost N budgets;
-    /// a fixed bound would cancel a model that was answering perfectly well.
-    /// What it must NOT do is grow per-generation — that would be the watchdog
-    /// quietly getting more permissive as the product asks for more.
+    /// It scales because the generations are SEQUENTIAL, and that is the ONLY
+    /// thing it may be used for. Stage 2 loops the axes and awaits a separate
+    /// single-axis `rewriteSet` for each one, so N tones there legitimately cost
+    /// N budgets and a fixed bound would cancel a model answering perfectly
+    /// well. Nowhere else in the product qualifies: Stage 1 and `Try another`
+    /// each issue ONE request and are scheduled `visibleDeadlineSeconds`
+    /// directly.
+    ///
+    /// WHAT THIS FUNCTION IS NOT FOR — BUILD 117 REPAIR.
+    ///
+    /// A multi-axis `rewriteSet` is not N generations. `performRewriteSet`
+    /// issues exactly ONE `session.respond` call in every branch: one guided
+    /// single-tone schema for one axis, one `GuidedRewriteTrio` for three, one
+    /// `GuidedRewriteQuartet` for four. The earlier note here said the
+    /// real-model timing test "charged a four-generation run to a
+    /// one-generation budget"; that was wrong. It was ONE uninterruptible
+    /// generation that took 31.3s, and bounding it by four budgets granted a
+    /// single call 120s on a premise that did not hold. A call that cannot be
+    /// interrupted gets one budget, whatever it was asked to produce.
     ///
     /// Clamped at one generation. Stage 2 already guards an empty set, so this
     /// is defence rather than a live fix: a zero-generation deadline is

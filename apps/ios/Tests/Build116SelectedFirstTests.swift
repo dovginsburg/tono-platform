@@ -948,17 +948,44 @@ final class Build116SelectedFirstTests: XCTestCase {
             let requestID = try XCTUnwrap(
                 controller.beginCoachRewrite(before: Self.draft, after: "", axis: "clearer")
             )
-            settle(0.25)
-            controller.view.layoutIfNeeded()
+            // BUILD 117 REPAIR — this was `settle(0.25)`: a fixed run-loop spin
+            // with no condition poll, in front of an async hand-off chain that
+            // hops to a `Task`, back to the main queue, and then out to the
+            // connected route. 250ms is not a property of that chain, it is a
+            // guess about it, and the guess lost — the test reproduced
+            // pass/FAIL/pass in isolation on the same Release products and
+            // failed a full Release gate with `reason == nil`, `handoff == nil`
+            // and `requestCount == 0`: the signature of "the hop had not landed
+            // yet". The wait is now on the state that actually has to arrive.
+            //
+            // The common precondition first: the engine really was asked, and
+            // the local stage has drained. Then the disposition's own evidence.
+            waitUntil(
+                { !engine.observations.isEmpty && !controller.coachLocalRequestInFlightForTesting },
+                "\(reason): the local generation never completed"
+            )
 
             switch expected {
             case .silent:
+                // Nothing more can arrive: the local stage is done and this
+                // disposition sends nothing onward, so a bounded spin here
+                // would only be waiting for something that must never happen.
+                controller.view.layoutIfNeeded()
                 XCTAssertNil(
                     Self.findView(controller.view, identifier: "TonoKB.coachError"),
                     "\(reason) must be silent — something newer owns the surface"
                 )
                 XCTAssertEqual(SpyProtocol.requestCount, 0, "\(reason) must send nothing")
             case .terminal:
+                waitUntil(
+                    {
+                        controller.view.layoutIfNeeded()
+                        return Self.findView(
+                            controller.view, identifier: "TonoKB.coachErrorDetail"
+                        ) != nil
+                    },
+                    "\(reason): the terminal sentence never reached the screen"
+                )
                 let detail = try XCTUnwrap(
                     Self.findView(controller.view, identifier: "TonoKB.coachErrorDetail") as? UILabel,
                     "\(reason) must show a truthful terminal sentence"
@@ -970,6 +997,16 @@ final class Build116SelectedFirstTests: XCTestCase {
                 )
                 XCTAssertNil(controller.coachHandoffRequestIDForTesting)
             case .handOff:
+                // The hand-off is a further hop: `completeLocalCoach` calls
+                // `startConnectedCoach`, which builds the request and posts it.
+                // Waiting for the request to exist is waiting for exactly the
+                // thing the three assertions below are about.
+                waitUntil(
+                    { controller.coachHandoffRequestIDForTesting != nil
+                        && SpyProtocol.requestCount >= 1 },
+                    "\(reason): the hand-off to the connected route never happened"
+                )
+                controller.view.layoutIfNeeded()
                 XCTAssertEqual(
                     controller.coachLocalRefusalForTesting, reason.rawValue,
                     "\(reason) must reach the connected route carrying its own reason"

@@ -28,6 +28,61 @@ import SwiftUI
 import UIKit
 @testable import Tono
 
+/// Turn the process's accessibility runtime on before any hosted SwiftUI view
+/// is measured.
+///
+/// BUILD 117 REPAIR (N1) — what the order dependence actually was.
+///
+/// Every hosted assertion in this file reads SwiftUI's accessibility tree.
+/// SwiftUI serves that tree from `_UIHostingView.accessibilityElements`, which
+/// it synthesises — there are no real `UIView` subviews behind it — and it
+/// synthesises NOTHING until the accessibility runtime has been engaged for the
+/// process. On a simulator that has just been erased it has not been, so a
+/// hosted view lays out correctly, reports a correct `sizeThatFits`, and
+/// exposes zero elements. Measured directly: `subviews=0, elements=0`, stable
+/// across 8 seconds of polling, identical whether the window is attached to the
+/// app's scene, made key, or swapped in as the app's own root.
+///
+/// In a full-suite run something else turned it on first. `Build106Suggestion‐
+/// RoutingTests` calls `accessibilityActivate()` on a UIKit button, and that
+/// single call flips the runtime on for the rest of the process — which is why
+/// 26 of this class's tests passed in the suite and failed the moment the class
+/// ran alone, and why pairing this class with `Build115IPadSurfaceLayoutTests`
+/// knocked out five of ITS tests instead: whichever hosted-UI class ran first
+/// paid for the runtime not being on.
+///
+/// So the precondition is stated here instead of being inherited by luck. It is
+/// public API, it is idempotent, and it asserts nothing — the tests that follow
+/// do the asserting, and now they do it whatever order they run in.
+///
+/// Measured on a freshly erased iPhone 17 Pro / iOS 26.5 simulator:
+/// a hosted `ReadTheAskModeSelector` exposes 0 elements before this call and 2
+/// after it.
+enum HostedAccessibilityRuntime {
+
+    private static var engaged = false
+
+    @MainActor
+    static func engage() {
+        guard !engaged else { return }
+        engaged = true
+        let controller = UIViewController()
+        controller.view.frame = CGRect(x: 0, y: 0, width: 64, height: 64)
+        let probe = UIButton(type: .system)
+        probe.frame = CGRect(x: 0, y: 0, width: 44, height: 44)
+        probe.isAccessibilityElement = true
+        probe.accessibilityLabel = "Tono accessibility runtime probe"
+        controller.view.addSubview(probe)
+        let window = UIWindow(frame: controller.view.frame)
+        window.rootViewController = controller
+        window.isHidden = false
+        window.makeKeyAndVisible()
+        _ = probe.accessibilityActivate()
+        window.isHidden = true
+        window.rootViewController = nil
+    }
+}
+
 final class Build117ReadTheAskTests: XCTestCase {
 
     // ───────────────────────────────────────────────────────────────────
@@ -184,6 +239,8 @@ final class Build117ReadTheAskTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        // Stated, not inherited. See `HostedAccessibilityRuntime`.
+        MainActor.assumeIsolated { HostedAccessibilityRuntime.engage() }
         ReadAskStub.reset()
         URLProtocol.registerClass(ReadAskStub.self)
         addTeardownBlock {
@@ -1422,9 +1479,41 @@ final class Build117ReadTheAskTests: XCTestCase {
         window.rootViewController = controller
         window.isHidden = false
         window.makeKeyAndVisible()
-        addTeardownBlock { MainActor.assumeIsolated { window.isHidden = true } }
+        // BUILD 117 REPAIR — hiding the window left it alive, still holding this
+        // controller and still nominally key, for every later test in the
+        // process. Torn down properly so this class cannot be the reason another
+        // class measures something odd.
+        addTeardownBlock {
+            MainActor.assumeIsolated {
+                window.isHidden = true
+                window.rootViewController = nil
+            }
+        }
         settle(controller)
         return controller
+    }
+
+    /// The canary for `HostedAccessibilityRuntime`.
+    ///
+    /// Every hosted assertion in this class reads SwiftUI's accessibility tree.
+    /// If that tree ever goes empty again, this fails first and says why —
+    /// instead of twenty-six tests failing with "the surface must offer a
+    /// control labelled …", which is what a reviewer had to diagnose by hand.
+    @MainActor
+    func testTheAccessibilityRuntimeIsEngagedBeforeAnySurfaceIsMeasured() {
+        let controller = host(
+            ReadTheAskModeSelector(mode: .constant(.rewrite)).frame(width: 353)
+        )
+        let labels = elements(of: controller.view).compactMap(\.accessibilityLabel)
+        XCTAssertTrue(
+            labels.contains(ReadTheAskCopy.rewriteModeTitle)
+                && labels.contains(ReadTheAskCopy.readAskModeTitle),
+            "SwiftUI exposed no accessibility elements for a laid-out surface "
+                + "(found \(labels)). The process's accessibility runtime is not "
+                + "engaged, so every hosted assertion in this class is measuring "
+                + "an empty tree rather than the surface. See "
+                + "HostedAccessibilityRuntime."
+        )
     }
 
     /// Drive the Read the Ask surface to an on-screen reading of `receivedText`.
@@ -1701,6 +1790,47 @@ private struct ReadTheAskLeavableHarness: View {
                 .tonoReadableColumn(.reading)
             }
             .background(Color.black.ignoresSafeArea())
+        }
+    }
+}
+
+/// The panel inside a `NavigationStack` that can push another screen over it —
+/// which is what Coach's own toolbar does when somebody taps Settings.
+///
+/// BUILD 117 (N-D). Nothing here simulates the cancellation: the push is a real
+/// `NavigationLink`, and whether the panel's `onDisappear` fires is SwiftUI's
+/// answer, not the test's.
+private struct ReadTheAskPushableHarness: View {
+    @ObservedObject var session: ReadTheAskSession
+    @State private var receivedText = ""
+    @State private var showsSettings = false
+
+    static let settingsLabel = "Settings"
+    static let destinationLabel = "Settings stand-in"
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    ReadTheAskPanel(
+                        receivedText: $receivedText, session: session, isOffline: false
+                    )
+                    // A plain button driving a real `navigationDestination`
+                    // push, rather than a `NavigationLink` — the link's own
+                    // accessibility activation does not reliably navigate in a
+                    // hosted window that is not the key window, and a test that
+                    // silently fails to navigate would "prove" whatever it
+                    // liked about what happens when you navigate.
+                    Button(Self.settingsLabel) { showsSettings = true }
+                    Spacer(minLength: 20)
+                }
+                .padding(20)
+                .tonoReadableColumn(.reading)
+            }
+            .background(Color.black.ignoresSafeArea())
+            .navigationDestination(isPresented: $showsSettings) {
+                Text(Self.destinationLabel)
+            }
         }
     }
 }
@@ -2070,6 +2200,82 @@ extension Build117ReadTheAskTests {
         XCTAssertFalse(rendered(controller).contains("Send the Q3 deck."), rendered(controller))
     }
 
+    /// N-D — pushing Settings over the panel cancels the reading too, and that
+    /// is the intended answer rather than an oversight.
+    ///
+    /// `.onDisappear { cancelReading() }` fires on ANY removal of the panel, and
+    /// a `NavigationStack` push removes it. An independent review noticed the
+    /// consequence and that nothing in the source or the suite stated it: start
+    /// a reading, check Settings, come back, and the reading is gone with no
+    /// error and a working Read button. Reproduced here for real — a genuine
+    /// `navigationDestination` push, with "the request is still in flight" and
+    /// "the push actually happened" both asserted as preconditions first,
+    /// because without them this test would pass on a harness that navigated
+    /// nowhere or on a reading that had already arrived.
+    ///
+    /// It is held here as the fail-closed behaviour it is. The alternative —
+    /// letting the response land while the person is on another screen — is the
+    /// precise defect the R5 repair exists to close, and it does not become
+    /// acceptable because the screen on top happens to be Tono's own.
+    ///
+    /// Read `session.outcome`, never `session.isEmpty`: `run()` calls
+    /// `setReceivedText` before it awaits, so the session stops being empty when
+    /// the request STARTS. Asserting on `isEmpty` here reports "a reading
+    /// landed" for a reading that never did.
+    @MainActor
+    func testAReadingIsCancelledWhenTheSurfaceIsPushedAsideForSettings() throws {
+        ReadAskStub.holdSeconds = 2.0
+        setSharedActivation(true)
+        let session = ReadTheAskSession()
+        let controller = host(ReadTheAskPushableHarness(session: session))
+        try type(Self.receivedWithDeadline, into: controller)
+        _ = settle(controller, until: { self.isAvailable(ReadTheAskCopy.readAction, in: controller) })
+
+        try activate(ReadTheAskCopy.readAction, in: controller)
+        XCTAssertGreaterThan(ReadAskStub.readAskCount, 0, "no request was ever made")
+        // PRECONDITION 1 — the request is genuinely still in flight. Without
+        // this the test would be describing what happens to a reading that had
+        // already arrived, which is a different question.
+        //
+        // `outcome`, not `isEmpty`: `run()` calls `session.setReceivedText`
+        // before it awaits, so the session stops being empty the moment the
+        // request STARTS. `outcome` is the reading itself and is nil until one
+        // lands.
+        XCTAssertNil(
+            session.outcome,
+            "the reading landed before Settings was pushed, so the push was not "
+                + "over an in-flight request"
+        )
+
+        try activate(ReadTheAskPushableHarness.settingsLabel, in: controller)
+        // PRECONDITION 2 — the push actually happened. Without this the test
+        // would pass on a harness that never navigated, which proves nothing
+        // about what navigating does.
+        XCTAssertTrue(
+            settle(controller, until: {
+                self.rendered(controller).contains(ReadTheAskPushableHarness.destinationLabel)
+            }),
+            "the Settings screen was never pushed, so this test measured nothing"
+        )
+
+        // Give the held response every chance to land. It must not.
+        _ = settle(controller, until: { session.outcome != nil }, seconds: 8.0)
+
+        XCTAssertNil(
+            session.outcome,
+            "a reading landed on the session while the person was on another "
+                + "screen. Leaving means leaving, whichever screen they left for."
+        )
+        // And it fails CLOSED, which is the part worth pinning: the message
+        // itself is untouched, so coming back and tapping Read again asks the
+        // same question about the same message. Nothing is lost but the tap.
+        XCTAssertEqual(
+            session.receivedText, Self.receivedWithDeadline,
+            "the message itself must survive a trip to Settings — cancelling the "
+                + "reading is not the same as throwing away what they pasted"
+        )
+    }
+
     // ── R6 — contrast measured, not inherited ──────────────────────────
 
     /// WCAG AA on the surfaces this build added.
@@ -2079,39 +2285,93 @@ extension Build117ReadTheAskTests {
     /// repo's only contrast gate covers keyboard chips. These are the app
     /// surfaces, measured against the field they are actually drawn on.
     func testEveryNewSurfaceTextColourClearsWCAGAAOnItsOwnBackground() {
-        // Coach's field is black; cards sit on it at low white opacity, which
-        // lightens the effective background very slightly. Measuring against
-        // pure black is the conservative direction: it UNDER-states the
-        // background luminance for light text, so a pass here is a pass on the
-        // real card too.
-        let field = UIColor.black
-
-        // Every foreground the Read the Ask surfaces use, with the size class
-        // it is used at. AA is 4.5:1 for body text and 3:1 for large text
-        // (≥18pt, or ≥14pt bold).
-        let samples: [(label: String, colour: UIColor, isLargeText: Bool)] = [
-            ("The Ask value (17pt medium)", .white.withAlphaComponent(0.95), true),
-            ("field heading (12pt semibold)", .white.withAlphaComponent(0.6), false),
-            ("muted 'No deadline stated' (15pt)", .white.withAlphaComponent(0.55), false),
-            ("possible-reading body (14pt)", .white.withAlphaComponent(0.85), false),
-            ("mode caption (13pt)", .white.withAlphaComponent(0.6), false),
-            ("notice text (13pt)", .white, false),
-            ("unselected segment (15pt semibold)", .white.withAlphaComponent(0.7), false),
-            ("activation body (15pt)", .white.withAlphaComponent(0.72), false),
-            ("activation toggle detail (13pt)", .white.withAlphaComponent(0.6), false),
-        ]
-
-        for sample in samples {
-            let ratio = Self.contrastRatio(
-                foreground: sample.colour.flattened(over: field), background: field
-            )
-            let required: CGFloat = sample.isLargeText ? 3.0 : 4.5
+        // BUILD 117 REPAIR (N-B) — this used to be a hand-transcribed table of
+        // nine colours measured against pure black. It omitted three
+        // foregrounds the surfaces actually use, and on the field they are
+        // really drawn on two of them failed AA and the third cleared it by
+        // 0.4%. Both halves of that are fixed here: the cases come from
+        // `ReadTheAskInk.allCases`, which is the same table the view draws
+        // from, and each one is measured on `ink.field` composited down to the
+        // opaque colour a person actually sees rather than on pure black.
+        for ink in ReadTheAskInk.allCases {
+            let background = Self.resolved(ink.field)
+            let foreground = Self.dark(UIColor(ink.color)).flattened(over: background)
+            let ratio = Self.contrastRatio(foreground: foreground, background: background)
+            // WCAG 2.1: 3:1 for large text (≥18pt, or ≥14pt bold), else 4.5:1.
+            let isLargeText = ink.pointSize >= 18 || (ink.pointSize >= 14 && ink.isBold)
+            let required: CGFloat = isLargeText ? 3.0 : 4.5
             XCTAssertGreaterThanOrEqual(
                 ratio, required,
-                "\(sample.label): \(String(format: "%.2f", ratio)):1 is below WCAG AA "
-                    + "(\(required):1) on the surface's own background"
+                "\(ink.rawValue) (\(ink.pointSize)pt\(ink.isBold ? " bold" : "")) on "
+                    + "\(ink.field.rawValue): \(String(format: "%.2f", ratio)):1 is below "
+                    + "WCAG AA (\(required):1) on the surface's own background"
             )
         }
+    }
+
+    /// The gate cannot be complete unless the view cannot draw a colour the gate
+    /// has never heard of. This is the structural half of the N-B repair: the
+    /// omission was possible because the table was written by hand beside the
+    /// view instead of being the thing the view reads.
+    func testTheViewDrawsNoForegroundOrFieldOutsideTheInkTable() throws {
+        let source = try String(
+            contentsOf: sourceRoot().appendingPathComponent("App/ReadTheAskView.swift"),
+            encoding: .utf8
+        )
+        // Only the view bodies, not the token declarations above them.
+        let body = String(source[source.range(of: "// MARK: - The mode selector")!.lowerBound...])
+
+        for (call, token) in [(".foregroundColor(", "ReadTheAskInk"),
+                              (".background(", "ReadTheAskField")] {
+            var searched = body.startIndex
+            var sites = 0
+            while let found = body.range(of: call, range: searched..<body.endIndex) {
+                let line = body[found.lowerBound...].prefix(while: { $0 != "\n" })
+                searched = found.upperBound
+                sites += 1
+                XCTAssertTrue(
+                    line.contains(token) || line.contains("Color.clear"),
+                    "\(call) at “\(line.trimmingCharacters(in: .whitespaces))” does not come "
+                        + "from \(token). A colour the view can draw but the contrast gate "
+                        + "cannot see is exactly how three failing foregrounds shipped."
+                )
+            }
+            XCTAssertGreaterThan(sites, 10, "\(call): the scrape found almost nothing to check")
+        }
+    }
+
+    /// Every ink names a field the view can actually build, and every field
+    /// composites down to an opaque colour. A field whose `base` chain did not
+    /// terminate would make the measurement above meaningless.
+    func testEveryFieldCompositesDownToAnOpaqueRoot() {
+        for field in ReadTheAskField.allCases {
+            var seen: Set<String> = [field.rawValue]
+            var cursor = field
+            var depth = 0
+            while let base = cursor.base {
+                XCTAssertTrue(seen.insert(base.rawValue).inserted, "\(field.rawValue) cycles")
+                cursor = base
+                depth += 1
+                XCTAssertLessThan(depth, ReadTheAskField.allCases.count, "\(field.rawValue) never roots")
+            }
+            XCTAssertNil(cursor.layer, "\(cursor.rawValue) is a root and must be opaque")
+            var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+            Self.resolved(field).getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+            XCTAssertEqual(alpha, 1, accuracy: 0.001, "\(field.rawValue) did not resolve opaque")
+        }
+    }
+
+    /// The field a person sees, composited from its opaque root upward.
+    private static func resolved(_ field: ReadTheAskField) -> UIColor {
+        guard let base = field.base else { return dark(UIColor(field.fill)) }
+        return dark(UIColor(field.fill)).flattened(over: resolved(base))
+    }
+
+    /// These surfaces are drawn dark (`overrideUserInterfaceStyle = .dark`), so
+    /// a dynamic system colour is resolved in that style rather than in whatever
+    /// the test host happens to be in.
+    private static func dark(_ colour: UIColor) -> UIColor {
+        colour.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
     }
 
     /// The selected segment is white on the app's purple — the one place a new

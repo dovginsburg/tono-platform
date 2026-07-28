@@ -30,6 +30,215 @@
 
 import SwiftUI
 
+// MARK: - Ink and fields
+
+/// Every surface these views draw text ON, and what it composites down to.
+///
+/// BUILD 117 REPAIR (N-B) — why this exists.
+///
+/// The contrast gate used to carry a hand-transcribed table of nine colours.
+/// Three foregrounds the surfaces actually use were not in it —
+/// `possibleReadingsCaption`, `draftEditableNote` and `receivedTextPlaceholder`
+/// — and measured against the field they are really drawn on, two of them
+/// failed WCAG AA outright and the third cleared it by 0.4%. The test was named
+/// `testEveryNewSurfaceTextColour…` and the handoff said "every foreground the
+/// new surfaces use is measured against the field it is drawn on". Neither was
+/// true, and neither could be: a table transcribed by hand drifts from the view
+/// in both directions and nothing notices.
+///
+/// So the view and the gate now read the SAME values. A foreground that is not
+/// in `ReadTheAskInk` cannot be drawn (there is a test for that), and every case
+/// that is in it is measured on `field`, composited down to an opaque colour
+/// rather than scored on its alpha channel.
+enum ReadTheAskField: String, CaseIterable {
+    case appBackground, sheetBackground
+    case selectorTrack, editorWell, card, secondaryFill
+    case draftCard, draftEditorWell, draftSecondaryFill
+    case notice, warningNotice
+    case purpleFill, dimPurpleFill
+    case toggleRow, sheetSecondaryFill
+
+    /// The translucent layer this field puts on top of `base`, exactly as the
+    /// view applies it. `nil` for the two opaque roots.
+    var layer: (tint: Color, opacity: Double)? {
+        switch self {
+        case .appBackground, .sheetBackground: return nil
+        case .selectorTrack:      return (.white, 0.08)
+        case .editorWell:         return (.white, 0.07)
+        case .card:               return (.white, 0.05)
+        case .secondaryFill:      return (.white, 0.10)
+        case .draftCard:          return (.purple, 0.15)
+        case .draftEditorWell:    return (.white, 0.07)
+        case .draftSecondaryFill: return (.white, 0.10)
+        case .notice:             return (.white, 0.08)
+        case .warningNotice:      return (.red, 0.18)
+        case .purpleFill:         return (.purple, 1.0)
+        case .dimPurpleFill:      return (.purple, 0.35)
+        case .toggleRow:          return (.white, 0.07)
+        case .sheetSecondaryFill: return (.white, 0.10)
+        }
+    }
+
+    /// The field this one is drawn on. `nil` for the two opaque roots.
+    var base: ReadTheAskField? {
+        switch self {
+        case .appBackground, .sheetBackground:
+            return nil
+        case .toggleRow, .sheetSecondaryFill:
+            return .sheetBackground
+        case .secondaryFill:
+            return .card
+        case .draftEditorWell, .draftSecondaryFill:
+            return .draftCard
+        default:
+            return .appBackground
+        }
+    }
+
+    /// What a view passes to `.background(…)`.
+    ///
+    /// Coach's field is `Color.black`; the activation sheet's is `Color(white:
+    /// 0.08)`. Everything else is one translucent layer over one of those, which
+    /// is why the composite below is exact rather than an approximation.
+    var fill: Color {
+        guard let layer else {
+            return self == .sheetBackground ? Color(white: 0.08) : .black
+        }
+        return layer.tint.opacity(layer.opacity)
+    }
+}
+
+/// Every text colour the Read the Ask surfaces draw, with the field it is drawn
+/// on and the type size it is drawn at.
+///
+/// The type size is here because WCAG's threshold depends on it: 3:1 for large
+/// text (≥18pt, or ≥14pt bold), 4.5:1 for everything else.
+enum ReadTheAskInk: String, CaseIterable {
+    // the reading
+    case askValue, mutedValue, fieldHeading
+    case possibleReadingsHeading, possibleReading, possibleReadingsCaption
+    // the message
+    case receivedTextLabel, receivedTextPlaceholder, editorText, removeControl
+    case disclosure, readActionLabel, readActionLabelDisabled
+    case secondaryActionLabel
+    // the draft
+    case draftHeading, draftEditorText, copyLabel, draftEditableNote
+    // notices
+    case noticeText, noticeGlyph, warningText, warningGlyph
+    // the selector and the sheet
+    case selectedSegment, unselectedSegment
+    case activationTitle, activationBody
+    case activationToggleTitle, activationToggleDetail
+    case activationConfirmLabel, activationDismissLabel
+
+    var tint: Color {
+        switch self {
+        case .removeControl: return .purple
+        case .warningGlyph: return .yellow
+        default: return .white
+        }
+    }
+
+    var opacity: Double {
+        switch self {
+        case .askValue: return 0.95
+        case .mutedValue: return 0.55
+        case .possibleReading: return 0.85
+        case .fieldHeading, .possibleReadingsHeading, .receivedTextLabel,
+             .disclosure, .draftHeading, .activationToggleDetail:
+            return 0.6
+        // BUILD 117 REPAIR — these three were 0.45, 0.45 and 0.35, and on the
+        // field they are actually drawn on they measured 4.52:1, 4.48:1 and
+        // 3.21:1 against a 4.5:1 requirement. 0.55 is the same value the muted
+        // "No deadline stated" already uses and clears AA with ≥1.36× margin on
+        // every one of the three fields.
+        case .possibleReadingsCaption, .draftEditableNote, .receivedTextPlaceholder:
+            return 0.55
+        case .noticeGlyph: return 0.7
+        case .unselectedSegment: return 0.7
+        case .activationBody: return 0.72
+        default: return 1.0
+        }
+    }
+
+    var field: ReadTheAskField {
+        switch self {
+        case .askValue, .mutedValue, .fieldHeading, .possibleReadingsHeading,
+             .possibleReading, .possibleReadingsCaption:
+            return .card
+        case .receivedTextLabel, .removeControl, .disclosure:
+            return .appBackground
+        case .receivedTextPlaceholder, .editorText:
+            return .editorWell
+        case .readActionLabel:
+            return .purpleFill
+        case .readActionLabelDisabled:
+            return .dimPurpleFill
+        case .secondaryActionLabel:
+            return .secondaryFill
+        case .draftHeading, .draftEditableNote:
+            return .draftCard
+        case .draftEditorText:
+            return .draftEditorWell
+        case .copyLabel:
+            return .draftSecondaryFill
+        case .noticeText, .noticeGlyph:
+            return .notice
+        case .warningText, .warningGlyph:
+            return .warningNotice
+        case .selectedSegment:
+            return .purpleFill
+        case .unselectedSegment:
+            return .selectorTrack
+        case .activationTitle, .activationBody:
+            return .sheetBackground
+        case .activationToggleTitle, .activationToggleDetail:
+            return .toggleRow
+        case .activationConfirmLabel:
+            return .purpleFill
+        case .activationDismissLabel:
+            return .sheetSecondaryFill
+        }
+    }
+
+    /// The type this ink is drawn at, for WCAG's large-text threshold.
+    var pointSize: CGFloat {
+        switch self {
+        case .activationTitle: return 22
+        case .askValue, .readActionLabel, .readActionLabelDisabled: return 17
+        case .activationToggleTitle, .activationConfirmLabel, .activationDismissLabel: return 16
+        case .mutedValue, .receivedTextPlaceholder, .editorText, .draftEditorText,
+             .selectedSegment, .unselectedSegment, .activationBody:
+            return 15
+        case .possibleReading, .secondaryActionLabel: return 14
+        case .removeControl, .copyLabel, .noticeText, .noticeGlyph,
+             .warningText, .warningGlyph, .activationToggleDetail:
+            return 13
+        case .fieldHeading, .possibleReadingsHeading, .receivedTextLabel,
+             .disclosure, .draftHeading:
+            return 12
+        case .possibleReadingsCaption, .draftEditableNote: return 11
+        }
+    }
+
+    var isBold: Bool {
+        switch self {
+        case .activationTitle, .askValue, .readActionLabel, .readActionLabelDisabled,
+             .activationToggleTitle, .activationConfirmLabel, .activationDismissLabel,
+             .selectedSegment, .unselectedSegment, .secondaryActionLabel,
+             .removeControl, .copyLabel, .fieldHeading, .possibleReadingsHeading,
+             .draftHeading:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// What a view passes to `.foregroundColor(…)`. The ONE place these values
+    /// live.
+    var color: Color { tint.opacity(opacity) }
+}
+
 // MARK: - The mode selector
 
 /// `Rewrite | Read the Ask`.
@@ -53,7 +262,7 @@ struct ReadTheAskModeSelector: View {
             segment(.readAsk, title: ReadTheAskCopy.readAskModeTitle)
         }
         .padding(4)
-        .background(Color.white.opacity(0.08))
+        .background(ReadTheAskField.selectorTrack.fill)
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(ReadTheAskCopy.modeSelectorAccessibilityLabel)
@@ -65,10 +274,10 @@ struct ReadTheAskModeSelector: View {
         } label: {
             Text(title)
                 .tonoFont(size: 15, weight: .semibold, relativeTo: .subheadline)
-                .foregroundColor(mode == value ? .white : .white.opacity(0.7))
+                .foregroundColor(mode == value ? ReadTheAskInk.selectedSegment.color : ReadTheAskInk.unselectedSegment.color)
                 .frame(maxWidth: .infinity)
                 .frame(minHeight: Self.minimumTouchTarget)
-                .background(mode == value ? Color.purple : Color.clear)
+                .background(mode == value ? ReadTheAskField.purpleFill.fill : Color.clear)
                 .clipShape(RoundedRectangle(cornerRadius: 11))
         }
         .accessibilityLabel(title)
@@ -107,13 +316,13 @@ struct ReadTheAskActivationSheet: View {
                 VStack(spacing: 20) {
                     Text(ReadTheAskCopy.activationTitle)
                         .tonoFont(size: 22, weight: .bold, relativeTo: .title2)
-                        .foregroundColor(.white)
+                        .foregroundColor(ReadTheAskInk.activationTitle.color)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
 
                     Text(ReadTheAskCopy.activationBody)
                         .tonoFont(size: 15, relativeTo: .subheadline)
-                        .foregroundColor(.white.opacity(0.72))
+                        .foregroundColor(ReadTheAskInk.activationBody.color)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
 
@@ -121,16 +330,16 @@ struct ReadTheAskActivationSheet: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(ReadTheAskCopy.activationToggleTitle)
                                 .tonoFont(size: 16, weight: .semibold, relativeTo: .body)
-                                .foregroundColor(.white)
+                                .foregroundColor(ReadTheAskInk.activationToggleTitle.color)
                             Text(ReadTheAskCopy.activationToggleDetail)
                                 .tonoFont(size: 13, relativeTo: .footnote)
-                                .foregroundColor(.white.opacity(0.6))
+                                .foregroundColor(ReadTheAskInk.activationToggleDetail.color)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                     .tint(.purple)
                     .padding(16)
-                    .background(Color.white.opacity(0.07))
+                    .background(ReadTheAskField.toggleRow.fill)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
                     .accessibilityHint(ReadTheAskCopy.settingsDisclosure)
 
@@ -144,7 +353,7 @@ struct ReadTheAskActivationSheet: View {
                 .padding(24)
                 .tonoReadableColumn(.form)
             }
-            .background(Color(white: 0.08).ignoresSafeArea())
+            .background(ReadTheAskField.sheetBackground.fill.ignoresSafeArea())
             .navigationBarTitleDisplayMode(.inline)
         }
         .presentationDetents([.medium, .large])
@@ -161,8 +370,8 @@ struct ReadTheAskActivationSheet: View {
                 .tonoFont(size: 16, weight: .semibold, relativeTo: .body)
                 .frame(maxWidth: .infinity)
                 .frame(minHeight: ReadTheAskModeSelector.minimumTouchTarget)
-                .background(Color.white.opacity(0.10))
-                .foregroundColor(.white)
+                .background(ReadTheAskField.sheetSecondaryFill.fill)
+                .foregroundColor(ReadTheAskInk.activationDismissLabel.color)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
         }
         .accessibilityLabel(ReadTheAskCopy.activationDismiss)
@@ -178,8 +387,8 @@ struct ReadTheAskActivationSheet: View {
                 .tonoFont(size: 16, weight: .semibold, relativeTo: .body)
                 .frame(maxWidth: .infinity)
                 .frame(minHeight: ReadTheAskModeSelector.minimumTouchTarget)
-                .background(Color.purple)
-                .foregroundColor(.white)
+                .background(ReadTheAskField.purpleFill.fill)
+                .foregroundColor(ReadTheAskInk.activationConfirmLabel.color)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
         }
         .accessibilityLabel(ReadTheAskCopy.activationConfirm)
@@ -282,6 +491,25 @@ struct ReadTheAskPanel: View {
         // the text before it awaits, and the response lands on the SESSION, not
         // the buffer. The task itself has to be cancelled, which is what this
         // does — for every way of leaving, including the ones Coach owns.
+        //
+        // "EVERY WAY OF LEAVING" INCLUDES PUSHING SETTINGS — stated, because it
+        // is a real user-visible consequence and nothing said so (N-D).
+        //
+        // `onDisappear` fires on any removal of this panel, and a
+        // `NavigationStack` push from Coach's toolbar removes it. Measured, not
+        // reasoned: with the request genuinely in flight and the push genuinely
+        // performed, the reading does not arrive. So starting a reading,
+        // checking Settings and coming back leaves the surface with no reading
+        // and a Read button that works.
+        //
+        // That is the right answer, and it is the same one Remove and the mode
+        // switch get. The alternative is a response landing on a surface the
+        // person is not looking at — the exact defect this repair exists to
+        // close — and it does not become acceptable because the screen on top
+        // happens to be Tono's own. It fails CLOSED: the message they pasted is
+        // untouched, so the cost is one tap, not their work.
+        // `testAReadingIsCancelledWhenTheSurfaceIsPushedAsideForSettings` holds
+        // both halves.
         .onDisappear { cancelReading() }
     }
 
@@ -292,7 +520,7 @@ struct ReadTheAskPanel: View {
             HStack {
                 Text(ReadTheAskCopy.receivedTextLabel)
                     .font(.caption)
-                    .foregroundColor(.white.opacity(0.6))
+                    .foregroundColor(ReadTheAskInk.receivedTextLabel.color)
                 Spacer()
                 // The contract's "removable before analysis", as a control. The
                 // person can always take the message back out before Tono is
@@ -305,7 +533,7 @@ struct ReadTheAskPanel: View {
                         errorMessage = nil
                     }
                     .tonoFont(size: 13, weight: .semibold, relativeTo: .footnote)
-                    .foregroundColor(.purple)
+                    .foregroundColor(ReadTheAskInk.removeControl.color)
                     .accessibilityHint("Removes the message and its reading from this screen.")
                 }
             }
@@ -313,14 +541,14 @@ struct ReadTheAskPanel: View {
             .frame(minHeight: 120)
             .padding(10)
             .scrollContentBackground(.hidden)
-            .background(Color.white.opacity(0.07))
+            .background(ReadTheAskField.editorWell.fill)
             .clipShape(RoundedRectangle(cornerRadius: 12))
-            .foregroundColor(.white)
+            .foregroundColor(ReadTheAskInk.editorText.color)
             .tint(.purple)
             .overlay(alignment: .topLeading) {
                 if receivedText.isEmpty {
                     Text(ReadTheAskCopy.receivedTextPlaceholder)
-                        .foregroundColor(.white.opacity(0.35))
+                        .foregroundColor(ReadTheAskInk.receivedTextPlaceholder.color)
                         .tonoFont(size: 15, relativeTo: .subheadline)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 18)
@@ -343,7 +571,7 @@ struct ReadTheAskPanel: View {
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
-        .foregroundColor(.white.opacity(0.6))
+        .foregroundColor(ReadTheAskInk.disclosure.color)
         .accessibilityElement(children: .combine)
     }
 
@@ -365,8 +593,8 @@ struct ReadTheAskPanel: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
-            .background(canSubmit ? Color.purple : Color.purple.opacity(0.35))
-            .foregroundColor(.white)
+            .background(canSubmit ? ReadTheAskField.purpleFill.fill : ReadTheAskField.dimPurpleFill.fill)
+            .foregroundColor(canSubmit ? ReadTheAskInk.readActionLabel.color : ReadTheAskInk.readActionLabelDisabled.color)
             .clipShape(RoundedRectangle(cornerRadius: 14))
         }
         .disabled(!canSubmit)
@@ -400,22 +628,22 @@ struct ReadTheAskPanel: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(ReadTheAskCopy.possibleReadingsHeading)
                         .tonoFont(size: 12, weight: .semibold, relativeTo: .caption)
-                        .foregroundColor(.white.opacity(0.6))
+                        .foregroundColor(ReadTheAskInk.possibleReadingsHeading.color)
                     ForEach(result.possibleReadings, id: \.self) { reading in
                         Text("• \(reading)")
                             .tonoFont(size: 14, relativeTo: .subheadline)
-                            .foregroundColor(.white.opacity(0.85))
+                            .foregroundColor(ReadTheAskInk.possibleReading.color)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Text(ReadTheAskCopy.possibleReadingsCaption)
                         .tonoFont(size: 11, relativeTo: .caption2)
-                        .foregroundColor(.white.opacity(0.45))
+                        .foregroundColor(ReadTheAskInk.possibleReadingsCaption.color)
                 }
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel(ReadTheAskCopy.possibleReadingsHeading)
             }
 
-            Divider().background(Color.white.opacity(0.08))
+            Divider().background(ReadTheAskField.selectorTrack.fill)
 
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 10) { replyButton(result); clarifyButton(result) }
@@ -424,7 +652,7 @@ struct ReadTheAskPanel: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.05))
+        .background(ReadTheAskField.card.fill)
         .clipShape(RoundedRectangle(cornerRadius: 14))
     }
 
@@ -434,14 +662,14 @@ struct ReadTheAskPanel: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(heading)
                 .tonoFont(size: 12, weight: .semibold, relativeTo: .caption)
-                .foregroundColor(.white.opacity(0.6))
+                .foregroundColor(ReadTheAskInk.fieldHeading.color)
             Text(value)
                 .tonoFont(
                     size: emphasised ? 17 : 15,
                     weight: emphasised ? .medium : .regular,
                     relativeTo: emphasised ? .body : .subheadline
                 )
-                .foregroundColor(.white.opacity(muted ? 0.55 : 0.95))
+                .foregroundColor(muted ? ReadTheAskInk.mutedValue.color : ReadTheAskInk.askValue.color)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
         }
@@ -474,8 +702,8 @@ struct ReadTheAskPanel: View {
             }
             .frame(maxWidth: .infinity)
             .frame(minHeight: ReadTheAskModeSelector.minimumTouchTarget)
-            .background(Color.white.opacity(0.10))
-            .foregroundColor(.white)
+            .background(ReadTheAskField.secondaryFill.fill)
+            .foregroundColor(ReadTheAskInk.secondaryActionLabel.color)
             .clipShape(RoundedRectangle(cornerRadius: 12))
         }
         .accessibilityLabel(title)
@@ -495,7 +723,7 @@ struct ReadTheAskPanel: View {
                     : ReadTheAskCopy.draftReplyAction
             )
             .tonoFont(size: 12, weight: .semibold, relativeTo: .caption)
-            .foregroundColor(.white.opacity(0.6))
+            .foregroundColor(ReadTheAskInk.draftHeading.color)
 
             TextEditor(
                 text: Binding(
@@ -506,9 +734,9 @@ struct ReadTheAskPanel: View {
             .frame(minHeight: 100)
             .padding(10)
             .scrollContentBackground(.hidden)
-            .background(Color.white.opacity(0.07))
+            .background(ReadTheAskField.draftEditorWell.fill)
             .clipShape(RoundedRectangle(cornerRadius: 12))
-            .foregroundColor(.white)
+            .foregroundColor(ReadTheAskInk.draftEditorText.color)
             .tint(.purple)
             .accessibilityLabel("Your draft")
             .accessibilityHint(ReadTheAskCopy.draftEditableNote)
@@ -524,20 +752,20 @@ struct ReadTheAskPanel: View {
                     .tonoFont(size: 13, weight: .semibold, relativeTo: .footnote)
                     .padding(.horizontal, 12)
                     .frame(minHeight: ReadTheAskModeSelector.minimumTouchTarget)
-                    .background(Color.white.opacity(0.10))
-                    .foregroundColor(.white)
+                    .background(ReadTheAskField.draftSecondaryFill.fill)
+                    .foregroundColor(ReadTheAskInk.copyLabel.color)
                     .clipShape(Capsule())
                 }
                 Text(ReadTheAskCopy.draftEditableNote)
                     .tonoFont(size: 11, relativeTo: .caption2)
-                    .foregroundColor(.white.opacity(0.45))
+                    .foregroundColor(ReadTheAskInk.draftEditableNote.color)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
             }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.purple.opacity(0.15))
+        .background(ReadTheAskField.draftCard.fill)
         .clipShape(RoundedRectangle(cornerRadius: 14))
     }
 
@@ -546,15 +774,15 @@ struct ReadTheAskPanel: View {
     private func notice(icon: String, text: String, tinted: Bool = false) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: icon)
-                .foregroundColor(tinted ? .yellow : .white.opacity(0.7))
+                .foregroundColor(tinted ? ReadTheAskInk.warningGlyph.color : ReadTheAskInk.noticeGlyph.color)
             Text(text)
                 .tonoFont(size: 13, relativeTo: .footnote)
-                .foregroundColor(.white)
+                .foregroundColor(tinted ? ReadTheAskInk.warningText.color : ReadTheAskInk.noticeText.color)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
         .padding(12)
-        .background(tinted ? Color.red.opacity(0.18) : Color.white.opacity(0.08))
+        .background(tinted ? ReadTheAskField.warningNotice.fill : ReadTheAskField.notice.fill)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .accessibilityElement(children: .combine)
     }

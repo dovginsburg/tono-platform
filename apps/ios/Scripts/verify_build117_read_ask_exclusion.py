@@ -20,12 +20,20 @@ WHAT IT CHECKS, AND WHY EACH CHECK IS SHAPED THE WAY IT IS
   demangled through ONE `swift-demangle` process (one per symbol turns a
   5-second check into an hour) before matching.
 
-* **Positive controls, mandatory.** A check that returns "0 hits" is worthless
-  until something proves it *can* return a hit. This bit for real: a naive first
-  pass reported 0 for every binary including the app, because a Debug build puts
-  the code in a separate `*.debug.dylib` and `nm` on the thin main binary sees
-  almost nothing. Every configuration therefore asserts the app and the Share
-  extension DO contain the feature before believing that the keyboard does not.
+* **Positive controls, mandatory, and one per scan.** A check that returns
+  "0 hits" is worthless until something proves it *can* return a hit. This bit
+  for real: a naive first pass reported 0 for every binary including the app,
+  because a Debug build puts the code in a separate `*.debug.dylib` and `nm` on
+  the thin main binary sees almost nothing. Every configuration therefore
+  asserts the app and the Share extension DO contain the feature before
+  believing that the keyboard does not — and asserts the SYMBOL scan and the
+  STRING scan separately, because a summed control let a live `strings` cover
+  for a dead demangler. The demangler itself gets a control too: a known
+  mangled name must come back demangled before any symbol result is believed.
+
+* **Fail closed on tool failure.** `nm`, `swift-demangle` and `strings` raise
+  rather than return "". "I found nothing" and "I could not look" are different
+  answers and only one of them is evidence.
 
 * **Strings, case-sensitively, as whole shipped sentences.** An earlier pass
   matched the fragment "Read this message" and reported
@@ -110,51 +118,126 @@ class Checker:
         return condition
 
 
+class ToolFailure(RuntimeError):
+    """A subprocess this script's conclusions depend on did not run.
+
+    BUILD 117 REPAIR (N-F) — this used to be swallowed. `demangled_symbols`
+    returned `""` on ANY subprocess failure, and the positive control tested
+    `symbol_hits + string_hits > 0` COMBINED. So a broken `nm` or
+    `swift-demangle` with a working `strings` kept the control green on string
+    hits alone while every symbol exclusion below it silently became vacuous —
+    the script would have reported `ok=28 fail=0` while proving half of nothing.
+    A check that cannot tell "absent" from "unreadable" is the exact failure
+    this script was written to prevent, so the tools now fail CLOSED.
+    """
+
+
+def _run(argv: list[str], *, stdin: str | None = None, timeout: int) -> str:
+    """Run a tool, or raise. Never returns a plausible-looking empty string."""
+    try:
+        result = subprocess.run(
+            argv, input=stdin, capture_output=True, text=True, timeout=timeout
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ToolFailure(f"{argv[0]} did not run ({exc})") from exc
+    if result.returncode != 0:
+        detail = (result.stderr or "").strip().splitlines()
+        raise ToolFailure(
+            f"{argv[0]} exited {result.returncode}"
+            + (f": {detail[0][:160]}" if detail else "")
+        )
+    return result.stdout
+
+
+#: Mach-O and universal-binary magics, so a bundle resource is skipped rather
+#: than counted as an unreadable binary.
+_MACHO_MAGICS = frozenset({
+    b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe",
+    b"\xfe\xed\xfa\xcf", b"\xfe\xed\xfa\xce",
+    b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",
+})
+
+
+def is_macho(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            return handle.read(4) in _MACHO_MAGICS
+    except OSError:
+        return False
+
+
 def demangled_symbols(binary: Path) -> str:
-    """Every symbol in `binary`, demangled, as one searchable blob."""
-    try:
-        raw = subprocess.run(
-            ["nm", "-a", str(binary)], capture_output=True, text=True, timeout=300
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return ""
+    """Every symbol in `binary`, demangled, as one searchable blob.
+
+    Raises `ToolFailure` if a tool FAILED — see the class docstring. An image
+    whose symbol table is genuinely empty is not a failure and must not be
+    reported as one: a Debug `Tono.app` ships `__preview.dylib`, a real Mach-O
+    that `nm` reads successfully and finds nothing in. Treating that as
+    unreadable made the whole Debug configuration fail on a healthy build.
+    "Read it, found nothing" is answered here; "could not read it" is raised;
+    and "the scan is blind" is caught one level up by the positive controls,
+    which now require symbol hits and string hits SEPARATELY.
+    """
+    raw = _run(["nm", "-a", str(binary)], timeout=300)
     names = "\n".join(line.split()[-1] for line in raw.splitlines() if line.split())
-    try:
-        return subprocess.run(
-            ["xcrun", "swift-demangle", "--compact"],
-            input=names, capture_output=True, text=True, timeout=600,
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return names
+    if not names:
+        return ""
+    return _run(
+        ["xcrun", "swift-demangle", "--compact"], stdin=names, timeout=600
+    )
 
 
 def binary_strings(binary: Path) -> str:
+    return _run(["strings", "-a", str(binary)], timeout=300)
+
+
+def verify_toolchain(checker: Checker) -> None:
+    """Prove the demangler is live before believing any symbol result.
+
+    A mangled name with a known demangling: if `swift-demangle` is missing,
+    stubbed or passing its input through, this fails and every symbol check
+    after it is reported as unproven rather than as a pass.
+    """
     try:
-        return subprocess.run(
-            ["strings", "-a", str(binary)], capture_output=True, text=True, timeout=300
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return ""
+        out = _run(
+            ["xcrun", "swift-demangle", "--compact"],
+            stdin="$s4Tono14ReadTheAskCopyV", timeout=60,
+        ).strip()
+    except ToolFailure as failure:
+        checker.failed(f"toolchain: swift-demangle is unusable — {failure}")
+        return
+    checker.check(
+        out == "Tono.ReadTheAskCopy",
+        "toolchain: swift-demangle actually demangles "
+        f"($s4Tono14ReadTheAskCopyV -> {out!r}); without this every symbol "
+        "check below is a search of mangled text and finds nothing by construction",
+    )
 
 
 def executables_for(bundle: Path) -> list[Path]:
-    """A bundle's main executable AND any sibling dylibs it ships.
+    """A bundle's Mach-O images: main executable, sibling dylibs, frameworks.
 
     Debug builds put most Swift code in `<Name>.debug.dylib` next to the thin
     main executable. Reading only the main binary is precisely the vacuous check
     this script exists to prevent, so everything the bundle carries is read.
+    Non-Mach-O bundle resources are filtered out here so they cannot be
+    mistaken for a binary that failed to read.
     """
     found = [p for p in bundle.glob("*.dylib") if p.is_file()]
     main = bundle / bundle.stem
     if main.is_file():
         found.append(main)
     found += [p for p in bundle.glob("Frameworks/*.framework/*") if p.is_file()]
-    return found
+    return [p for p in found if is_macho(p)]
 
 
 def scan(bundle: Path) -> tuple[str, str]:
+    """Raises `ToolFailure` if any image in the bundle could not be read."""
+    images = executables_for(bundle)
+    if not images:
+        raise ToolFailure(f"{bundle.name} contains no Mach-O image to read")
     symbols, strings = [], []
-    for exe in executables_for(bundle):
+    for exe in images:
         symbols.append(demangled_symbols(exe))
         strings.append(binary_strings(exe))
     return "\n".join(symbols), "\n".join(strings)
@@ -173,31 +256,50 @@ def verify_products(products: Path, checker: Checker) -> None:
         f"[{label}] every expected extension is packaged (found {sorted(shipped)})",
     )
 
-    scans: dict[str, tuple[str, str]] = {"Tono": scan(app)}
-    for name in sorted(shipped):
-        scans[name] = scan(plugins / f"{name}.appex")
+    scans: dict[str, tuple[str, str]] = {}
+    for name, bundle in [("Tono", app)] + [
+        (n, plugins / f"{n}.appex") for n in sorted(shipped)
+    ]:
+        try:
+            scans[name] = scan(bundle)
+        except ToolFailure as failure:
+            # Fail closed. An unreadable binary is not an empty one, and the
+            # difference is the whole value of this script.
+            checker.failed(f"[{label}] {name}: could not be read — {failure}")
 
     # ── positive controls first. Nothing below means anything without them.
+    #
+    # The two halves are asserted SEPARATELY. Summed, a live `strings` covered
+    # for a dead `nm`/`swift-demangle` and the symbol exclusions went vacuous
+    # without a single check going red.
     for name, needles in REQUIRED.items():
-        symbols, strings = scans.get(name, ("", ""))
+        if name not in scans:
+            checker.failed(
+                f"[{label}] POSITIVE CONTROL — {name} could not be scanned, so "
+                f"every exclusion in {label} is unproven"
+            )
+            continue
+        symbols, strings = scans[name]
         symbol_hits = sum(symbols.count(n) for n in needles)
         string_hits = sum(strings.count(n) for n in needles)
         checker.check(
-            symbol_hits + string_hits > 0,
-            f"[{label}] POSITIVE CONTROL — {name} carries the feature "
-            f"({symbol_hits} symbol / {string_hits} string hits); a zero here "
-            f"means the scan is blind and every exclusion below is vacuous",
+            symbol_hits > 0,
+            f"[{label}] POSITIVE CONTROL (symbols) — {name} carries the feature "
+            f"in {symbol_hits} demangled symbols; a zero here means the symbol "
+            f"scan is blind and every symbol exclusion below is vacuous",
+        )
+        checker.check(
+            string_hits > 0,
+            f"[{label}] POSITIVE CONTROL (strings) — {name} carries the feature "
+            f"in {string_hits} strings; a zero here means the string scan is "
+            f"blind and every string exclusion below is vacuous",
         )
 
     # ── the exclusion itself.
     for name in EXCLUDED:
-        symbols, strings = scans.get(name, ("", ""))
-        if not symbols and not strings:
-            checker.failed(
-                f"[{label}] {name}: nothing could be read from the bundle — "
-                f"an unreadable binary is not an empty one"
-            )
-            continue
+        if name not in scans:
+            continue  # already reported as unreadable above
+        symbols, strings = scans[name]
         leaked_symbols = sorted({n for n in SYMBOL_NEEDLES if n in symbols})
         leaked_strings = sorted({n for n in STRING_NEEDLES if n in strings})
         checker.check(
@@ -287,6 +389,7 @@ def main(argv: list[str]) -> int:
         return 2
 
     checker = Checker()
+    verify_toolchain(checker)
     verify_target_membership(ROOT, checker)
     for raw in argv[1:]:
         verify_products(Path(raw), checker)

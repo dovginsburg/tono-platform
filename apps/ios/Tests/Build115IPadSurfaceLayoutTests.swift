@@ -101,6 +101,11 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        // BUILD 117 REPAIR (N1) — this class reads SwiftUI's accessibility tree
+        // too, and it lost five tests the moment it ran before the class that
+        // happened to be turning the accessibility runtime on. The precondition
+        // is stated rather than inherited; see `HostedAccessibilityRuntime`.
+        MainActor.assumeIsolated { HostedAccessibilityRuntime.engage() }
         if restoreCredentials == nil {
             restoreCredentials = (
                 Tono.SharedKeychain.get(Tono.KeychainKeys.deviceID),
@@ -217,6 +222,28 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(0.3))
         controller.view.setNeedsLayout()
         controller.view.layoutIfNeeded()
+        // BUILD 117 REPAIR — 0.3s is how long SwiftUI usually takes, not how
+        // long it is allowed to take. On a loaded machine an iPad-sized render
+        // had not populated by then, and `testNoSurfaceLosesContentOnAnIPad`
+        // compared a full phone surface against an empty iPad one and reported
+        // it as lost content. The spin above is kept because the pixel measure
+        // wants a settled frame; this adds a bounded wait on the thing the
+        // assertions actually read, so a slow render costs milliseconds instead
+        // of a false failure. A surface that genuinely exposes nothing costs
+        // the whole budget once and is then reported by its own assertion.
+        //
+        // The budget is deliberately generous rather than tuned: the loop exits
+        // the instant the tree populates, so a large bound costs nothing on a
+        // healthy render and is the difference between a false failure and a
+        // slightly slower test on a machine sharing its cores with another
+        // Xcode. Four seconds was not enough on this machine and produced
+        // exactly the empty-iPad comparison this wait exists to prevent.
+        let deadline = Date().addingTimeInterval(20)
+        while accessibilityElements(of: controller.view).isEmpty, Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            controller.view.setNeedsLayout()
+            controller.view.layoutIfNeeded()
+        }
 
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
@@ -615,6 +642,16 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
             let phoneLabels = Set(accessibilityElements(of: phone.view).map(\.label).filter { !$0.isEmpty })
             let padLabels = Set(accessibilityElements(of: pad.view).map(\.label).filter { !$0.isEmpty })
             XCTAssertFalse(phoneLabels.isEmpty, "\(surface.name) exposed nothing on a phone")
+            // BUILD 117 — said separately, because "the iPad rendered nothing"
+            // and "the iPad dropped some content" are different faults and the
+            // subtraction below reports both as the second one. When a slow
+            // render beat the wait above, this test blamed the layout for an
+            // empty measurement.
+            XCTAssertFalse(
+                padLabels.isEmpty,
+                "\(surface.name) exposed nothing on an iPad — the surface did not render in "
+                    + "time, which is a measurement failure rather than a layout one"
+            )
             XCTAssertEqual(
                 phoneLabels.subtracting(padLabels), [],
                 "\(surface.name): content a phone shows is missing on an iPad"
