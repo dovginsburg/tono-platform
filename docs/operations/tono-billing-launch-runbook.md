@@ -191,8 +191,14 @@ Run these against the live deployment **without creating a real charge**:
    Then switch to live keys for launch; no live charge is made during acceptance.
 4. **Apple Sandbox.** Verify a StoreKit **Sandbox** transaction through
    `POST /v1/app-store/subscription` grants `pro`; a refund/revoke
-   notification revokes it. (Apple is under App Review — no public App Store
-   badge is shown on the site.)
+   notification revokes it. Before driving the sandbox purchase, confirm
+   `GET /v1/app-store/readiness` reports
+   `verification_configured: true` and `sandbox_verification_enabled: true`
+   (mirrors the `GET /v1/google-play/readiness` shape). The probe never
+   returns a secret value — only booleans + the already-public bundle id,
+   product ids, and catalog version — so it is safe to share with monitors
+   and on-call. (Apple is under App Review — no public App Store badge is
+   shown on the site.)
 5. **Google Play closed test.** Server-side Play verification is **implemented**
    (`apps/backend/google_play.py`): configure `TONO_GOOGLE_SERVICE_ACCOUNT_JSON`,
    `TONO_GOOGLE_BASE_PLAN_IDS` (the confirmed Play Console base-plan ids), and the
