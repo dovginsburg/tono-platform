@@ -1929,30 +1929,13 @@ final class Build115LocalCoachTests: XCTestCase {
     /// production telemetry as traffic nobody sent.
     static let productionHosts = ["api.tonoit.com", "tonoit.com", "parentscript.app"]
 
-    /// Point every backend URL this test can cause at a local address, whatever
-    /// the build configuration would otherwise fall back to.
-    ///
-    /// `TonoBackend.baseURL` resolves the runtime override FIRST, so writing it
-    /// here is the same lever the shipping app uses for staging — not a stub
-    /// standing in for the resolution logic.
-    @MainActor
-    func useLocalBackendForTesting(_ address: String = "http://127.0.0.1:8765") {
-        let defaults = Tono.SharedStore.defaults
-        let previous = defaults.string(forKey: Tono.SharedKeys.backendURL)
-        addTeardownBlock {
-            if let previous {
-                defaults.set(previous, forKey: Tono.SharedKeys.backendURL)
-            } else {
-                defaults.removeObject(forKey: Tono.SharedKeys.backendURL)
-            }
-        }
-        defaults.set(address, forKey: Tono.SharedKeys.backendURL)
-        XCTAssertEqual(
-            Tono.TonoBackend.shared.baseURL.absoluteString, address,
-            "the local backend override did not take, so this test is still aimed "
-                + "wherever the build configuration points"
-        )
-    }
+    // `useLocalBackendForTesting` used to live here, as a method on this class
+    // alone. BUILD 117 REPAIR (Finding 5) moved it to an `XCTestCase`
+    // extension at the foot of this file, unchanged, because the next suite
+    // that needed it — `Build117ReadTheAskTests` — could not reach it and was
+    // left relying on a URL-protocol path list for containment instead. A
+    // safety lever only one class can pull is a safety lever the next class
+    // will do without.
 
     /// The guard. Fails if any URL in `urls` names a production host.
     static func assertNoProductionHostWasTargeted(
@@ -1969,13 +1952,21 @@ final class Build115LocalCoachTests: XCTestCase {
         )
     }
 
-    /// The standing guard, independent of any one test.
+    /// The standing guard, independent of the assertions of any one test.
     ///
-    /// The test above proves its OWN traffic is local. This proves it for every
-    /// request any test in this class caused, because `ProcessWideRequestLog`
-    /// keeps an all-time list — and because the escape an independent reviewer
-    /// found was a fire-and-forget beacon that could land outside the window
-    /// any single test was watching.
+    /// EXACTLY WHAT THIS COVERS, corrected in Build 117 after an independent
+    /// reviewer read it as covering more. `ProcessWideRequestLog` is registered
+    /// and unregistered inside
+    /// `testTheCompleteOnDeviceRouteIssuesZeroRequestsOnSuccessAndOnFailure`
+    /// alone, so `allURLs` holds every request the whole process made *while
+    /// that protocol was registered* — not every request every test in this
+    /// class caused. What the all-time list buys is real but narrower than it
+    /// read: within that window it survives the `reset()` calls the counting
+    /// arms make, so a fire-and-forget beacon landing between two arms is still
+    /// caught. That is the escape the reviewer found. Requests caused by other
+    /// tests in this class, before or after that window, are not observed here
+    /// — those are contained by `useLocalBackendForTesting` and by each test's
+    /// own spy, not by this guard.
     func testNoRequestFromThisSuiteWasEverAddressedToProduction() {
         Self.assertNoProductionHostWasTargeted(ProcessWideRequestLog.allURLs)
     }
@@ -2890,6 +2881,50 @@ final class Build115LocalCoachTests: XCTestCase {
         guard let range = source.range(of: "static let \(name): TimeInterval = ") else { return nil }
         let tail = source[range.upperBound...].prefix { "0123456789.".contains($0) }
         return Double(tail)
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Shared containment lever.
+//
+// BUILD 117 REPAIR (Finding 5) — this is the N5 repair made reachable by every
+// suite in the target instead of by the one class that first needed it. The
+// body is unchanged from where it lived on `Build115LocalCoachTests`.
+// ───────────────────────────────────────────────────────────────────────
+
+extension XCTestCase {
+
+    /// Point every backend URL this test can cause at a local address, whatever
+    /// the build configuration would otherwise fall back to.
+    ///
+    /// `TonoBackend.baseURL` resolves the runtime override FIRST, so writing it
+    /// here is the same lever the shipping app uses for staging — not a stub
+    /// standing in for the resolution logic.
+    ///
+    /// The fallback it displaces is `http://127.0.0.1:8765` under DEBUG and
+    /// `https://api.tonoit.com` — the live production host — otherwise, so a
+    /// suite that does not call this is aimed at production in the Release gate
+    /// by build configuration rather than by decision. Claiming requests at a
+    /// `URLProtocol` is not a substitute: a protocol claims the paths it knows,
+    /// and anything on a path it does not know goes to whatever host the
+    /// configuration picked.
+    @MainActor
+    func useLocalBackendForTesting(_ address: String = "http://127.0.0.1:8765") {
+        let defaults = Tono.SharedStore.defaults
+        let previous = defaults.string(forKey: Tono.SharedKeys.backendURL)
+        addTeardownBlock {
+            if let previous {
+                defaults.set(previous, forKey: Tono.SharedKeys.backendURL)
+            } else {
+                defaults.removeObject(forKey: Tono.SharedKeys.backendURL)
+            }
+        }
+        defaults.set(address, forKey: Tono.SharedKeys.backendURL)
+        XCTAssertEqual(
+            Tono.TonoBackend.shared.baseURL.absoluteString, address,
+            "the local backend override did not take, so this test is still aimed "
+                + "wherever the build configuration points"
+        )
     }
 }
 

@@ -4134,11 +4134,46 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
                 // what to do about it instead.
                 //
                 // The cost, stated: a CONNECTED person loses the cloud rewrite
-                // for this class. It is bounded — with the response budget now
-                // derived from the admitted draft length, every admitted length
-                // is served (measured at 545 / 919 / 996 characters × 3 tones
-                // and 749 × 4), and this fires only on input that sends the
-                // model into a loop.
+                // for this class, and on the local route this tap ends here —
+                // no rewrite and no hand-off, only the sentence
+                // `presentLocalCoachRefusal` shows: "This device ran out of
+                // room finishing that rewrite. Try a shorter message."
+                //
+                // BUILD 117 CORRECTION — this paragraph used to claim "every
+                // admitted length is served" and that this "fires only on input
+                // that sends the model into a loop". Build 117 measured the
+                // shape that actually ships and both claims are false for it.
+                // The figures cited (545 / 919 / 996 characters × 3 tones and
+                // 749 × 4) are trio and quartet calls; no shipping site issues
+                // those. Every user-visible on-device action issues ONE axis,
+                // and in that shape — ordinary non-repetitive prose truncated
+                // at a WORD boundary, at the 919-character draft
+                // `maximumDraftCharacters(forAxisCount: 1)` admits — `clearer`
+                // ends HERE, in `.rewriteDidNotFinish`, EVERY time it has been
+                // measured: a dozen runs across Debug and Release, none faster
+                // than 13.1 s and none slower than 18.1 s, worst margin 1.66x
+                // inside the 30 s watchdog. `safer` ends in
+                // `noValidRewrite`, which does hand off. That is the ordinary
+                // case, not the adversarial one: the adversarial input on
+                // record is the MID-word cut, which the B115 record measures at
+                // 80 s to `exceededContextWindowSize` uncapped and
+                // `decodingFailure` at 27 s capped
+                // (`Build115LocalCoachTests.realisticDraft`). Both cuts reach
+                // this branch. Measured by
+                // `Build115LocalCoachTests.testTheRealModelMeetsTheVisibleDeadlineOnEveryShippingGeneration`.
+                //
+                // The terminal disposition is retained anyway, on the cap
+                // evidence rather than on "every admitted length is served":
+                // in the counter-experiment that lifted the response budget to
+                // `responseTokenCeiling` (2,048), that same generation ran
+                // 45.3 s and STILL ended in `.rewriteDidNotFinish` — past the
+                // 30 s watchdog, so the person would have watched a spinner
+                // until it was cancelled. Loosening the budget makes this
+                // strictly worse. What the watchdog promises is that the person
+                // is answered before it fires, and they are: truthfully, with
+                // something to do about it, in 13-18 s. The lost cloud rewrite
+                // is the price of not lying to them, and it is a bigger price
+                // than this comment used to admit.
                 coachDeadline?.cancel()
                 coachDeadline = nil
                 coachRequestID = nil

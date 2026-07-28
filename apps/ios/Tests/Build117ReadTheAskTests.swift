@@ -241,6 +241,19 @@ final class Build117ReadTheAskTests: XCTestCase {
         super.setUp()
         // Stated, not inherited. See `HostedAccessibilityRuntime`.
         MainActor.assumeIsolated { HostedAccessibilityRuntime.engage() }
+        // BUILD 117 REPAIR (Finding 5) — containment by decision, not by the
+        // completeness of a path list.
+        //
+        // This class calls `TonoBackend.shared.readAsk`, and `baseURL`'s
+        // last-resort fallback is `127.0.0.1` under DEBUG and the live
+        // `https://api.tonoit.com` otherwise — so in the Release gate the host
+        // was a property of the build configuration. Nothing escaped: every
+        // path this suite reaches is claimed by `ReadAskStub`. But a stub
+        // claims by PATH, so anything on a path it does not know — a new
+        // endpoint, a redirect, a beacon — would have gone to production. The
+        // override below is the same lever the shipping app uses for staging,
+        // and it makes the host this suite talks to something the suite chose.
+        MainActor.assumeIsolated { useLocalBackendForTesting() }
         ReadAskStub.reset()
         URLProtocol.registerClass(ReadAskStub.self)
         addTeardownBlock {
@@ -2278,13 +2291,19 @@ extension Build117ReadTheAskTests {
 
     // ── R6 — contrast measured, not inherited ──────────────────────────
 
-    /// WCAG AA on the surfaces this build added.
+    /// WCAG AA on the surfaces this build added, under the large-text rule as
+    /// `ReadTheAskInk.isBold` applies it — which counts `.semibold`.
     ///
     /// The new surfaces reuse CoachView's existing opacity idiom, and "matches
     /// what was already there" is a provenance argument, not a measurement. The
     /// repo's only contrast gate covers keyboard chips. These are the app
     /// surfaces, measured against the field they are actually drawn on.
-    func testEveryNewSurfaceTextColourClearsWCAGAAOnItsOwnBackground() {
+    ///
+    /// The name says which reading it applies because the reading is load-
+    /// bearing for three inks — see `inksClearingOnlyAsSemiboldLargeText`. A
+    /// gate that quietly picks the permissive reading and calls itself "clears
+    /// WCAG AA" is the same kind of claim this build was opened to correct.
+    func testEveryNewSurfaceTextColourClearsWCAGAAUnderTheSemiboldLargeTextReading() {
         // BUILD 117 REPAIR (N-B) — this used to be a hand-transcribed table of
         // nine colours measured against pure black. It omitted three
         // foregrounds the surfaces actually use, and on the field they are
@@ -2293,6 +2312,7 @@ extension Build117ReadTheAskTests {
         // `ReadTheAskInk.allCases`, which is the same table the view draws
         // from, and each one is measured on `ink.field` composited down to the
         // opaque colour a person actually sees rather than on pure black.
+        var reliedOnTheSemiboldReading: [String: CGFloat] = [:]
         for ink in ReadTheAskInk.allCases {
             let background = Self.resolved(ink.field)
             let foreground = Self.dark(UIColor(ink.color)).flattened(over: background)
@@ -2300,6 +2320,17 @@ extension Build117ReadTheAskTests {
             // WCAG 2.1: 3:1 for large text (≥18pt, or ≥14pt bold), else 4.5:1.
             let isLargeText = ink.pointSize >= 18 || (ink.pointSize >= 14 && ink.isBold)
             let required: CGFloat = isLargeText ? 3.0 : 4.5
+            // Large ONLY because a sub-18pt semibold was counted as bold, AND
+            // short of the threshold a strict reading would apply. Both halves
+            // matter: an ink that clears 4.5 anyway owes nothing to the reading.
+            if isLargeText, ink.pointSize < 18, ratio < 4.5 {
+                reliedOnTheSemiboldReading[ink.rawValue] = ratio
+            }
+            // Printed so the table is a record somebody can read rather than a
+            // pass/fail with the numbers thrown away.
+            print("BUILD117 contrast ink=\(ink.rawValue) field=\(ink.field.rawValue) "
+                  + "pt=\(Int(ink.pointSize)) bold=\(ink.isBold) "
+                  + "ratio=\(String(format: "%.2f", ratio)) required=\(required)")
             XCTAssertGreaterThanOrEqual(
                 ratio, required,
                 "\(ink.rawValue) (\(ink.pointSize)pt\(ink.isBold ? " bold" : "")) on "
@@ -2307,7 +2338,61 @@ extension Build117ReadTheAskTests {
                     + "WCAG AA (\(required):1) on the surface's own background"
             )
         }
+
+        // The exemption this gate leans on, bounded rather than left implicit.
+        //
+        // One-directional on purpose. An ink LEAVING this set is the accent
+        // being made stricter and must not fail anything; an ink ENTERING it is
+        // a new surface quietly taking the permissive reading, and that fails
+        // here — which is the whole point of naming the set.
+        let unrecorded = Set(reliedOnTheSemiboldReading.keys)
+            .subtracting(Self.inksClearingOnlyAsSemiboldLargeText)
+        XCTAssertTrue(
+            unrecorded.isEmpty,
+            "these inks clear AA only because `.semibold` is counted as WCAG's "
+                + "bold, and they are not in the recorded set: "
+                + unrecorded.sorted()
+                    .map { "\($0) \(String(format: "%.2f", reliedOnTheSemiboldReading[$0] ?? 0)):1" }
+                    .joined(separator: ", ")
+                + ". Either hold it to 4.5:1 or record it — do not let the set "
+                + "grow silently."
+        )
     }
+
+    /// The inks that clear AA only because `ReadTheAskInk.isBold` counts
+    /// `.semibold` (weight 600) as WCAG's bold (commonly read as 700).
+    ///
+    /// All three are white on `Color.purple`, and all three measure **3.63:1**
+    /// where this gate measures it — on an iPhone 17 Pro / iOS 26.5 simulator,
+    /// from `UIColor(Color.purple)` resolved dark, printed by the loop above in
+    /// Debug and Release alike. That is above the 3:1 large-text threshold this
+    /// gate applies and below the 4.5:1 a strict reading of SC 1.4.3 would apply
+    /// to text under 18pt, which is the whole point of naming them. One of the
+    /// three, `readActionLabel`, is the primary action on the new surface.
+    ///
+    /// A recomputation of the same chain outside the runtime put it at 3.52:1.
+    /// The difference is the system colour itself, not rounding and not the
+    /// compositing method — `purpleFill`'s layer opacity is 1.0, so flattening
+    /// it over `appBackground` is the identity and both numbers are plain
+    /// white-on-purple. Measured on this simulator, `UIColor(Color.purple)`
+    /// (and `UIColor.systemPurple`, which resolves to the same thing) is
+    /// **#DB34F2**, luminance 0.2393 → 3.63:1. 3.52:1 is what the widely
+    /// published systemPurple-dark value **#BF5AF2** gives, luminance 0.2480 —
+    /// a real colour, but not the one this runtime resolves. The figure
+    /// recorded here is the one the running system produced. Either way the ink
+    /// lands between 3.0 and 4.5, so the classification below does not turn on
+    /// which is used.
+    ///
+    /// Why they are recorded rather than fixed: white-on-`Color.purple` is the
+    /// app's established accent, drawn identically in `CoachView` and
+    /// `DigestView` since well before this build. Moving it is an app-wide
+    /// accent decision, not a Read-the-Ask one, and it is not made here. What
+    /// IS made here is that nothing in this suite claims more than it measured.
+    /// (`KeyboardVisualStyleTests` holds its own white-on-fill palette to a
+    /// flat 4.5:1 with no large-text exemption at all, and meets it.)
+    static let inksClearingOnlyAsSemiboldLargeText: Set<String> = [
+        "readActionLabel", "activationConfirmLabel", "selectedSegment",
+    ]
 
     /// The gate cannot be complete unless the view cannot draw a colour the gate
     /// has never heard of. This is the structural half of the N-B repair: the

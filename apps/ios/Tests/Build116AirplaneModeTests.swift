@@ -157,6 +157,20 @@ final class Build116AirplaneModeTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        // BUILD 117 REPAIR — stated, not inherited. See
+        // `HostedAccessibilityRuntime` in `Build117ReadTheAskTests` for the
+        // measurement: SwiftUI synthesises `_UIHostingView.accessibilityElements`
+        // only once the process accessibility runtime is engaged, and on a
+        // freshly erased simulator it is not. This class hosts `CoachView` and
+        // reads its accessibility elements, so alone on an erased simulator 12
+        // of its 22 tests failed, while the same 22 passed in full-suite order
+        // — where some earlier class happened to engage the runtime first.
+        // Measured both ways on this object: 22/22 with this line, 12 failures
+        // with it removed and nothing else changed. The precondition is
+        // idempotent, asserts nothing, and is the same line
+        // `Build117ReadTheAskTests` and `Build115IPadSurfaceLayoutTests`
+        // already state.
+        MainActor.assumeIsolated { HostedAccessibilityRuntime.engage() }
         CoachBackendStub.reset()
         URLProtocol.registerClass(CoachBackendStub.self)
         addTeardownBlock {

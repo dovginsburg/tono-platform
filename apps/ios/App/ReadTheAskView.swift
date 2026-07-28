@@ -221,6 +221,17 @@ enum ReadTheAskInk: String, CaseIterable {
         }
     }
 
+    /// Whether this ink is drawn heavier than regular — which is `.semibold`
+    /// everywhere here except `activationTitle`, the one `.bold` case.
+    ///
+    /// Read this before reading the gate that uses it. WCAG 2.1 SC 1.4.3 gives
+    /// large text (≥18pt, or ≥14pt **bold**) the lower 3:1 threshold, and
+    /// "bold" is commonly read as weight 700; `.semibold` is 600. So every ink
+    /// under 18pt that clears only because this returns `true` is clearing a
+    /// threshold a stricter reading would not grant it. Which inks those are,
+    /// and what each of them actually measures, is recorded at
+    /// `Build117ReadTheAskTests.inksClearingOnlyAsSemiboldLargeText` rather
+    /// than left implicit here.
     var isBold: Bool {
         switch self {
         case .activationTitle, .askValue, .readActionLabel, .readActionLabelDisabled,
