@@ -152,6 +152,10 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
     /// The 17 Pro's landscape geometry, so the landscape claim is not about one
     /// device either. Both clear the 700pt reading measure.
     private static let phoneLandscapeWide = CGSize(width: 874, height: 402)
+    /// Height used ONLY by `testPhoneLandscapeIsCappedAndCentredOnPurpose`, so a
+    /// raster-based measurement of HORIZONTAL geometry can see the whole surface
+    /// rather than the top 393pt of it. See that test for the full reasoning.
+    private static let landscapeMeasurementHeight: CGFloat = 1_000
     private static let iPadPortrait = CGSize(width: 1032, height: 1376)
     private static let iPadLandscape = CGSize(width: 1376, height: 1032)
     /// The 11-inch family, so the claim is not about one device.
@@ -641,11 +645,35 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
     /// window, on both landscape geometries. The suite previously used
     /// `phoneLandscape` for the clipping test only, so nothing asserted what
     /// landscape was supposed to look like.
+    ///
+    /// BUILD 117 — why this one test measures at a taller viewport than the
+    /// device it names.
+    ///
+    /// This assertion is about HORIZONTAL geometry: capped, centred, inside the
+    /// window. It reads that off a raster, which means it can only see elements
+    /// the viewport actually contains. Build 117 put a top-level
+    /// `Rewrite | Read the Ask` control at the top of Coach, and on a 393pt-tall
+    /// landscape phone that pushes Coach's first full-width element (the draft
+    /// editor) below the fold — so the widest thing left inside the 180pt-cropped
+    /// band is a line of wrapped text, which is leading-aligned and therefore
+    /// reads as "not centred" however correct the column is.
+    ///
+    /// The column itself is unchanged and was measured directly: at 874pt
+    /// landscape, Coach draws from x=107 to x=766 — 660pt wide, capped at the
+    /// 700pt reading measure, and centred to the pixel. So the WIDTH is the
+    /// thing this test is about and the HEIGHT is only how much of the surface
+    /// the raster can see. Raising the measurement height lets it see the
+    /// surface again without weakening a single assertion below — every bound
+    /// is still checked against the real landscape `size.width`.
+    ///
+    /// The genuinely height-dependent landscape claims — clipping and the
+    /// two-column grid — keep the real 393/402pt geometry in their own tests.
     @MainActor
     func testPhoneLandscapeIsCappedAndCentredOnPurpose() {
         for size in [Self.phoneLandscape, Self.phoneLandscapeWide] {
             for surface in Self.surfaces() {
-                let (extent, _, _) = measureContent(surface.make(), size: size)
+                let viewport = CGSize(width: size.width, height: Self.landscapeMeasurementHeight)
+                let (extent, _, _) = measureContent(surface.make(), size: viewport)
                 XCTAssertFalse(extent.isEmpty, "\(surface.name) rendered nothing at \(size.width)pt landscape")
                 let cap = TonoAdaptiveLayout.cap(surface.measure, dynamicTypeSize: .large)
                 XCTAssertLessThanOrEqual(

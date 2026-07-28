@@ -1436,12 +1436,12 @@ final class Build115LocalCoachTests: XCTestCase {
         XCTAssertLessThanOrEqual(LocalCoachRoutePolicy.maximumOptionCharacters, 4_000)
     }
 
-    /// Every shipped bundle is Build 116 and the marketing version is unchanged.
+    /// Every shipped bundle is Build 117 and the marketing version is unchanged.
     ///
-    /// BUILD 116 UPDATE — the number moves because the build number is a
+    /// BUILD 117 UPDATE — the number moves because the build number is a
     /// reviewed release input and this is a new release object. The marketing
     /// version does not: nothing here is a new product version.
-    func testAllFourShippedBundlesAreBuild116() throws {
+    func testAllFourShippedBundlesAreBuild117() throws {
         let guardScript = try Self.source("Scripts/bump-build.sh")
         var expected: String?
         for line in guardScript.split(separator: "\n") {
@@ -1450,14 +1450,14 @@ final class Build115LocalCoachTests: XCTestCase {
             expected = trimmed.dropFirst("EXPECTED_BUILD=".count)
                 .trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
         }
-        XCTAssertEqual(expected, "116", "the build guard must pin the reviewed number")
+        XCTAssertEqual(expected, "117", "the build guard must pin the reviewed number")
         for relative in ["App/Info.plist", "KeyboardExtension/Info.plist",
                          "ShareExtension/Info.plist", "TonoMessagesExtension/Info.plist"] {
             let data = try Data(contentsOf: Self.sourceRoot().appendingPathComponent(relative))
             let plist = try PropertyListSerialization.propertyList(
                 from: data, options: [], format: nil
             ) as? [String: Any]
-            XCTAssertEqual(plist?["CFBundleVersion"] as? String, "116", "\(relative)")
+            XCTAssertEqual(plist?["CFBundleVersion"] as? String, "117", "\(relative)")
             XCTAssertEqual(plist?["CFBundleShortVersionString"] as? String, "1.1", "\(relative)")
         }
     }

@@ -61,27 +61,60 @@ struct CoachView: View {
     // Whether /v1/register has ever succeeded this install.
     @State private var hasRegistered: Bool = false
 
+    // Build 117 — what the person has asked Tono to do with this message.
+    // Rewrite is where Coach has always opened and where it still opens; the
+    // mode is a choice the person makes, never one Tono works out for itself.
+    @State private var mode: TonoRequestMode = .rewrite
+
+    // Build 117 — the received message, its reading and the draft made from it.
+    // Held for one flow and cleared the moment the person leaves Read the Ask or
+    // turns it off. Nothing in it is ever written to disk.
+    @StateObject private var readAskSession = ReadTheAskSession()
+
+    /// The Read the Ask editor's buffer. Local `@State` for the same reason
+    /// `draft` is: an editor bound through an `ObservableObject` republishes to
+    /// this whole surface on every keystroke. Cleared together with the session
+    /// by `clearReadTheAsk()` — the two are never cleared apart.
+    @State private var readAskText: String = ""
+
+    @State private var showActivationSheet = false
+    @State private var readTheAskEnabled = ReadTheAskActivation().isEnabled
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    hero
-                    draftEditor
-                    coachButton
-                    // Build 116 — the current fact outranks the stale one. An
-                    // error sentence describes an attempt made in a network
-                    // world that no longer exists; while there is no
-                    // connection, the connection is the thing to say.
-                    if isOffline {
-                        offlineNotice
-                    } else if let err = errorMessage {
-                        errorBanner(err)
+                    // Build 117 — the only new navigation. No new root tab: the
+                    // root stays Coach · This Week · Settings.
+                    ReadTheAskModeSelector(mode: $mode)
+                    Text(ReadTheAskCopy.modeSelectorCaption)
+                        .tonoFont(size: 13, relativeTo: .footnote)
+                        .foregroundColor(.white.opacity(0.6))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    // The chosen surface, in a group that spans the column.
+                    //
+                    // The `.frame` is load-bearing and was found the hard way.
+                    // A `switch` in a ViewBuilder is `_ConditionalContent` — ONE
+                    // child of this stack rather than the several the rewrite
+                    // screen used to contribute directly — and a group sizes to
+                    // its widest child, not to the column. That silently pulled
+                    // the whole Coach surface 100pt narrower than its measure
+                    // and off-centre on a landscape phone
+                    // (`Build115IPadSurfaceLayoutTests
+                    // .testPhoneLandscapeIsCappedAndCentredOnPurpose` caught it:
+                    // 97pt of inset on the left against 196pt on the right).
+                    // Spanning the column restores exactly the geometry the
+                    // approved screen had, at every width.
+                    VStack(alignment: .leading, spacing: 18) {
+                        switch mode {
+                        case .rewrite:
+                            rewriteSurface
+                        case .readAsk:
+                            readAskSurface
+                        }
                     }
-                    if let a = analysis {
-                        resultsCard(a)
-                    } else if !hasCoachedOnce && !loading {
-                        emptyState
-                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     Spacer(minLength: 20)
                 }
                 .padding(20)
@@ -124,6 +157,45 @@ struct CoachView: View {
         .onChange(of: connectivity.status) { _, _ in
             errorMessage = nil
         }
+        // Build 117 — the first tap on Read the Ask asks before it does
+        // anything. Nothing is read and nothing is sent until the person has
+        // seen this sheet and moved the switch themselves.
+        .onChange(of: mode) { _, newMode in
+            readTheAskEnabled = ReadTheAskActivation().isEnabled
+            if newMode == .readAsk && !readTheAskEnabled {
+                showActivationSheet = true
+            }
+            if newMode == .rewrite {
+                // Changing modes clears the unsaved one-flow context
+                // immediately — the message, the reading and the draft. Leaving
+                // a received message sitting behind a tab the person walked away
+                // from is exactly the retention the contract rules out.
+                clearReadTheAsk()
+            }
+        }
+        // Build 117 — a withdrawal takes effect where the person is, not where
+        // they made it. Settings is one push away from this screen, so switching
+        // Read the Ask off there has to reach a Coach surface that is still
+        // holding a received message — and it has to reach it now.
+        .onReceive(NotificationCenter.default.publisher(for: .readTheAskActivationChanged)) { _ in
+            readTheAskEnabled = ReadTheAskActivation().isEnabled
+            guard !readTheAskEnabled else { return }
+            clearReadTheAsk()
+            if mode == .readAsk { mode = .rewrite }
+        }
+        .sheet(isPresented: $showActivationSheet) {
+            ReadTheAskActivationSheet { enabled in
+                ReadTheAskActivation().setEnabled(enabled)
+                readTheAskEnabled = enabled
+                if !enabled {
+                    // Declined, or confirmed with the switch still off. Either
+                    // way the feature is off, so the surface goes back to the
+                    // one that works.
+                    clearReadTheAsk()
+                    mode = .rewrite
+                }
+            }
+        }
         .task {
             await bootstrap()
             // Onboarding polish: first time the user sees Coach without a
@@ -136,6 +208,92 @@ struct CoachView: View {
                 }
             }
         }
+    }
+
+    // MARK: - The two surfaces
+
+    /// Build 117 — the rewrite surface, unchanged. Every element and every
+    /// ordering below is exactly what shipped in Build 116, moved into a named
+    /// sub-view and not otherwise touched; the only difference is that a person
+    /// now arrives here by choosing Rewrite rather than by there being nothing
+    /// else to choose.
+    ///
+    /// What is actually pinned, precisely — because a comment that claims more
+    /// than its tests deliver is worse than no comment:
+    /// `testTheRewritePathStillPostsTheUnchangedCoachRequest` reads the bytes
+    /// this path posts and requires `"mode":"coach"` and one request per tap;
+    /// `testTheRewriteSurfaceStillDeliversItsRewrite` drives it end to end;
+    /// `testTheRewriteSurfaceRendersTheSameElementsInTheSameOrder` reads the
+    /// laid-out accessibility tree; and the whole Build 112/114/115/116 rewrite
+    /// suite runs against it unmodified.
+    @ViewBuilder
+    private var rewriteSurface: some View {
+        hero
+        draftEditor
+        coachButton
+        // Build 116 — the current fact outranks the stale one. An error
+        // sentence describes an attempt made in a network world that no longer
+        // exists; while there is no connection, the connection is the thing to
+        // say.
+        if isOffline {
+            offlineNotice
+        } else if let err = errorMessage {
+            errorBanner(err)
+        }
+        if let a = analysis {
+            resultsCard(a)
+        } else if !hasCoachedOnce && !loading {
+            emptyState
+        }
+    }
+
+    /// Build 117 — Read the Ask. When the toggle is off this is a sentence and a
+    /// way to turn it on, and nothing else: no editor to paste into, no action
+    /// to tap, no request that could be made. An inactive entry point is one
+    /// that cannot act, not one that acts and then apologises.
+    @ViewBuilder
+    private var readAskSurface: some View {
+        if readTheAskEnabled {
+            ReadTheAskPanel(
+                receivedText: $readAskText, session: readAskSession, isOffline: isOffline
+            )
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(ReadTheAskCopy.offNotice)
+                    .tonoFont(size: 15, relativeTo: .subheadline)
+                    .foregroundColor(.white.opacity(0.8))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(ReadTheAskCopy.settingsDisclosure)
+                    .tonoFont(size: 13, relativeTo: .footnote)
+                    .foregroundColor(.white.opacity(0.55))
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    showActivationSheet = true
+                } label: {
+                    Text("Turn on Read the Ask")
+                        .tonoFont(size: 15, weight: .semibold, relativeTo: .subheadline)
+                        .frame(maxWidth: .infinity)
+                        .frame(minHeight: ReadTheAskModeSelector.minimumTouchTarget)
+                        .background(Color.purple)
+                        .foregroundColor(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+                .accessibilityHint("Opens the Read the Ask privacy settings.")
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white.opacity(0.05))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+        }
+    }
+
+    /// The whole one-flow context, gone in one call. One function so the two
+    /// halves — the editor's buffer and the session record — can never be
+    /// cleared apart, which is the only way a received message survives a
+    /// withdrawal.
+    private func clearReadTheAsk() {
+        readAskText = ""
+        readAskSession.clear()
     }
 
     // MARK: - Sub-views
@@ -499,6 +657,10 @@ struct CoachView: View {
                 appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0"
             )
 
+            // Build 117 — the mode is stated at the call site and mapped by the
+            // one legacy adapter, so the wire this established path posts is
+            // byte-for-byte the `"coach"` it has always posted while the CALLER
+            // no longer relies on a default to say what it meant.
             let response = try await TonoBackend.shared.analyze(
                 text: trimmed,
                 preferredVoice: prefs.preferredVoice,
@@ -506,7 +668,7 @@ struct CoachView: View {
                 recipientHint: nil,
                 contextHints: nil,
                 threadContext: nil,
-                mode: .coach
+                mode: try TonoLegacyAnalysisMode.analysisMode(for: .rewrite)
             )
 
             // Pick the default featured axis: warmer if available, otherwise first.

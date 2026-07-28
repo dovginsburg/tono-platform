@@ -1111,7 +1111,12 @@ public final class TonoBackend: @unchecked Sendable {
         return try await execute(req)
     }
 
-    private func buildRequest<In: Encodable>(
+    /// Build 117 — relaxed from `private` to module-internal, and NOTHING else
+    /// about it changed. `ReadTheAsk.swift` builds its request with this exact
+    /// function so the new path inherits the bearer, the content type, the
+    /// timeout and the `notRegistered` gate rather than growing a second,
+    /// slightly-different copy of them.
+    func buildRequest<In: Encodable>(
         path: String, method: String, body: In?, authorize: Bool
     ) throws -> URLRequest {
         guard let url = URL(string: path, relativeTo: baseURL) else {
@@ -1133,7 +1138,11 @@ public final class TonoBackend: @unchecked Sendable {
         return req
     }
 
-    private func execute<Out: Decodable>(_ req: URLRequest) async throws -> Out {
+    /// Build 117 — relaxed from `private` to module-internal for the same
+    /// reason `buildRequest` was. Read the Ask needs the 401 / 402 / 429
+    /// distinction this function preserves; re-implementing it beside this one
+    /// is how that distinction gets lost again.
+    func execute<Out: Decodable>(_ req: URLRequest) async throws -> Out {
         let data: Data
         let response: URLResponse
         do {

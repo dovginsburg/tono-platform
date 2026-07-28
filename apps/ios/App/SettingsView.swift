@@ -114,6 +114,10 @@ struct SettingsView: View {
     private let liveTonePrefs = LiveTonePreference()
     @State private var isSettingUp:        Bool       = false
 
+    // Build 117 — Read the Ask. Read once on appear and kept in step with the
+    // store on every write, so the switch always shows what is actually true.
+    @State private var readTheAskEnabled: Bool = ReadTheAskActivation().isEnabled
+
     var body: some View {
         NavigationStack {
             Form {
@@ -126,6 +130,7 @@ struct SettingsView: View {
                 axesSection
                 onDeviceRewritingSection
                 liveToneSection
+                readTheAskSection
                 localIntelligenceSection
                 planSection
                 privacySection
@@ -146,6 +151,7 @@ struct SettingsView: View {
                 recipients = RecipientMemory.all()
                 loadFeatureToggles()
                 loadLiveTone()
+                readTheAskEnabled = ReadTheAskActivation().isEnabled
                 loadLocalRewriteState()
                 coachVariants = coachVariantStore.load()
                 refreshAccountState()
@@ -604,6 +610,37 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
+    }
+
+    // MARK: - Build 117 · Read the Ask
+    //
+    // The contract's first line: a user-facing toggle the person can turn on or
+    // off at ANY time. Coach's activation sheet is where most people will first
+    // meet it, but a feature that can only be switched off from the screen that
+    // switched it on is not really a toggle — so it lives here too, permanently,
+    // in the same shape as every other privacy switch in this list.
+    //
+    // Turning it off here does the same thing turning it off anywhere does: the
+    // entry points go inactive and any unsaved received-message context is gone.
+    // There is nothing else to delete, because nothing else was ever kept.
+    private var readTheAskSection: some View {
+        Section("Read the Ask") {
+            Toggle(ReadTheAskCopy.readAskModeTitle, isOn: readTheAskBinding)
+            Text(ReadTheAskCopy.settingsDisclosure)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .accessibilityIdentifier("Tono.readTheAskDisclosure")
+        }
+    }
+
+    private var readTheAskBinding: Binding<Bool> {
+        Binding(
+            get: { readTheAskEnabled },
+            set: { newValue in
+                ReadTheAskActivation().setEnabled(newValue)
+                readTheAskEnabled = newValue
+            }
+        )
     }
 
     // MARK: - Build 115 · on-device rewriting

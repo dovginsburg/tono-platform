@@ -90,6 +90,15 @@ from .analyze import (
     select_model_for_variant,
 )
 from .auth import CurrentUser, OptionalCurrentUser, StoreDep, current_user
+# Build 117 — Read the Ask. Its own module because its response contract is a
+# different product from a rewrite, not a variation on one.
+from .read_ask import (
+    READ_ASK_MODE,
+    ReadAskContractError,
+    ReadAskRequest,
+    ReadAskResponse,
+    invoke_read_ask,
+)
 from .store import AccountConflictError, DeviceRegistrationProofError, Store, User, get_store
 
 # Locales the LLM providers can respond in. Defines the BCP-47 code → display
@@ -1837,6 +1846,93 @@ async def api_analyze(
         drafts_chars=len(body.text),
     )
     return ApiAnalyzeResponse(**result, used_today=used, daily_limit=limit, plan=user.plan_resolved)
+
+
+# ---------------------------------------------------------------------------
+# BUILD 117 — Read the Ask
+# ---------------------------------------------------------------------------
+#
+# A reading of a message the person RECEIVED. It stands beside rewrite and
+# reuses every protection the rewrite path already has — the same bearer, the
+# same server-authoritative entitlement gate, the same per-IP window, the same
+# draft ceiling, the same provider client and timeouts. What it does NOT reuse
+# is the rewrite response: the Read the Ask contract returns the Ask, a By when
+# the sender actually wrote, and one Unclear detail, and it forbids the risk
+# score, perception and subtext that ``ToneAnalysis`` requires. Two products
+# sharing one response model would mean fabricating one of them, so the shape is
+# its own — see ``read_ask.py`` for the whole argument.
+#
+# The mode is stated, never inferred, and this route serves exactly one of them.
+
+
+@app.post("/api/read-ask", response_model=ReadAskResponse)
+async def api_read_ask(
+    body: ReadAskRequest,
+    request: Request,
+    user: CurrentUser,
+    store: StoreDep,
+) -> ReadAskResponse:
+    """Read what a received message is asking. Authenticated, entitled,
+    rate-limited; the server holds the LLM API key."""
+    # The explicit-mode boundary, stated rather than implied. ``rewrite`` is a
+    # real mode in this vocabulary and simply not this route's, so it is refused
+    # with a reason instead of falling through a schema.
+    if body.mode != READ_ASK_MODE:
+        raise HTTPException(
+            400,
+            f"mode must be '{READ_ASK_MODE}' on this route; got '{body.mode}'",
+        )
+
+    if not body.text or not body.text.strip():
+        raise HTTPException(400, "text is required")
+    if len(body.text) > _DRAFT_MAX_CHARS:
+        raise HTTPException(400, f"text too long (max {_DRAFT_MAX_CHARS} chars)")
+
+    # Same order as /api/analyze: entitlement first, so a caller without one is
+    # told the honest 402 and never the misleading 429.
+    _require_rewrite_entitlement(user)
+
+    if not _check_ip_rate(_get_client_ip(request)):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="too many requests from this IP — try again in a minute",
+            headers={"Retry-After": "60"},
+        )
+
+    provider = os.environ.get("TONO_PROVIDER", "mock").lower()
+
+    try:
+        result = await invoke_read_ask(body.text, provider)
+    except ReadAskContractError as e:
+        logger.warning("Invalid Read the Ask response from %s: %s", provider, e)
+        store.log_usage(
+            user.device_id, "/api/read-ask", 502, provider=provider, drafts_chars=0,
+        )
+        raise HTTPException(502, "Read the Ask response incomplete. Please retry.") from e
+    except HTTPException:
+        store.log_usage(
+            user.device_id, "/api/read-ask", 502, provider=provider, drafts_chars=0,
+        )
+        raise
+    except Exception as e:
+        logger.exception("/api/read-ask failed")
+        store.log_usage(
+            user.device_id, "/api/read-ask", 500, provider=provider, drafts_chars=0,
+        )
+        raise HTTPException(500, "read the ask failed") from e
+
+    # A declined reading is silence, and silence is not an event. Nothing is
+    # counted, logged or measured for it — not even a character count, which is
+    # still derived from the message.
+    if result["status"] == "ok":
+        store.log_usage(
+            user.device_id, "/api/read-ask", 200, provider=provider, drafts_chars=0,
+        )
+
+    # Deliberately NOT cached. The rewrite path's response cache is global across
+    # accounts and keyed on request identity; a message somebody received is
+    # their private context and has no business in a shared table.
+    return ReadAskResponse(**result, plan=user.plan_resolved)
 
 
 @app.post("/v1/event/axis", status_code=204)

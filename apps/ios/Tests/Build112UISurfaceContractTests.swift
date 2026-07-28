@@ -36,6 +36,10 @@ final class Build112UISurfaceContractTests: XCTestCase {
         "App/TonoApp.swift",
         "App/CoachView.swift",
         "App/SettingsView.swift",
+        // Build 117 — Read the Ask's own surfaces. `Shared/ReadTheAsk.swift`
+        // is deliberately NOT here: it is pure Foundation and renders nothing,
+        // so the discovery pass below correctly does not see it as a surface.
+        "App/ReadTheAskView.swift",
         "App/RecipientsManagerView.swift",
         "App/SetupDoctorView.swift",
         "App/MemoryView.swift",
@@ -76,6 +80,11 @@ final class Build112UISurfaceContractTests: XCTestCase {
         "App/MemoryView.swift",
         "App/OnboardingCalibrationView.swift",
         "App/OnboardingEntryPointsView.swift",
+        // Build 117 — Read the Ask's own surfaces, under the same raw-error
+        // contract as every other screen. `Shared/ReadTheAsk.swift` is
+        // deliberately absent: it is pure Foundation and renders nothing, which
+        // is why the discovery pass below does not see it as a surface.
+        "App/ReadTheAskView.swift",
         "App/RecipientsManagerView.swift",
         "App/SettingsView.swift",
         "App/SetupDoctorView.swift",
@@ -938,10 +947,11 @@ final class Build112UISurfaceContractTests: XCTestCase {
     /// catches a wholesale one). A real release edits the literal here on
     /// purpose, which is the point — release identity should not be able to
     /// change without somebody saying so.
-    /// BUILD 116 UPDATE — the number moves because the build number is a
+    /// BUILD 117 UPDATE — the number moves because the build number is a
     /// reviewed release input and this is a new release object. The marketing
-    /// version stays at 1.1; nothing here is a new product version.
-    func testAllFourShippedBundlesAreBuild116AtVersion11() throws {
+    /// version stays at 1.1: Read the Ask is a new capability inside the same
+    /// product version, and nothing in this build is a new product version.
+    func testAllFourShippedBundlesAreBuild117AtVersion11() throws {
         let root = Self.sourceRoot()
         let guardScript = try Self.source("Scripts/bump-build.sh")
         let expected = try XCTUnwrap(
@@ -949,7 +959,7 @@ final class Build112UISurfaceContractTests: XCTestCase {
             "Scripts/bump-build.sh must pin EXPECTED_BUILD — it is the release authority"
         )
         XCTAssertEqual(
-            expected, "116",
+            expected, "117",
             "the single build guard authority must pin the reviewed build number"
         )
         for relative in Self.shippedPlists {

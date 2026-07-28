@@ -210,6 +210,10 @@
 		970000000000000000000220 /* Build97KeyboardRow3VisibleBoundsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 970000000000000000000020 /* Build97KeyboardRow3VisibleBoundsTests.swift */; };
 		970000000000000000000230 /* Build98PunctuationKeyTitleInvarianceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 970000000000000000000021 /* Build98PunctuationKeyTitleInvarianceTests.swift */; };
 		970000000000000000000240 /* Build99CoachSurfaceLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 970000000000000000000022 /* Build99CoachSurfaceLifecycleTests.swift */; };
+		B117REA0000000000000011 /* ReadTheAsk.swift in Sources */ = {isa = PBXBuildFile; fileRef = B117REA0000000000000001 /* ReadTheAsk.swift */; };
+		B117REA0000000000000012 /* ReadTheAsk.swift in Sources */ = {isa = PBXBuildFile; fileRef = B117REA0000000000000001 /* ReadTheAsk.swift */; };
+		B117REA0000000000000021 /* ReadTheAskView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B117REA0000000000000002 /* ReadTheAskView.swift */; };
+		B117REA0000000000000031 /* Build117ReadTheAskTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B117REA0000000000000003 /* Build117ReadTheAskTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -389,6 +393,9 @@
 		970000000000000000000020 /* Build97KeyboardRow3VisibleBoundsTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build97KeyboardRow3VisibleBoundsTests.swift; sourceTree = "<group>"; };
 		970000000000000000000021 /* Build98PunctuationKeyTitleInvarianceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build98PunctuationKeyTitleInvarianceTests.swift; sourceTree = "<group>"; };
 		970000000000000000000022 /* Build99CoachSurfaceLifecycleTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build99CoachSurfaceLifecycleTests.swift; sourceTree = "<group>"; };
+		B117REA0000000000000001 /* ReadTheAsk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadTheAsk.swift; sourceTree = "<group>"; };
+		B117REA0000000000000002 /* ReadTheAskView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadTheAskView.swift; sourceTree = "<group>"; };
+		B117REA0000000000000003 /* Build117ReadTheAskTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build117ReadTheAskTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -442,6 +449,7 @@
 		7CCA65BB1F5C2B14CEB12B39 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				B117REA0000000000000003 /* Build117ReadTheAskTests.swift */,
 				B115ADA7000000000000F002 /* Build115AdaptiveLayoutTests.swift */,
 				B115ADA7000000000000F004 /* Build115IPadSurfaceLayoutTests.swift */,
 				B115C0FFEE0000000000F002 /* Build115LocalCoachTests.swift */,
@@ -505,6 +513,7 @@
 		8CDBA1B22180BBD9A85B4846 /* Shared */ = {
 			isa = PBXGroup;
 			children = (
+				B117REA0000000000000001 /* ReadTheAsk.swift */,
 				B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */,
 				59A99B14322C64F30B091061 /* AppleRewriteBridge.swift */,
 				664006D51FBA77935CCA67AA /* AnthropicToneAnalyzer.swift */,
@@ -563,6 +572,7 @@
 		ACBF71996DDD904FF659BD91 /* App */ = {
 			isa = PBXGroup;
 			children = (
+				B117REA0000000000000002 /* ReadTheAskView.swift */,
 				B115ADA7000000000000F001 /* AdaptiveLayout.swift */,
 				B3861F3AF2390477CF4D567E /* CoachDraftIntent.swift */,
 				B88FDB62F52944069CC31478 /* CoachView.swift */,
@@ -884,6 +894,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B117REA0000000000000012 /* ReadTheAsk.swift in Sources */,
 				B115C0FFEE0000000000F012 /* LocalCoachRewrite.swift in Sources */,
 				CE0000000000000000000012 /* ConsumerErrorCopy.swift in Sources */,
 				A950D38EBA2B8E065632F65A /* ShareRootView.swift in Sources */,
@@ -915,6 +926,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B117REA0000000000000031 /* Build117ReadTheAskTests.swift in Sources */,
 				B115C0FFEE0000000000F015 /* LocalCoachRewrite.swift in Sources */,
 				B115ADA7000000000000F022 /* Build115AdaptiveLayoutTests.swift in Sources */,
 				B115ADA7000000000000F044 /* Build115IPadSurfaceLayoutTests.swift in Sources */,
@@ -1024,6 +1036,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B117REA0000000000000021 /* ReadTheAskView.swift in Sources */,
+				B117REA0000000000000011 /* ReadTheAsk.swift in Sources */,
 				B115C0FFEE0000000000F014 /* LocalCoachRewrite.swift in Sources */,
 				CE0000000000000000000010 /* ConsumerErrorCopy.swift in Sources */,
 				A70000000000000000000002 /* LocalIntelligence.swift in Sources */,
