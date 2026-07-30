@@ -2,6 +2,8 @@ package com.tono.shared.network
 
 import com.tono.shared.account.EmailAuthException
 import com.tono.shared.account.EmailAuthOutcome
+import com.tono.shared.account.CouponRedemptionException
+import com.tono.shared.account.CouponRedemptionOutcome
 import com.tono.shared.models.AnalysisMode
 import com.tono.shared.models.RewriteAxis
 import com.tono.shared.models.ToneAnalysis
@@ -68,6 +70,11 @@ import kotlin.coroutines.resumeWithException
     @SerialName("top_axis")          val topAxis: String? = null,
     @SerialName("axis_breakdown")    val axisBreakdown: Map<String, Int>,
     @SerialName("prev_axis_breakdown") val prevAxisBreakdown: Map<String, Int>,
+)
+
+@Serializable data class CouponRedemption(
+    @SerialName("coupon_pro_expires_at") val couponProExpiresAt: String,
+    val message: String,
 )
 
 object TonoBackend {
@@ -188,6 +195,50 @@ object TonoBackend {
     }
 
     suspend fun weeklyDigest(): WeeklyDigestResponse = get("/v1/digest")
+
+    /**
+     * Redeems against the account proven by the current bearer, then re-reads
+     * the canonical entitlement. The redemption response is informational:
+     * only `/v1/me` is allowed to update the cached Pro mirror used by the IME.
+     */
+    suspend fun redeemCoupon(code: String): CouponRedemption {
+        val token = SecureStore.get(KeychainKeys.API_TOKEN)?.takeIf { it.isNotBlank() }
+            ?: throw CouponRedemptionException(CouponRedemptionOutcome.SIGN_IN_REQUIRED)
+        return redeemCouponAuthorized(
+            code = code,
+            bearerToken = token,
+            serverBaseUrl = baseUrl,
+            cacheAccount = ::cacheAccountState,
+        )
+    }
+
+    internal suspend fun redeemCouponAuthorized(
+        code: String,
+        bearerToken: String,
+        serverBaseUrl: String,
+        cacheAccount: (TonoMe) -> Unit,
+        requestExecutor: suspend (Request) -> String = ::executeCouponBody,
+    ): CouponRedemption {
+        @Serializable data class Req(val code: String)
+        val redemption: CouponRedemption = decodeCouponResponse(requestExecutor(
+            Request.Builder()
+                .url("${serverBaseUrl.trimEnd('/')}/v1/coupon/redeem")
+                .post(json.encodeToString(Req(code)).toRequestBody("application/json".toMediaType()))
+                .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer $bearerToken")
+                .build(),
+        ))
+        val refreshed: TonoMe = decodeCouponResponse(requestExecutor(
+            Request.Builder()
+                .url("${serverBaseUrl.trimEnd('/')}/v1/me")
+                .get()
+                .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer $bearerToken")
+                .build(),
+        ))
+        cacheAccount(refreshed)
+        return redemption
+    }
 
     fun logAxisWin(axis: String, riskLevel: String) {
         @Serializable data class Req(val axis: String, val risk_level: String)
@@ -543,6 +594,54 @@ object TonoBackend {
                 }
             })
         }
+
+    private inline fun <reified Out> decodeCouponResponse(body: String): Out =
+        runCatching { json.decodeFromString<Out>(body) }.getOrElse {
+            throw CouponRedemptionException(CouponRedemptionOutcome.SERVICE_UNAVAILABLE)
+        }
+
+    private suspend fun executeCouponBody(request: Request): String =
+        suspendCancellableCoroutine { cont ->
+            val call = client.newCall(request)
+            cont.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    cont.resumeWithException(
+                        CouponRedemptionException(
+                            when (e) {
+                                is java.net.UnknownHostException,
+                                is java.net.ConnectException,
+                                is java.net.NoRouteToHostException,
+                                is java.net.SocketTimeoutException,
+                                is javax.net.ssl.SSLException,
+                                -> CouponRedemptionOutcome.OFFLINE
+                                else -> CouponRedemptionOutcome.SERVICE_UNAVAILABLE
+                            }
+                        )
+                    )
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    response.use { resp ->
+                        couponOutcomeForStatus(resp.code)?.let { outcome ->
+                            cont.resumeWithException(CouponRedemptionException(outcome))
+                            return
+                        }
+                        cont.resume(resp.body?.string() ?: "")
+                    }
+                }
+            })
+        }
+
+    internal fun couponOutcomeForStatus(code: Int): CouponRedemptionOutcome? = when {
+        code in 200..299 -> null
+        code == 401 || code == 403 -> CouponRedemptionOutcome.SIGN_IN_REQUIRED
+        code == 409 -> CouponRedemptionOutcome.ALREADY_USED
+        code == 410 -> CouponRedemptionOutcome.EXPIRED
+        code == 400 || code == 404 || code == 422 -> CouponRedemptionOutcome.REJECTED
+        code == 429 -> CouponRedemptionOutcome.RATE_LIMITED
+        else -> CouponRedemptionOutcome.SERVICE_UNAVAILABLE
+    }
 
     @Serializable private data class ErrorBody(val error: ErrorInner)
     @Serializable private data class ErrorInner(

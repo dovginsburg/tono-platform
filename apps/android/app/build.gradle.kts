@@ -21,17 +21,18 @@ android {
         minSdk = 26
         targetSdk = 35
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        // Android Build 118 repairs the Build 117 IME attach crash. iOS remains
+        // Android Build 119 adds server-authoritative coupon redemption while
+        // preserving the Build 118 IME attach repair. iOS remains
         // CFBundleVersion 117 because this is an Android-only repair successor.
         //
         // Source floor is 114 (Build 114 alignment commit); codes 16–113 were
         // burned by that jump and cannot be reused. Live codes observed on
-        // Google Play: 13 (internal) and 15 (alpha draft); 118 strictly exceeds
+        // Google Play: 13 (internal) and 15 (alpha draft); 119 strictly exceeds
         // both.
         //
         // One-way door: Google Play requires versionCode to increase strictly
-        // and forever, so codes 119+ are reserved for downstream hotfixes.
-        versionCode = 118
+        // and forever, so codes 120+ are reserved for downstream hotfixes.
+        versionCode = 119
         versionName = "1.1"
     }
 

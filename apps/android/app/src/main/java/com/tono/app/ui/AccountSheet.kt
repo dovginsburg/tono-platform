@@ -30,6 +30,9 @@ import com.tono.shared.account.EmailAccountPolicy
 import com.tono.shared.account.EmailAddress
 import com.tono.shared.account.EmailAuthException
 import com.tono.shared.account.EmailAuthOutcome
+import com.tono.shared.account.CouponRedemptionException
+import com.tono.shared.account.CouponRedemptionOutcome
+import com.tono.shared.account.PromoCodeUiState
 import com.tono.shared.network.TonoBackend
 import com.tono.shared.storage.SecureStore
 import kotlinx.coroutines.Dispatchers
@@ -338,6 +341,81 @@ fun EmailAccountRows(
         Text(
             "Finishing setup on this device — reopen Tono in a moment if a purchase is blocked.",
             color = Color.Gray,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+        )
+    }
+}
+
+/**
+ * A deliberately small account action: its only success path is the backend
+ * redemption followed by the backend's `/v1/me` refresh. No response field
+ * grants Pro locally, and no response body or exception message is rendered.
+ */
+@Composable
+fun PromoCodeRows(
+    isAuthorized: Boolean,
+    onRedeemed: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var state by remember { mutableStateOf(PromoCodeUiState()) }
+
+    OutlinedTextField(
+        value = state.input,
+        onValueChange = { state = state.edited(it) },
+        label = { Text("Promo code") },
+        singleLine = true,
+        enabled = isAuthorized && !state.isApplying,
+        keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Ascii,
+            imeAction = ImeAction.Done,
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+    )
+    Button(
+        onClick = {
+            state = state.applying()
+            val code = state.normalizedCode
+            scope.launch {
+                val result = runCatching {
+                    withContext(Dispatchers.IO) { TonoBackend.redeemCoupon(code) }
+                }
+                result.fold(
+                    onSuccess = {
+                        state = state.succeeded()
+                        onRedeemed()
+                    },
+                    onFailure = { failure ->
+                        val outcome = (failure as? CouponRedemptionException)?.outcome
+                            ?: CouponRedemptionOutcome.SERVICE_UNAVAILABLE
+                        state = state.failed(outcome)
+                    },
+                )
+            }
+        },
+        enabled = isAuthorized && state.canApply,
+        modifier = Modifier.padding(horizontal = 16.dp),
+    ) {
+        Text(if (state.isApplying) "Applying…" else "Apply")
+    }
+    if (!isAuthorized) {
+        Text(
+            "Connect or sign in to your account before applying a promo code.",
+            color = Color.Gray,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+        )
+    }
+    state.notice?.let { notice ->
+        Text(
+            notice,
+            color = if (notice == com.tono.shared.account.CouponRedemptionCopy.SUCCESS) {
+                Color.Gray
+            } else {
+                MaterialTheme.colorScheme.error
+            },
             fontSize = 12.sp,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
         )

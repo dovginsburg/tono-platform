@@ -163,11 +163,11 @@ class PlayBillingManagerGateTest {
     // ── Release identity ───────────────────────────────────────────────────
 
     @Test
-    fun androidShipsBuild118() {
+    fun androidShipsBuild119() {
         val gradle = source("app/build.gradle.kts")
         assertTrue(
-            "Android must declare versionCode 118 for the Android repair successor",
-            Regex("""versionCode\s*=\s*118""").containsMatchIn(gradle),
+            "Android must declare versionCode 119 for coupon redemption",
+            Regex("""versionCode\s*=\s*119""").containsMatchIn(gradle),
         )
         assertTrue(
             "the marketing version must stay 1.1",
@@ -176,8 +176,8 @@ class PlayBillingManagerGateTest {
     }
 
     @Test
-    fun android118KeepsIosAtBuild117() {
-        // Build 118 is intentionally Android-only. Pin both sides so a repair
+    fun android119KeepsIosAtBuild117() {
+        // Build 119 is intentionally Android-only. Pin both sides so a repair
         // cannot silently turn into an unrelated iOS rebuild.
         val bumpScript = File(repoRoot(), "apps/ios/Scripts/bump-build.sh")
         if (!bumpScript.exists()) return  // Android may be built without the iOS tree present.

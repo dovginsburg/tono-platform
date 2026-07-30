@@ -118,6 +118,16 @@ fun SettingsScreen(
                 )
             }
 
+            PromoCodeRows(
+                isAuthorized = me != null,
+                onRedeemed = {
+                    // The backend method already refreshed the canonical
+                    // entitlement and cache. Re-read it for this visible screen.
+                    accountRevision++
+                    PlayBillingManager.refresh()
+                },
+            )
+
             Text(
                 // Build 114: the old sentence named the backend and an API key.
                 // What a person actually owns is the draft, and the fact that it
