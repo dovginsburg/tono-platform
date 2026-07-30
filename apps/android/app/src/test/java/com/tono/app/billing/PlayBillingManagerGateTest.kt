@@ -163,11 +163,11 @@ class PlayBillingManagerGateTest {
     // ── Release identity ───────────────────────────────────────────────────
 
     @Test
-    fun androidShipsBuild114() {
+    fun androidShipsBuild117() {
         val gradle = source("app/build.gradle.kts")
         assertTrue(
-            "Android must declare versionCode 114 so one build number describes the product",
-            Regex("""versionCode\s*=\s*114""").containsMatchIn(gradle),
+            "Android must declare versionCode 117 so one build number describes the product",
+            Regex("""versionCode\s*=\s*117""").containsMatchIn(gradle),
         )
         assertTrue(
             "the marketing version must stay 1.1",

@@ -20,16 +20,23 @@ android {
         applicationId = "com.tono.myapp"
         minSdk = 26
         targetSdk = 35
-        // Build 114. Aligned with the iOS CFBundleVersion so one release number
+        // Build 117. Aligned with the iOS CFBundleVersion so one release number
         // describes the whole product — the Android email account lane and the
         // iOS one ship the same contract, and a support question that arrives as
-        // "build 114" must mean the same thing on either platform.
+        // "build 117" must mean the same thing on either platform.
         //
-        // One-way door: Google Play requires versionCode to increase strictly and
-        // forever, so codes 16–113 are burned by this jump and cannot be reused.
-        // Nothing is uploaded by this change; the number simply becomes the floor
-        // for every future Android release.
-        versionCode = 114
+        // Source floor is 114 (Build 114 alignment commit); codes 16–113 were
+        // burned by that jump and cannot be reused. Build 117 mirrors the iOS
+        // CFBundleVersion 117 shipped in `ios/Scripts/bump-build.sh` (the
+        // reviewed authority), and the unit test
+        // `PlayBillingManagerGateTest.theAndroidBuildNumberMatchesTheiOSReleaseAuthority`
+        // will turn red the moment these two drift. Live codes observed on
+        // Google Play: 13 (internal) and 15 (alpha draft); 117 strictly exceeds
+        // both.
+        //
+        // One-way door: Google Play requires versionCode to increase strictly
+        // and forever, so codes 118+ are reserved for downstream hotfixes.
+        versionCode = 117
         versionName = "1.1"
     }
 
