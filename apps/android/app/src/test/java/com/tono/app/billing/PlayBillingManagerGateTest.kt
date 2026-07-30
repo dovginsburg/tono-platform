@@ -163,11 +163,11 @@ class PlayBillingManagerGateTest {
     // ── Release identity ───────────────────────────────────────────────────
 
     @Test
-    fun androidShipsBuild117() {
+    fun androidShipsBuild118() {
         val gradle = source("app/build.gradle.kts")
         assertTrue(
-            "Android must declare versionCode 117 so one build number describes the product",
-            Regex("""versionCode\s*=\s*117""").containsMatchIn(gradle),
+            "Android must declare versionCode 118 for the Android repair successor",
+            Regex("""versionCode\s*=\s*118""").containsMatchIn(gradle),
         )
         assertTrue(
             "the marketing version must stay 1.1",
@@ -176,10 +176,9 @@ class PlayBillingManagerGateTest {
     }
 
     @Test
-    fun theAndroidBuildNumberMatchesTheiOSReleaseAuthority() {
-        // `ios/Scripts/bump-build.sh` is the reviewed authority for the iOS
-        // bundles. Deriving from it here means the two platforms cannot drift
-        // apart silently — a bump on one side turns this red on the other.
+    fun android118KeepsIosAtBuild117() {
+        // Build 118 is intentionally Android-only. Pin both sides so a repair
+        // cannot silently turn into an unrelated iOS rebuild.
         val bumpScript = File(repoRoot(), "apps/ios/Scripts/bump-build.sh")
         if (!bumpScript.exists()) return  // Android may be built without the iOS tree present.
         val expected = bumpScript.readLines()
@@ -187,12 +186,9 @@ class PlayBillingManagerGateTest {
             ?.substringAfter('=')
             ?.trim('"', '\'', ' ')
         assertEquals(
-            "Android versionCode and the iOS build authority must agree",
+            "iOS must remain at its reviewed Build 117 authority",
+            "117",
             expected,
-            Regex("""versionCode\s*=\s*(\d+)""")
-                .find(source("app/build.gradle.kts"))
-                ?.groupValues
-                ?.get(1),
         )
     }
 

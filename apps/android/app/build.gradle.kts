@@ -20,23 +20,18 @@ android {
         applicationId = "com.tono.myapp"
         minSdk = 26
         targetSdk = 35
-        // Build 117. Aligned with the iOS CFBundleVersion so one release number
-        // describes the whole product — the Android email account lane and the
-        // iOS one ship the same contract, and a support question that arrives as
-        // "build 117" must mean the same thing on either platform.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // Android Build 118 repairs the Build 117 IME attach crash. iOS remains
+        // CFBundleVersion 117 because this is an Android-only repair successor.
         //
         // Source floor is 114 (Build 114 alignment commit); codes 16–113 were
-        // burned by that jump and cannot be reused. Build 117 mirrors the iOS
-        // CFBundleVersion 117 shipped in `ios/Scripts/bump-build.sh` (the
-        // reviewed authority), and the unit test
-        // `PlayBillingManagerGateTest.theAndroidBuildNumberMatchesTheiOSReleaseAuthority`
-        // will turn red the moment these two drift. Live codes observed on
-        // Google Play: 13 (internal) and 15 (alpha draft); 117 strictly exceeds
+        // burned by that jump and cannot be reused. Live codes observed on
+        // Google Play: 13 (internal) and 15 (alpha draft); 118 strictly exceeds
         // both.
         //
         // One-way door: Google Play requires versionCode to increase strictly
-        // and forever, so codes 118+ are reserved for downstream hotfixes.
-        versionCode = 117
+        // and forever, so codes 119+ are reserved for downstream hotfixes.
+        versionCode = 118
         versionName = "1.1"
     }
 
@@ -106,4 +101,11 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.test:core-ktx:1.5.0")
+
+    androidTestImplementation("androidx.test.ext:junit:1.1.5")
+    androidTestImplementation("androidx.test:runner:1.5.2")
+    androidTestImplementation("androidx.test:rules:1.5.0")
+    androidTestImplementation("androidx.test:core-ktx:1.5.0")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
 }

@@ -56,7 +56,7 @@ class TonoImeService : InputMethodService(),
 
     override fun onStartInputView(info: EditorInfo, restarting: Boolean) {
         super.onStartInputView(info, restarting)
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+        lifecycleRegistry.currentState = Lifecycle.State.RESUMED
         syncDraftFromEditor()
     }
 
@@ -70,7 +70,7 @@ class TonoImeService : InputMethodService(),
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+        lifecycleRegistry.currentState = Lifecycle.State.CREATED
         super.onFinishInputView(finishingInput)
     }
 
@@ -83,11 +83,26 @@ class TonoImeService : InputMethodService(),
     // ─── Input view ────────────────────────────────────────────────────────
 
     override fun onCreateInputView(): View {
+        /*
+         * InputMethodService inserts this view below its own parentPanel. Compose
+         * creates the window recomposer from that framework-owned parent, so
+         * owners installed only on the returned ComposeView are not visible to
+         * the lookup that runs while parentPanel is attaching (Build 117's P0).
+         *
+         * Install the service owners at the IME window root before returning the
+         * input view. Every framework and app-owned descendant then resolves the
+         * same lifecycle, saved-state registry, and ViewModel store.
+         */
+        val decorView = requireNotNull(window?.window?.decorView) {
+            "InputMethodService window must exist before creating its input view"
+        }
+        decorView.setViewTreeLifecycleOwner(this)
+        decorView.setViewTreeViewModelStoreOwner(this)
+        decorView.setViewTreeSavedStateRegistryOwner(this)
+
         return ComposeView(this).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
-            // An IME has no Activity/Fragment decor view to install these owners.
-            // Compose resolves them from the view tree before composition locals exist,
-            // so providing only LocalLifecycleOwner inside setContent still crashes.
+            // Also support direct attachment in previews and regression harnesses.
             setViewTreeLifecycleOwner(this@TonoImeService)
             setViewTreeViewModelStoreOwner(this@TonoImeService)
             setViewTreeSavedStateRegistryOwner(this@TonoImeService)
