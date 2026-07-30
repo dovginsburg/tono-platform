@@ -12,7 +12,7 @@ import { looksLikeEmail, MIN_PASSWORD_LENGTH } from '@/lib/email-auth';
 import { callEmailAuth, currentBearer } from '@/lib/email-auth-server';
 
 export async function POST(request: Request) {
-  let body: { email?: unknown; password?: unknown };
+  let body: { email?: unknown; password?: unknown; promo_code?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -21,6 +21,7 @@ export async function POST(request: Request) {
 
   const email = typeof body.email === 'string' ? body.email.trim() : '';
   const password = typeof body.password === 'string' ? body.password : '';
+  const promoCode = typeof body.promo_code === 'string' ? body.promo_code.trim() : '';
   if (!looksLikeEmail(email) || password.length < MIN_PASSWORD_LENGTH) {
     return NextResponse.json({ outcome: 'invalid_input' }, { status: 200 });
   }
@@ -30,7 +31,7 @@ export async function POST(request: Request) {
   const bearer = await currentBearer();
   const { outcome } = await callEmailAuth(
     '/v1/auth/email/register',
-    { email, password },
+    { email, password, promo_code: promoCode || undefined },
     'check_your_email',
     bearer
   );

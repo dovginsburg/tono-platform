@@ -59,6 +59,19 @@ def _grant_pro(device_id: str, status: str = "active") -> None:
     )
 
 
+def _identify(reg: dict, subject: str | None = None) -> dict:
+    """Turn the fixture's anonymous auto-account into a verified identity."""
+    from backend.store import get_store
+
+    store = get_store()
+    account_id = store.get_by_device(reg["device_id"]).account_id
+    store._conn.execute(
+        "UPDATE accounts SET supabase_sub = ? WHERE id = ?",
+        (subject or f"subject-{reg['device_id']}", account_id),
+    )
+    return reg
+
+
 # ---------------------------------------------------------------------------
 # Sanity
 # ---------------------------------------------------------------------------
@@ -553,7 +566,7 @@ def test_coupon_happy_path(client, monkeypatch):
     assert r.json()["code"] == "TONO10"
 
     # Redeem
-    reg = _register(client)
+    reg = _identify(_register(client))
     r = client.post(
         "/v1/coupon/redeem",
         headers=_auth(reg["api_token"]),
@@ -573,7 +586,7 @@ def test_coupon_happy_path(client, monkeypatch):
 def test_coupon_redeemed_twice_rejected(client, monkeypatch):
     monkeypatch.setenv("TONO_ADMIN_SECRET", _ADMIN_SECRET)
     _create_coupon(client, code="ONCE")
-    reg = _register(client)
+    reg = _identify(_register(client))
     headers = _auth(reg["api_token"])
 
     r = client.post("/v1/coupon/redeem", headers=headers, json={"code": "ONCE"})
@@ -585,7 +598,7 @@ def test_coupon_redeemed_twice_rejected(client, monkeypatch):
 
 
 def test_coupon_invalid_code(client):
-    reg = _register(client)
+    reg = _identify(_register(client))
     r = client.post(
         "/v1/coupon/redeem",
         headers=_auth(reg["api_token"]),
@@ -600,8 +613,8 @@ def test_coupon_max_uses_enforced(client, monkeypatch):
     monkeypatch.setenv("TONO_ADMIN_SECRET", _ADMIN_SECRET)
     _create_coupon(client, code="LIMITED", max_uses=1)
 
-    reg1 = _register(client)
-    reg2 = _register(client)
+    reg1 = _identify(_register(client))
+    reg2 = _identify(_register(client))
 
     r = client.post("/v1/coupon/redeem", headers=_auth(reg1["api_token"]), json={"code": "LIMITED"})
     assert r.status_code == 200
@@ -622,7 +635,7 @@ def test_coupon_unlocks_unlimited_rewrites(client, monkeypatch):
     """A coupon-pro user should bypass the daily rate limit."""
     monkeypatch.setenv("TONO_ADMIN_SECRET", _ADMIN_SECRET)
     _create_coupon(client, code="UNLIM")
-    reg = _register(client)
+    reg = _identify(_register(client))
     client.post("/v1/coupon/redeem", headers=_auth(reg["api_token"]), json={"code": "UNLIM"})
 
     headers = _auth(reg["api_token"])

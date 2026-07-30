@@ -463,6 +463,24 @@ def test_06_purchase_binds_account_uuid_never_device_uuid(client, apple):
     assert _me(client, reg2["api_token"])["is_pro"] is False
 
 
+def test_validated_app_store_grant_projects_to_sibling_device_only(client, apple):
+    """A provider-validated iOS purchase belongs to the canonical account, so a
+    web/Android sibling linked to that account sees it through /v1/me while an
+    unrelated signed-in account remains closed."""
+    from backend.store import get_store
+
+    ios = _register(client)
+    sibling = _register(client)
+    other = _register(client)
+    get_store().link_device_to_account(sibling["device_id"], ios["account_id"])
+
+    purchase = apple.sign_transaction(appAccountToken=ios["account_id"])
+    assert _sync(client, ios["api_token"], purchase).status_code == 200
+    assert _me(client, sibling["api_token"])["account_id"] == ios["account_id"]
+    assert _me(client, sibling["api_token"])["is_pro"] is True
+    assert _me(client, other["api_token"])["is_pro"] is False
+
+
 # ===========================================================================
 # 7. JWS happy path + every rejection mode + stale-after-refund
 # ===========================================================================

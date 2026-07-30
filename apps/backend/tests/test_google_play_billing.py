@@ -351,6 +351,24 @@ def test_obfuscated_matching_account_grants_direct(client, gp):
     assert _me(client, reg["api_token"])["is_pro"] is True
 
 
+def test_validated_google_play_grant_projects_to_sibling_device_only(client, gp):
+    """A Developer-API-validated Play purchase projects through the canonical
+    account to a web/iOS sibling, never to an unrelated signed-in account."""
+    from backend.store import get_store
+
+    android = _register(client)
+    sibling = _register(client)
+    other = _register(client)
+    get_store().link_device_to_account(sibling["device_id"], android["account_id"])
+    token = "tok-sibling-projection"
+    gp.verifier.subs[token] = raw_sub(obfuscated=android["account_id"])
+
+    assert _sync(client, android["api_token"], token).status_code == 200
+    assert _me(client, sibling["api_token"])["account_id"] == android["account_id"]
+    assert _me(client, sibling["api_token"])["is_pro"] is True
+    assert _me(client, other["api_token"])["is_pro"] is False
+
+
 # ===========================================================================
 # Package / product / base-plan validation (fail closed)
 # ===========================================================================

@@ -441,6 +441,9 @@ def compute_me_fields(user: User, store: Store) -> dict[str, Any]:
     subscription_renews_at = (
         user.account.subscription_renews_at if identified else user.subscription_renews_at
     )
+    coupon_pro_expires_at = (
+        user.account.coupon_pro_expires_at if identified else user.coupon_pro_expires_at
+    )
     return dict(
         device_id=user.device_id,
         plan=user.plan_resolved,
@@ -449,6 +452,7 @@ def compute_me_fields(user: User, store: Store) -> dict[str, Any]:
         daily_limit=limit,
         subscription_status=subscription_status,
         subscription_renews_at=subscription_renews_at,
+        coupon_pro_expires_at=coupon_pro_expires_at,
         account_id=user.account_id,
         # Build 114 — the account-path fields every client already decodes.
         # The iOS `TonoMe` has declared `email` / `email_verified_at` since

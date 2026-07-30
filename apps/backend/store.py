@@ -306,6 +306,18 @@ CREATE TABLE IF NOT EXISTS coupon_redemptions (
     PRIMARY KEY (device_id, code)
 );
 
+-- Build 120: coupon authority follows the immutable canonical account.  The
+-- legacy device ledger above remains untouched for audit/rollback only.
+CREATE TABLE IF NOT EXISTS account_coupon_redemptions (
+    account_id    TEXT NOT NULL REFERENCES accounts(id),
+    code          TEXT NOT NULL REFERENCES coupons(code),
+    redeemed_at   TEXT NOT NULL,
+    expires_at    TEXT NOT NULL,
+    PRIMARY KEY (account_id, code)
+);
+CREATE INDEX IF NOT EXISTS idx_account_coupon_code
+    ON account_coupon_redemptions(code);
+
 CREATE TABLE IF NOT EXISTS feature_flags (
     key             TEXT PRIMARY KEY,
     enabled         INTEGER NOT NULL DEFAULT 1,
@@ -669,10 +681,11 @@ class User:
         # device never itself had a subscription.
         if self.account is not None and self.account.is_identified and self.account.is_pro:
             return True
-        # Fall through to the device's own fields — unchanged pre-accounts
-        # behavior for anonymous auto-accounts, and it also preserves a
-        # device-level coupon/Stripe grant across the anonymous->identified
-        # upgrade so signing in never silently drops Pro (contract §1/hostile 4).
+        # Device coupon fields are bounded legacy compatibility for an
+        # anonymous install only. Once identified, account authority is
+        # exclusive; link-time convergence preserves a valid legacy grant.
+        if self.account is not None and self.account.is_identified:
+            return _plan_grants_pro(self.plan, self.subscription_status, None)
         return _plan_grants_pro(self.plan, self.subscription_status, self.coupon_pro_expires_at)
 
     @property
@@ -794,6 +807,9 @@ class Store:
             "ALTER TABLE account_registrations ADD COLUMN last_seen_surface TEXT",
             "ALTER TABLE account_registrations ADD COLUMN last_seen_app_build TEXT",
             "ALTER TABLE account_registrations ADD COLUMN provider_subject TEXT",
+            # Normalized code is held server-side while the address is pending.
+            # It is consumed only by mark_email_verified's transaction.
+            "ALTER TABLE account_registrations ADD COLUMN pending_coupon_code TEXT",
             # A signed-out device row is retired: its credential is gone and its
             # bearer is rotated, so nothing can prove itself back into it.
             # Recording WHEN it was retired is what lets `register_device`
@@ -837,8 +853,62 @@ class Store:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_supabase_sub ON accounts(supabase_sub)"
         )
         self._backfill_email_identity()
+        self._backfill_account_coupons()
         self._backfill_stripe_trial_ledger()
         self._seed_feature_flags()
+
+    def _backfill_account_coupons(self) -> None:
+        """Additively project valid legacy device grants into their accounts.
+
+        Legacy rows and counters are audit facts and are never rewritten.
+        Re-running is harmless: max-expiry and INSERT OR IGNORE are monotonic.
+        """
+        cur = self._conn.cursor()
+        now = _now_iso()
+        cur.execute("BEGIN IMMEDIATE")
+        try:
+            cur.execute(
+                """SELECT account_id, MAX(coupon_pro_expires_at) AS expires_at
+                     FROM users
+                    WHERE account_id IS NOT NULL
+                      AND coupon_pro_expires_at IS NOT NULL
+                      AND coupon_pro_expires_at > ?
+                    GROUP BY account_id""",
+                (now,),
+            )
+            for row in cur.fetchall():
+                cur.execute(
+                    """UPDATE accounts
+                          SET coupon_pro_expires_at =
+                                CASE WHEN coupon_pro_expires_at IS NULL
+                                           OR coupon_pro_expires_at < ?
+                                     THEN ? ELSE coupon_pro_expires_at END,
+                              updated_at = ?
+                        WHERE id = ?""",
+                    (row["expires_at"], row["expires_at"], now, row["account_id"]),
+                )
+            cur.execute(
+                """SELECT DISTINCT u.account_id, r.code, r.redeemed_at,
+                                  u.coupon_pro_expires_at
+                     FROM coupon_redemptions r
+                     JOIN users u ON u.device_id = r.device_id
+                    WHERE u.account_id IS NOT NULL
+                      AND u.coupon_pro_expires_at IS NOT NULL
+                      AND u.coupon_pro_expires_at > ?""",
+                (now,),
+            )
+            for row in cur.fetchall():
+                cur.execute(
+                    """INSERT OR IGNORE INTO account_coupon_redemptions
+                           (account_id, code, redeemed_at, expires_at)
+                       VALUES (?, ?, ?, ?)""",
+                    (row["account_id"], row["code"], row["redeemed_at"], row["coupon_pro_expires_at"]),
+                )
+            cur.execute("COMMIT")
+        except Exception:
+            with contextlib.suppress(sqlite3.Error):
+                cur.execute("ROLLBACK")
+            raise
 
     def _backfill_email_identity(self) -> None:
         """Make existing accounts truthful under the Build 114 columns.
@@ -1684,6 +1754,7 @@ class Store:
         source_surface: Optional[str] = None,
         app_version: Optional[str] = None,
         provider_subject: Optional[str] = None,
+        pending_coupon_code: Optional[str] = None,
     ) -> Account:
         """Move `account_id` into the PENDING email-registration state.
 
@@ -1758,6 +1829,11 @@ class Store:
                 now=now,
                 provider_subject=claim,
             )
+            if pending_coupon_code:
+                cur.execute(
+                    "UPDATE account_registrations SET pending_coupon_code = ? WHERE account_id = ?",
+                    (pending_coupon_code.strip().upper(), account_id),
+                )
             self._insert_registration_event(
                 cur,
                 account_id=account_id,
@@ -1783,9 +1859,10 @@ class Store:
 
         This is the ONLY writer of `accounts.email` on the Build 114 email
         path, and it runs only after the auth provider has confirmed the
-        address. It sets no plan, touches no subscription column and grants no
-        entitlement — `is_pro` still reads plan/subscription/coupon alone, so a
-        verified-but-unsubscribed person stays truthfully gated.
+        address. It sets no plan and touches no subscription column. When the
+        registration holds a pending coupon, this same transaction may redeem
+        that coupon only after verification; otherwise a verified but
+        unsubscribed person stays truthfully gated.
 
         The partial unique index on `account_registrations` makes "one verified
         address, one canonical account" a DATABASE invariant rather than a
@@ -1828,36 +1905,58 @@ class Store:
                     "this email address already belongs to a different account"
                 )
             now = _now_iso()
-            cur.execute(
-                """UPDATE accounts
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                cur.execute(
+                    """UPDATE accounts
                       SET email = ?,
                           email_normalized = ?,
                           email_verified_at = COALESCE(email_verified_at, ?),
                           updated_at = ?
                     WHERE id = ?""",
-                (normalized, normalized, now, now, account_id),
-            )
-            self._upsert_registration_row(
-                cur,
-                account_id=account_id,
-                lifecycle_state=email_identity.STATE_VERIFIED,
-                email_normalized=normalized,
-                source_surface=source_surface,
-                app_build=app_version,
-                now=now,
-                verified_at=now,
-                sign_in=True,
-            )
-            self._insert_registration_event(
-                cur,
-                account_id=account_id,
-                event_type=email_identity.EVENT_VERIFICATION_COMPLETED,
-                source_surface=source_surface,
-                app_build=app_version,
-                now=now,
-            )
-            cur.execute("SELECT * FROM accounts WHERE id = ?", (account_id,))
-            return _row_to_account(cur.fetchone())
+                    (normalized, normalized, now, now, account_id),
+                )
+                self._upsert_registration_row(
+                    cur,
+                    account_id=account_id,
+                    lifecycle_state=email_identity.STATE_VERIFIED,
+                    email_normalized=normalized,
+                    source_surface=source_surface,
+                    app_build=app_version,
+                    now=now,
+                    verified_at=now,
+                    sign_in=True,
+                )
+                self._insert_registration_event(
+                    cur,
+                    account_id=account_id,
+                    event_type=email_identity.EVENT_VERIFICATION_COMPLETED,
+                    source_surface=source_surface,
+                    app_build=app_version,
+                    now=now,
+                )
+                cur.execute(
+                    "SELECT pending_coupon_code FROM account_registrations WHERE account_id = ?",
+                    (account_id,),
+                )
+                pending = cur.fetchone()
+                if pending and pending["pending_coupon_code"]:
+                    # Promo validity must never prevent verification or become
+                    # an account/code enumeration side channel.
+                    with contextlib.suppress(ValueError):
+                        self._redeem_coupon_tx(cur, account_id, pending["pending_coupon_code"], now)
+                    cur.execute(
+                        "UPDATE account_registrations SET pending_coupon_code = NULL WHERE account_id = ?",
+                        (account_id,),
+                    )
+                cur.execute("SELECT * FROM accounts WHERE id = ?", (account_id,))
+                result = _row_to_account(cur.fetchone())
+                cur.execute("COMMIT")
+                return result
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
 
         return self._run(_do).result()
 
@@ -2438,6 +2537,31 @@ class Store:
             now = _now_iso()
             cur.execute("BEGIN IMMEDIATE")
             try:
+                # Converge bounded anonymous/device legacy coupon facts before
+                # switching principals. This never increments coupons.use_count:
+                # legacy redemption already did that when originally consumed.
+                cur.execute(
+                    "SELECT account_id, coupon_pro_expires_at FROM users WHERE device_id = ?",
+                    (device_id,),
+                )
+                legacy = cur.fetchone()
+                if legacy and legacy["coupon_pro_expires_at"] and legacy["coupon_pro_expires_at"] > now:
+                    cur.execute(
+                        """UPDATE accounts SET coupon_pro_expires_at =
+                               CASE WHEN coupon_pro_expires_at IS NULL
+                                          OR coupon_pro_expires_at < ?
+                                    THEN ? ELSE coupon_pro_expires_at END,
+                               updated_at = ?
+                             WHERE id = ?""",
+                        (legacy["coupon_pro_expires_at"], legacy["coupon_pro_expires_at"], now, account_id),
+                    )
+                    cur.execute(
+                        """INSERT OR IGNORE INTO account_coupon_redemptions
+                               (account_id, code, redeemed_at, expires_at)
+                           SELECT ?, r.code, r.redeemed_at, ?
+                             FROM coupon_redemptions r WHERE r.device_id = ?""",
+                        (account_id, legacy["coupon_pro_expires_at"], device_id),
+                    )
                 cur.execute(
                     "UPDATE users SET account_id = ?, updated_at = ? WHERE device_id = ?",
                     (account_id, now, device_id),
@@ -2914,45 +3038,64 @@ class Store:
 
     # ---- coupons ----
 
-    def redeem_coupon(self, device_id: str, code: str) -> str:
-        """Redeem a coupon code for the given device. Returns the new
+    def _redeem_coupon_tx(
+        self, cur: sqlite3.Cursor, account_id: str, code: str, now: str
+    ) -> str:
+        cur.execute("SELECT * FROM accounts WHERE id = ?", (account_id,))
+        account = cur.fetchone()
+        if not account or not _row_to_account(account).is_identified:
+            raise ValueError("Sign in to a verified account before redeeming a code.")
+        cur.execute("SELECT * FROM coupons WHERE code = ?", (code,))
+        row = cur.fetchone()
+        if not row:
+            raise ValueError("Invalid code.")
+        if row["expires_at"] and row["expires_at"] < now:
+            raise ValueError("This code has expired.")
+        cur.execute(
+            "SELECT 1 FROM account_coupon_redemptions WHERE account_id = ? AND code = ?",
+            (account_id, code),
+        )
+        if cur.fetchone():
+            raise ValueError("You've already redeemed this code.")
+        if row["max_uses"] > 0 and row["use_count"] >= row["max_uses"]:
+            raise ValueError("This code has reached its usage limit.")
+        now_dt = dt.datetime.fromisoformat(now)
+        current = account["coupon_pro_expires_at"]
+        base = now_dt
+        if current:
+            with contextlib.suppress(ValueError):
+                parsed = dt.datetime.fromisoformat(current)
+                if parsed > base:
+                    base = parsed
+        expires_at = (base + dt.timedelta(days=int(row["duration_days"]))).isoformat(timespec="seconds")
+        cur.execute(
+            """INSERT INTO account_coupon_redemptions
+                   (account_id, code, redeemed_at, expires_at) VALUES (?, ?, ?, ?)""",
+            (account_id, code, now, expires_at),
+        )
+        cur.execute(
+            """UPDATE coupons SET use_count = use_count + 1
+                 WHERE code = ? AND (max_uses = 0 OR use_count < max_uses)""",
+            (code,),
+        )
+        if cur.rowcount != 1:
+            raise ValueError("This code has reached its usage limit.")
+        cur.execute(
+            "UPDATE accounts SET coupon_pro_expires_at = ?, updated_at = ? WHERE id = ?",
+            (expires_at, now, account_id),
+        )
+        return expires_at
+
+    def redeem_coupon(self, account_id: str, code: str) -> str:
+        """Redeem a coupon code for the canonical account. Returns the new
         coupon_pro_expires_at ISO string on success.
         Raises ValueError with a user-visible message on failure."""
         def _do() -> str:
             now = _now_iso()
             cur = self._conn.cursor()
-            cur.execute("SELECT * FROM coupons WHERE code = ?", (code,))
-            row = cur.fetchone()
-            if not row:
-                raise ValueError("Invalid code.")
-            if row["expires_at"] and row["expires_at"] < now:
-                raise ValueError("This code has expired.")
-            if row["max_uses"] > 0 and row["use_count"] >= row["max_uses"]:
-                raise ValueError("This code has reached its usage limit.")
-            cur.execute(
-                "SELECT 1 FROM coupon_redemptions WHERE device_id = ? AND code = ?",
-                (device_id, code),
-            )
-            if cur.fetchone():
-                raise ValueError("You've already redeemed this code.")
-            expires_at = (
-                dt.datetime.now(dt.timezone.utc)
-                + dt.timedelta(days=int(row["duration_days"]))
-            ).isoformat(timespec="seconds")
             cur.execute("BEGIN IMMEDIATE")
             try:
-                cur.execute(
-                    "INSERT INTO coupon_redemptions (device_id, code, redeemed_at) VALUES (?, ?, ?)",
-                    (device_id, code, now),
-                )
-                cur.execute(
-                    "UPDATE coupons SET use_count = use_count + 1 WHERE code = ?",
-                    (code,),
-                )
-                cur.execute(
-                    "UPDATE users SET coupon_pro_expires_at = ?, updated_at = ? WHERE device_id = ?",
-                    (expires_at, now, device_id),
-                )
+                expires_at = self._redeem_coupon_tx(cur, account_id, code, now)
                 cur.execute("COMMIT")
             except Exception:
                 cur.execute("ROLLBACK")
@@ -3444,6 +3587,14 @@ class Store:
                         "WHERE device_id = ? AND account_id IS NULL",
                         (account_id, now, r["device_id"]),
                     )
+                    if r["coupon_pro_expires_at"] and r["coupon_pro_expires_at"] > now:
+                        cur.execute(
+                            """INSERT OR IGNORE INTO account_coupon_redemptions
+                                   (account_id, code, redeemed_at, expires_at)
+                               SELECT ?, code, redeemed_at, ?
+                                 FROM coupon_redemptions WHERE device_id = ?""",
+                            (account_id, r["coupon_pro_expires_at"], r["device_id"]),
+                        )
                     created += 1
                 cur.execute("SELECT COUNT(*) AS c FROM users WHERE account_id IS NULL")
                 remaining = cur.fetchone()["c"]

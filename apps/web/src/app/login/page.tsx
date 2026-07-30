@@ -80,6 +80,7 @@ type Mode = 'signin' | 'create';
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [promoCode, setPromoCode] = useState('');
   const [mode, setMode] = useState<Mode>('signin');
   const [busy, setBusy] = useState(false);
   // A reviewed CODE, never a message. There is no state on this page that can
@@ -158,7 +159,7 @@ export default function LoginPage() {
     try {
       const result =
         mode === 'create'
-          ? await post('/api/auth/email/register', { email, password })
+          ? await post('/api/auth/email/register', { email, password, promo_code: promoCode })
           : await post('/api/auth/email/login', { email, password });
       if (result === 'signed_in') {
         // A full navigation, not a router push: the signed-in surface is
@@ -318,6 +319,25 @@ export default function LoginPage() {
                 autoComplete="email"
               />
             </div>
+            {mode === 'create' ? (
+              <div>
+                <label
+                  htmlFor="promo-code"
+                  className="block text-[11px] font-semibold tracking-wider uppercase text-tono-text-softer mb-1.5"
+                >
+                  promo code <span className="normal-case font-normal">(optional)</span>
+                </label>
+                <input
+                  id="promo-code"
+                  type="text"
+                  value={promoCode}
+                  onChange={(e) => setPromoCode(e.target.value)}
+                  placeholder="applied after email verification"
+                  className="w-full bg-tono-bg-elev text-tono-text border border-tono-border rounded-[12px] px-4 py-3 text-[14px] outline-none focus:border-tono-border-strong min-h-[48px] placeholder:text-tono-muted"
+                  autoComplete="off"
+                />
+              </div>
+            ) : null}
             <div>
               <label
                 htmlFor="password"

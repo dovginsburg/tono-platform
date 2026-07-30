@@ -130,7 +130,11 @@ test('vercel.json apex rewrites cover every API route, as deploy-transition cove
       return wildcard ? stripped.startsWith(src) : r.source === route;
     });
 
-  const uncovered = declaredRoutes().filter((r) => !covered(r));
+  // New Build 120 code has only ever called this handler through apiPath(), so
+  // there is no previous apex-calling bundle to bridge. Keeping an apex rewrite
+  // would instead collide with the physical Next route.
+  const physicalOnly = new Set(['/api/coupon/redeem']);
+  const uncovered = declaredRoutes().filter((r) => !physicalOnly.has(r) && !covered(r));
   assert.deepEqual(
     uncovered,
     [],

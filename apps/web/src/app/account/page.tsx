@@ -11,6 +11,7 @@ import Link from 'next/link'
 import { cookies } from 'next/headers'
 import ManageBillingButton from './ManageBillingButton'
 import PasskeyManager from './PasskeyManager'
+import PromoRedemption from './PromoRedemption'
 
 export const metadata: Metadata = {
   title: 'your account — tono',
@@ -23,6 +24,7 @@ type Me = {
   is_pro?: boolean
   subscription_status?: string | null
   subscription_renews_at?: string | null
+  coupon_pro_expires_at?: string | null
 }
 
 async function loadMe(): Promise<{ signedIn: boolean; me: Me | null; error: boolean }> {
@@ -120,6 +122,11 @@ export default async function AccountPage() {
                   renews {formatDate(me.subscription_renews_at)}
                 </p>
               ) : null}
+              {me?.coupon_pro_expires_at ? (
+                <p className="mt-1 text-[13px] text-tono-text-softer">
+                  promo access through {formatDate(me.coupon_pro_expires_at)}
+                </p>
+              ) : null}
             </section>
 
             <section className="space-y-4">
@@ -148,6 +155,10 @@ export default async function AccountPage() {
                   </Link>
                 </>
               )}
+            </section>
+
+            <section className="pt-2 border-t border-tono-border">
+              <PromoRedemption />
             </section>
 
             <section className="pt-2 border-t border-tono-border">

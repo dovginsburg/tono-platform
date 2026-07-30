@@ -545,6 +545,7 @@ def test_webhook_checkout_completed_updates_account_and_all_its_devices(client, 
 
     device_b = _register(client)
     _sign_in_apple(client, app, device_b["api_token"], sub="apple-billing-3")  # same identity -> same account
+    other = _register(client)
 
     import backend.payments as payments_mod
 
@@ -589,3 +590,4 @@ def test_webhook_checkout_completed_updates_account_and_all_its_devices(client, 
         me = client.get("/v1/me", headers=_auth(device["api_token"])).json()
         assert me["is_pro"] is True
         assert me["daily_limit"] == -1
+    assert client.get("/v1/me", headers=_auth(other["api_token"])).json()["is_pro"] is False

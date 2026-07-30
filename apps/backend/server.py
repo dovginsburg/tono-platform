@@ -720,6 +720,7 @@ class MeResponse(BaseModel):
     daily_limit: int  # -1 = unlimited
     subscription_status: Optional[str]
     subscription_renews_at: Optional[str]
+    coupon_pro_expires_at: Optional[str]
     # Required non-null after migration — the canonical entitlement principal
     # (contract §1). A null here is a contract violation.
     account_id: str
@@ -855,7 +856,9 @@ async def auth_apple(
 ) -> SignInResponse:
     claims = await verifier(body.identity_token)
     account = _resolve_provider_signin(store, user, "apple", claims.sub, claims.email, body.link)
-    return SignInResponse(account_id=account.id, plan=account.plan, is_pro=account.is_pro, email=account.email)
+    refreshed = store.get_by_device(user.device_id) or user
+    projection = compute_me_fields(refreshed, store)
+    return SignInResponse(account_id=account.id, plan=projection["plan"], is_pro=projection["is_pro"], email=account.email)
 
 
 @app.post("/v1/auth/google", response_model=SignInResponse)
@@ -867,7 +870,9 @@ async def auth_google(
 ) -> SignInResponse:
     claims = await verifier(body.id_token)
     account = _resolve_provider_signin(store, user, "google", claims.sub, claims.email, body.link)
-    return SignInResponse(account_id=account.id, plan=account.plan, is_pro=account.is_pro, email=account.email)
+    refreshed = store.get_by_device(user.device_id) or user
+    projection = compute_me_fields(refreshed, store)
+    return SignInResponse(account_id=account.id, plan=projection["plan"], is_pro=projection["is_pro"], email=account.email)
 
 
 # ---------------------------------------------------------------------------
@@ -1110,6 +1115,7 @@ class EmailRegisterRequest(BaseModel):
     password: str
     source_surface: Optional[str] = None
     app_version: Optional[str] = None
+    promo_code: Optional[str] = None
 
 
 class EmailAcceptedResponse(BaseModel):
@@ -1198,14 +1204,30 @@ async def auth_email_register(
         )
         raise _email_auth_failure(exc.outcome) from None
 
-    _record_email_registration_intent(
-        store,
-        user,
-        normalized,
-        body.source_surface,
-        body.app_version,
-        provider_subject=signup.provider_user_id,
-    )
+    if user is not None:
+        _record_email_registration_intent(
+            store,
+            user,
+            normalized,
+            body.source_surface,
+            body.app_version,
+            provider_subject=signup.provider_user_id,
+            promo_code=body.promo_code,
+        )
+    else:
+        # A bearer-less web signup still gets a pending canonical principal,
+        # but not a fake device slot. The provider-subject claim is what the
+        # later verified callback resolves; no credential is minted/exposed.
+        pending = store.create_bare_account()
+        with contextlib.suppress(AccountConflictError):
+            store.begin_email_registration(
+                account_id=pending.id,
+                email=normalized,
+                source_surface=body.source_surface,
+                app_version=body.app_version,
+                provider_subject=signup.provider_user_id,
+                pending_coupon_code=body.promo_code,
+            )
     return EmailAcceptedResponse()
 
 
@@ -1217,13 +1239,14 @@ def _record_email_registration_intent(
     app_version: Optional[str],
     *,
     provider_subject: Optional[str] = None,
+    promo_code: Optional[str] = None,
 ) -> None:
     """Move the CALLER'S existing canonical account into `pending`, when there
     is one, and reserve the provider identity the signup just created for it.
 
-    A browser or fresh install with no bearer has no account to bind yet — it
-    gets one at first login — so this is a no-op rather than a place that mints
-    stray accounts on unauthenticated input.
+    A bearer-less web signup is assigned a pending anonymous canonical account
+    by the caller after provider signup succeeds. The subject claim below makes
+    the later verified callback converge onto it without exposing a credential.
 
     ``provider_subject`` is what makes the anonymous upgrade real. Binding only
     the ADDRESS was not enough, because the step that proves the address happens
@@ -1252,6 +1275,7 @@ def _record_email_registration_intent(
             source_surface=source_surface,
             app_version=app_version,
             provider_subject=provider_subject,
+            pending_coupon_code=promo_code,
         )
 
 
@@ -2318,12 +2342,12 @@ def admin_stats(request: Request, store: StoreDep) -> dict[str, Any]:
         import datetime as dt
         now_iso = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
         cur.execute(
-            "SELECT COUNT(*) as cnt FROM users WHERE coupon_pro_expires_at IS NOT NULL AND coupon_pro_expires_at > ?",
+            "SELECT COUNT(*) as cnt FROM accounts WHERE coupon_pro_expires_at IS NOT NULL AND coupon_pro_expires_at > ?",
             (now_iso,),
         )
         coupon_pro = cur.fetchone()["cnt"]
 
-        cur.execute("SELECT COUNT(*) as cnt FROM coupon_redemptions")
+        cur.execute("SELECT COUNT(*) as cnt FROM account_coupon_redemptions")
         total_redemptions = cur.fetchone()["cnt"]
 
         today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
@@ -2562,9 +2586,14 @@ def redeem_coupon(
     user: CurrentUser,
     store: StoreDep,
 ) -> RedeemCouponResponse:
-    """Redeem a promo/coupon code. Grants Pro access for the code's duration."""
+    """Redeem for the identified canonical account proven by this bearer."""
+    if not user.account_id or not user.account or not user.account.is_identified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="sign in to a verified account before redeeming a code",
+        )
     try:
-        exp = store.redeem_coupon(user.device_id, body.code.strip().upper())
+        exp = store.redeem_coupon(user.account_id, body.code.strip().upper())
         return RedeemCouponResponse(
             coupon_pro_expires_at=exp,
             message="Pro access activated!",

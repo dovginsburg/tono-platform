@@ -76,6 +76,7 @@ public struct TonoMe: Codable, Equatable {
     public let isPro: Bool
     public let subscriptionStatus: String?
     public let subscriptionRenewsAt: String?
+    public let couponProExpiresAt: String?
     // Canonical server-issued account UUID — the only entitlement principal and
     // what a new StoreKit purchase binds as `appAccountToken` (build 91 §1).
     // Decoded as optional purely for robustness against a pre-migration server;
@@ -96,6 +97,7 @@ public struct TonoMe: Codable, Equatable {
         case isPro = "is_pro"
         case subscriptionStatus = "subscription_status"
         case subscriptionRenewsAt = "subscription_renews_at"
+        case couponProExpiresAt = "coupon_pro_expires_at"
         case accountId = "account_id"
         case email
         case emailVerifiedAt = "email_verified_at"

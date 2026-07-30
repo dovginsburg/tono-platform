@@ -43,6 +43,7 @@ import kotlin.coroutines.resumeWithException
     @SerialName("daily_limit")          val dailyLimit: Int,
     @SerialName("subscription_status")  val subscriptionStatus: String? = null,
     @SerialName("subscription_renews_at") val subscriptionRenewsAt: String? = null,
+    @SerialName("coupon_pro_expires_at") val couponProExpiresAt: String? = null,
 )
 
 @Serializable data class TonoSuggestionWire(
@@ -217,10 +218,11 @@ object TonoBackend {
         bearerToken: String,
         serverBaseUrl: String,
         cacheAccount: (TonoMe) -> Unit,
-        requestExecutor: suspend (Request) -> String = ::executeCouponBody,
+        requestExecutor: (suspend (Request) -> String)? = null,
     ): CouponRedemption {
         @Serializable data class Req(val code: String)
-        val redemption: CouponRedemption = decodeCouponResponse(requestExecutor(
+        val execute = requestExecutor ?: { request: Request -> executeCouponBody(request) }
+        val redemption: CouponRedemption = decodeCouponResponse(execute(
             Request.Builder()
                 .url("${serverBaseUrl.trimEnd('/')}/v1/coupon/redeem")
                 .post(json.encodeToString(Req(code)).toRequestBody("application/json".toMediaType()))
@@ -228,7 +230,7 @@ object TonoBackend {
                 .header("Authorization", "Bearer $bearerToken")
                 .build(),
         ))
-        val refreshed: TonoMe = decodeCouponResponse(requestExecutor(
+        val refreshed: TonoMe = decodeCouponResponse(execute(
             Request.Builder()
                 .url("${serverBaseUrl.trimEnd('/')}/v1/me")
                 .get()

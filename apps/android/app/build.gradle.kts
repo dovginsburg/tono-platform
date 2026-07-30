@@ -21,7 +21,7 @@ android {
         minSdk = 26
         targetSdk = 35
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        // Android Build 119 adds server-authoritative coupon redemption while
+        // Android Build 120 makes coupon redemption canonical-account based while
         // preserving the Build 118 IME attach repair. iOS remains
         // CFBundleVersion 117 because this is an Android-only repair successor.
         //
@@ -30,9 +30,8 @@ android {
         // Google Play: 13 (internal) and 15 (alpha draft); 119 strictly exceeds
         // both.
         //
-        // One-way door: Google Play requires versionCode to increase strictly
-        // and forever, so codes 120+ are reserved for downstream hotfixes.
-        versionCode = 119
+        // One-way door: Google Play requires versionCode to increase strictly.
+        versionCode = 120
         versionName = "1.1"
     }
 
