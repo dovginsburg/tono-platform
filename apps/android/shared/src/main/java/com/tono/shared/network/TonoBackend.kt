@@ -221,7 +221,8 @@ object TonoBackend {
         requestExecutor: (suspend (Request) -> String)? = null,
     ): CouponRedemption {
         @Serializable data class Req(val code: String)
-        val execute = requestExecutor ?: { request: Request -> executeCouponBody(request) }
+        val execute: suspend (Request) -> String =
+            requestExecutor ?: ::executeCouponBody
         val redemption: CouponRedemption = decodeCouponResponse(execute(
             Request.Builder()
                 .url("${serverBaseUrl.trimEnd('/')}/v1/coupon/redeem")
