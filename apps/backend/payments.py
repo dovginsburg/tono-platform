@@ -402,6 +402,7 @@ async def stripe_webhook(
     #   'duplicate_ok'     -> already processed; ACK immediately
     #   'duplicate_pending' -> previous attempt failed; retry
     #   'new'              -> first delivery; process then mark done
+    event = _stripe_event_to_dict(event)
     event_status = store.record_stripe_event(event["id"], event["type"], json.dumps(event))
     if event_status == "duplicate_ok":
         return {"received": True, "duplicate": True}
@@ -902,3 +903,19 @@ def _iso(ts) -> Optional[str]:
         )
     except (TypeError, ValueError, OSError):
         return None
+
+
+def _stripe_event_to_dict(event: Any) -> dict:
+    """Normalize a verified Stripe SDK Event before durable JSON storage."""
+    if isinstance(event, dict):
+        return event
+    for method_name in ("to_dict_recursive", "to_dict"):
+        method = getattr(event, method_name, None)
+        if callable(method):
+            try:
+                result = method()
+            except Exception:
+                continue
+            if isinstance(result, dict):
+                return result
+    raise TypeError(f"verified Stripe {type(event).__name__} is not JSON serializable")

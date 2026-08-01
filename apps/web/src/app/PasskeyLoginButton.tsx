@@ -20,6 +20,10 @@ export default function PasskeyLoginButton() {
     try {
       // 1. Ask the server for a challenge (also mints the pending device).
       const startRes = await fetch(apiPath('/api/passkey/login/start'), { method: 'POST' });
+      if (startRes.status === 503) {
+        setError('passkeys are not configured here yet. use email, Apple, or Google.');
+        return;
+      }
       if (!startRes.ok) {
         setError("couldn't start a passkey sign-in. try another method.");
         return;

@@ -28,6 +28,29 @@ from unittest.mock import MagicMock
 import pytest
 
 
+def test_stripe_sdk_event_is_normalized_for_durable_inbox():
+    from backend.payments import _stripe_event_to_dict
+
+    class Event:
+        def to_dict_recursive(self):
+            return {"id": "evt_real", "type": "customer.subscription.updated", "data": {"object": {"id": "sub_real"}}}
+
+    normalized = _stripe_event_to_dict(Event())
+    assert normalized["id"] == "evt_real"
+    assert json.loads(json.dumps(normalized))["data"]["object"]["id"] == "sub_real"
+
+
+def test_unserializable_verified_stripe_event_fails_retryably():
+    from backend.payments import _stripe_event_to_dict
+
+    class BrokenEvent:
+        def to_dict_recursive(self):
+            raise TypeError("broken")
+
+    with pytest.raises(TypeError):
+        _stripe_event_to_dict(BrokenEvent())
+
+
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
 # ---------------------------------------------------------------------------

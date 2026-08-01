@@ -26,6 +26,11 @@
 
 import SwiftUI
 import UIKit
+import AuthenticationServices
+import CryptoKit
+#if canImport(GoogleSignIn)
+import GoogleSignIn
+#endif
 
 struct OnboardingEntryPointsView: View {
     let onDone: () -> Void
@@ -444,6 +449,8 @@ struct EmailSignInSheet: View {
     /// The last thing that happened, as a shape. Never an `Error`.
     @State private var lastOutcome: TonoBackend.EmailAuthOutcome?
     @State private var lastAction: Action = .signIn
+    @State private var providerNotice: String?
+    @State private var appleNonce: String?
 
     let onSuccess: () -> Void
     let onCancel: () -> Void
@@ -503,6 +510,8 @@ struct EmailSignInSheet: View {
                 .font(.callout)
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            providerButtons
+            Divider()
             emailField
             passwordField(isNew: false)
             noticeView
@@ -572,6 +581,73 @@ struct EmailSignInSheet: View {
     }
 
     // MARK: - Fields
+
+    private var providerButtons: some View {
+        VStack(spacing: 10) {
+            SignInWithAppleButton(.continue) { request in
+                let nonce = UUID().uuidString + UUID().uuidString
+                appleNonce = nonce
+                request.requestedScopes = [.email]
+                request.nonce = SHA256.hash(data: Data(nonce.utf8))
+                    .map { String(format: "%02x", $0) }.joined()
+            } onCompletion: { result in
+                guard case .success(let authorization) = result,
+                      let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
+                      let data = credential.identityToken,
+                      let token = String(data: data, encoding: .utf8),
+                      let nonce = appleNonce else {
+                    providerNotice = "Apple sign-in did not finish. Try again or use email."
+                    return
+                }
+                appleNonce = nil
+                Task { await submitApple(token: token, nonce: nonce) }
+            }
+            .signInWithAppleButtonStyle(.black)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .accessibilityLabel("Continue with Apple")
+
+#if canImport(GoogleSignIn)
+            Button("Continue with Google") { Task { await submitGoogle() } }
+                .buttonStyle(.bordered)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .disabled(isWorking)
+#endif
+
+            if let providerNotice {
+                Text(providerNotice).font(.footnote).foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private func submitApple(token: String, nonce: String) async {
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            _ = try await TonoBackend.shared.signInWithApple(identityToken: token, nonce: nonce)
+            onSuccess()
+        } catch {
+            providerNotice = "That Apple sign-in could not be verified. Try again or use email."
+        }
+    }
+
+#if canImport(GoogleSignIn)
+    private func submitGoogle() async {
+        guard let presenter = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene }).flatMap(\.windows)
+            .first(where: \.isKeyWindow)?.rootViewController else {
+            providerNotice = "Google sign-in is unavailable. Use Apple or email."
+            return
+        }
+        do {
+            let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: presenter)
+            guard let token = result.user.idToken?.tokenString else { throw URLError(.userAuthenticationRequired) }
+            _ = try await TonoBackend.shared.signInWithGoogle(idToken: token)
+            onSuccess()
+        } catch {
+            providerNotice = "Google sign-in did not finish. Try again or use Apple."
+        }
+    }
+#endif
 
     private var emailField: some View {
         TextField("you@example.com", text: $email)

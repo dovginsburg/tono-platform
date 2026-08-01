@@ -491,6 +491,35 @@ public final class TonoBackend: @unchecked Sendable {
         if let verified = resp["email_verified"] as? Bool, verified,
            let address = resp["email"] as? String, !address.isEmpty {
             SharedKeychain.set(address, forKey: KeychainKeys.signedInEmail)
+            SharedKeychain.set("true", forKey: KeychainKeys.hasRecoveryIdentity)
+        }
+        return try await me()
+    }
+
+    public func signInWithApple(identityToken: String, nonce: String) async throws -> TonoMe {
+        try await signInWithNativeProvider(
+            path: "/v1/auth/apple",
+            payload: ["identity_token": identityToken, "nonce": nonce, "link": false]
+        )
+    }
+
+    public func signInWithGoogle(idToken: String) async throws -> TonoMe {
+        try await signInWithNativeProvider(
+            path: "/v1/auth/google", payload: ["id_token": idToken, "link": false]
+        )
+    }
+
+    private func signInWithNativeProvider(
+        path: String, payload: [String: Any]
+    ) async throws -> TonoMe {
+        _ = try await registerIfNeeded(platform: "ios", appVersion: Self.appBuild)
+        let response: [String: Any] = try await postObject(
+            path: path, json: payload, authorize: true
+        )
+        persistAccountID(response["account_id"] as? String)
+        SharedKeychain.set("true", forKey: KeychainKeys.hasRecoveryIdentity)
+        if let address = response["email"] as? String, !address.isEmpty {
+            SharedKeychain.set(address, forKey: KeychainKeys.signedInEmail)
         }
         return try await me()
     }
@@ -537,6 +566,7 @@ public final class TonoBackend: @unchecked Sendable {
         _ = try? await postObject(path: "/v1/auth/email/logout", json: [:], authorize: true)
         SharedKeychain.delete(KeychainKeys.apiToken)
         SharedKeychain.delete(KeychainKeys.signedInEmail)
+        SharedKeychain.delete(KeychainKeys.hasRecoveryIdentity)
         SharedKeychain.delete(KeychainKeys.accountID)
         SharedKeychain.delete(KeychainKeys.deviceCredential)
         SharedKeychain.delete(KeychainKeys.deviceID)

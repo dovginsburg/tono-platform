@@ -509,7 +509,7 @@ _PRIVACY_HTML = """<!DOCTYPE html>
 </ul>
 
 <h2>How your data is used</h2>
-<p>Device IDs are used solely to associate your subscription entitlement with your device. Aggregate usage counts may be used to improve the product. No data is sold to or shared with third parties for advertising.</p>
+<p>Device IDs identify an installation session only. Accounts, history, and subscriptions are owned by a separate server-issued account ID and can follow a verified sign-in across devices. Aggregate usage counts may be used to improve the product. No data is sold to or shared with third parties for advertising.</p>
 
 <h2>How Tono learns and improves</h2>
 <p>With your permission ("Help improve Tono" toggle in Settings, on by default), Tono records content-free outcome signals: which rewrite style you chose, whether you used the suggestion, and a rough message-length bucket (short / medium / long — never the actual length or any words). <strong>Your messages, your rewrites, and who you're messaging are never collected.</strong> These anonymous outcome signals accumulate across users and help us improve axis ordering and rewrite quality for everyone. You can opt out at any time in Settings → Preferences → Help improve Tono; opting out immediately stops any signal from leaving your device and does not affect your personal style memory.</p>
@@ -523,13 +523,13 @@ _PRIVACY_HTML = """<!DOCTYPE html>
 </ul>
 
 <h2>Data retention</h2>
-<p>Device records (ID, token, plan) are retained as long as you use the app. You can request deletion by emailing us; we will remove your record within 30 days.</p>
+<p>Account and device-session records are retained while you use Tono. You can delete your account from Settings; contact privacy@tonoit.com if you cannot access the app.</p>
 
 <h2>Children</h2>
 <p>Tono is not directed at children under 13. We do not knowingly collect data from anyone under 13.</p>
 
 <h2>Contact</h2>
-<p>Questions? <a href="mailto:privacy@tonocoach.com">privacy@tonocoach.com</a></p>
+<p>Questions? <a href="mailto:privacy@tonoit.com">privacy@tonoit.com</a></p>
 
 <footer>Tono / Social Tone Coach</footer>
 </body>
@@ -754,6 +754,9 @@ def me(user: CurrentUser, store: StoreDep) -> MeResponse:
 
 class AppleSignInRequest(BaseModel):
     identity_token: str
+    # Native AuthenticationServices sends the unhashed one-time nonce; Apple
+    # signs its SHA-256 value into the ID token. It is never an account key.
+    nonce: Optional[str] = None
     # False (default): plain sign-in — resolve/create the account for this
     # identity and point the calling device at it, switching away from
     # whatever account the device was previously linked to if any. This is
@@ -855,6 +858,10 @@ async def auth_apple(
     verifier: Annotated[social_auth.IdentityVerifier, Depends(social_auth.get_apple_verifier)],
 ) -> SignInResponse:
     claims = await verifier(body.identity_token)
+    if body.nonce is not None:
+        expected_nonce = hashlib.sha256(body.nonce.encode("utf-8")).hexdigest()
+        if not claims.nonce or not hmac.compare_digest(claims.nonce, expected_nonce):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid Apple sign-in nonce")
     account = _resolve_provider_signin(store, user, "apple", claims.sub, claims.email, body.link)
     refreshed = store.get_by_device(user.device_id) or user
     projection = compute_me_fields(refreshed, store)

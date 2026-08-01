@@ -47,9 +47,20 @@ public final class StoreKitManager: ObservableObject {
     /// recoverable after a reinstall, so binding a purchase to it risks silent
     /// entitlement loss. Purchase initiation is blocked until the user signs in.
     public var isIdentifiedAccount: Bool {
-        guard let email = SharedKeychain.get(KeychainKeys.signedInEmail),
-              !email.isEmpty else { return false }
-        return SharedKeychain.get(KeychainKeys.accountID) != nil
+        guard let accountID = SharedKeychain.get(KeychainKeys.accountID),
+              !accountID.isEmpty else { return false }
+        if SharedKeychain.get(KeychainKeys.hasRecoveryIdentity) == "true" {
+            return true
+        }
+
+        // Upgrade migration: before hasRecoveryIdentity existed, signedInEmail
+        // was written only after the backend confirmed email_verified. Preserve
+        // that verified state for existing installs, then persist the new flag.
+        guard let legacyVerifiedEmail = SharedKeychain.get(KeychainKeys.signedInEmail),
+              !legacyVerifiedEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return false }
+        SharedKeychain.set("true", forKey: KeychainKeys.hasRecoveryIdentity)
+        return true
     }
 
     /// Resets all in-memory entitlement state to anonymous/non-Pro.

@@ -530,6 +530,43 @@ final class Build114EmailAccountTests: XCTestCase {
             gate.contains("KeychainKeys.accountID"),
             "a purchase binds to the canonical account id, so both facts are required"
         )
+        XCTAssertTrue(
+            gate.contains("KeychainKeys.hasRecoveryIdentity"),
+            "new verified provider sign-ins must use the explicit recovery-identity flag"
+        )
+        XCTAssertTrue(
+            gate.contains("SharedKeychain.set(\"true\", forKey: KeychainKeys.hasRecoveryIdentity)"),
+            "an upgrading verified-email account must migrate its pre-existing proof"
+        )
+        XCTAssertTrue(
+            gate.contains("else { return false }"),
+            "missing account or verified legacy email must remain fail closed"
+        )
+    }
+
+    /// This project does not link GoogleSignIn. A conditional implementation
+    /// must therefore also conditionally compile the button, not render a tap
+    /// target whose only possible result is an unavailable notice.
+    func testGoogleButtonIsAbsentWhenGoogleSignInIsNotLinked() throws {
+        let source = Self.strippingComments(
+            try Self.source("App/OnboardingEntryPointsView.swift")
+        )
+        let button = try XCTUnwrap(source.range(of: "Button(\"Continue with Google\")"))
+        let conditional = try XCTUnwrap(
+            source.range(of: "#if canImport(GoogleSignIn)", options: .backwards,
+                         range: source.startIndex..<button.lowerBound)
+        )
+        let end = try XCTUnwrap(
+            source.range(of: "#endif", range: button.upperBound..<source.endIndex)
+        )
+        XCTAssertLessThan(conditional.lowerBound, button.lowerBound)
+        XCTAssertGreaterThan(end.lowerBound, button.upperBound)
+
+        let project = try Self.repoSource("apps/ios/Tono.xcodeproj/project.pbxproj")
+        XCTAssertFalse(
+            project.contains("GoogleSignIn"),
+            "if the SDK is linked later, its client configuration must be reviewed before exposing UI"
+        )
     }
 
     /// One password floor, stated in two places, is a drift risk — so the two

@@ -416,6 +416,17 @@
             "default": false,
             "title": "Link",
             "type": "boolean"
+          },
+          "nonce": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nonce"
           }
         },
         "required": [
@@ -680,6 +691,17 @@
           "password": {
             "title": "Password",
             "type": "string"
+          },
+          "promo_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Promo Code"
           },
           "source_surface": {
             "anyOf": [
@@ -998,6 +1020,17 @@
             "title": "Account Id",
             "type": "string"
           },
+          "coupon_pro_expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coupon Pro Expires At"
+          },
           "daily_limit": {
             "title": "Daily Limit",
             "type": "integer"
@@ -1076,6 +1109,7 @@
           "daily_limit",
           "subscription_status",
           "subscription_renews_at",
+          "coupon_pro_expires_at",
           "account_id"
         ],
         "title": "MeResponse",
@@ -1396,6 +1430,107 @@
           "url"
         ],
         "title": "PortalResponse",
+        "type": "object"
+      },
+      "ReadAskRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "locale": {
+            "default": "en",
+            "description": "BCP-47 locale for the reading.",
+            "title": "Locale",
+            "type": "string"
+          },
+          "mode": {
+            "description": "Must be exactly 'read_ask'. Stated by the caller, never inferred.",
+            "enum": [
+              "rewrite",
+              "read_ask"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "text": {
+            "description": "The message the user received.",
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "mode"
+        ],
+        "title": "ReadAskRequest",
+        "type": "object"
+      },
+      "ReadAskResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "ask": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ask"
+          },
+          "by_when": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "By When"
+          },
+          "mode": {
+            "const": "read_ask",
+            "default": "read_ask",
+            "title": "Mode",
+            "type": "string"
+          },
+          "plan": {
+            "title": "Plan",
+            "type": "string"
+          },
+          "possible_readings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Possible Readings",
+            "type": "array"
+          },
+          "status": {
+            "default": "ok",
+            "enum": [
+              "ok",
+              "no_ask",
+              "declined"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "unclear": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unclear"
+          }
+        },
+        "required": [
+          "plan"
+        ],
+        "title": "ReadAskResponse",
         "type": "object"
       },
       "RedeemCouponRequest": {
@@ -1806,11 +1941,11 @@
             "title": "Preferred Voice"
           },
           "prior_versions": {
-            "description": "Build 114 \u2014 rewrites already shown to this person for the SAME source message and axis, so the next one is meaningfully different. Bounded; the server truncates and never logs them. Does not affect the preflight decision or model routing.",
+            "description": "Build 114 \u2014 the rewrite this person read and REJECTED, for the SAME source message and the SAME user-selected tone. Present only on the one permitted retry; an initial request omits it entirely. At most one, because the contract allows exactly one additional generation. Never logged, and it does not affect the preflight decision or model routing.",
             "items": {
               "type": "string"
             },
-            "maxItems": 3,
+            "maxItems": 1,
             "title": "Prior Versions",
             "type": "array"
           },
@@ -2577,6 +2712,50 @@
         "summary": "Api Analyze Variant"
       }
     },
+    "/api/read-ask": {
+      "post": {
+        "description": "Read what a received message is asking. Authenticated, entitled,\nrate-limited; the server holds the LLM API key.",
+        "operationId": "api_read_ask_api_read_ask_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadAskRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadAskResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Api Read Ask"
+      }
+    },
     "/health": {
       "get": {
         "operationId": "health_health_get",
@@ -2881,6 +3060,30 @@
         ]
       }
     },
+    "/v1/app-store/readiness": {
+      "get": {
+        "description": "Non-secret readiness probe. Mirrors the Google Play readiness contract\n(see google_play.google_play_readiness) so operators and monitors can\nconfirm which Apple credentials are wired without exposing any secret\nvalue (contract \u00a75).\n\nThe endpoint always answers 200 with booleans + already-public identifiers:\n  - ``verification_configured`` \u2014 the trusted Apple root (PEM) is wired so\n    signed-data (JWS) verification can run.\n  - ``production_verification_enabled`` \u2014 the app's numeric Apple id is\n    wired, so the Production environment verifier can be built. Sandbox\n    works without it.\n  - ``sandbox_verification_enabled`` \u2014 Sandbox environment is allowed and\n    its verifier can be built from the same root.\n  - ``provider_api_configured`` \u2014 the App Store Server API credentials\n    (issuer id / key id / private key) are all wired, so the\n    current-provider lookup + Set-App-Account-Token sender can be built.\n  - ``set_token_sender_configured`` \u2014 the Set-App-Account-Token\n    reconciliation sender is available (alias of ``provider_api_configured``\n    for symmetry with google_play's separate push-auth reporting).\n  - ``bundle_id`` / ``product_ids`` / ``environments`` / ``catalog_version``\n    \u2014 already-public identifiers from the configuration + catalog.\n\n``ready`` is the single end-to-end answer: verification is configured AND\nthe production-class path is usable (Production verifier OR the\ncurrent-provider Set-App-Account-Token sender, both of which the live\niOS paywall relies on). Sandbox-only configurations can verify a TestFlight\npurchase but cannot drive Set-App-Account-Token against Production, so\nthey are still 'ready' as long as the production endpoint is reachable\nthrough one of those seams.\n\nNo secret value (PEM bytes, API key, private key) is ever returned: only\nbooleans + the non-secret bundle id / product ids / catalog version.",
+        "operationId": "app_store_readiness_v1_app_store_readiness_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response App Store Readiness V1 App Store Readiness Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "App Store Readiness",
+        "tags": [
+          "app-store"
+        ]
+      }
+    },
     "/v1/app-store/subscription": {
       "post": {
         "operationId": "sync_subscription_v1_app_store_subscription_post",
@@ -3086,7 +3289,7 @@
     },
     "/v1/auth/email/resend": {
       "post": {
-        "description": "Resend the verification link. Anti-enumerating: an unknown address and\nan already-verified address produce the identical accepted answer.",
+        "description": "Resend the verification link. Anti-enumerating: an unknown address and\nan already-verified address produce the identical accepted answer.\n\nThe bearer is OPTIONAL and changes nothing a caller can observe \u2014 the\nresponse, the rate gate and the provider call are identical with and without\nit. It is read only to decide whether this caller's `source_surface` claim\nmay be attributed to the account being audited (see `_record_email_audit`).",
         "operationId": "auth_email_resend_v1_auth_email_resend_post",
         "requestBody": {
           "content": {
@@ -3120,12 +3323,17 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Auth Email Resend"
       }
     },
     "/v1/auth/email/reset": {
       "post": {
-        "description": "Begin password recovery. Anti-enumerating for the same reason as\nresend: the answer is identical whether or not the address is known.",
+        "description": "Begin password recovery. Anti-enumerating for the same reason as\nresend: the answer is identical whether or not the address is known.\n\nThe link the provider mails lands on the web callback, which recognises a\nrecovery and hands the person a screen where they choose and confirm a new\npassword (`apps/web/src/app/auth/password`). That destination is the whole\npoint of this endpoint: an emailed recovery link with nowhere to set a\npassword is a dead end, not a recovery.\n\nThe bearer is optional and observationally inert \u2014 see `auth_email_resend`.",
         "operationId": "auth_email_reset_v1_auth_email_reset_post",
         "requestBody": {
           "content": {
@@ -3159,6 +3367,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Auth Email Reset"
       }
     },
@@ -3502,7 +3715,7 @@
     },
     "/v1/coupon/redeem": {
       "post": {
-        "description": "Redeem a promo/coupon code. Grants Pro access for the code's duration.",
+        "description": "Redeem for the identified canonical account proven by this bearer.",
         "operationId": "redeem_coupon_v1_coupon_redeem_post",
         "requestBody": {
           "content": {

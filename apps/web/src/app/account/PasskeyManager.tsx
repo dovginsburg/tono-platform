@@ -67,6 +67,10 @@ export default function PasskeyManager() {
         setError('please sign in again to add a passkey.');
         return;
       }
+      if (optRes.status === 503) {
+        setError('passkeys are not configured on this Tono deployment.');
+        return;
+      }
       if (!optRes.ok) {
         setError("couldn't start passkey setup. try again in a moment.");
         return;

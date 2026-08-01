@@ -40,6 +40,7 @@ _JWKS_TTL_SECONDS = 3600
 class IdentityClaims:
     sub: str
     email: Optional[str] = None
+    nonce: Optional[str] = None
 
 
 IdentityVerifier = Callable[[str], "Any"]  # async (token: str) -> IdentityClaims
@@ -104,7 +105,7 @@ async def verify_apple_identity_token(identity_token: str) -> IdentityClaims:
         claims = _decode_with_jwk(identity_token, jwk, audience=client_id, issuer=APPLE_ISSUER)
     except jwt.PyJWTError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"invalid Apple identity token: {exc}")
-    return IdentityClaims(sub=claims["sub"], email=claims.get("email"))
+    return IdentityClaims(sub=claims["sub"], email=claims.get("email"), nonce=claims.get("nonce"))
 
 
 async def verify_google_id_token(id_token: str) -> IdentityClaims:
