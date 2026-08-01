@@ -42,6 +42,7 @@ CONSUMER_SURFACES = [
     "App/HomeView.swift",
     "App/OnboardingEntryPointsView.swift",
     "App/OnboardingCalibrationView.swift",
+    "App/ReadTheAskView.swift",
 ]
 
 # Copy that ships with the paywall and the keyboard's consumer strings but
@@ -81,6 +82,7 @@ RENDERING_SURFACES = [
     "App/MemoryView.swift",
     "App/OnboardingCalibrationView.swift",
     "App/OnboardingEntryPointsView.swift",
+    "App/ReadTheAskView.swift",
     "App/RecipientsManagerView.swift",
     "App/SettingsView.swift",
     "App/SetupDoctorView.swift",
@@ -143,6 +145,7 @@ RAW_ERROR_EXPRESSIONS = [
 # here must be fixed copy or the output of an approved mapper.
 FAILURE_STATE_SINKS = [
     r"\berrorMessage\s*=\s*(?P<rhs>[^\n]+)",
+    r"\breadAskFailure\s*=\s*(?P<rhs>[^\n]+)",
     r"\bpurchaseError\s*=\s*(?P<rhs>[^\n]+)",
     r"\bmode\s*=\s*\.error\((?P<rhs>[^\n]*)\)",
     r"\bcompletion\((?P<rhs>[^\n]*)\)",
@@ -156,6 +159,8 @@ APPROVED_ERROR_MAPPERS = [
     "requestErrorMessage(",
     "verificationErrorMessage(",
     "userFacingMessage",
+    "ReadTheAskFailure.message(",
+    "ReadTheAskNotice.forFailure(",
 ]
 
 # Identifiers that name a failure. Assigning one straight into rendered
