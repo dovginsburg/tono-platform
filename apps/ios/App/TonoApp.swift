@@ -33,6 +33,10 @@ struct RootView: View {
     @State private var prefs = TonePreferences()
     @State private var showOnboarding = false
     @State private var showEntryPointsOnboarding = false
+    /// Presented when the "Open Tono Keyboard Setup" App Intent left a one-shot
+    /// route. Local-only: the intent reads and sends nothing; this just shows
+    /// the existing setup screen (which owns the sanctioned iOS-settings jump).
+    @State private var showKeyboardSetup = false
     @Environment(\.requestReview) var requestReview
 
     var body: some View {
@@ -62,8 +66,25 @@ struct RootView: View {
             promptReviewIfEarned()
             NotificationManager.shared.ensureNudgeScheduled()
             WidgetCenter.shared.reloadAllTimelines()
+            consumePendingAppIntentRoute()
         }
-        .task { await fetchFeaturesAndOnboard() }
+        .task {
+            // Cold launch via the intent: the didBecomeActive notification can
+            // fire before this view subscribes, so also consume once here. The
+            // read-and-clear signal makes the double check idempotent.
+            consumePendingAppIntentRoute()
+            await fetchFeaturesAndOnboard()
+        }
+        .sheet(isPresented: $showKeyboardSetup) {
+            NavigationStack {
+                SetupDoctorView()
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showKeyboardSetup = false }
+                        }
+                    }
+            }
+        }
         .fullScreenCover(isPresented: $showEntryPointsOnboarding) {
             OnboardingEntryPointsView {
                 // After entry-points tiles, fall through to calibration
@@ -79,6 +100,18 @@ struct RootView: View {
             OnboardingCalibrationView {
                 showOnboarding = false
             }
+        }
+    }
+
+    /// Present the screen a local-only App Intent asked for, once. The signal is
+    /// read-and-cleared, so a route shows its screen a single time rather than on
+    /// every foreground.
+    private func consumePendingAppIntentRoute() {
+        switch AppIntentRouteSignal().consumePending() {
+        case .keyboardSetup:
+            showKeyboardSetup = true
+        case .none:
+            break
         }
     }
 
