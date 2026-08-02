@@ -435,6 +435,41 @@
         "title": "AppleSignInRequest",
         "type": "object"
       },
+      "AppleWebSignInRequest": {
+        "properties": {
+          "app_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Version"
+          },
+          "identity_token": {
+            "title": "Identity Token",
+            "type": "string"
+          },
+          "nonce": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nonce"
+          }
+        },
+        "required": [
+          "identity_token"
+        ],
+        "title": "AppleWebSignInRequest",
+        "type": "object"
+      },
       "AxisEventRequest": {
         "properties": {
           "axis": {
@@ -1404,9 +1439,31 @@
       },
       "PaymentHistoryItem": {
         "properties": {
+          "amount_minor": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount Minor"
+          },
           "created_at": {
             "title": "Created At",
             "type": "string"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
           },
           "effective_at": {
             "title": "Effective At",
@@ -1446,30 +1503,6 @@
           "is_current": {
             "title": "Is Current",
             "type": "boolean"
-          },
-          "amount_minor": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Verified plan price in integer minor units (399 = $3.99); present only for providers with an authoritative normalized amount (Stripe), else null.",
-            "title": "Amount Minor"
-          },
-          "currency": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Lowercase ISO currency code paired with amount_minor; null when no verified amount is available.",
-            "title": "Currency"
           },
           "ownership_type": {
             "title": "Ownership Type",
@@ -3385,6 +3418,49 @@
           }
         ],
         "summary": "Auth Apple"
+      }
+    },
+    "/v1/auth/apple/web": {
+      "post": {
+        "operationId": "auth_apple_web_v1_auth_apple_web_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppleWebSignInRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebSignInResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Auth Apple Web"
       }
     },
     "/v1/auth/email/login": {

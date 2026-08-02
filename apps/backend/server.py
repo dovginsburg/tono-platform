@@ -1040,6 +1040,105 @@ async def auth_web(
 
 
 # ---------------------------------------------------------------------------
+# Direct Apple web sign-in. The website OWNS the Apple OAuth boundary (start +
+# callback under Tono's own Services ID, `tonoit.com`) instead of routing Apple
+# through Supabase. Its callback exchanges the code with Apple, fully verifies
+# the identity token, and forwards it here. We INDEPENDENTLY re-verify it (web
+# Services ID audience) and converge the Apple `sub` onto the ONE canonical
+# account — the SAME `apple_sub` the native iOS app resolves — so a person's
+# native and web Apple identities are one account. Like /v1/auth/web (and unlike
+# /v1/auth/apple), the caller need not already hold a device bearer: a fresh
+# browser has none, so we register a per-browser device and return its bearer.
+# ---------------------------------------------------------------------------
+
+
+class AppleWebSignInRequest(BaseModel):
+    identity_token: str
+    # Apple echoes the web-flow nonce VERBATIM (the native flow sends a SHA-256
+    # of it instead). Optional defense-in-depth: the website already verified the
+    # nonce against its own HttpOnly transaction cookie before calling here.
+    nonce: Optional[str] = None
+    # So a web Apple sign-in is recorded on the same registration ledger the
+    # native surfaces write to. Optional; an older build sends none.
+    app_version: Optional[str] = None
+
+
+@app.post("/v1/auth/apple/web", response_model=WebSignInResponse)
+async def auth_apple_web(
+    body: AppleWebSignInRequest,
+    user: OptionalCurrentUser,
+    store: StoreDep,
+    verifier: Annotated[
+        social_auth.IdentityVerifier, Depends(social_auth.get_apple_web_verifier)
+    ],
+) -> WebSignInResponse:
+    # Fail closed: an invalid/expired/wrong-audience token raises 401 (or 503 if
+    # the web Services ID audience is unconfigured) inside the verifier before we
+    # touch any account state.
+    claims = await verifier(body.identity_token)
+
+    # Defense in depth: re-check the raw nonce against the token's claim when the
+    # website forwards it (web nonce is verbatim, NOT hashed like native).
+    if body.nonce is not None:
+        if not claims.nonce or not hmac.compare_digest(claims.nonce, body.nonce):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid Apple sign-in nonce")
+
+    # NEVER persist/merge on an unverified email — resolution keys on the
+    # immutable Apple ``sub``; an unverified address never drives convergence.
+    email = claims.email if claims.email_verified else None
+
+    # A fresh browser carries no device bearer — mint a random per-browser device
+    # with a durable credential. A returning browser reuses its device so its
+    # anonymous account upgrades in place instead of orphaning.
+    device_credential: Optional[str] = None
+    if user is None:
+        registration = store.register_device()
+        user = registration.user
+        device_credential = registration.device_credential
+
+    # Same provider-linking primitive Apple(native)/Google/web/email use, with
+    # provider="apple": same-subject convergence with the NATIVE Apple identity,
+    # pending-registration claim redemption, verified-email continuity, anonymous
+    # upgrade-in-place, and 409-on-collision all come for free (link=False).
+    account = _resolve_provider_signin(
+        store, user, "apple", claims.sub, email, link=False,
+        email_verified=claims.email_verified,
+    )
+
+    # One registration ledger for every surface (mirrors /v1/auth/web): records
+    # the fact the provider proved (a confirmed address), never the token.
+    if email:
+        with contextlib.suppress(AccountConflictError):
+            store.mark_email_verified(
+                account_id=account.id,
+                email=email,
+                source_surface=email_identity.SURFACE_WEB,
+                app_version=body.app_version,
+            )
+    store.record_registration_event(
+        account_id=account.id,
+        event_type=email_identity.EVENT_SIGN_IN,
+        source_surface=email_identity.SURFACE_WEB,
+        app_version=body.app_version,
+    )
+
+    # Project entitlement through the SAME authority /v1/me uses, so an App
+    # Store / Play subscriber who signs in on the website reads is_pro correctly.
+    refreshed = store.get_by_device(user.device_id) or user
+    projection = compute_me_fields(refreshed, store)
+
+    return WebSignInResponse(
+        device_id=user.device_id,
+        api_token=user.api_token,
+        device_credential=device_credential,
+        account_id=account.id,
+        plan=projection["plan"],
+        is_pro=projection["is_pro"],
+        email=account.email,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Build 114 — email registration, verification, login, reset, logout.
 #
 # One architecture, not a second login silo. Supabase keeps owning auth.users,

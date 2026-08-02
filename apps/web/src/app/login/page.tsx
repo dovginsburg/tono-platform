@@ -64,23 +64,26 @@ const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 // rather than a dead button. Email/password + passkeys remain.
 const OAUTH_CONFIGURED = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
-// Additional, SEPARATE gate for the Apple button — a product-branding check.
+// SEPARATE gate for the Apple button — and deliberately INDEPENDENT of the
+// Supabase gate above.
 //
-// Supabase drives Apple sign-in with the Services ID configured on its Apple
-// provider (a dashboard value, invisible to this bundle). On the shared project
-// that binding is a SIBLING PRODUCT's, so clicking Apple would land a Tono user
-// on that other product's consent screen. We therefore render Apple ONLY when an
-// operator has attested — via NEXT_PUBLIC_APPLE_WEB_SERVICES_ID — that the
-// binding is Tono's own. Fail closed by default (today's live state):
-// the button is hidden and truthful recovery copy points at Google/email. See
+// Apple sign-in no longer runs through Supabase. It is a direct, Tono-owned
+// OAuth boundary (`/api/auth/apple/start` → Apple → `/api/auth/apple/callback`)
+// under Tono's OWN Services ID (`tonoit.com`), so it works even when Supabase
+// OAuth is unconfigured. The public `NEXT_PUBLIC_APPLE_WEB_SERVICES_ID` value is
+// the operator's ATTESTATION that the server-side boundary (team id / key id /
+// private key / redirect URI) is fully configured on this deployment; the start
+// route itself independently fails closed if any secret is missing. We render
+// Apple ONLY when that attested Services ID is Tono-owned — so the contaminated
+// sibling id can never satisfy the gate, and a Tono user is never sent into
+// another product's consent screen. Fail closed by default
+// (env unset ⇒ button hidden, truthful recovery copy points at email). See
 // src/lib/apple-oauth-binding.ts. The literal env reads stay inline so Next
 // inlines them at build time.
-const APPLE_OAUTH_ENABLED =
-  OAUTH_CONFIGURED &&
-  appleWebSignInEnabled(
-    process.env.NEXT_PUBLIC_APPLE_WEB_SERVICES_ID,
-    process.env.NEXT_PUBLIC_APPLE_WEB_EXPECTED_SERVICES_ID,
-  );
+const APPLE_OAUTH_ENABLED = appleWebSignInEnabled(
+  process.env.NEXT_PUBLIC_APPLE_WEB_SERVICES_ID,
+  process.env.NEXT_PUBLIC_APPLE_WEB_EXPECTED_SERVICES_ID,
+);
 
 // build a basePath-aware redirect URI:
 //   on tonoit.com, callback URL is https://tonoit.com/app/auth/callback
@@ -139,19 +142,32 @@ export default function LoginPage() {
     if (code) setOutcome(CALLBACK_CODE_TO_OUTCOME[code]);
   }, []);
 
-  const oauth = async (provider: 'apple' | 'google') => {
+  // GOOGLE only. Apple no longer runs through Supabase — see `startApple`. This
+  // function is deliberately narrowed to `'google'` so no Apple sign-in can ever
+  // be started via Supabase's OAuth from this page.
+  const oauth = async (provider: 'google') => {
     setOutcome(null);
     const supabase = createClient();
     const { error: err } = await supabase.auth.signInWithOAuth({
       provider,
       options: {
         redirectTo: buildRedirectTo(),
-        // Sherlock's runbook #4 — Supabase dashboard needs these URLs whitelisted.
-        // (Dov does dashboard config; this just states intent.)
-        scopes: provider === 'google' ? 'email profile' : undefined,
+        // Supabase dashboard needs these URLs whitelisted (operator-owned config).
+        scopes: 'email profile',
       },
     });
     if (err) setOutcome(classifyAuthFailure(err));
+  };
+
+  // Apple sign-in is a direct, Tono-owned OAuth flow. Clicking the button is a
+  // top-level navigation to our own start route, which mints state+nonce, sets
+  // the transaction cookies, and 302s to Apple under `client_id=tonoit.com`. It
+  // never touches Supabase. `next` is carried so the callback lands the person
+  // where they were headed; the route re-sanitizes it, so it cannot open-redirect.
+  const startApple = () => {
+    const next = new URLSearchParams(window.location.search).get('next');
+    const base = apiPath('/api/auth/apple/start');
+    window.location.assign(next ? `${base}?next=${encodeURIComponent(next)}` : base);
   };
 
   /**
@@ -281,12 +297,13 @@ export default function LoginPage() {
             pick one, copy, send.
           </p>
 
-          {/* OAuth buttons — Google renders whenever the provider is configured
-              (fail-closed capability gate). Apple renders only when its binding
-              is attested Tono-branded (APPLE_OAUTH_ENABLED); otherwise it is
-              omitted and a truthful line explains why, so no one is sent into a
-              sibling product's consent screen. Passkeys always render with their
-              own honest not-configured state. */}
+          {/* OAuth buttons — Google renders whenever the Supabase provider is
+              configured (fail-closed capability gate). Apple is a DIRECT,
+              Tono-owned flow (not Supabase): it renders only when the operator
+              has attested the server-side boundary is configured and Tono-branded
+              (APPLE_OAUTH_ENABLED); otherwise it is omitted and a truthful line
+              explains why, so no one is sent into a sibling product's consent
+              screen. Passkeys always render with their own honest state. */}
           <div className="space-y-2.5">
             {OAUTH_CONFIGURED ? (
               <button
@@ -301,20 +318,20 @@ export default function LoginPage() {
             {APPLE_OAUTH_ENABLED ? (
               <button
                 type="button"
-                onClick={() => oauth('apple')}
+                onClick={startApple}
                 className="w-full inline-flex items-center justify-center gap-3 px-5 py-3 rounded-[12px] bg-tono-bg-elev hover:bg-tono-bg-card text-tono-text border border-tono-border hover:border-tono-border-strong font-semibold text-[14px] transition min-h-[48px]"
                 aria-label="Continue with Apple"
               >
                 <AppleIcon /> continue with apple
               </button>
-            ) : OAUTH_CONFIGURED ? (
+            ) : (
               <p
                 role="note"
                 className="text-[12px] text-tono-muted leading-[1.5] px-1 py-1"
               >
                 {APPLE_WEB_UNAVAILABLE_COPY}
               </p>
-            ) : null}
+            )}
             <PasskeyLoginButton />
           </div>
 
