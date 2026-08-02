@@ -22,6 +22,7 @@ SDK only (no iOS 27 / PCC SDK on this machine).
 | `App/TonoApp.swift` (edit) | (existing) | Contained hook that presents keyboard setup once when the intent requests it. |
 | `Scripts/verify_apple_intelligence_routing.swift` | — | Runnable `swiftc` contract test (199 checks). |
 | `Scripts/verify_tone_variant_config.swift` | — | Runnable `swiftc` contract test (34 checks). |
+| `Scripts/verify_tone_variant_entity.swift` | — | Runnable `swiftc` contract test (64 checks) — pins the `ToneVariantEntity` / `ToneVariantQuery` privacy-safe id contract and Shortcuts/Spotlight discoverability. `AppEntity` compiles under `swiftc` on host macOS, so no device is required. |
 | `Tests/Build118AppleIntelligenceTests.swift` | TonoTests | XCTest half (11 tests). |
 
 ## Acceptance matrix
@@ -31,8 +32,8 @@ verified** — those require hardware and/or a toolchain this machine does not h
 
 | State | Status | Evidence / why |
 |-------|--------|----------------|
-| **SOURCE_IMPLEMENTED** | ✅ YES | All files above compile. Verifiers: routing 199/199, tone-variant 34/34; XCTest 11/11; shortcut regression 50/50. |
-| **TARGET_REGISTERED** | ✅ YES (source) | The intents/entities/provider files are members of shipping targets and compile into them (`build` + `build-for-testing` SUCCEEDED, Debug **and** Release). `AppShortcutsProvider` (`TonoShortcutsProvider`) is present so the framework auto-registers the intents at install. Runtime registration itself is device-observed (see DEVICE_VERIFIED). |
+| **SOURCE_IMPLEMENTED** | ✅ YES | All files above compile. Verifiers: routing 199/199, tone-variant config 34/34, tone-variant entity 64/64; XCTest 11/11; shortcut regression 50/50. |
+| **TARGET_REGISTERED** | ✅ YES (source) | The intents/entities/provider files are members of shipping targets and compile into them (`build` + `build-for-testing` SUCCEEDED, Debug **and** Release). `AppShortcutsProvider` (`TonoShortcutsProvider`) is present so the framework auto-registers the intents at install. Confirmed from the built app: `Tono.app/Metadata.appintents/extract.actionsdata` contains `CoachDraftIntent`, `OpenKeyboardSetupIntent`, `SetToneVariantEnabledIntent`, `ToneVariantEntity`, and `ToneVariantQuery`, and the App Intents NL trainer trained the new keyboard-setup phrases at build time. Runtime registration itself is device-observed (see DEVICE_VERIFIED). |
 | **SHORTCUT_DISCOVERABLE** | 🟡 SOURCE ONLY | `TonoShortcutsProvider` declares phrases for "Coach this text" (preserved) and "Open Tono Keyboard Setup" (new). Whether the phrases actually appear in Shortcuts/Siri is observable only on a device — not verified here. |
 | **SPOTLIGHT_CONTENT_INDEXED** | ⬜ NO — intentionally | Reported **separately from action discoverability**, as required. **Action/entity discoverability** is via App Intents: `ToneVariantQuery.suggestedEntities()` surfaces the tone variants, and the entity id is the axis string only. **Searchable CONTENT indexing** (`CoreSpotlight` / `CSSearchableItem` over coaching history) is deliberately **not** implemented — no source proves retained coaching history exists whose privacy contract permits indexing, so none is indexed. |
 | **FOUNDATION_MODEL_VERIFIED** | ⬜ NOT VERIFIED (this change) | The routing seam is a *decision* layer; it does not itself run a generation. The existing on-device path (`OnDeviceAppleRewrite` / `AppleRewriteBridge`, which calls `SystemLanguageModel`) is unchanged. No new on-device generation was executed in this task. |
