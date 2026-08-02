@@ -4,6 +4,12 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase-client';
 import { buildAuthCallbackUrl } from '@/lib/auth-redirects';
+import {
+  APPLE_ICON_PATH,
+  APPLE_ICON_VIEWBOX,
+  isAppleWebOAuthEnabled,
+  isGoogleWebOAuthEnabled,
+} from '@/lib/social-auth';
 import PasskeyLoginButton from '../PasskeyLoginButton';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -37,6 +43,19 @@ export default function LoginPage() {
   const [sending, setSending] = useState(false);
   const [magicSent, setMagicSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Web social OAuth is OFF by default. Each provider re-enables only behind its
+  // own public flag, evaluated independently (no shared fallback). See
+  // social-auth.ts for the incident this contains. process.env.NEXT_PUBLIC_* is
+  // referenced as a literal here so Next inlines it at build time.
+  const googleOAuthEnabled = isGoogleWebOAuthEnabled({
+    NEXT_PUBLIC_TONO_WEB_GOOGLE_OAUTH_ENABLED:
+      process.env.NEXT_PUBLIC_TONO_WEB_GOOGLE_OAUTH_ENABLED,
+  });
+  const appleOAuthEnabled = isAppleWebOAuthEnabled({
+    NEXT_PUBLIC_TONO_WEB_APPLE_OAUTH_ENABLED:
+      process.env.NEXT_PUBLIC_TONO_WEB_APPLE_OAUTH_ENABLED,
+  });
 
   const oauth = async (provider: 'apple' | 'google') => {
     setError(null);
@@ -102,24 +121,29 @@ export default function LoginPage() {
             pick one, copy, send.
           </p>
 
-          {/* OAuth buttons */}
+          {/* Sign-in options. Social OAuth is gated OFF by default (see
+              social-auth.ts); passkey is always available. */}
           <div className="space-y-2.5">
-            <button
-              type="button"
-              onClick={() => oauth('google')}
-              className="w-full inline-flex items-center justify-center gap-3 px-5 py-3 rounded-[12px] bg-tono-bg-elev hover:bg-tono-bg-card text-tono-text border border-tono-border hover:border-tono-border-strong font-semibold text-[14px] transition min-h-[48px]"
-              aria-label="Continue with Google"
-            >
-              <GoogleIcon /> continue with google
-            </button>
-            <button
-              type="button"
-              onClick={() => oauth('apple')}
-              className="w-full inline-flex items-center justify-center gap-3 px-5 py-3 rounded-[12px] bg-tono-bg-elev hover:bg-tono-bg-card text-tono-text border border-tono-border hover:border-tono-border-strong font-semibold text-[14px] transition min-h-[48px]"
-              aria-label="Continue with Apple"
-            >
-              <AppleIcon /> continue with apple
-            </button>
+            {googleOAuthEnabled && (
+              <button
+                type="button"
+                onClick={() => oauth('google')}
+                className="w-full inline-flex items-center justify-center gap-3 px-5 py-3 rounded-[12px] bg-tono-bg-elev hover:bg-tono-bg-card text-tono-text border border-tono-border hover:border-tono-border-strong font-semibold text-[14px] transition min-h-[48px]"
+                aria-label="Continue with Google"
+              >
+                <GoogleIcon /> continue with google
+              </button>
+            )}
+            {appleOAuthEnabled && (
+              <button
+                type="button"
+                onClick={() => oauth('apple')}
+                className="w-full inline-flex items-center justify-center gap-3 px-5 py-3 rounded-[12px] bg-tono-bg-elev hover:bg-tono-bg-card text-tono-text border border-tono-border hover:border-tono-border-strong font-semibold text-[14px] transition min-h-[48px]"
+                aria-label="Continue with Apple"
+              >
+                <AppleIcon /> continue with apple
+              </button>
+            )}
             <PasskeyLoginButton />
           </div>
 
@@ -225,8 +249,15 @@ function GoogleIcon() {
 
 function AppleIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-      <path d="M16.365 1.43c0 1.14-.43 2.21-1.13 3-.71.79-1.85 1.4-2.99 1.32-.13-1.13.43-2.31 1.13-3.07.79-.85 2.07-1.45 2.99-1.25zM21 17.21c-.6 1.39-1.3 2.74-2.2 4.01-1.2 1.69-2.91 3.79-5.02 3.81-1.88.02-2.36-1.21-4.92-1.2-2.55.02-3.1 1.23-4.97 1.21-2.11-.02-3.72-1.93-4.92-3.62-3.36-4.74-3.71-10.3-1.64-13.26 1.47-2.1 3.79-3.33 5.97-3.33 2.21 0 3.6 1.21 5.43 1.21 1.78 0 2.86-1.21 5.41-1.21 1.94 0 4.01 1.06 5.47 2.88-4.81 2.64-4.03 9.5 1.39 11.5z" />
+    <svg
+      width="16"
+      height="16"
+      viewBox={APPLE_ICON_VIEWBOX}
+      fill="currentColor"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d={APPLE_ICON_PATH} />
     </svg>
   );
 }
