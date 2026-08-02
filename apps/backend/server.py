@@ -783,7 +783,14 @@ class SignInResponse(BaseModel):
 
 
 def _resolve_provider_signin(
-    store: Store, user: User, provider: str, sub: str, email: Optional[str], link: bool
+    store: Store,
+    user: User,
+    provider: str,
+    sub: str,
+    email: Optional[str],
+    link: bool,
+    *,
+    email_verified: bool = False,
 ):
     """Shared by /v1/auth/apple, /v1/auth/google, /v1/auth/web and the email
     login. `link=False` (plain sign-in) always succeeds and switches the
@@ -797,16 +804,32 @@ def _resolve_provider_signin(
       1. an account that ALREADY owns this provider subject;
       2. the account that RESERVED this subject when it started an email
          registration, before anyone had proved the address;
-      3. the calling device's own anonymous account, upgraded in place;
-      4. a brand-new account.
+      3. an existing canonical account that owns this same VERIFIED email but
+         not yet this kind of provider identity (account continuity);
+      4. the calling device's own anonymous account, upgraded in place;
+      5. a brand-new account.
 
     Step 2 is Build 114's correction. The verification click arrives in a
-    browser with no bearer and no session, so steps 3 and 4 were the only ones
-    reachable there — and step 4 minted a second canonical account, orphaning
-    the one the person had been using. It is placed ABOVE step 3 deliberately:
+    browser with no bearer and no session, so steps 4 and 5 were the only ones
+    reachable there — and step 5 minted a second canonical account, orphaning
+    the one the person had been using. It is placed ABOVE step 4 deliberately:
     the browser that opens the link has an anonymous account of its own (it was
     just minted to carry the request), and that throwaway must never outrank the
     account that actually started the registration.
+
+    Step 3 is the account-continuity bridge. The same human signs in with Google
+    on iOS (``google:<google-sub>``) and later on the website, where the browser
+    authenticates through Supabase (``supabase:<supabase-uid>`` — a different
+    subject). Steps 1–2 can't see across that, so the person split into two
+    canonical accounts with divided history and entitlements. When the provider
+    has PROVEN the address on this sign-in (``email_verified``), we converge onto
+    the one existing account that owns that verified address, attaching this new
+    identity rather than minting a duplicate. It sits BELOW the pending-
+    registration claim (that account explicitly reserved this exact subject) and
+    ABOVE the anonymous-device upgrade (a proven cross-surface identity outranks
+    a throwaway local account). It never fires on an unverified address, and
+    ``find_verified_email_account`` refuses an ambiguous one — so it can only ever
+    ATTACH to a single unambiguous account, never fuse two populated ones.
     """
     try:
         if link:
@@ -823,6 +846,13 @@ def _resolve_provider_signin(
                 None if existing is not None
                 else store.claim_pending_registration_account(sub)
             )
+            # Only a provider-proven address may drive convergence — the contract
+            # forbids merging accounts by an unverified email alone.
+            verified_email_match = (
+                store.find_verified_email_account(provider, sub, email)
+                if (existing is None and claimant is None and email_verified and email)
+                else None
+            )
             if existing is not None:
                 # Plain sign-in: switch to (or reuse) the account that already
                 # owns this identity — never a conflict (existing behavior).
@@ -832,6 +862,13 @@ def _resolve_provider_signin(
                 # it reserved, whichever surface finally proved the address.
                 account = store.upsert_account_by_provider(
                     provider, sub, email, link_into_account_id=claimant
+                )
+            elif verified_email_match is not None:
+                # Same person, second surface: attach this identity to the
+                # existing account that already owns this verified address, so
+                # history and entitlements stay on one canonical account.
+                account = store.upsert_account_by_provider(
+                    provider, sub, email, link_into_account_id=verified_email_match
                 )
             elif user.account is not None and not user.account.is_identified:
                 # Brand-new identity while on an anonymous auto-account: upgrade
@@ -862,7 +899,10 @@ async def auth_apple(
         expected_nonce = hashlib.sha256(body.nonce.encode("utf-8")).hexdigest()
         if not claims.nonce or not hmac.compare_digest(claims.nonce, expected_nonce):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid Apple sign-in nonce")
-    account = _resolve_provider_signin(store, user, "apple", claims.sub, claims.email, body.link)
+    account = _resolve_provider_signin(
+        store, user, "apple", claims.sub, claims.email, body.link,
+        email_verified=claims.email_verified,
+    )
     refreshed = store.get_by_device(user.device_id) or user
     projection = compute_me_fields(refreshed, store)
     return SignInResponse(account_id=account.id, plan=projection["plan"], is_pro=projection["is_pro"], email=account.email)
@@ -876,7 +916,10 @@ async def auth_google(
     verifier: Annotated[social_auth.IdentityVerifier, Depends(social_auth.get_google_verifier)],
 ) -> SignInResponse:
     claims = await verifier(body.id_token)
-    account = _resolve_provider_signin(store, user, "google", claims.sub, claims.email, body.link)
+    account = _resolve_provider_signin(
+        store, user, "google", claims.sub, claims.email, body.link,
+        email_verified=claims.email_verified,
+    )
     refreshed = store.get_by_device(user.device_id) or user
     projection = compute_me_fields(refreshed, store)
     return SignInResponse(account_id=account.id, plan=projection["plan"], is_pro=projection["is_pro"], email=account.email)
@@ -944,7 +987,10 @@ async def auth_web(
     # Reuse the exact provider-linking primitive Apple/Google use: same-subject
     # convergence, anonymous-account upgrade-in-place, and 409-on-collision all
     # come for free (link=False = plain sign-in).
-    account = _resolve_provider_signin(store, user, "supabase", claims.sub, email, link=False)
+    account = _resolve_provider_signin(
+        store, user, "supabase", claims.sub, email, link=False,
+        email_verified=claims.email_verified,
+    )
 
     # Build 114 — one registration ledger for every surface. A person who signs
     # up on the website is a registration Tono must be able to count and audit,

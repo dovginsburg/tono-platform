@@ -37,11 +37,40 @@ test('reset password form uses PasswordField for new + confirm fields', () => {
   assert.doesNotMatch(src, /type="password"/);
 });
 
-test('OAuth buttons are gated on a fail-closed capability flag', () => {
+test('Google OAuth button is gated on a fail-closed capability flag', () => {
   const src = read('app/login/page.tsx');
   assert.match(src, /OAUTH_CONFIGURED = Boolean\(SUPABASE_URL && SUPABASE_ANON_KEY\)/);
-  // The Apple/Google buttons render only when configured.
+  // The Google button renders only when the provider is configured.
   assert.match(src, /\{OAUTH_CONFIGURED \?/);
+});
+
+test('Apple OAuth button has a SEPARATE fail-closed product-branding gate', () => {
+  const src = read('app/login/page.tsx');
+  // Apple is not gated on mere OAUTH_CONFIGURED — it needs an attested Tono
+  // Services ID binding, or it must not render (never send users to ParentScript).
+  assert.match(src, /APPLE_OAUTH_ENABLED\s*=\s*\n?\s*OAUTH_CONFIGURED &&/);
+  assert.match(src, /appleWebSignInEnabled\(/);
+  assert.match(src, /process\.env\.NEXT_PUBLIC_APPLE_WEB_SERVICES_ID/);
+  // The Apple button is rendered under the Apple gate, not the generic one.
+  assert.match(src, /\{APPLE_OAUTH_ENABLED \?/);
+  // A truthful fallback replaces the button when the binding is unverified.
+  assert.match(src, /APPLE_WEB_UNAVAILABLE_COPY/);
+});
+
+test('no compiled web source embeds a foreign (sibling-product) Apple client id', () => {
+  // The contamination is a Supabase dashboard binding, and it must never be
+  // "fixed" by hard-coding the sibling's client id into a shipped artifact.
+  // The branding gate is an allowlist by Tono shape precisely so this stays true.
+  const files = [
+    'app/login/page.tsx',
+    'lib/apple-oauth-binding.ts',
+    'lib/supabase-client.ts',
+    'app/auth/callback/route.ts',
+  ];
+  for (const f of files) {
+    const src = read(f).toLowerCase();
+    assert.doesNotMatch(src, /parentscript/, `${f} must not embed the sibling client id`);
+  }
 });
 
 test('editor chrome no longer prints a raw account/user id', () => {

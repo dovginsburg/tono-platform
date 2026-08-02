@@ -19,6 +19,7 @@ import {
 } from '@/lib/email-auth';
 import PasskeyLoginButton from '../PasskeyLoginButton';
 import PasswordField from '../PasswordField';
+import { appleWebSignInEnabled, APPLE_WEB_UNAVAILABLE_COPY } from '@/lib/apple-oauth-binding';
 
 // Build 114 remediation — one vocabulary for this page.
 //
@@ -53,15 +54,33 @@ function classifyAuthFailure(error: unknown): EmailAuthOutcome {
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
-// Capability gate for the Apple/Google OAuth buttons.
+// Capability gate for the Google OAuth button.
 //
-// Those buttons can only complete a sign-in through a configured Supabase
+// The OAuth buttons can only complete a sign-in through a configured Supabase
 // project. When either public value is absent at build time, the provider
-// client cannot start an OAuth flow, so rendering the buttons would give a
-// person a control that fails the instant they click it. We fail closed and
-// omit them entirely — mirroring how passkeys surface an honest "not configured
-// here yet" state rather than a dead button. Email/password + passkeys remain.
+// client cannot start an OAuth flow, so rendering a button would give a person
+// a control that fails the instant they click it. We fail closed and omit it —
+// mirroring how passkeys surface an honest "not configured here yet" state
+// rather than a dead button. Email/password + passkeys remain.
 const OAUTH_CONFIGURED = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
+
+// Additional, SEPARATE gate for the Apple button — a product-branding check.
+//
+// Supabase drives Apple sign-in with the Services ID configured on its Apple
+// provider (a dashboard value, invisible to this bundle). On the shared project
+// that binding is a SIBLING PRODUCT's, so clicking Apple would land a Tono user
+// on that other product's consent screen. We therefore render Apple ONLY when an
+// operator has attested — via NEXT_PUBLIC_APPLE_WEB_SERVICES_ID — that the
+// binding is Tono's own. Fail closed by default (today's live state):
+// the button is hidden and truthful recovery copy points at Google/email. See
+// src/lib/apple-oauth-binding.ts. The literal env reads stay inline so Next
+// inlines them at build time.
+const APPLE_OAUTH_ENABLED =
+  OAUTH_CONFIGURED &&
+  appleWebSignInEnabled(
+    process.env.NEXT_PUBLIC_APPLE_WEB_SERVICES_ID,
+    process.env.NEXT_PUBLIC_APPLE_WEB_EXPECTED_SERVICES_ID,
+  );
 
 // build a basePath-aware redirect URI:
 //   on tonoit.com, callback URL is https://tonoit.com/app/auth/callback
@@ -262,29 +281,39 @@ export default function LoginPage() {
             pick one, copy, send.
           </p>
 
-          {/* OAuth buttons — rendered only when the provider is configured
-              (fail-closed capability gate); passkeys always render with their
+          {/* OAuth buttons — Google renders whenever the provider is configured
+              (fail-closed capability gate). Apple renders only when its binding
+              is attested Tono-branded (APPLE_OAUTH_ENABLED); otherwise it is
+              omitted and a truthful line explains why, so no one is sent into a
+              sibling product's consent screen. Passkeys always render with their
               own honest not-configured state. */}
           <div className="space-y-2.5">
             {OAUTH_CONFIGURED ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => oauth('google')}
-                  className="w-full inline-flex items-center justify-center gap-3 px-5 py-3 rounded-[12px] bg-tono-bg-elev hover:bg-tono-bg-card text-tono-text border border-tono-border hover:border-tono-border-strong font-semibold text-[14px] transition min-h-[48px]"
-                  aria-label="Continue with Google"
-                >
-                  <GoogleIcon /> continue with google
-                </button>
-                <button
-                  type="button"
-                  onClick={() => oauth('apple')}
-                  className="w-full inline-flex items-center justify-center gap-3 px-5 py-3 rounded-[12px] bg-tono-bg-elev hover:bg-tono-bg-card text-tono-text border border-tono-border hover:border-tono-border-strong font-semibold text-[14px] transition min-h-[48px]"
-                  aria-label="Continue with Apple"
-                >
-                  <AppleIcon /> continue with apple
-                </button>
-              </>
+              <button
+                type="button"
+                onClick={() => oauth('google')}
+                className="w-full inline-flex items-center justify-center gap-3 px-5 py-3 rounded-[12px] bg-tono-bg-elev hover:bg-tono-bg-card text-tono-text border border-tono-border hover:border-tono-border-strong font-semibold text-[14px] transition min-h-[48px]"
+                aria-label="Continue with Google"
+              >
+                <GoogleIcon /> continue with google
+              </button>
+            ) : null}
+            {APPLE_OAUTH_ENABLED ? (
+              <button
+                type="button"
+                onClick={() => oauth('apple')}
+                className="w-full inline-flex items-center justify-center gap-3 px-5 py-3 rounded-[12px] bg-tono-bg-elev hover:bg-tono-bg-card text-tono-text border border-tono-border hover:border-tono-border-strong font-semibold text-[14px] transition min-h-[48px]"
+                aria-label="Continue with Apple"
+              >
+                <AppleIcon /> continue with apple
+              </button>
+            ) : OAUTH_CONFIGURED ? (
+              <p
+                role="note"
+                className="text-[12px] text-tono-muted leading-[1.5] px-1 py-1"
+              >
+                {APPLE_WEB_UNAVAILABLE_COPY}
+              </p>
             ) : null}
             <PasskeyLoginButton />
           </div>

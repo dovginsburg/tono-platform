@@ -2043,6 +2043,64 @@ class Store:
 
         return self._run(_do).result()
 
+    def find_verified_email_account(
+        self, provider: str, sub: str, email: Optional[str]
+    ) -> Optional[str]:
+        """The ONE canonical account this provider identity should join by a
+        *verified* email, or ``None`` when there is no safe, unambiguous target.
+
+        This is the account-continuity primitive. The same human signs in with
+        Google on iOS (canonical key ``google:<google-sub>``) and later with
+        Google on the website — where the browser authenticates through Supabase,
+        so the web identity arrives as ``supabase:<supabase-uid>``, a *different*
+        subject. Without a bridge the two never converge and the person owns two
+        canonical accounts with split history and entitlements. Verified-email
+        convergence is that bridge, and the contract permits it precisely because
+        the address was proven by the provider on both surfaces.
+
+        Deliberately conservative — it attaches, it never merges:
+
+          * matches only accounts whose address is VERIFIED (``email_verified_at``
+            set) and not tombstoned;
+          * requires the ``{provider}_sub`` column to be EMPTY on the target, so
+            we only ever *attach* this new identity to an account that does not
+            yet own one of this kind — never rewrite a subject, never fuse two
+            populated provider identities;
+          * returns ``None`` when the address maps to more than one candidate.
+            An ambiguous address (a shared or family mailbox that already spawned
+            two accounts) must be resolved by an explicit, authenticated linking
+            flow, not silently collapsed here where one account's history would
+            be orphaned.
+
+        The caller must have proven this address is verified for THIS identity
+        (see ``server._resolve_provider_signin``'s ``email_verified`` gate); an
+        unverified address can never reach this method with a non-null ``email``.
+        """
+        assert provider in ("apple", "google", "supabase"), f"unknown provider: {provider}"
+        column = f"{provider}_sub"
+        normalized = normalize_email(email)
+        if not normalized:
+            return None
+
+        def _do() -> Optional[str]:
+            cur = self._conn.cursor()
+            cur.execute(
+                f"""SELECT id FROM accounts
+                     WHERE email_normalized = ?
+                       AND email_verified_at IS NOT NULL
+                       AND deleted_at IS NULL
+                       AND ({column} IS NULL OR {column} = ?)""",
+                (normalized, sub),
+            )
+            rows = cur.fetchall()
+            if len(rows) != 1:
+                # Zero: nothing to join. More than one: ambiguous — refuse to
+                # pick, so no account's history is silently orphaned.
+                return None
+            return rows[0]["id"]
+
+        return self._run(_do).result()
+
     def get_registration(self, account_id: str) -> Optional[dict]:
         """The current product registration row for one canonical account."""
 
