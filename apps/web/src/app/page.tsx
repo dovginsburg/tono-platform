@@ -16,6 +16,7 @@
 
 import Link from 'next/link'
 import ProCheckoutButton from './ProCheckoutButton'
+import DemoRewrite from './DemoRewrite'
 
 // ── Server component — no client state needed. ──────────────────────────
 export default function LandingPage() {
@@ -35,9 +36,9 @@ export default function LandingPage() {
               </span>
               {/* Benefit-first subline — the thing the first-2-second scanner
                   actually needs to know before reading the trust strip and h1.
-                  Pitches the value, not the feature list. */}
+                  Pitches the outcome, not a latency number we can't stand behind. */}
               <p className="text-[14px] md:text-[16px] text-tono-text-soft leading-[1.45] mt-4 sm:mt-5 max-w-xl">
-                Check tone before you send, in 8 seconds.
+                Check how your message may land before you send it.
               </p>
               <p
                 aria-label="trust and privacy"
@@ -78,12 +79,14 @@ export default function LandingPage() {
               </p>
             </div>
 
-            {/* ── Product preview — a finished rewrite, shown not simulated.
-                Non-interactive on purpose: there is no anonymous rewrite
-                path under the contract, so the hero shows a real example
-                artifact and routes visitors into the existing 14-day free
-                trial rather than implying a no-account demo. */}
-            <aside aria-label="tono preview — one draft, four ways to say it" className="relative">
+            {/* ── Product demo — the loop, run before signup. Interactive but
+                NOT a live rewrite: the draft is fixed and the four outputs are
+                precomputed constants (DemoRewrite.tsx / lib/demo-rewrite.ts), so
+                there is no anonymous /api/analyze to abuse and nothing implies a
+                model ran. The visitor picks the tone they'd send — the product's
+                core decision — then routes into the 14-day trial to do it with
+                their own drafts. */}
+            <aside aria-label="tono demo — pick one of four ways to say it" className="relative">
               {/* soft glow behind the preview card */}
               <div
                 aria-hidden="true"
@@ -103,30 +106,20 @@ export default function LandingPage() {
                   </span>
                 </div>
 
-                {/* the draft (static example) */}
-                <div className="px-4 pt-3">
-                  <p className="text-[10px] font-mono lowercase text-tono-muted mb-1.5">your draft</p>
-                  <p className="text-[14px] text-tono-text-soft leading-[1.5]">
-                    “you still haven’t sent the file — what’s the holdup?”
-                  </p>
-                </div>
+                {/* the loop, run before signup — fixed draft, one action, four
+                    labeled outputs, and a pick. Every card is a canned sample;
+                    see DemoRewrite.tsx. No network, no anonymous rewrite path. */}
+                <DemoRewrite />
 
-                {/* four finished tones — the real artifact, not an input box */}
-                <div className="px-2.5 py-3 mt-3 space-y-1.5 border-t border-tono-border bg-tono-bg-soft">
-                  <ToneChip name="warmer" text="hey — any update on that file when you get a moment?" />
-                  <ToneChip name="clearer" text="can you send the file today? i’m blocked without it." />
-                  <ToneChip name="funnier" text="the file and i have never met — can you introduce us?" />
-                  <ToneChip name="safer" text="i might’ve missed it — did the file already go out?" />
-                </div>
-
-                {/* trial CTA — routes into the existing account/checkout flow */}
+                {/* trial CTA — the sample is on us; your own drafts route into
+                    the existing account/checkout flow. */}
                 <div className="px-4 py-3 border-t border-tono-border">
                   <ProCheckoutButton
                     interval="month"
-                    label="start 14-day free trial to rewrite"
+                    label="start 14-day free trial to rewrite your own drafts"
                     className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-[10px] bg-tono-accent hover:bg-tono-accent-hover disabled:opacity-60 disabled:pointer-events-none text-white font-semibold text-[13px] transition min-h-[44px]"
                   >
-                    start 14-day free trial to rewrite
+                    start 14-day free trial to rewrite your own drafts
                   </ProCheckoutButton>
                 </div>
 
@@ -151,7 +144,7 @@ export default function LandingPage() {
           <div className="mb-10 max-w-2xl">
             <span className="text-[11px] uppercase tracking-wider font-semibold text-tono-accent-light">how it works</span>
             <h2 className="text-[32px] md:text-[40px] font-bold tracking-[-0.02em] text-tono-text mt-3">
-              three steps. ten seconds.
+              three steps. one decision.
             </h2>
           </div>
           <ol className="grid md:grid-cols-3 gap-5">
@@ -385,26 +378,6 @@ function TonoNav() {
         </Link>
       </div>
     </header>
-  )
-}
-
-// ── ToneChip ────────────────────────────────────────────────────────────
-// Compact tone preview for the hero demo card. Single-column list inside
-// the iOS phone screen so the demo reads finished on mobile too. The
-// tone name drives a class suffix — never an inline color literal.
-function ToneChip({ name, text }: { name: 'warmer' | 'clearer' | 'funnier' | 'safer'; text: string }) {
-  const rule = `tone-rule-l-${name}`
-  const dot = `tone-dot-sm-${name}`
-  return (
-    <div
-      className={`bg-tono-bg-elev border border-tono-border rounded-[10px] p-2.5 hover:border-tono-border-strong transition ${rule}`}
-    >
-      <div className="flex items-center gap-1.5 mb-1">
-        <span className={`w-1.5 h-1.5 rounded-full ${dot}`} aria-hidden="true" />
-        <span className={`text-[10px] font-semibold tracking-[0.04em] uppercase tone-text-${name}`}>{name}</span>
-      </div>
-      <p className="text-[12px] text-tono-text-soft leading-[1.45]">{text}</p>
-    </div>
   )
 }
 

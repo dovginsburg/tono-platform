@@ -9,7 +9,7 @@
 //   - no exclamation marks
 //   - the four tones named in copy match the on-screen accent color
 //   - "thinking…" / "rewriting…" loading (one word)
-//   - empty state IS the demo: "paste any text. four rewrites in two seconds."
+//   - empty state IS the demo: "paste any text. get four ways to say it."
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
@@ -271,7 +271,7 @@ export function RewriteEditor({
               ref={textareaRef}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
-              placeholder="paste any text. four rewrites in two seconds."
+              placeholder="paste any text. get four ways to say it."
               aria-label="Draft text"
               style={textareaStyle}
             />
