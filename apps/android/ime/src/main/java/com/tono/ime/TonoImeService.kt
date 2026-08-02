@@ -14,8 +14,10 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.tono.ime.intelligence.GeminiNanoRewriter
 import com.tono.ime.ui.KeyboardScreen
 import com.tono.shared.analytics.CrashReporter
+import com.tono.shared.intelligence.OnDeviceRewriteEngine
 import com.tono.shared.storage.SharedKeys
 import com.tono.shared.storage.SharedStore
 
@@ -40,6 +42,12 @@ class TonoImeService : InputMethodService(),
 
     private lateinit var viewModel: CoachViewModel
 
+    // The ML Kit (Gemini Nano) engine. Held here so it is closed when the
+    // keyboard is torn down. The ViewModel only sees the pure interface, so it
+    // stays JVM-unit-testable. On a device without AICore/Gemini Nano this
+    // engine simply reports unavailable — it is fail-closed, not a crash.
+    private var onDeviceEngine: OnDeviceRewriteEngine? = null
+
     // ─── Service lifecycle ─────────────────────────────────────────────────
 
     override fun onCreate() {
@@ -49,6 +57,14 @@ class TonoImeService : InputMethodService(),
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
 
         viewModel = ViewModelProvider(this)[CoachViewModel::class.java]
+
+        // Attach the on-device engine. Constructing it touches no native
+        // resources (the ML Kit client is created lazily on first use), and the
+        // gesture itself stays gated behind the Pro-and-default-off kill switch
+        // plus a real availability check, so this is safe on every device.
+        onDeviceEngine = GeminiNanoRewriter(applicationContext).also {
+            viewModel.attachOnDeviceEngine(it)
+        }
 
         SharedStore.putBoolean(SharedKeys.KEYBOARD_LOADED, true)
         CrashReporter.configure(this)
@@ -76,6 +92,8 @@ class TonoImeService : InputMethodService(),
 
     override fun onDestroy() {
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
+        onDeviceEngine?.close()
+        onDeviceEngine = null
         _viewModelStore.clear()
         super.onDestroy()
     }

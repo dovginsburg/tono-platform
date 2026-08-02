@@ -60,6 +60,35 @@ android {
         }
     }
 
+    // ── App Functions EAP gate (default OFF; the checked-in build never sets it) ──
+    //
+    // Android App Functions is an experimental preview: it needs Android 16
+    // (compileSdk 36), the alpha `androidx.appfunctions` library + a KSP
+    // compiler that requires Kotlin 2.x, and — critically — admission to
+    // Google's Early Access Program before any system agent (Gemini included)
+    // can invoke a function end-to-end. As of May 2026 that integration is a
+    // private preview with trusted testers. None of that contract is met on the
+    // checked-in toolchain (Kotlin 1.9.22), so the annotated `@AppFunction`
+    // service under src/appFunctionsEap/ is NOT compiled by default and the
+    // runtime seam fails closed (AppFunctionGate → DISABLED_BY_BUILD).
+    //
+    // A developer admitted to the EAP, on Kotlin 2.x + KSP + Android 16, flips
+    // `-Ptono.appfunctions.eap=true` and follows docs/google-intelligence-
+    // readiness.md to add the alpha deps, the KSP compiler, compileSdk 36, and
+    // the service manifest entry. Until then, this block only wires the source
+    // directory so the integration point is discoverable, and warns about the
+    // manual toolchain steps.
+    if ((project.findProperty("tono.appfunctions.eap") as? String)?.toBoolean() == true) {
+        logger.warn(
+            "tono.appfunctions.eap=true: App Functions EAP source is included, but it " +
+            "additionally requires Kotlin 2.x, the androidx.appfunctions alpha + KSP " +
+            "compiler, compileSdk 36, EAP admission, and the service manifest entry " +
+            "(see docs/google-intelligence-readiness.md). It will NOT compile on the " +
+            "checked-in Kotlin 1.9.22 toolchain.",
+        )
+        sourceSets.getByName("main").java.srcDir("src/appFunctionsEap/java")
+    }
+
     buildFeatures {
         compose = true
         buildConfig = true
@@ -70,7 +99,14 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
+    kotlinOptions {
+        jvmTarget = "17"
+        // ML Kit GenAI (pulled transitively from :ime at runtime/lint time) ships
+        // Kotlin 2.1.0 metadata; this project is on Kotlin 1.9.22. Relax ONLY the
+        // metadata-version gate so lint's classpath analysis does not choke on it.
+        // Compile-only; :app links no ML Kit symbol directly. Same rationale as :ime.
+        freeCompilerArgs = freeCompilerArgs + "-Xskip-metadata-version-check"
+    }
 }
 
 dependencies {

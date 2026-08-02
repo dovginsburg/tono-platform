@@ -26,22 +26,30 @@ enum class FeatureFlag(val key: String) {
     // Default OFF (B2B only)
     SLACK_ENABLED("slack_enabled"),
 
+    // Default OFF (staged, dark-launch). The remote/user kill switch for the
+    // Gemini Nano on-device "Funnier" gesture. Off by default because the path
+    // is not device-verified: it lights up only when this flag is on AND the
+    // device actually reports the on-device model available (fail-closed). It
+    // never bypasses billing (Pro-gated) or the backend Safer route.
+    GEMINI_NANO_REWRITE("gemini_nano_rewrite"),
+
     // Collective improvement signal (default ON, user-controllable opt-out)
     IMPROVE_TONO("improve_tono");
 
     val defaultValue: Boolean get() = when (this) {
-        CUSTOM_AXES, RECIPIENT_MEMORY, WIDGET_ENABLED, SLACK_ENABLED -> false
+        CUSTOM_AXES, RECIPIENT_MEMORY, WIDGET_ENABLED, SLACK_ENABLED, GEMINI_NANO_REWRITE -> false
         else -> true
     }
 
     val requiresPro: Boolean get() = when (this) {
-        MEMORY_INFERENCE, MEMORY_CONTEXT_HINTS, WEEKLY_DIGEST, CUSTOM_AXES, RECIPIENT_MEMORY -> true
+        MEMORY_INFERENCE, MEMORY_CONTEXT_HINTS, WEEKLY_DIGEST, CUSTOM_AXES, RECIPIENT_MEMORY,
+        GEMINI_NANO_REWRITE -> true
         else -> false
     }
 
     val isUserControllable: Boolean get() = when (this) {
         THREAD_CONTEXT, WEEKLY_DIGEST, RISK_DELTA, MEMORY_INFERENCE, MEMORY_CONTEXT_HINTS,
-        IMPROVE_TONO -> true
+        IMPROVE_TONO, GEMINI_NANO_REWRITE -> true
         else -> false
     }
 
@@ -56,6 +64,7 @@ enum class FeatureFlag(val key: String) {
         RECIPIENT_MEMORY       -> "Per-recipient style memory"
         WIDGET_ENABLED         -> "Home screen widget"
         SLACK_ENABLED          -> "Slack integration"
+        GEMINI_NANO_REWRITE    -> "On-device Funnier (Gemini Nano)"
         IMPROVE_TONO           -> "Help improve Tono"
     }
 }

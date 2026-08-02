@@ -6,6 +6,12 @@ import com.tono.shared.analytics.AnalyticsEvent
 import com.tono.shared.analytics.CrashReporter
 import com.tono.shared.analytics.TonoAnalytics
 import com.tono.shared.engine.MockToneAnalyzer
+import com.tono.shared.flags.FeatureFlag
+import com.tono.shared.flags.FeatureFlags
+import com.tono.shared.intelligence.GeminiRewritePreferenceStore
+import com.tono.shared.intelligence.OnDeviceFunnierResult
+import com.tono.shared.intelligence.OnDeviceFunnierUseCase
+import com.tono.shared.intelligence.OnDeviceRewriteEngine
 import com.tono.shared.models.AnalysisMode
 import com.tono.shared.models.AnalysisRequest
 import com.tono.shared.models.RewriteAxis
@@ -19,6 +25,7 @@ import com.tono.shared.storage.SharedKeys
 import com.tono.shared.storage.SharedStore
 import com.tono.shared.storage.StyleMemory
 import com.tono.shared.storage.UserMemory
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -32,6 +39,19 @@ sealed class KeyboardMode {
     data class Error(val message: String) : KeyboardMode()
 }
 
+// The transient state of the explicit on-device Funnier gesture (Gemini Nano).
+// Additive: it never replaces the backend Coach results, only augments them.
+sealed class OnDeviceFunnierUiState {
+    /** Affordance shown, nothing requested yet. */
+    object Idle : OnDeviceFunnierUiState()
+    /** A single on-device generation is in flight (cancellable). */
+    object Running : OnDeviceFunnierUiState()
+    /** A distinct on-device rewrite is ready for the user to insert. */
+    data class Ready(val text: String) : OnDeviceFunnierUiState()
+    /** Deterministic decline; [canDownload] true only when an explicit download could fix it. */
+    data class Unavailable(val message: String, val canDownload: Boolean) : OnDeviceFunnierUiState()
+}
+
 class CoachViewModel : ViewModel() {
 
     private val _mode = MutableStateFlow<KeyboardMode>(KeyboardMode.Keyboard)
@@ -42,6 +62,31 @@ class CoachViewModel : ViewModel() {
 
     private val _isPro = MutableStateFlow(SharedStore.getBoolean(SharedKeys.PRO_UNLOCKED))
     val isPro: StateFlow<Boolean> = _isPro
+
+    // ── Google-intelligence: the explicit on-device Funnier gesture ──────────
+    // The engine is INJECTED by the IME service (the only place ML Kit is
+    // linked). Null here means the feature is unavailable — the affordance never
+    // shows and no on-device code path can run. Default-off and fail-closed.
+    private var onDeviceEngine: OnDeviceRewriteEngine? = null
+    private val onDeviceFunnierUseCase = OnDeviceFunnierUseCase()
+    private var onDeviceJob: Job? = null
+
+    private val _onDeviceFunnier = MutableStateFlow<OnDeviceFunnierUiState>(OnDeviceFunnierUiState.Idle)
+    val onDeviceFunnier: StateFlow<OnDeviceFunnierUiState> = _onDeviceFunnier
+
+    /** Injected once by [TonoImeService]. Passing null disables the gesture. */
+    fun attachOnDeviceEngine(engine: OnDeviceRewriteEngine?) {
+        onDeviceEngine = engine
+    }
+
+    /**
+     * Whether to OFFER the on-device Funnier affordance at all. Gated by the
+     * remote/user kill switch (Pro-gated, default off) AND an attached engine.
+     * The affordance's PRESENCE reveals nothing about the device; availability
+     * is checked only on an explicit tap, so there is no prefetch here.
+     */
+    fun onDeviceFunnierOffered(): Boolean =
+        onDeviceEngine != null && FeatureFlags.isEnabled(FeatureFlag.GEMINI_NANO_REWRITE)
 
     // Recipient picker — loaded when the keyboard opens, toggled by the chip row
     private val _recipients = MutableStateFlow<List<Recipient>>(emptyList())
@@ -88,6 +133,7 @@ class CoachViewModel : ViewModel() {
 
         val recipient = _selectedRecipient.value
 
+        resetOnDeviceFunnier()
         coachTapTime = System.currentTimeMillis()
         TonoAnalytics.track(AnalyticsEvent.CoachRequested("coach"))
         CrashReporter.addBreadcrumb("Coach tapped")
@@ -185,6 +231,82 @@ class CoachViewModel : ViewModel() {
         }
     }
 
+    // ── On-device Funnier gesture (explicit only; no fan-out, no prefetch) ───
+
+    /**
+     * Run the explicit on-device Funnier gesture. Cancels any prior on-device
+     * request first (so there is never more than one generation in flight), then
+     * runs exactly one availability check + at most one generation via the pure
+     * [OnDeviceFunnierUseCase]. The backend is never called from here.
+     */
+    fun requestOnDeviceFunnier() {
+        val engine = onDeviceEngine ?: return
+        if (!onDeviceFunnierOffered()) return
+        onDeviceJob?.cancel()
+        _onDeviceFunnier.value = OnDeviceFunnierUiState.Running
+        CrashReporter.addBreadcrumb("On-device Funnier requested")
+        onDeviceJob = viewModelScope.launch {
+            val result = onDeviceFunnierUseCase.run(
+                draft = _draft.value,
+                engine = engine,
+                remoteKillSwitchAllows = FeatureFlags.isEnabled(FeatureFlag.GEMINI_NANO_REWRITE),
+                preference = GeminiRewritePreferenceStore.load(),
+            )
+            _onDeviceFunnier.value = when (result) {
+                is OnDeviceFunnierResult.Rewrote ->
+                    OnDeviceFunnierUiState.Ready(result.text)
+                is OnDeviceFunnierResult.Unavailable ->
+                    OnDeviceFunnierUiState.Unavailable(
+                        message = OnDeviceFunnierUseCase.message(result.reason),
+                        canDownload = OnDeviceFunnierUseCase.isDownloadable(result.reason),
+                    )
+            }
+        }
+    }
+
+    /**
+     * Explicitly download the on-device model, then re-run the gesture. Called
+     * ONLY from the "Download model" affordance — never speculatively.
+     */
+    fun downloadOnDeviceModel() {
+        val engine = onDeviceEngine ?: return
+        if (!onDeviceFunnierOffered()) return
+        onDeviceJob?.cancel()
+        _onDeviceFunnier.value = OnDeviceFunnierUiState.Running
+        onDeviceJob = viewModelScope.launch {
+            engine.download() // explicit; suspends until the download resolves
+            requestOnDeviceFunnier()
+        }
+    }
+
+    /**
+     * Consume a ready on-device rewrite for insertion. Returns the text and
+     * resets the affordance, or null if nothing is ready. Insertion is the
+     * user's explicit choice, exactly like tapping a backend rewrite chip.
+     */
+    fun takeOnDeviceRewrite(): String? {
+        val state = _onDeviceFunnier.value
+        if (state !is OnDeviceFunnierUiState.Ready) return null
+        lastInsertedRewrite = state.text
+        CrashReporter.addBreadcrumb("On-device Funnier inserted")
+        val count = SharedStore.getInt(SharedKeys.COACH_USE_COUNT) + 1
+        SharedStore.putInt(SharedKeys.COACH_USE_COUNT, count)
+        _onDeviceFunnier.value = OnDeviceFunnierUiState.Idle
+        return state.text
+    }
+
+    /** Dismiss/cancel the on-device gesture, returning to the plain affordance. */
+    fun dismissOnDeviceFunnier() {
+        onDeviceJob?.cancel()
+        _onDeviceFunnier.value = OnDeviceFunnierUiState.Idle
+    }
+
+    private fun resetOnDeviceFunnier() {
+        onDeviceJob?.cancel()
+        onDeviceJob = null
+        _onDeviceFunnier.value = OnDeviceFunnierUiState.Idle
+    }
+
     // Called by the IME service when the user taps a rewrite chip
     fun onRewriteChosen(suggestion: RewriteSuggestion, analysis: ToneAnalysis): String {
         val recipientId = _selectedRecipient.value?.id
@@ -236,6 +358,7 @@ class CoachViewModel : ViewModel() {
                 pendingOutcome = null
             }
         }
+        resetOnDeviceFunnier()
         _mode.value = KeyboardMode.Keyboard
     }
 

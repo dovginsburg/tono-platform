@@ -28,6 +28,9 @@ dependencies {
 
     // Build 114 — the email account contract (outcome shapes, normalization,
     // consumer copy) is deliberately pure Kotlin, so it is provable by ordinary
-    // JVM unit tests rather than only by running the app on a device.
+    // JVM unit tests rather than only by running the app on a device. The
+    // Google-intelligence provider/router/availability seams follow the same
+    // rule, hence the coroutine test runner for the on-device use case.
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
 }

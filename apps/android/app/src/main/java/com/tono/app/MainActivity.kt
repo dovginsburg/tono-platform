@@ -27,6 +27,8 @@ import com.tono.app.theme.TonoTheme
 import com.tono.app.ui.*
 import com.tono.shared.flags.FeatureFlag
 import com.tono.shared.flags.FeatureFlags
+import com.tono.shared.intelligence.AppFunctionRoute
+import com.tono.shared.intelligence.AppFunctionRouteSignal
 import com.tono.shared.storage.SharedKeys
 import com.tono.shared.storage.SharedStore
 
@@ -55,6 +57,22 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
+        }
+    }
+
+    /**
+     * Present any one-shot route an App Function queued (mirror of the iOS
+     * `TonoApp` foreground hook). Read-and-clear, so a route presents once. The
+     * signal carries a route enum only — never text — so nothing an agent set
+     * can reach a screen except a known local destination. On the checked-in
+     * build no App Function is compiled in, so this simply finds nothing; the
+     * consumption path is real and testable regardless.
+     */
+    override fun onResume() {
+        super.onResume()
+        when (AppFunctionRouteSignal.consumePending()) {
+            AppFunctionRoute.KEYBOARD_SETUP -> openKeyboardSettings()
+            null -> Unit
         }
     }
 

@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tono.ime.CoachViewModel
 import com.tono.ime.KeyboardMode
+import com.tono.ime.OnDeviceFunnierUiState
 import com.tono.shared.models.AnalysisMode
 import com.tono.shared.models.RewriteAxis
 import com.tono.shared.models.RewriteSuggestion
@@ -49,6 +50,7 @@ fun KeyboardScreen(
     val mode              by viewModel.mode.collectAsState()
     val recipients        by viewModel.recipients.collectAsState()
     val selectedRecipient by viewModel.selectedRecipient.collectAsState()
+    val onDeviceFunnier   by viewModel.onDeviceFunnier.collectAsState()
 
     Box(
         modifier = modifier
@@ -77,6 +79,16 @@ fun KeyboardScreen(
                     onInsertText(text)
                 },
                 onBack = { viewModel.goBack() },
+                // On-device Funnier: only offered in Coach mode, gated by the
+                // Pro-and-default-off kill switch plus an attached engine.
+                onDeviceOffered  = m.mode == AnalysisMode.COACH && viewModel.onDeviceFunnierOffered(),
+                onDeviceState    = onDeviceFunnier,
+                onRequestOnDevice = { viewModel.requestOnDeviceFunnier() },
+                onDownloadModel   = { viewModel.downloadOnDeviceModel() },
+                onInsertOnDevice  = {
+                    viewModel.takeOnDeviceRewrite()?.let { onInsertText(it) }
+                },
+                onDismissOnDevice = { viewModel.dismissOnDeviceFunnier() },
             )
             is KeyboardMode.Error -> ErrorView(
                 message = m.message,
@@ -280,6 +292,12 @@ private fun ResultsView(
     mode: AnalysisMode,
     onInsert: (RewriteSuggestion) -> Unit,
     onBack: () -> Unit,
+    onDeviceOffered: Boolean = false,
+    onDeviceState: OnDeviceFunnierUiState = OnDeviceFunnierUiState.Idle,
+    onRequestOnDevice: () -> Unit = {},
+    onDownloadModel: () -> Unit = {},
+    onInsertOnDevice: () -> Unit = {},
+    onDismissOnDevice: () -> Unit = {},
 ) {
     Column(
         Modifier
@@ -313,6 +331,116 @@ private fun ResultsView(
         if (mode == AnalysisMode.COACH) {
             analysis.suggestions.forEach { suggestion ->
                 RewriteChip(suggestion = suggestion, onInsert = { onInsert(suggestion) })
+            }
+
+            // On-device Funnier — an explicit, additive gesture. Fully separate
+            // from the backend Funnier chip above; the user opts in per tap.
+            if (onDeviceOffered) {
+                OnDeviceFunnierSection(
+                    state             = onDeviceState,
+                    onRequest         = onRequestOnDevice,
+                    onDownloadModel   = onDownloadModel,
+                    onInsert          = onInsertOnDevice,
+                    onDismiss         = onDismissOnDevice,
+                )
+            }
+        }
+    }
+}
+
+// ─── On-device Funnier (Gemini Nano) ───────────────────────────────────────────
+
+@Composable
+private fun OnDeviceFunnierSection(
+    state: OnDeviceFunnierUiState,
+    onRequest: () -> Unit,
+    onDownloadModel: () -> Unit,
+    onInsert: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    when (state) {
+        is OnDeviceFunnierUiState.Idle -> {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .background(SurfaceVariant, RoundedCornerShape(12.dp))
+                    .clickable(onClick = onRequest)
+                    .padding(12.dp)
+                    .semantics {
+                        contentDescription =
+                            "Try a Funnier rewrite on this device. Runs privately on-device; nothing is sent."
+                    },
+            ) {
+                Text(
+                    "✨ Funnier · on device",
+                    color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
+        is OnDeviceFunnierUiState.Running -> {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(SurfaceVariant, RoundedCornerShape(12.dp))
+                    .padding(12.dp),
+                verticalAlignment     = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                CircularProgressIndicator(color = Purple, modifier = Modifier.size(18.dp))
+                Text("Writing on device…", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel", color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp)
+                }
+            }
+        }
+        is OnDeviceFunnierUiState.Ready -> {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(SurfaceVariant, RoundedCornerShape(12.dp))
+                    .clickable(onClick = onInsert)
+                    .padding(12.dp)
+                    .semantics {
+                        contentDescription =
+                            "On-device Funnier rewrite. ${state.text}. Tap to insert. Produced on this device."
+                    },
+            ) {
+                Box(
+                    Modifier
+                        .background(Color(0xFF27AE60), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                ) {
+                    Text("Funnier · on device", color = Color.White,
+                        fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(state.text, color = Color.White, fontSize = 15.sp, lineHeight = 21.sp)
+                Spacer(Modifier.height(4.dp))
+                Text("On this device · Gemini Nano", color = Color.White.copy(alpha = 0.45f), fontSize = 12.sp)
+            }
+        }
+        is OnDeviceFunnierUiState.Unavailable -> {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(SurfaceVariant, RoundedCornerShape(12.dp))
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(state.message, color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
+                if (state.canDownload) {
+                    Box(
+                        Modifier
+                            .background(Purple, RoundedCornerShape(8.dp))
+                            .clickable(onClick = onDownloadModel)
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                            .semantics { contentDescription = "Download the on-device model" },
+                    ) {
+                        Text("Download model", color = Color.White, fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold)
+                    }
+                }
             }
         }
     }
