@@ -10,6 +10,7 @@ exists.
 from __future__ import annotations
 
 import pytest
+import hashlib
 
 
 def _register(client) -> dict:
@@ -38,6 +39,39 @@ def _override_google(app, sub: str, email: str | None = "person@example.com"):
         return social_auth.IdentityClaims(sub=sub, email=email)
 
     app.dependency_overrides[social_auth.get_google_verifier] = lambda: fake_verifier
+
+
+def test_native_apple_nonce_is_single_request_bound(client):
+    from backend.server import app
+    import backend.social_auth as social_auth
+
+    device = _register(client)
+    raw_nonce = "one-time-native-nonce"
+
+    async def verifier(_token: str):
+        return social_auth.IdentityClaims(
+            sub="apple-nonce-user",
+            email="nonce@example.com",
+            nonce=hashlib.sha256(raw_nonce.encode()).hexdigest(),
+        )
+
+    app.dependency_overrides[social_auth.get_apple_verifier] = lambda: verifier
+    headers = _auth_headers(device["api_token"])
+    good = client.post(
+        "/v1/auth/apple",
+        json={"identity_token": "signed", "nonce": raw_nonce},
+        headers=headers,
+    )
+    assert good.status_code == 200, good.text
+    account_id = good.json()["account_id"]
+
+    bad = client.post(
+        "/v1/auth/apple",
+        json={"identity_token": "signed", "nonce": "attacker-replay"},
+        headers=headers,
+    )
+    assert bad.status_code == 401
+    assert client.get("/v1/me", headers=headers).json()["account_id"] == account_id
 
 
 def test_apple_signin_creates_account_and_links_device(client):

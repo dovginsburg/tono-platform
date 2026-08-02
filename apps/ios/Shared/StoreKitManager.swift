@@ -35,7 +35,22 @@ public final class StoreKitManager: ObservableObject {
     @Published public private(set) var isInFreeTrial: Bool = false
     @Published public private(set) var eligibleFreeTrialProductIDs: Set<String> = []
 
+    /// build 122: fail-closed Apple purchase capability resolved from the live
+    /// backend readiness contract (`apple_configured` via `/health`). Defaults to
+    /// `.unknown` so nothing can initiate a charge before a probe confirms
+    /// `.ready`. Build 121 was quarantined because the app could reach
+    /// `product.purchase(...)` while the live backend reported
+    /// `apple_configured: false`; this is the state the initiation gate reads.
+    @Published public private(set) var applePurchaseCapability: ApplePurchaseCapability = .unknown
+
     private var updatesTask: Task<Void, Never>?
+
+    /// Seam for deterministic tests. Production resolves the live `/health`
+    /// contract; a test injects a fixed verdict for the false / unavailable /
+    /// malformed / verified-true states with no network and no secrets.
+    public var applePurchaseCapabilityProvider: () async -> ApplePurchaseCapability = {
+        await TonoBackend.shared.fetchApplePurchaseCapability()
+    }
 
     private init() {}
 
@@ -47,9 +62,20 @@ public final class StoreKitManager: ObservableObject {
     /// recoverable after a reinstall, so binding a purchase to it risks silent
     /// entitlement loss. Purchase initiation is blocked until the user signs in.
     public var isIdentifiedAccount: Bool {
-        guard let email = SharedKeychain.get(KeychainKeys.signedInEmail),
-              !email.isEmpty else { return false }
-        return SharedKeychain.get(KeychainKeys.accountID) != nil
+        guard let accountID = SharedKeychain.get(KeychainKeys.accountID),
+              !accountID.isEmpty else { return false }
+        if SharedKeychain.get(KeychainKeys.hasRecoveryIdentity) == "true" {
+            return true
+        }
+
+        // Upgrade migration: before hasRecoveryIdentity existed, signedInEmail
+        // was written only after the backend confirmed email_verified. Preserve
+        // that verified state for existing installs, then persist the new flag.
+        guard let legacyVerifiedEmail = SharedKeychain.get(KeychainKeys.signedInEmail),
+              !legacyVerifiedEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return false }
+        SharedKeychain.set("true", forKey: KeychainKeys.hasRecoveryIdentity)
+        return true
     }
 
     /// Resets all in-memory entitlement state to anonymous/non-Pro.
@@ -75,6 +101,41 @@ public final class StoreKitManager: ObservableObject {
         Task { await loadProductsAndEntitlements() }
     }
 
+    // MARK: - Purchase-capability gate (build 122)
+
+    /// Passively resolves the live Apple purchase capability and publishes it to
+    /// `applePurchaseCapability`, WITHOUT setting `purchaseError`. The paywall
+    /// calls this on appear so it can disable the buy button before any tap.
+    public func refreshApplePurchaseCapability() async {
+        applePurchaseCapability = await applePurchaseCapabilityProvider()
+    }
+
+    /// The fail-closed initiation gate. Resolves the live capability, publishes
+    /// it, and — on any non-`.ready` verdict — sets `purchaseError` with honest,
+    /// action-appropriate copy and returns the verdict so the caller aborts
+    /// BEFORE `product.purchase(...)`. This is the single authority that stops a
+    /// charge when the backend cannot honor it; the UI disable is only
+    /// defense-in-depth. A later `/v1/me` reconciliation cannot undo a charge,
+    /// so it is deliberately NOT relied on here.
+    @discardableResult
+    public func preflightApplePurchaseCapability() async -> ApplePurchaseCapability {
+        let verdict = await applePurchaseCapabilityProvider()
+        applePurchaseCapability = verdict
+        switch verdict {
+        case .ready:
+            break
+        case .notConfigured, .malformed:
+            purchaseError = ConsumerErrorCopy.message(
+                for: StoreError.appleNotConfigured, action: .purchase
+            )
+        case .unavailable, .unknown:
+            purchaseError = ConsumerErrorCopy.message(
+                for: StoreError.purchaseCapabilityUnavailable, action: .purchase
+            )
+        }
+        return verdict
+    }
+
     // MARK: - Public API
 
     public func purchase(_ product: Product) async {
@@ -83,8 +144,22 @@ public final class StoreKitManager: ObservableObject {
         // (PaywallView) must gate the buy tap on isIdentifiedAccount and route
         // to sign-in first; this guard is a belt-and-suspenders fail-loud check.
         guard isIdentifiedAccount else {
-            purchaseError = StoreError.needsIdentifiedAccount.errorDescription
+            purchaseError = ConsumerErrorCopy.message(
+                for: StoreError.needsIdentifiedAccount, action: .purchase
+            )
             return
+        }
+        // build 122: fail-closed purchase-INITIATION gate. Build 121 was
+        // quarantined because the app could reach `product.purchase(...)` while
+        // the LIVE backend reported `apple_configured: false` — Apple took the
+        // money and the backend could not honor it. Capability is confirmed at
+        // initiation: the charge never starts unless the readiness contract is a
+        // well-formed, explicit `true`. Every other verdict (false / unreachable
+        // / malformed / not-yet-known) refuses here, with no charge. Post-payment
+        // entitlement reconciliation cannot refund a charge and is not a
+        // substitute for this guard.
+        guard await preflightApplePurchaseCapability().allowsPurchaseInitiation else {
+            return  // purchaseError set by the preflight; no charge initiated.
         }
         isLoading = true
         purchaseError = nil
@@ -116,7 +191,9 @@ public final class StoreKitManager: ObservableObject {
                 purchaseError = "Purchase did not complete. Please try again."
             }
         } catch {
-            purchaseError = error.localizedDescription
+            // Build 112: a purchase failure carried the transport's own text
+            // straight onto the paywall. The user gets the action instead.
+            purchaseError = ConsumerErrorCopy.message(for: error, action: .purchase)
         }
         isLoading = false
     }
@@ -128,7 +205,7 @@ public final class StoreKitManager: ObservableObject {
             try await AppStore.sync()
             await updateProState()
         } catch {
-            purchaseError = "Restore failed: \(error.localizedDescription)"
+            purchaseError = ConsumerErrorCopy.message(for: error, action: .restore)
         }
         isLoading = false
     }
@@ -250,7 +327,7 @@ public final class StoreKitManager: ObservableObject {
                     await updateProState()
                     await tx.finish()
                 } catch {
-                    purchaseError = "Purchase received, but server verification failed. Try Restore purchases."
+                    purchaseError = "Purchase received, but we couldn't confirm it yet. Try Restore purchases."
                 }
             }
         }
@@ -287,6 +364,16 @@ public final class StoreKitManager: ObservableObject {
         /// server account UUID that is recoverable after reinstall, which requires
         /// a prior email sign-in. Route the user to sign in before retrying.
         case needsIdentifiedAccount
+        /// build 122: purchase blocked at INITIATION because the live backend is
+        /// not configured to verify/honor Apple StoreKit transactions
+        /// (`apple_configured` is false, or the readiness contract was malformed).
+        /// Starting the charge anyway is exactly what quarantined Build 121: Apple
+        /// takes the money and the backend cannot grant Pro. Fail closed.
+        case appleNotConfigured
+        /// build 122: purchase blocked at INITIATION because the backend readiness
+        /// contract could not be reached, so Apple-configuration could not be
+        /// confirmed. Fail closed rather than charging on an unknown.
+        case purchaseCapabilityUnavailable
         public var errorDescription: String? {
             switch self {
             case .failedVerification:
@@ -295,6 +382,10 @@ public final class StoreKitManager: ObservableObject {
                 return "Tono must finish account setup before purchasing. Please reopen the app and try again."
             case .needsIdentifiedAccount:
                 return "Sign in with your email before subscribing so your account is recoverable if you reinstall or switch devices."
+            case .appleNotConfigured:
+                return "Subscriptions aren't available right now. No charge was made. Please try again later."
+            case .purchaseCapabilityUnavailable:
+                return "Couldn't confirm subscriptions are available right now. No charge was made. Check your connection and try again."
             }
         }
     }

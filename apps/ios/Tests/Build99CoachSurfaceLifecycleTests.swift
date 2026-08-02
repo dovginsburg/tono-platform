@@ -449,14 +449,23 @@ final class Build99CoachSurfaceLifecycleTests: XCTestCase {
         XCTAssertEqual(Self.surfaceIdentifiers(in: controller), [Const.error])
     }
 
-    // MARK: - preserved: Apple routes stay off
+    // MARK: - Build 115: the Apple route is now the LIVE route
 
-    /// This change must not surface either staged Apple route. `FeatureFlags`
-    /// pulls in SharedStore / TonoBackend and is deliberately outside the
-    /// unit-test binary, so the default-OFF contract is pinned at the source
-    /// — the same way this suite pins other Shared/ contracts. The behavioral
-    /// assertion lives in `Shared/OnDeviceAppleRewriteTests.swift`.
-    func testAppleRewriteFlagsRemainOffByDefault() throws {
+    /// Build 99 pinned "neither staged Apple route is reachable from the coach
+    /// surface", and that was the right contract while the on-device path was
+    /// dark. Build 115 is the change that turns it on, because the dark path was
+    /// the defect: with no connection the keyboard produced no rewrite at all.
+    ///
+    /// What replaces it is the contract that now matters — the two flags mean
+    /// DIFFERENT things and only one of them may default open:
+    ///
+    ///   * `appleIntelligenceRewriteEnabled` is a REMOTE KILL SWITCH and defaults
+    ///     ON, because on-device rewriting is the default behaviour wherever the
+    ///     model is actually available. The person's own opt-out is not this flag
+    ///     — see `LocalRewritePreferenceStore`.
+    ///   * `appleIntelligenceAllowsSaferRoute` is the Safer corpus-quality gate
+    ///     and still defaults OFF. Fail-closed, exactly as before.
+    func testTheSaferCorpusGateStillDefaultsClosedAndTheKillSwitchDoesNot() throws {
         let flags = try Self.source("Shared/FeatureFlags.swift")
         let defaultOffBranch = try XCTUnwrap(
             flags.components(separatedBy: "public var defaultValue: Bool {").last?
@@ -464,19 +473,27 @@ final class Build99CoachSurfaceLifecycleTests: XCTestCase {
             "FeatureFlag.defaultValue must keep an explicit default-OFF branch"
         )
         XCTAssertTrue(
-            defaultOffBranch.contains("appleIntelligenceRewriteEnabled"),
-            "the on-device Apple rewrite kill switch must stay OFF by default"
-        )
-        XCTAssertTrue(
             defaultOffBranch.contains("appleIntelligenceAllowsSaferRoute"),
             "the Safer-axis corpus gate must stay OFF by default"
         )
-
-        // The coach surface lifecycle must not have acquired an Apple route.
-        let controller = try Self.source("KeyboardExtension/KeyboardViewController.swift")
         XCTAssertFalse(
-            controller.contains("AppleRewriteBridge") || controller.contains("appleIntelligence"),
-            "the keyboard's coach path must not reach either staged Apple route"
+            defaultOffBranch.contains("appleIntelligenceRewriteEnabled"),
+            "the on-device kill switch defaults ON in Build 115 — it is not the user's switch"
+        )
+    }
+
+    /// And the coach path now DOES reach it. This is the exact inversion of the
+    /// Build 99 assertion, kept as a test rather than deleted so the change is
+    /// visible in the suite rather than silent.
+    func testTheCoachPathNowReachesTheOnDeviceRoute() throws {
+        let controller = try Self.source("KeyboardExtension/KeyboardViewController.swift")
+        XCTAssertTrue(
+            controller.contains("AppleRewriteBridge"),
+            "the live keyboard must reach the on-device engine — its absence was the defect"
+        )
+        XCTAssertTrue(
+            controller.contains("appleIntelligenceAllowsSaferRoute"),
+            "the Safer corpus gate must still be consulted on the live path"
         )
     }
 

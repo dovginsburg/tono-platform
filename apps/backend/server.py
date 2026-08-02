@@ -27,19 +27,20 @@ Two API surfaces share one FastAPI app:
 The system prompt + JSON schema mirror Shared/ToneEngine.swift on the
 iOS side. Keep them in sync if you edit one, edit the other.
 
-Run with ``uvicorn server:app --port 8765`` for local experimentation.
-In production, ``Dockerfile`` + ``railway.toml`` / ``fly.toml``.
+Run with ``uvicorn backend.server:app --port 8765`` from ``apps/`` for local
+experimentation — the module uses package-relative imports, so it cannot be run
+as a bare script. In production, ``Dockerfile`` (whose CMD is exactly
+``uvicorn backend.server:app``) + ``railway.toml`` / ``fly.toml``.
 """
 
 from __future__ import annotations
 
-import collections
+import contextlib
 import hashlib
 import hmac
 import json
 import logging
 import os
-import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -51,7 +52,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import app_store, google_play, passkeys, payments, rate_limit, slack, social_auth, supabase_auth
+from . import (
+    app_store,
+    email_auth,
+    email_identity,
+    google_play,
+    passkeys,
+    payments,
+    rate_limit,
+    slack,
+    social_auth,
+    supabase_auth,
+)
+from . import store as store_module
 from .app_store import compute_me_fields
 from .analyze import (
     AnalyzeRequest,
@@ -71,11 +84,21 @@ from .analyze import (
     VariantBlockedReason,
     VariantRequest,
     VariantResponse,
+    aclose_provider_client,
     invoke_single_variant,
     preflight_variant,
     select_model_for_variant,
 )
 from .auth import CurrentUser, OptionalCurrentUser, StoreDep, current_user
+# Build 117 — Read the Ask. Its own module because its response contract is a
+# different product from a rewrite, not a variation on one.
+from .read_ask import (
+    READ_ASK_MODE,
+    ReadAskContractError,
+    ReadAskRequest,
+    ReadAskResponse,
+    invoke_read_ask,
+)
 from .store import AccountConflictError, DeviceRegistrationProofError, Store, User, get_store
 
 # Locales the LLM providers can respond in. Defines the BCP-47 code → display
@@ -134,8 +157,11 @@ def _build_provenance() -> dict[str, str]:
 
 _DRAFT_MAX_CHARS = int(os.environ.get("DRAFT_MAX_CHARS", "2000"))
 _IP_RATE_LIMIT = int(os.environ.get("IP_RATE_LIMIT_PER_MIN", "20"))
-_ip_windows: dict[str, collections.deque] = {}
-_ip_lock = threading.Lock()
+
+# Scope name for the rewrite routes' per-IP budget inside the shared limiter.
+# Distinct from "register"/"auth"/"coupon" so a flood on one endpoint family
+# cannot eat another's budget.
+_IP_RATE_SCOPE = "analyze"
 
 
 def _get_client_ip(request: Request) -> str:
@@ -146,21 +172,60 @@ def _get_client_ip(request: Request) -> str:
 
 
 def _check_ip_rate(ip: str) -> bool:
-    """Sliding-window rate limiter. Returns False if the IP is over limit."""
-    now = time.time()
-    with _ip_lock:
-        dq = _ip_windows.setdefault(ip, collections.deque())
-        while dq and now - dq[0] > 60:
-            dq.popleft()
-        if len(dq) >= _IP_RATE_LIMIT:
-            return False
-        dq.append(now)
-        return True
+    """Per-IP sliding-window cap for the rewrite routes. False = over limit.
+
+    Delegates to ``rate_limit.check_ip_rate`` — the SAME limiter ``/v1/register``
+    already uses — rather than keeping a second, parallel implementation here.
+    The local copy this replaced held its windows in a module-level dict that was
+    never evicted, so every distinct key it ever saw was retained for the life of
+    the process. ``_get_client_ip`` derives that key from the client-supplied
+    ``X-Forwarded-For`` header, so a caller rotating that header grew the dict
+    without bound (and, separately, side-stepped the cap — see the deployment
+    note in docs/verification about terminating-proxy trust).
+
+    Limit and window are unchanged: ``IP_RATE_LIMIT_PER_MIN`` (default 20) over
+    60 seconds. ``_IP_RATE_LIMIT`` is read at call time so tests can monkeypatch
+    it. One deliberate semantic delta: the shared limiter records the attempt
+    even when it is rejected, so sustained flooding keeps the window extended
+    instead of letting an attacker pace exactly at the cap — this is already how
+    ``/v1/register`` behaves.
+    """
+    allowed, _ = rate_limit.check_ip_rate(_IP_RATE_SCOPE, ip, _IP_RATE_LIMIT, 60.0)
+    return allowed
 
 
-def _analysis_cache_key(text: str, axes: list[str], voice: str | None, locale: str) -> str:
-    raw = f"{text}|{','.join(sorted(axes))}|{voice or ''}|{locale}"
-    return hashlib.sha256(raw.encode()).hexdigest()
+def _analysis_cache_key(internal: AnalyzeRequest, *, locale: str, provider: str) -> str:
+    """Cache identity for one ``/api/analyze`` response.
+
+    ``response_cache`` is a GLOBAL, account-agnostic table keyed ONLY by this
+    digest (see ``store.get_cached_response``), so the key must cover every
+    input that can shape the provider's output. Any prompt-shaping field left
+    out of the key lets one caller's cached response be served verbatim to a
+    DIFFERENT account.
+
+    That is not hypothetical: ``thread_context`` (the other party's message),
+    ``recipient_hint``, and ``context_hints`` (facts inferred from the caller's
+    private history) all reach the provider through ``build_system_prompt`` /
+    ``build_user_prompt``. A key built from only (text, axes, voice, locale)
+    therefore let account B receive a rewrite shaped by account A's private
+    thread and inferred personal patterns.
+
+    The key is derived from the canonical ``AnalyzeRequest`` that is actually
+    handed to the provider, so a field added to that model is covered
+    automatically instead of silently widening the leak again. ``locale`` and
+    ``provider`` are wire-level inputs that are not carried on the internal
+    model, so they are mixed in explicitly under reserved keys.
+
+    Two requests share an entry only when their ENTIRE provider input is
+    byte-identical — so the requester already possesses every input the cached
+    answer was derived from, and no private data can cross accounts.
+    """
+    payload: dict[str, Any] = internal.model_dump(mode="json")
+    # Reserved keys — the leading NULs cannot collide with a pydantic field name.
+    payload["\x00locale"] = locale
+    payload["\x00provider"] = provider
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -320,16 +385,31 @@ async def _lifespan(_: "FastAPI"):
         logger.exception("google-play acknowledge reconcile failed on startup; will retry")
 
     logger.info(
-        "tono backend ready: provider=%s stripe=%s slack=%s apple=%s google=%s",
+        # Build 114 adds `email=`. A project missing its auth configuration
+        # fails closed at 503, which a person meets as "email sign-in isn't
+        # available" — truthful, but the first place anyone would notice was a
+        # real signup. Saying it at boot makes the misconfiguration visible
+        # before it costs a registration. It logs the WORD "configured", never
+        # the key.
+        "tono backend ready: provider=%s stripe=%s slack=%s apple=%s google=%s email=%s",
         os.environ.get("TONO_PROVIDER", "mock"),
         "configured" if os.environ.get("STRIPE_SECRET_KEY") else "off",
         "configured" if os.environ.get("SLACK_CLIENT_ID") else "off",
         "configured" if os.environ.get("TONO_APPLE_ROOT_CA_PEM") else "off",
         "configured" if os.environ.get("TONO_GOOGLE_SERVICE_ACCOUNT_JSON") else "off",
+        "configured" if email_auth.config_is_valid() else "off",
     )
     try:
         yield
     finally:
+        # Drain the pooled provider keep-alive connections on a graceful stop
+        # so shutdown closes them instead of dropping sockets. Best-effort:
+        # a transport hiccup here must never mask a real shutdown error or
+        # prevent the store from being closed.
+        try:
+            await aclose_provider_client()
+        except Exception:
+            logger.exception("provider client close failed during shutdown")
         get_store().close()
 
 
@@ -429,7 +509,7 @@ _PRIVACY_HTML = """<!DOCTYPE html>
 </ul>
 
 <h2>How your data is used</h2>
-<p>Device IDs are used solely to associate your subscription entitlement with your device. Aggregate usage counts may be used to improve the product. No data is sold to or shared with third parties for advertising.</p>
+<p>Device IDs identify an installation session only. Accounts, history, and subscriptions are owned by a separate server-issued account ID and can follow a verified sign-in across devices. Aggregate usage counts may be used to improve the product. No data is sold to or shared with third parties for advertising.</p>
 
 <h2>How Tono learns and improves</h2>
 <p>With your permission ("Help improve Tono" toggle in Settings, on by default), Tono records content-free outcome signals: which rewrite style you chose, whether you used the suggestion, and a rough message-length bucket (short / medium / long — never the actual length or any words). <strong>Your messages, your rewrites, and who you're messaging are never collected.</strong> These anonymous outcome signals accumulate across users and help us improve axis ordering and rewrite quality for everyone. You can opt out at any time in Settings → Preferences → Help improve Tono; opting out immediately stops any signal from leaving your device and does not affect your personal style memory.</p>
@@ -443,13 +523,13 @@ _PRIVACY_HTML = """<!DOCTYPE html>
 </ul>
 
 <h2>Data retention</h2>
-<p>Device records (ID, token, plan) are retained as long as you use the app. You can request deletion by emailing us; we will remove your record within 30 days.</p>
+<p>Account and device-session records are retained while you use Tono. You can delete your account from Settings; contact privacy@tonoit.com if you cannot access the app.</p>
 
 <h2>Children</h2>
 <p>Tono is not directed at children under 13. We do not knowingly collect data from anyone under 13.</p>
 
 <h2>Contact</h2>
-<p>Questions? <a href="mailto:privacy@tonocoach.com">privacy@tonocoach.com</a></p>
+<p>Questions? <a href="mailto:privacy@tonoit.com">privacy@tonoit.com</a></p>
 
 <footer>Tono / Social Tone Coach</footer>
 </body>
@@ -640,9 +720,15 @@ class MeResponse(BaseModel):
     daily_limit: int  # -1 = unlimited
     subscription_status: Optional[str]
     subscription_renews_at: Optional[str]
+    coupon_pro_expires_at: Optional[str]
     # Required non-null after migration — the canonical entitlement principal
     # (contract §1). A null here is a contract violation.
     account_id: str
+    # Build 114 — account-path projection. Optional so a legacy/anonymous
+    # device is described truthfully rather than with a fabricated address.
+    email: Optional[str] = None
+    email_verified_at: Optional[str] = None
+    lifecycle_state: str = "anonymous"
 
 
 @app.get("/v1/me", response_model=MeResponse)
@@ -668,6 +754,9 @@ def me(user: CurrentUser, store: StoreDep) -> MeResponse:
 
 class AppleSignInRequest(BaseModel):
     identity_token: str
+    # Native AuthenticationServices sends the unhashed one-time nonce; Apple
+    # signs its SHA-256 value into the ID token. It is never an account key.
+    nonce: Optional[str] = None
     # False (default): plain sign-in — resolve/create the account for this
     # identity and point the calling device at it, switching away from
     # whatever account the device was previously linked to if any. This is
@@ -694,13 +783,54 @@ class SignInResponse(BaseModel):
 
 
 def _resolve_provider_signin(
-    store: Store, user: User, provider: str, sub: str, email: Optional[str], link: bool
+    store: Store,
+    user: User,
+    provider: str,
+    sub: str,
+    email: Optional[str],
+    link: bool,
+    *,
+    email_verified: bool = False,
 ):
-    """Shared by /v1/auth/apple and /v1/auth/google. `link=False` (plain
-    sign-in) always succeeds and switches the calling device to whichever
-    account owns this identity — creating one on first use. `link=True`
-    requires the device to already be signed in and refuses (409) to
-    attach an identity that already belongs to someone else's account."""
+    """Shared by /v1/auth/apple, /v1/auth/google, /v1/auth/web and the email
+    login. `link=False` (plain sign-in) always succeeds and switches the
+    calling device to whichever account owns this identity — creating one on
+    first use. `link=True` requires the device to already be signed in and
+    refuses (409) to attach an identity that already belongs to someone else's
+    account.
+
+    Resolution order for a plain sign-in, most specific first:
+
+      1. an account that ALREADY owns this provider subject;
+      2. the account that RESERVED this subject when it started an email
+         registration, before anyone had proved the address;
+      3. an existing canonical account that owns this same VERIFIED email but
+         not yet this kind of provider identity (account continuity);
+      4. the calling device's own anonymous account, upgraded in place;
+      5. a brand-new account.
+
+    Step 2 is Build 114's correction. The verification click arrives in a
+    browser with no bearer and no session, so steps 4 and 5 were the only ones
+    reachable there — and step 5 minted a second canonical account, orphaning
+    the one the person had been using. It is placed ABOVE step 4 deliberately:
+    the browser that opens the link has an anonymous account of its own (it was
+    just minted to carry the request), and that throwaway must never outrank the
+    account that actually started the registration.
+
+    Step 3 is the account-continuity bridge. The same human signs in with Google
+    on iOS (``google:<google-sub>``) and later on the website, where the browser
+    authenticates through Supabase (``supabase:<supabase-uid>`` — a different
+    subject). Steps 1–2 can't see across that, so the person split into two
+    canonical accounts with divided history and entitlements. When the provider
+    has PROVEN the address on this sign-in (``email_verified``), we converge onto
+    the one existing account that owns that verified address, attaching this new
+    identity rather than minting a duplicate. It sits BELOW the pending-
+    registration claim (that account explicitly reserved this exact subject) and
+    ABOVE the anonymous-device upgrade (a proven cross-surface identity outranks
+    a throwaway local account). It never fires on an unverified address, and
+    ``find_verified_email_account`` refuses an ambiguous one — so it can only ever
+    ATTACH to a single unambiguous account, never fuse two populated ones.
+    """
     try:
         if link:
             if not user.account_id:
@@ -712,10 +842,34 @@ def _resolve_provider_signin(
             )
         else:
             existing = store.get_account_by_provider(provider, sub)
+            claimant = (
+                None if existing is not None
+                else store.claim_pending_registration_account(sub)
+            )
+            # Only a provider-proven address may drive convergence — the contract
+            # forbids merging accounts by an unverified email alone.
+            verified_email_match = (
+                store.find_verified_email_account(provider, sub, email)
+                if (existing is None and claimant is None and email_verified and email)
+                else None
+            )
             if existing is not None:
                 # Plain sign-in: switch to (or reuse) the account that already
                 # owns this identity — never a conflict (existing behavior).
                 account = existing
+            elif claimant is not None:
+                # The account that started this registration gets the identity
+                # it reserved, whichever surface finally proved the address.
+                account = store.upsert_account_by_provider(
+                    provider, sub, email, link_into_account_id=claimant
+                )
+            elif verified_email_match is not None:
+                # Same person, second surface: attach this identity to the
+                # existing account that already owns this verified address, so
+                # history and entitlements stay on one canonical account.
+                account = store.upsert_account_by_provider(
+                    provider, sub, email, link_into_account_id=verified_email_match
+                )
             elif user.account is not None and not user.account.is_identified:
                 # Brand-new identity while on an anonymous auto-account: upgrade
                 # that account IN PLACE so its UUID, history, and entitlement
@@ -741,8 +895,17 @@ async def auth_apple(
     verifier: Annotated[social_auth.IdentityVerifier, Depends(social_auth.get_apple_verifier)],
 ) -> SignInResponse:
     claims = await verifier(body.identity_token)
-    account = _resolve_provider_signin(store, user, "apple", claims.sub, claims.email, body.link)
-    return SignInResponse(account_id=account.id, plan=account.plan, is_pro=account.is_pro, email=account.email)
+    if body.nonce is not None:
+        expected_nonce = hashlib.sha256(body.nonce.encode("utf-8")).hexdigest()
+        if not claims.nonce or not hmac.compare_digest(claims.nonce, expected_nonce):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid Apple sign-in nonce")
+    account = _resolve_provider_signin(
+        store, user, "apple", claims.sub, claims.email, body.link,
+        email_verified=claims.email_verified,
+    )
+    refreshed = store.get_by_device(user.device_id) or user
+    projection = compute_me_fields(refreshed, store)
+    return SignInResponse(account_id=account.id, plan=projection["plan"], is_pro=projection["is_pro"], email=account.email)
 
 
 @app.post("/v1/auth/google", response_model=SignInResponse)
@@ -753,8 +916,13 @@ async def auth_google(
     verifier: Annotated[social_auth.IdentityVerifier, Depends(social_auth.get_google_verifier)],
 ) -> SignInResponse:
     claims = await verifier(body.id_token)
-    account = _resolve_provider_signin(store, user, "google", claims.sub, claims.email, body.link)
-    return SignInResponse(account_id=account.id, plan=account.plan, is_pro=account.is_pro, email=account.email)
+    account = _resolve_provider_signin(
+        store, user, "google", claims.sub, claims.email, body.link,
+        email_verified=claims.email_verified,
+    )
+    refreshed = store.get_by_device(user.device_id) or user
+    projection = compute_me_fields(refreshed, store)
+    return SignInResponse(account_id=account.id, plan=projection["plan"], is_pro=projection["is_pro"], email=account.email)
 
 
 # ---------------------------------------------------------------------------
@@ -771,6 +939,10 @@ async def auth_google(
 
 class WebSignInRequest(BaseModel):
     access_token: str
+    # Build 114 — so a web sign-in is recorded on the same registration ledger
+    # the native surfaces write to. Optional: an older web build sends neither
+    # and is described as `web`/no-build rather than rejected.
+    app_version: Optional[str] = None
 
 
 class WebSignInResponse(BaseModel):
@@ -815,16 +987,970 @@ async def auth_web(
     # Reuse the exact provider-linking primitive Apple/Google use: same-subject
     # convergence, anonymous-account upgrade-in-place, and 409-on-collision all
     # come for free (link=False = plain sign-in).
-    account = _resolve_provider_signin(store, user, "supabase", claims.sub, email, link=False)
+    account = _resolve_provider_signin(
+        store, user, "supabase", claims.sub, email, link=False,
+        email_verified=claims.email_verified,
+    )
+
+    # Build 114 — one registration ledger for every surface. A person who signs
+    # up on the website is a registration Tono must be able to count and audit,
+    # exactly like an iOS or Android one; before this, only the native email
+    # path wrote a row, so the web population was invisible. Records the fact
+    # the provider proved (a confirmed address) and never the token that carried
+    # it. `record_registration_event` is monotonic, so a returning browser adds
+    # a sign-in event without ever walking the state back.
+    if email:
+        with contextlib.suppress(AccountConflictError):
+            store.mark_email_verified(
+                account_id=account.id,
+                email=email,
+                source_surface=email_identity.SURFACE_WEB,
+                app_version=body.app_version,
+            )
+    store.record_registration_event(
+        account_id=account.id,
+        event_type=email_identity.EVENT_SIGN_IN,
+        source_surface=email_identity.SURFACE_WEB,
+        app_version=body.app_version,
+    )
+
+    # Project the entitlement through the SAME authority `/v1/me` and the email
+    # login use, by re-reading the device now that it has been re-linked.
+    #
+    # `account.is_pro` alone is not the entitlement answer: it reads
+    # plan/subscription/coupon, which is the Stripe-shaped half. An App Store or
+    # Play subscription attaches to the canonical account as a provider
+    # ENTITLEMENT GRANT, and only `User.is_pro` (via `_attach_account`'s
+    # `provider_entitlement_active`) accounts for it. Returning the raw account
+    # projection here told every mobile subscriber who signed in on the website
+    # `is_pro: false` — the same defect the email login already documents and
+    # fixes, left in place on its sibling.
+    refreshed = store.get_by_device(user.device_id) or user
+    projection = compute_me_fields(refreshed, store)
 
     return WebSignInResponse(
         device_id=user.device_id,
         api_token=user.api_token,
         device_credential=device_credential,
         account_id=account.id,
-        plan=account.plan,
-        is_pro=account.is_pro,
+        plan=projection["plan"],
+        is_pro=projection["is_pro"],
         email=account.email,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Direct Apple web sign-in. The website OWNS the Apple OAuth boundary (start +
+# callback under Tono's own Services ID, `tonoit.com`) instead of routing Apple
+# through Supabase. Its callback exchanges the code with Apple, fully verifies
+# the identity token, and forwards it here. We INDEPENDENTLY re-verify it (web
+# Services ID audience) and converge the Apple `sub` onto the ONE canonical
+# account — the SAME `apple_sub` the native iOS app resolves — so a person's
+# native and web Apple identities are one account. Like /v1/auth/web (and unlike
+# /v1/auth/apple), the caller need not already hold a device bearer: a fresh
+# browser has none, so we register a per-browser device and return its bearer.
+# ---------------------------------------------------------------------------
+
+
+class AppleWebSignInRequest(BaseModel):
+    identity_token: str
+    # Apple echoes the web-flow nonce VERBATIM (the native flow sends a SHA-256
+    # of it instead). Optional defense-in-depth: the website already verified the
+    # nonce against its own HttpOnly transaction cookie before calling here.
+    nonce: Optional[str] = None
+    # So a web Apple sign-in is recorded on the same registration ledger the
+    # native surfaces write to. Optional; an older build sends none.
+    app_version: Optional[str] = None
+
+
+@app.post("/v1/auth/apple/web", response_model=WebSignInResponse)
+async def auth_apple_web(
+    body: AppleWebSignInRequest,
+    user: OptionalCurrentUser,
+    store: StoreDep,
+    verifier: Annotated[
+        social_auth.IdentityVerifier, Depends(social_auth.get_apple_web_verifier)
+    ],
+) -> WebSignInResponse:
+    # Fail closed: an invalid/expired/wrong-audience token raises 401 (or 503 if
+    # the web Services ID audience is unconfigured) inside the verifier before we
+    # touch any account state.
+    claims = await verifier(body.identity_token)
+
+    # Defense in depth: re-check the raw nonce against the token's claim when the
+    # website forwards it (web nonce is verbatim, NOT hashed like native).
+    if body.nonce is not None:
+        if not claims.nonce or not hmac.compare_digest(claims.nonce, body.nonce):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid Apple sign-in nonce")
+
+    # NEVER persist/merge on an unverified email — resolution keys on the
+    # immutable Apple ``sub``; an unverified address never drives convergence.
+    email = claims.email if claims.email_verified else None
+
+    # A fresh browser carries no device bearer — mint a random per-browser device
+    # with a durable credential. A returning browser reuses its device so its
+    # anonymous account upgrades in place instead of orphaning.
+    device_credential: Optional[str] = None
+    if user is None:
+        registration = store.register_device()
+        user = registration.user
+        device_credential = registration.device_credential
+
+    # Same provider-linking primitive Apple(native)/Google/web/email use, with
+    # provider="apple": same-subject convergence with the NATIVE Apple identity,
+    # pending-registration claim redemption, verified-email continuity, anonymous
+    # upgrade-in-place, and 409-on-collision all come for free (link=False).
+    account = _resolve_provider_signin(
+        store, user, "apple", claims.sub, email, link=False,
+        email_verified=claims.email_verified,
+    )
+
+    # One registration ledger for every surface (mirrors /v1/auth/web): records
+    # the fact the provider proved (a confirmed address), never the token.
+    if email:
+        with contextlib.suppress(AccountConflictError):
+            store.mark_email_verified(
+                account_id=account.id,
+                email=email,
+                source_surface=email_identity.SURFACE_WEB,
+                app_version=body.app_version,
+            )
+    store.record_registration_event(
+        account_id=account.id,
+        event_type=email_identity.EVENT_SIGN_IN,
+        source_surface=email_identity.SURFACE_WEB,
+        app_version=body.app_version,
+    )
+
+    # Project entitlement through the SAME authority /v1/me uses, so an App
+    # Store / Play subscriber who signs in on the website reads is_pro correctly.
+    refreshed = store.get_by_device(user.device_id) or user
+    projection = compute_me_fields(refreshed, store)
+
+    return WebSignInResponse(
+        device_id=user.device_id,
+        api_token=user.api_token,
+        device_credential=device_credential,
+        account_id=account.id,
+        plan=projection["plan"],
+        is_pro=projection["is_pro"],
+        email=account.email,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Build 114 — email registration, verification, login, reset, logout.
+#
+# One architecture, not a second login silo. Supabase keeps owning auth.users,
+# the password material and the verification/reset mail (see email_auth.py);
+# this server keeps owning the canonical account. Every endpoint below ends in
+# the SAME `_resolve_provider_signin` primitive that Apple/Google/web sign-in
+# uses, so an email login converges on the identical canonical person and the
+# identical entitlement projection. Nothing here writes a plan, a subscription
+# column, or a grant: verification proves an address, never a purchase.
+#
+# Anti-enumeration: register, resend and reset ALWAYS answer with the same
+# accepted shape for a known and an unknown address. The only ways these
+# endpoints answer differently are ones that carry no information about whether
+# an account exists: being throttled (429) and the provider being down (503),
+# both already observable from outside, and a refusal of the submitted string
+# itself (400 — malformed address, password the provider calls too weak), which
+# describes what the person just typed and nothing else.
+# ---------------------------------------------------------------------------
+
+
+# One bounded budget per email-auth family, so a flood against `login` cannot
+# starve a legitimate `resend`, and a per-address lockout bounds brute force
+# independently of how many IPs the attacker rotates through.
+_EMAIL_AUTH_IP_LIMIT = rate_limit.RATE_SCOPES["auth"]
+_EMAIL_AUTH_KEY_LIMIT = rate_limit.OTP_LOCKOUT_LIMIT
+_EMAIL_AUTH_KEY_WINDOW = rate_limit.OTP_LOCKOUT_WINDOW
+
+
+def _email_auth_rate_gate(request: Request, scope: str, normalized_email: Optional[str]) -> None:
+    """Bound attempts per IP and per address. Raises 429 — which the clients
+    render as wait-and-retry, never as a credential failure and never as a
+    paywall (Build 113's protected property)."""
+    ip = _get_client_ip(request)
+    allowed, _ = rate_limit.check_ip_rate(f"email_{scope}", ip, _EMAIL_AUTH_IP_LIMIT)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="too many attempts — try again in a minute",
+            headers={"Retry-After": "60"},
+        )
+    if normalized_email:
+        allowed, _ = rate_limit.check_keyed_rate(
+            f"email_{scope}",
+            normalized_email,
+            _EMAIL_AUTH_KEY_LIMIT,
+            _EMAIL_AUTH_KEY_WINDOW,
+        )
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="too many attempts — try again shortly",
+                headers={"Retry-After": str(_EMAIL_AUTH_KEY_WINDOW)},
+            )
+
+
+def _email_auth_failure(outcome: email_auth.EmailAuthOutcome) -> HTTPException:
+    """Map a provider outcome to a status the clients already know how to
+    render. The provider's own message is never consulted, so no provider or
+    transport text can reach a screen.
+
+    Note what is deliberately absent: there is no branch that turns a provider
+    outage into "we sent you an email". An operational failure is always 503.
+    """
+    if outcome is email_auth.EmailAuthOutcome.RATE_LIMITED:
+        return HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="too many attempts — try again shortly",
+            headers={"Retry-After": "60"},
+        )
+    if outcome is email_auth.EmailAuthOutcome.VERIFICATION_REQUIRED:
+        return HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="email_verification_required"
+        )
+    # Input-shaped refusals get a plain, actionable answer. They describe the
+    # string the person just typed — never an account — so they are not
+    # enumeration signals, and they must NOT ride the anti-enumerating
+    # "verification_pending" path: telling someone to check their inbox when
+    # the provider refused the request is the one failure they can never
+    # recover from on their own.
+    if outcome is email_auth.EmailAuthOutcome.WEAK_PASSWORD:
+        return HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="choose a stronger password and try again",
+        )
+    if outcome is email_auth.EmailAuthOutcome.INVALID_EMAIL:
+        return HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="that email address can't be used — try another",
+        )
+    if outcome in (
+        email_auth.EmailAuthOutcome.NOT_CONFIGURED,
+        email_auth.EmailAuthOutcome.PROVIDER_UNAVAILABLE,
+    ):
+        return HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="email sign-in is temporarily unavailable",
+        )
+    return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_credentials")
+
+
+def _require_email(raw: str) -> str:
+    normalized = store_module.normalize_email(raw)
+    if not normalized:
+        # Shape-only rejection. This is NOT enumeration: it says the string is
+        # not an address, which the caller can see for themselves.
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "enter a valid email address")
+    return normalized
+
+
+def _require_password(raw: str) -> str:
+    # A floor, not a policy lecture: the provider enforces its own rules and we
+    # never store or hash the value. Bounded above so a multi-megabyte body
+    # cannot be pushed through to the provider.
+    if len(raw) < 8:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "use at least 8 characters for your password"
+        )
+    if len(raw) > 512:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "that password is too long")
+    return raw
+
+
+class EmailRegisterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str
+    password: str
+    source_surface: Optional[str] = None
+    app_version: Optional[str] = None
+    promo_code: Optional[str] = None
+
+
+class EmailAcceptedResponse(BaseModel):
+    """The single anti-enumerating answer for register / resend / reset.
+
+    `status` is a constant. There is intentionally no field that varies with
+    whether the address exists, whether it is already verified, or whether the
+    person has an account — those are exactly the bits an attacker wants.
+    """
+
+    status: Literal["verification_pending"] = "verification_pending"
+
+
+class EmailSessionResponse(BaseModel):
+    device_id: str
+    api_token: str
+    device_credential: Optional[str] = None
+    account_id: str
+    plan: str
+    is_pro: bool
+    email: Optional[str] = None
+    email_verified: bool = False
+
+
+@app.post(
+    "/v1/auth/email/register",
+    response_model=EmailAcceptedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def auth_email_register(
+    body: EmailRegisterRequest,
+    request: Request,
+    user: OptionalCurrentUser,
+    store: StoreDep,
+    client: Annotated[
+        email_auth.SupabaseEmailAuthClient, Depends(email_auth.get_email_auth_client)
+    ],
+) -> EmailAcceptedResponse:
+    """Start an email registration.
+
+    Answers `verification_pending` for every outcome that depends on whether
+    the address is already registered — which is the whole anti-enumeration
+    property. It does NOT answer that way when the provider refused the
+    submitted address or password on its own validation rules: that is a fact
+    about the input, and reporting it is the difference between a person
+    fixing their password and a person waiting forever for mail that was
+    never sent.
+
+    The canonical account is bound here, BEFORE verification, so that an
+    anonymous device that has been coaching drafts for weeks upgrades in place
+    — its account UUID, history, usage and any purchase ownership all survive
+    the registration. The account stays in the `pending` lifecycle state and
+    unidentified until the person proves the address, so binding early costs
+    no access.
+    """
+    normalized = _require_email(body.email)
+    password = _require_password(body.password)
+    _email_auth_rate_gate(request, "register", normalized)
+
+    try:
+        signup = await client.sign_up(email=normalized, password=password)
+    except email_auth.EmailAuthError as exc:
+        if exc.outcome is email_auth.EmailAuthOutcome.INVALID_CREDENTIALS:
+            # Supabase answers 4xx for "already registered". Revealing that
+            # would enumerate the address, so we record the attempt and return
+            # the same accepted shape a brand-new address gets. A person who
+            # genuinely owns it still receives provider mail; one who does not
+            # learns nothing.
+            #
+            # No provider subject is available on this branch, and that is the
+            # right outcome rather than a gap: the provider refused to create
+            # anything, so there is no new identity to reserve, and an existing
+            # account's binding is left exactly as it was. It is specifically
+            # what stops a stranger who types someone else's address from
+            # claiming the verification that address is already waiting for.
+            _record_email_registration_intent(
+                store, user, normalized, body.source_surface, body.app_version
+            )
+            return EmailAcceptedResponse()
+        _record_provider_outage(
+            store,
+            exc.outcome,
+            account_id=user.account_id if user else None,
+            source_surface=body.source_surface,
+            app_version=body.app_version,
+        )
+        raise _email_auth_failure(exc.outcome) from None
+
+    if user is not None:
+        _record_email_registration_intent(
+            store,
+            user,
+            normalized,
+            body.source_surface,
+            body.app_version,
+            provider_subject=signup.provider_user_id,
+            promo_code=body.promo_code,
+        )
+    else:
+        # A bearer-less web signup still gets a pending canonical principal,
+        # but not a fake device slot. The provider-subject claim is what the
+        # later verified callback resolves; no credential is minted/exposed.
+        pending = store.create_bare_account()
+        with contextlib.suppress(AccountConflictError):
+            store.begin_email_registration(
+                account_id=pending.id,
+                email=normalized,
+                source_surface=body.source_surface,
+                app_version=body.app_version,
+                provider_subject=signup.provider_user_id,
+                pending_coupon_code=body.promo_code,
+            )
+    return EmailAcceptedResponse()
+
+
+def _record_email_registration_intent(
+    store: Store,
+    user: Optional[User],
+    normalized_email: str,
+    source_surface: Optional[str],
+    app_version: Optional[str],
+    *,
+    provider_subject: Optional[str] = None,
+    promo_code: Optional[str] = None,
+) -> None:
+    """Move the CALLER'S existing canonical account into `pending`, when there
+    is one, and reserve the provider identity the signup just created for it.
+
+    A bearer-less web signup is assigned a pending anonymous canonical account
+    by the caller after provider signup succeeds. The subject claim below makes
+    the later verified callback converge onto it without exposing a credential.
+
+    ``provider_subject`` is what makes the anonymous upgrade real. Binding only
+    the ADDRESS was not enough, because the step that proves the address happens
+    somewhere this account is not: the person opens the link from their mail app,
+    which lands in a browser carrying no bearer and no session. With nothing tying
+    that click back to the caller, it minted a fresh canonical account and the
+    person's own one — the one holding their history, usage and any purchase —
+    was orphaned at the exact step the product's UI instructs. The subject is the
+    one durable thing both halves of that sequence can see.
+
+    It is recorded on the registration row and NOT on `accounts`: the account must
+    stay unidentified and its lifecycle must keep reading `pending` until the
+    address is actually proven. See `store.begin_email_registration`.
+
+    Never raises into the response: an audit write must not be able to turn a
+    successful registration into a visible failure, and a conflict here (the
+    account already has a different verified address) is a legitimate refusal
+    to re-point a live identity, not a reason to tell the caller anything.
+    """
+    if user is None or not user.account_id:
+        return
+    with contextlib.suppress(AccountConflictError):
+        store.begin_email_registration(
+            account_id=user.account_id,
+            email=normalized_email,
+            source_surface=source_surface,
+            app_version=app_version,
+            provider_subject=provider_subject,
+            pending_coupon_code=promo_code,
+        )
+
+
+# The outcomes that mean "we could not serve this", as opposed to "we served
+# it and the answer was no". Kept as one set so every path agrees about which
+# failures are operational — a rate limit and a wrong password are emphatically
+# not outages, and auditing them as such would make the outage count useless.
+_OUTAGE_OUTCOMES = frozenset(
+    {
+        email_auth.EmailAuthOutcome.PROVIDER_UNAVAILABLE,
+        email_auth.EmailAuthOutcome.NOT_CONFIGURED,
+    }
+)
+
+
+def _record_provider_outage(
+    store: Store,
+    outcome: email_auth.EmailAuthOutcome,
+    *,
+    account_id: Optional[str],
+    source_surface: Optional[str],
+    app_version: Optional[str],
+) -> None:
+    """Audit an attempt the auth provider could not serve.
+
+    Worth writing down because the alternative is that "how many people could
+    not register while the provider was down" is unanswerable afterwards — a
+    503 that is only ever a status code leaves no trace, and the person who
+    never got their link has no way to prove they tried.
+
+    `account_id` is frequently None here, and deliberately so: an
+    unauthenticated attempt has no caller account, and an outage is not a
+    reason to mint one. The row records that an attempt could not be served;
+    it carries no address, so it identifies nobody.
+
+    Swallows everything. An audit write must never be able to turn one failure
+    into two, and the caller is already on its way to raising the real one.
+    """
+    if outcome not in _OUTAGE_OUTCOMES:
+        return
+    with contextlib.suppress(Exception):
+        store.record_registration_event(
+            account_id=account_id,
+            event_type=email_identity.EVENT_PROVIDER_UNAVAILABLE,
+            source_surface=source_surface,
+            app_version=app_version,
+        )
+
+
+class EmailLoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str
+    password: str
+    source_surface: Optional[str] = None
+    app_version: Optional[str] = None
+
+
+@app.post("/v1/auth/email/login", response_model=EmailSessionResponse)
+async def auth_email_login(
+    body: EmailLoginRequest,
+    request: Request,
+    user: OptionalCurrentUser,
+    store: StoreDep,
+    client: Annotated[
+        email_auth.SupabaseEmailAuthClient, Depends(email_auth.get_email_auth_client)
+    ],
+    verifier: Annotated[
+        supabase_auth.SupabaseVerifier, Depends(supabase_auth.get_supabase_verifier)
+    ],
+) -> EmailSessionResponse:
+    """Sign in with email and password.
+
+    Two independent gates, both fail-closed:
+
+      1. The provider must accept the credentials AND consider the address
+         confirmed. Supabase withholds a session for an unconfirmed address,
+         which surfaces as 403 `email_verification_required`.
+      2. We re-verify the returned access token cryptographically through the
+         SAME verifier the web callback uses, and refuse to proceed unless its
+         `email_verified` claim is true. So even a misconfigured project with
+         confirmations switched off cannot mint a verified identity here.
+    """
+    normalized = _require_email(body.email)
+    password = _require_password(body.password)
+    _email_auth_rate_gate(request, "login", normalized)
+
+    try:
+        session = await client.sign_in(email=normalized, password=password)
+    except email_auth.EmailAuthError as exc:
+        if exc.outcome is email_auth.EmailAuthOutcome.VERIFICATION_REQUIRED:
+            # The provider knows this address and refused it for the one reason
+            # the person can fix. Recorded so "I never got the email" is
+            # answerable from the account's own history rather than from a
+            # status code nobody kept.
+            _record_email_audit(
+                store,
+                normalized,
+                email_identity.EVENT_VERIFICATION_PENDING_BLOCKED,
+                body,
+                caller=user,
+            )
+        _record_provider_outage(
+            store,
+            exc.outcome,
+            account_id=user.account_id if user else None,
+            source_surface=body.source_surface,
+            app_version=body.app_version,
+        )
+        raise _email_auth_failure(exc.outcome) from None
+
+    claims = await verifier(session.access_token)
+    if not claims.email_verified:
+        # Gate 2. A project with confirmations switched off can hand back a
+        # session for an unproven address; this is where that is refused, and
+        # it is the same refusal a person sees from gate 1, audited the same
+        # way — the two must not be distinguishable from outside.
+        _record_email_audit(
+            store,
+            normalized,
+            email_identity.EVENT_VERIFICATION_PENDING_BLOCKED,
+            body,
+            caller=user,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="email_verification_required"
+        )
+
+    # A successful login clears the per-address lockout so a person who simply
+    # mistyped once is not held out by their own earlier attempts.
+    rate_limit.reset_keyed_rate("email_login", normalized)
+
+    device_credential: Optional[str] = None
+    if user is None:
+        registration = store.register_device()
+        user = registration.user
+        device_credential = registration.device_credential
+
+    verified_email = claims.email or normalized
+    # Thread the AUTHORITATIVE verified status into the continuity resolver. Both
+    # gates above have already proven this address is confirmed: gate 1 (the
+    # provider withheld a session for an unconfirmed address) and gate 2 (the
+    # cryptographically re-verified token's GoTrue-controlled `email_verified`
+    # claim, which raised a 403 otherwise). So `claims.email_verified` is True
+    # here by construction, and passing it lets an email/password sign-in join
+    # the one canonical account that already owns this proven address — the same
+    # verified-email convergence Apple/Google/web sign-in get. Without it, a
+    # password login stayed split from the person's existing identity.
+    account = _resolve_provider_signin(
+        store, user, "supabase", claims.sub, verified_email, link=False,
+        email_verified=claims.email_verified,
+    )
+    try:
+        account = store.mark_email_verified(
+            account_id=account.id,
+            email=verified_email,
+            source_surface=body.source_surface,
+            app_version=body.app_version,
+        )
+    except AccountConflictError:
+        # The address is already the verified identity of a DIFFERENT canonical
+        # account — a second provider subject presenting the same spelling. The
+        # store is right to refuse (merging would hand this person someone
+        # else's history and entitlement), but the refusal has to arrive as a
+        # reviewed consumer answer.
+        #
+        # Uncaught, this propagated as a raw 500: the one shape Build 112
+        # established must never reach a screen, and the least recoverable one
+        # here — a person cannot tell "the server broke" from "try again later"
+        # and has no next step either way. 409 carries the shared vocabulary
+        # code the clients already map to "this address is spoken for; sign in
+        # the way you did before, or use a different address".
+        #
+        # `mark_email_verified` has already written the `identity_conflict`
+        # audit event, so the refusal is visible to support without the
+        # response having to describe the other account in any way.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=email_identity.OUTCOME_ACCOUNT_CONFLICT,
+        ) from None
+    store.record_registration_event(
+        account_id=account.id,
+        event_type=email_identity.EVENT_SIGN_IN,
+        source_surface=body.source_surface,
+        app_version=body.app_version,
+    )
+
+    # Project the entitlement through the SAME authority `/v1/me` uses, by
+    # re-reading the device now that it has been re-linked.
+    #
+    # `Account.is_pro` alone is not the entitlement answer and never was. It
+    # reads plan/subscription/coupon, which is the Stripe-shaped half; an
+    # Apple or Play subscription attaches to the canonical account as a
+    # provider ENTITLEMENT GRANT, and only `User.is_pro` (via
+    # `_attach_account`'s `provider_entitlement_active`) accounts for it.
+    #
+    # Returning `account.is_pro` therefore told every returning App Store and
+    # Play subscriber `is_pro: false` at the exact moment they signed back in to
+    # recover their subscription — the reinstall case this whole lane exists to
+    # serve. Re-reading here is what makes a login a genuine entitlement
+    # refresh, and what makes a same-account 402 resolve in one call instead of
+    # needing a Restore tap.
+    refreshed = store.get_by_device(user.device_id) or user
+    projection = compute_me_fields(refreshed, store)
+    return EmailSessionResponse(
+        device_id=user.device_id,
+        api_token=user.api_token,
+        device_credential=device_credential,
+        account_id=account.id,
+        plan=projection["plan"],
+        is_pro=projection["is_pro"],
+        email=account.email,
+        email_verified=account.email_is_verified,
+    )
+
+
+class EmailAddressRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str
+    source_surface: Optional[str] = None
+    app_version: Optional[str] = None
+
+
+@app.post(
+    "/v1/auth/email/resend",
+    response_model=EmailAcceptedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def auth_email_resend(
+    body: EmailAddressRequest,
+    request: Request,
+    user: OptionalCurrentUser,
+    store: StoreDep,
+    client: Annotated[
+        email_auth.SupabaseEmailAuthClient, Depends(email_auth.get_email_auth_client)
+    ],
+) -> EmailAcceptedResponse:
+    """Resend the verification link. Anti-enumerating: an unknown address and
+    an already-verified address produce the identical accepted answer.
+
+    The bearer is OPTIONAL and changes nothing a caller can observe — the
+    response, the rate gate and the provider call are identical with and without
+    it. It is read only to decide whether this caller's `source_surface` claim
+    may be attributed to the account being audited (see `_record_email_audit`).
+    """
+    normalized = _require_email(body.email)
+    _email_auth_rate_gate(request, "resend", normalized)
+    try:
+        await client.resend_verification(email=normalized)
+    except email_auth.EmailAuthError as exc:
+        if exc.outcome is email_auth.EmailAuthOutcome.INVALID_CREDENTIALS:
+            return EmailAcceptedResponse()
+        if exc.outcome in _OUTAGE_OUTCOMES:
+            _record_email_audit(
+                store, normalized, email_identity.EVENT_PROVIDER_UNAVAILABLE, body, caller=user
+            )
+        raise _email_auth_failure(exc.outcome) from None
+    _record_email_audit(
+        store, normalized, email_identity.EVENT_VERIFICATION_RESENT, body, caller=user
+    )
+    return EmailAcceptedResponse()
+
+
+@app.post(
+    "/v1/auth/email/reset",
+    response_model=EmailAcceptedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def auth_email_reset(
+    body: EmailAddressRequest,
+    request: Request,
+    user: OptionalCurrentUser,
+    store: StoreDep,
+    client: Annotated[
+        email_auth.SupabaseEmailAuthClient, Depends(email_auth.get_email_auth_client)
+    ],
+) -> EmailAcceptedResponse:
+    """Begin password recovery. Anti-enumerating for the same reason as
+    resend: the answer is identical whether or not the address is known.
+
+    The link the provider mails lands on the web callback, which recognises a
+    recovery and hands the person a screen where they choose and confirm a new
+    password (`apps/web/src/app/auth/password`). That destination is the whole
+    point of this endpoint: an emailed recovery link with nowhere to set a
+    password is a dead end, not a recovery.
+
+    The bearer is optional and observationally inert — see `auth_email_resend`.
+    """
+    normalized = _require_email(body.email)
+    _email_auth_rate_gate(request, "reset", normalized)
+    try:
+        await client.request_password_reset(email=normalized)
+    except email_auth.EmailAuthError as exc:
+        if exc.outcome is email_auth.EmailAuthOutcome.INVALID_CREDENTIALS:
+            return EmailAcceptedResponse()
+        if exc.outcome in _OUTAGE_OUTCOMES:
+            _record_email_audit(
+                store, normalized, email_identity.EVENT_PROVIDER_UNAVAILABLE, body, caller=user
+            )
+        raise _email_auth_failure(exc.outcome) from None
+    _record_email_audit(
+        store, normalized, email_identity.EVENT_PASSWORD_RESET_REQUESTED, body, caller=user
+    )
+    return EmailAcceptedResponse()
+
+
+def _record_email_audit(
+    store: Store,
+    normalized_email: str,
+    event: str,
+    body: "EmailAddressRequest | EmailLoginRequest",
+    *,
+    caller: Optional[User] = None,
+) -> None:
+    """Audit an address-scoped event against the account(s) that already own
+    the address. Writes nothing when the address is unknown — which is also why
+    this cannot become an enumeration oracle: the caller's response is
+    identical either way, and the write is invisible to them.
+
+    Takes either request shape because it reads only the two audit fields both
+    carry (surface and build) and never the credentials one of them also has.
+
+    ATTESTATION. These endpoints are reachable with no bearer at all, by design
+    — a person who has forgotten their password cannot be asked to prove who
+    they are first. That makes `source_surface` and `app_version` claims about
+    an account the caller has not shown any right to describe, and the row they
+    landed on is somebody else's: a bearer-less reset naming `android`/`666`
+    rewrote a victim's `('ios','114')` registration outright.
+
+    So a write is attributed ONLY when the caller presented a bearer for the
+    very account being written. Everything else is recorded as unattributed —
+    the event still happened and is still worth auditing, but Tono does not
+    restate a stranger's claim as an observation. `store` enforces the rest:
+    with `attested=False` the surface and build are dropped rather than
+    written, and `source_surface` is immutable regardless.
+    """
+    caller_account = caller.account_id if caller is not None else None
+    for account in store.find_accounts_by_email(normalized_email):
+        store.record_registration_event(
+            account_id=account.id,
+            event_type=event,
+            source_surface=body.source_surface,
+            app_version=body.app_version,
+            attested=account.id == caller_account,
+        )
+
+
+class EmailLogoutResponse(BaseModel):
+    signed_out: bool
+
+
+@app.post("/v1/auth/email/logout", response_model=EmailLogoutResponse)
+def auth_email_logout(user: CurrentUser, store: StoreDep) -> EmailLogoutResponse:
+    """Sign this DEVICE out, and mean it.
+
+    Deliberately local and provider-independent: the bearer the caller just
+    presented stops working before this returns, so logging out of a shared
+    device never depends on a reachable provider or a good network.
+
+    `sign_out_device` is used rather than `rotate_token` because rotating alone
+    is not a sign-out: the device also holds a durable credential that lets it
+    re-register itself into the same row, so the next `/v1/register` would hand
+    it a working bearer for an account it was just signed out of. See the store
+    method for the full argument.
+
+    The canonical account, its history, its entitlement and its registration
+    audit are untouched — signing back in returns the person to exactly the
+    same account. The sign-out event is recorded BEFORE the unlink, while the
+    account is still known.
+    """
+    if user.account_id:
+        store.record_registration_event(
+            account_id=user.account_id,
+            event_type=email_identity.EVENT_SIGN_OUT,
+        )
+    store.sign_out_device(user.device_id)
+    return EmailLogoutResponse(signed_out=True)
+
+
+class RegistrationEventsResponse(BaseModel):
+    account_id: str
+    lifecycle_state: str
+    email_verified: bool
+    events: list[dict]
+
+
+@app.get("/v1/account/registration-events", response_model=RegistrationEventsResponse)
+def account_registration_events(
+    user: CurrentUser, store: StoreDep
+) -> RegistrationEventsResponse:
+    """The caller's OWN registration/verification history.
+
+    Scoped by the bearer's account — there is no account id parameter, so one
+    person cannot read another's history. Every row carries a timestamp, the
+    source surface and the app build; none carries a password, a token or a
+    verification link (see the `account_registration_events` table comment).
+    """
+    if not user.account_id:
+        reloaded = store.ensure_account(user.device_id)
+        if reloaded is not None:
+            user = reloaded
+    if not user.account_id:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, "no canonical account for this device"
+        )
+    account = store.get_account(user.account_id)
+    return RegistrationEventsResponse(
+        account_id=user.account_id,
+        lifecycle_state=account.lifecycle_state if account else "anonymous",
+        email_verified=bool(account and account.email_is_verified),
+        events=store.list_registration_events(user.account_id),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Account payment / billing history. Authenticated; owner-scoped read of the
+# account's own subscription timeline. The purchase/entitlement data has always
+# been modelled server-side (provider_purchases + entitlement_grants), mutated
+# by every Stripe/Apple/Google path, but had no read contract until now — the
+# namesake gap of this worktree. This exposes it WITHOUT any raw provider or
+# transaction identifier (contract §7: no raw IDs, no vanity-only totals).
+# ---------------------------------------------------------------------------
+
+
+class PaymentHistoryItem(BaseModel):
+    # Opaque grant id — a UUID handle for this timeline row, NOT a provider or
+    # transaction identifier. Safe to render as a list key.
+    id: str
+    provider: str  # 'stripe' | 'apple' | 'google_play'
+    product_id: str  # catalog product (e.g. com.tonoit.pro.monthly)
+    entitlement: str  # canonical entitlement this grant confers ('pro')
+    ownership_type: str  # 'PURCHASED' | 'FAMILY_SHARED'
+    grant_kind: str  # 'direct' | 'family'
+    entitlement_state: str  # 'active' | 'revoked'
+    purchase_state: str  # 'active' | 'expired' | 'refunded' | 'revoked' | ...
+    # True when this grant is the live entitlement (active and not lapsed).
+    is_current: bool
+    trial_consumed: bool
+    # Verified plan price, present ONLY where the provider gave an authoritative,
+    # already-normalized amount (Stripe recurring price). ``amount_minor`` is
+    # integer minor units (399 = $3.99); ``currency`` is a lowercase ISO code.
+    # Both are null for providers we don't normalize (Apple/Google) — a client
+    # renders a price only when both are present, never a fabricated one.
+    amount_minor: Optional[int] = None
+    currency: Optional[str] = None
+    environment: str  # 'Production' | 'Sandbox'
+    effective_at: str
+    expires_at: Optional[str] = None
+    revoked_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class PaymentHistoryResponse(BaseModel):
+    account_id: str
+    # Current entitlement summary — the same projection /v1/me returns, so the
+    # timeline header and the rest of the app never disagree on Pro status.
+    plan: str
+    is_pro: bool
+    subscription_status: Optional[str] = None
+    subscription_renews_at: Optional[str] = None
+    coupon_pro_expires_at: Optional[str] = None
+    # Newest first. Empty for an account that never purchased (never a lie about
+    # entitlement — an anonymous device with a coupon still reads is_pro above).
+    items: list[PaymentHistoryItem]
+
+
+@app.get("/v1/account/payment-history", response_model=PaymentHistoryResponse)
+def account_payment_history(
+    user: CurrentUser, store: StoreDep
+) -> PaymentHistoryResponse:
+    """The caller's OWN payment/subscription timeline.
+
+    Scoped by the bearer's account — there is no account id parameter, so one
+    person can never read another's billing. Every row is an entitlement grant
+    to THIS account joined to the store purchase that produced it; no raw
+    provider/transaction identifier is exposed. The header carries the live
+    entitlement projection (identical to /v1/me) so a client can render the
+    current plan even when the account has no per-purchase rows (e.g. a founder
+    coupon grant, which is entitlement without a provider purchase).
+    """
+    if not user.account_id:
+        # Contract §1: every device resolves to a canonical account. A null here
+        # is a legacy row; backfill so the read has a principal.
+        reloaded = store.ensure_account(user.device_id)
+        if reloaded is not None:
+            user = reloaded
+    if not user.account_id:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, "no canonical account for this device"
+        )
+    projection = compute_me_fields(user, store)
+    rows = store.list_account_payment_history(user.account_id)
+    items = [
+        PaymentHistoryItem(
+            id=row["id"],
+            provider=row["provider"],
+            product_id=row["product_id"],
+            entitlement="pro",
+            ownership_type=row["ownership_type"],
+            grant_kind=row["grant_kind"],
+            entitlement_state=row["entitlement_state"],
+            purchase_state=row["purchase_state"],
+            is_current=bool(row["is_current"]),
+            trial_consumed=bool(row["trial_consumed"]),
+            amount_minor=row.get("amount_minor"),
+            currency=row.get("currency"),
+            environment=row["environment"],
+            effective_at=row["effective_at"],
+            expires_at=row.get("expires_at"),
+            revoked_at=row.get("revoked_at"),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+        for row in rows
+    ]
+    return PaymentHistoryResponse(
+        account_id=user.account_id,
+        plan=projection["plan"],
+        is_pro=projection["is_pro"],
+        subscription_status=projection["subscription_status"],
+        subscription_renews_at=projection["subscription_renews_at"],
+        coupon_pro_expires_at=projection["coupon_pro_expires_at"],
+        items=items,
     )
 
 
@@ -942,9 +2068,11 @@ async def api_analyze(
         locale=body.locale,
     )
 
-    # Cache lookup — hits don't consume the daily allowance.
+    # Cache lookup — hits don't consume the daily allowance. The key is derived
+    # from the canonical ``internal`` request (every prompt-shaping input), NOT
+    # from a hand-picked subset: the cache table is global across accounts.
     cache_key = (
-        _analysis_cache_key(body.text, axes, body.preferred_voice, body.locale)
+        _analysis_cache_key(internal, locale=body.locale, provider=provider)
         if provider != "mock"
         else None
     )
@@ -1017,6 +2145,104 @@ async def api_analyze(
         drafts_chars=len(body.text),
     )
     return ApiAnalyzeResponse(**result, used_today=used, daily_limit=limit, plan=user.plan_resolved)
+
+
+# ---------------------------------------------------------------------------
+# BUILD 117 — Read the Ask
+# ---------------------------------------------------------------------------
+#
+# A reading of a message the person RECEIVED. It stands beside rewrite and
+# reuses every protection the rewrite path already has — the same bearer, the
+# same server-authoritative entitlement gate, the same per-IP window, the same
+# draft ceiling, the same provider client and timeouts. What it does NOT reuse
+# is the rewrite response: the Read the Ask contract returns the Ask, a By when
+# the sender actually wrote, and one Unclear detail, and it forbids the risk
+# score, perception and subtext that ``ToneAnalysis`` requires. Two products
+# sharing one response model would mean fabricating one of them, so the shape is
+# its own — see ``read_ask.py`` for the whole argument.
+#
+# The mode is stated, never inferred, and this route serves exactly one of them.
+
+
+@app.post("/api/read-ask", response_model=ReadAskResponse)
+async def api_read_ask(
+    body: ReadAskRequest,
+    request: Request,
+    user: CurrentUser,
+    store: StoreDep,
+) -> ReadAskResponse:
+    """Read what a received message is asking. Authenticated, entitled,
+    rate-limited; the server holds the LLM API key."""
+    # The explicit-mode boundary, stated rather than implied. ``rewrite`` is a
+    # real mode in this vocabulary and simply not this route's, so it is refused
+    # with a reason instead of falling through a schema.
+    if body.mode != READ_ASK_MODE:
+        raise HTTPException(
+            400,
+            f"mode must be '{READ_ASK_MODE}' on this route; got '{body.mode}'",
+        )
+
+    if not body.text or not body.text.strip():
+        raise HTTPException(400, "text is required")
+    if len(body.text) > _DRAFT_MAX_CHARS:
+        raise HTTPException(400, f"text too long (max {_DRAFT_MAX_CHARS} chars)")
+
+    # Same order as /api/analyze: entitlement first, so a caller without one is
+    # told the honest 402 and never the misleading 429.
+    _require_rewrite_entitlement(user)
+
+    if not _check_ip_rate(_get_client_ip(request)):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="too many requests from this IP — try again in a minute",
+            headers={"Retry-After": "60"},
+        )
+
+    provider = os.environ.get("TONO_PROVIDER", "mock").lower()
+
+    try:
+        result = await invoke_read_ask(body.text, provider)
+    except ReadAskContractError as e:
+        logger.warning("Invalid Read the Ask response from %s: %s", provider, e)
+        store.log_usage(
+            user.device_id, "/api/read-ask", 502, provider=provider, drafts_chars=0,
+        )
+        raise HTTPException(502, "Read the Ask response incomplete. Please retry.") from e
+    except HTTPException:
+        store.log_usage(
+            user.device_id, "/api/read-ask", 502, provider=provider, drafts_chars=0,
+        )
+        raise
+    except Exception as e:
+        logger.exception("/api/read-ask failed")
+        store.log_usage(
+            user.device_id, "/api/read-ask", 500, provider=provider, drafts_chars=0,
+        )
+        raise HTTPException(500, "read the ask failed") from e
+
+    # Recorded when a provider was actually reached; silent when one was not.
+    #
+    # `ok` and `no_ask` both cost a generation — `no_ask` is what a real model
+    # returns for "thanks for dinner last night", which is an ordinary message,
+    # so leaving it out made provider spend on a whole common class of message
+    # invisible to telemetry.
+    #
+    # `declined` stays silent, and that is a different kind of decision: the
+    # crisis preflight returns BEFORE any provider call, so there is nothing to
+    # bill — and counting it would be measuring how often a person shared
+    # something Tono has no business reading. Silence is not an event.
+    #
+    # `drafts_chars=0` throughout: a character count is still derived from the
+    # message.
+    if result["status"] in ("ok", "no_ask"):
+        store.log_usage(
+            user.device_id, "/api/read-ask", 200, provider=provider, drafts_chars=0,
+        )
+
+    # Deliberately NOT cached. The rewrite path's response cache is global across
+    # accounts and keyed on request identity; a message somebody received is
+    # their private context and has no business in a shared table.
+    return ReadAskResponse(**result, plan=user.plan_resolved)
 
 
 @app.post("/v1/event/axis", status_code=204)
@@ -1135,6 +2361,23 @@ async def api_analyze_variant(
         user.device_id, "/api/analyze/variant", 200,
         provider=provider, drafts_chars=len(body.text or ""),
     )
+    # Build 114 — a generation that happened is a generation that counts.
+    #
+    # This endpoint served a real provider call but never advanced the
+    # `used_today` disclosure, so the keyboard — the primary surface — produced
+    # rewrites the counter never saw. "Try another" makes that untenable rather
+    # than merely untidy: a second generation the person deliberately asked for
+    # is exactly the one they would expect to see counted, and a counter that
+    # silently ignores it is not a truthful disclosure of what was spent on
+    # their behalf.
+    #
+    # `record_rewrite` is NON-AUTHORIZING (see its docstring) and there is no
+    # free daily tier, so counting here cannot gate anyone out of anything —
+    # the entitlement decision was already made, above, before any provider
+    # call. It only makes the number honest. The blocked path above returns
+    # before this point and is deliberately not counted: no provider call was
+    # made, so nothing was generated.
+    store.record_rewrite(user.device_id)
     return response
 
 
@@ -1374,12 +2617,12 @@ def admin_stats(request: Request, store: StoreDep) -> dict[str, Any]:
         import datetime as dt
         now_iso = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
         cur.execute(
-            "SELECT COUNT(*) as cnt FROM users WHERE coupon_pro_expires_at IS NOT NULL AND coupon_pro_expires_at > ?",
+            "SELECT COUNT(*) as cnt FROM accounts WHERE coupon_pro_expires_at IS NOT NULL AND coupon_pro_expires_at > ?",
             (now_iso,),
         )
         coupon_pro = cur.fetchone()["cnt"]
 
-        cur.execute("SELECT COUNT(*) as cnt FROM coupon_redemptions")
+        cur.execute("SELECT COUNT(*) as cnt FROM account_coupon_redemptions")
         total_redemptions = cur.fetchone()["cnt"]
 
         today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
@@ -1405,6 +2648,53 @@ def admin_stats(request: Request, store: StoreDep) -> dict[str, Any]:
         }
 
     return store._run(_do).result()
+
+
+# ---------------------------------------------------------------------------
+# Admin registration analytics (Build 114)
+# ---------------------------------------------------------------------------
+
+
+class AdminRegistrationsResponse(BaseModel):
+    """Aggregate registration reporting. Every field is a count or a
+    count-by-category; there is deliberately no field that could hold an
+    address, an account id, or an event detail."""
+
+    days: int
+    registrations_total: int
+    by_lifecycle_state: dict[str, int]
+    by_source_surface: dict[str, int]
+    by_app_build: dict[str, int]
+    created_in_window: int
+    verified_in_window: int
+    signed_in_in_window: int
+    events_in_window: dict[str, int]
+
+
+@app.get("/admin/registrations", response_model=AdminRegistrationsResponse)
+def admin_registrations(
+    request: Request, store: StoreDep, days: int = 30
+) -> AdminRegistrationsResponse:
+    """How registration is going, for whoever runs the product.
+
+    The Build 114 brief asks Tono to TRACK registrations, not merely to record
+    them: `/v1/account/registration-events` answers "what happened to my
+    account" for one signed-in person and is scoped by their own bearer, which
+    is the right shape for support and the wrong shape for knowing whether
+    signup works at all.
+
+    Counts only. The response model above has no field an address could travel
+    in, and `Store.registration_metrics` selects nothing but counts and the
+    grouping columns the store itself sanitized on write — so this endpoint
+    could not identify a person even if an operator wanted it to. That is why
+    it is safe to expose an aggregate over a table whose per-row contents are
+    otherwise deliberately unreadable from outside.
+
+    Admin-secret protected like every other `/admin` route; without a
+    configured `TONO_ADMIN_SECRET` it answers 403 rather than opening.
+    """
+    _check_admin(request)
+    return AdminRegistrationsResponse(**store.registration_metrics(days=days))
 
 
 # ---------------------------------------------------------------------------
@@ -1571,9 +2861,14 @@ def redeem_coupon(
     user: CurrentUser,
     store: StoreDep,
 ) -> RedeemCouponResponse:
-    """Redeem a promo/coupon code. Grants Pro access for the code's duration."""
+    """Redeem for the identified canonical account proven by this bearer."""
+    if not user.account_id or not user.account or not user.account.is_identified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="sign in to a verified account before redeeming a code",
+        )
     try:
-        exp = store.redeem_coupon(user.device_id, body.code.strip().upper())
+        exp = store.redeem_coupon(user.account_id, body.code.strip().upper())
         return RedeemCouponResponse(
             coupon_pro_expires_at=exp,
             message="Pro access activated!",
@@ -1628,5 +2923,9 @@ def _today_utc() -> str:
 
 
 if __name__ == "__main__":
+    # Only reachable via ``python -m backend.server`` from ``apps/``; a bare
+    # ``python server.py`` fails earlier on this module's relative imports.
+    # The import string must match the Dockerfile CMD exactly — the previous
+    # ``Backend.server:app`` resolved only on a case-insensitive filesystem.
     import uvicorn
-    uvicorn.run("Backend.server:app", host="127.0.0.1", port=8765, reload=True)
+    uvicorn.run("backend.server:app", host="127.0.0.1", port=8765, reload=True)

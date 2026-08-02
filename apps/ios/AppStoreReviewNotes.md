@@ -123,5 +123,5 @@ Sign in with the sandbox Apple ID, then start the Pro trial to test the full exp
 7. Tap a rewrite chip to insert it
 8. Tap **Read**, type or paste a received message, then tap **Read** again to get an interpretation
 
-The companion app (Coach tab) shows setup status, Playground for in-app
-testing, This Week digest, and Settings/account management.
+The companion app has three tabs: Coach (paste a draft, tap Coach, read
+the rewrites), This Week digest, and Settings/account management.

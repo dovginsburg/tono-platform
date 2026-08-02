@@ -88,10 +88,13 @@ final class SpellingCorrectionTests: XCTestCase {
             allowsSpellChecking: true
         )
         XCTAssertNil(SpellingPolicy.evaluate(request: request("teh", host: noAutocorrect), checker: checker))
+        // Build 106: the flat supplementary-word set became `LocalLexicon`,
+        // which distinguishes "the user's device knows this word" from "the
+        // user configured this shortcut". Membership still suppresses.
         XCTAssertNil(SpellingPolicy.evaluate(
             request: request("Tono"),
             checker: checker,
-            supplementaryWords: ["tono"]
+            lexicon: LocalLexicon(words: ["tono"], expansions: [:])
         ))
     }
 
@@ -211,14 +214,44 @@ final class SpellingCorrectionTests: XCTestCase {
         XCTAssertTrue(service.accepts(generation: current))
     }
 
-    func testSupportedAndUnsupportedLanguages() {
-        XCTAssertEqual(english.supportedLanguage, "en-US")
+    /// Build 106 changed this contract deliberately.
+    ///
+    /// Build 105 answered "is this English?" and returned the requested tag
+    /// verbatim. That disabled the whole local lane for every non-English
+    /// keyboard even when iOS had the dictionary installed, which is half of
+    /// the "offline mode did not visibly utilize local intelligence" finding.
+    /// Build 106 answers "which INSTALLED dictionary should serve this
+    /// keyboard?", so the result is one of `UITextChecker.availableLanguages`
+    /// in that API's own spelling (which is `en_US`, not `en-US`, on current
+    /// OS versions) and a non-English language resolves when it is installed.
+    func testResolvesToAnInstalledDictionaryRatherThanEnglishOnly() throws {
+        let available = UITextChecker.availableLanguages
+        try XCTSkipIf(available.isEmpty, "no dictionaries installed on this runner")
+
+        let resolvedEnglish = try XCTUnwrap(english.supportedLanguage)
+        XCTAssertTrue(
+            available.contains(resolvedEnglish),
+            "the resolved language must be one UITextChecker actually published"
+        )
+        XCTAssertTrue(resolvedEnglish.lowercased().hasPrefix("en"))
+
+        // A language with no installed dictionary still yields nothing.
         XCTAssertNil(SpellingHostPolicy(
-            language: "fr-FR",
+            language: "zz-ZZ",
             fieldKind: .ordinary,
             allowsAutocorrection: true,
             allowsSpellChecking: true
         ).supportedLanguage)
+
+        // Injected sets keep the resolution deterministic regardless of runner.
+        let french = SpellingHostPolicy(
+            language: "fr-FR",
+            fieldKind: .ordinary,
+            allowsAutocorrection: true,
+            allowsSpellChecking: true,
+            availableLanguages: ["en_US", "fr_FR"]
+        )
+        XCTAssertEqual(french.supportedLanguage, "fr_FR", "Build 105 returned nil here")
     }
 
     func testRealUITextCheckerSmokeWhenEnglishIsAvailable() throws {

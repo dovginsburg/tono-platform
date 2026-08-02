@@ -76,6 +76,7 @@ public struct TonoMe: Codable, Equatable {
     public let isPro: Bool
     public let subscriptionStatus: String?
     public let subscriptionRenewsAt: String?
+    public let couponProExpiresAt: String?
     // Canonical server-issued account UUID — the only entitlement principal and
     // what a new StoreKit purchase binds as `appAccountToken` (build 91 §1).
     // Decoded as optional purely for robustness against a pre-migration server;
@@ -96,6 +97,7 @@ public struct TonoMe: Codable, Equatable {
         case isPro = "is_pro"
         case subscriptionStatus = "subscription_status"
         case subscriptionRenewsAt = "subscription_renews_at"
+        case couponProExpiresAt = "coupon_pro_expires_at"
         case accountId = "account_id"
         case email
         case emailVerifiedAt = "email_verified_at"
@@ -158,6 +160,31 @@ public enum AnalysisEvent {
     case suggestion(axis: String, text: String, rationale: String, riskAfter: String?)
     case complete(riskLevel: String, subtext: String, riskReason: String, flags: [String])
     case error(String)
+    /// Build 113: an HTTP failure carried as a status code rather than as
+    /// prose. The non-streaming path throws `TonoBackendError.http(code, …)`
+    /// and keeps 401, 402 and 429 apart; the streaming path used to stringify
+    /// the code into `"Server error (\(code))"` before anything could read it,
+    /// so the keyboard strip and the Share sheet collapsed all three into one
+    /// "Try again." The status is the only fact a user's next step depends on,
+    /// and a sentence is the one shape it must not travel in.
+    case failure(status: Int)
+}
+
+/// Build 113: a streamed failure reduced to the fact that changes what the
+/// user should do next.
+///
+/// Deliberately carries no message payload. A response body is exactly where
+/// hosts, status lines and stack traces live, so this type gives a consumer
+/// surface nothing it could render even by accident — `ConsumerErrorCopy`
+/// turns the code into a sentence, the same way it does for the
+/// non-streaming path.
+///
+/// It is intentionally *not* a `TonoBackendError`: the streaming callers
+/// already catch that type in a branch that re-checks entitlement, and this
+/// repair changes which sentence a user reads, not how many requests a tap
+/// makes.
+public enum StreamedFailure: Error, Equatable {
+    case http(status: Int)
 }
 
 public struct WeeklyDigestResponse: Codable {
@@ -183,6 +210,69 @@ public struct CouponRedemption: Decodable {
     enum CodingKeys: String, CodingKey {
         case couponProExpiresAt = "coupon_pro_expires_at"
         case message
+    }
+}
+
+/// One row of the account's billing timeline. Mirrors the backend
+/// PaymentHistoryItem — carries NO raw provider or transaction identifier.
+public struct PaymentHistoryItem: Decodable, Identifiable {
+    public let id: String
+    public let provider: String
+    public let productId: String
+    public let entitlement: String
+    public let ownershipType: String
+    public let grantKind: String
+    public let entitlementState: String
+    public let purchaseState: String
+    public let isCurrent: Bool
+    public let trialConsumed: Bool
+    /// Verified plan price in integer minor units (399 = $3.99), present only
+    /// where the provider gave an authoritative normalized amount (Stripe).
+    /// Null for providers we don't normalize (Apple/Google) — a client shows a
+    /// price only when both this and `currency` are present, never a guess.
+    public let amountMinor: Int?
+    public let currency: String?
+    public let environment: String
+    public let effectiveAt: String
+    public let expiresAt: String?
+    public let revokedAt: String?
+    public let createdAt: String
+    public let updatedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, provider, entitlement, environment, currency
+        case productId = "product_id"
+        case ownershipType = "ownership_type"
+        case grantKind = "grant_kind"
+        case entitlementState = "entitlement_state"
+        case purchaseState = "purchase_state"
+        case isCurrent = "is_current"
+        case trialConsumed = "trial_consumed"
+        case amountMinor = "amount_minor"
+        case effectiveAt = "effective_at"
+        case expiresAt = "expires_at"
+        case revokedAt = "revoked_at"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+}
+
+public struct PaymentHistoryResponse: Decodable {
+    public let accountId: String
+    public let plan: String
+    public let isPro: Bool
+    public let subscriptionStatus: String?
+    public let subscriptionRenewsAt: String?
+    public let couponProExpiresAt: String?
+    public let items: [PaymentHistoryItem]
+
+    enum CodingKeys: String, CodingKey {
+        case plan, items
+        case accountId = "account_id"
+        case isPro = "is_pro"
+        case subscriptionStatus = "subscription_status"
+        case subscriptionRenewsAt = "subscription_renews_at"
+        case couponProExpiresAt = "coupon_pro_expires_at"
     }
 }
 
@@ -323,48 +413,248 @@ public final class TonoBackend: @unchecked Sendable {
         SharedKeychain.set(uuid.uuidString, forKey: KeychainKeys.accountID)
     }
 
-    // ── Email identity (added 2026-07-03) ──────────────────────────────────
-    // Send a 6-digit OTP to `email`. A successful request uses the same safe
-    // response regardless of account state. Operational failures remain
-    // explicit so the app never claims delivery when email is unavailable.
-    @discardableResult
-    public func requestEmailLink(email: String) async throws -> [String: Any] {
-        let body: [String: Any] = ["email": email]
-        return try await postObject(path: "/v1/auth/request-link", json: body, authorize: false)
+    // ── Email identity (Build 114) ─────────────────────────────────────────
+    //
+    // Build 113 and earlier shipped `requestEmailLink` / `verifyEmailOTP`
+    // pointing at `/v1/auth/request-link` and `/v1/auth/verify-otp`. NEITHER
+    // endpoint has ever existed on the server, so every one of those calls
+    // 404'd. That was not a cosmetic gap: `StoreKitManager.isIdentifiedAccount`
+    // requires `KeychainKeys.signedInEmail`, and the only writer of that key
+    // was the dead verify path — so `purchase(_:)` refused every purchase on
+    // every device. Build 114 replaces the pair with the real endpoints.
+    //
+    // The whole flow is brokered by the Tono backend, which talks to the auth
+    // provider server-side. This app therefore never handles a provider token,
+    // a fragment, or a project key — it exchanges an email and password for an
+    // ordinary Tono bearer, which is what it already knows how to keep in the
+    // Keychain. Verification and reset stay link-based and provider-owned.
+
+    /// Consumer-visible outcomes of an email request. Deliberately a closed
+    /// set of SHAPES: the UI switches on these and never on a message, so no
+    /// server or provider text can reach a screen.
+    public enum EmailAuthOutcome: Equatable {
+        /// The request was accepted. Identical for a known and an unknown
+        /// address — the server is anti-enumerating and so is this app.
+        case checkYourEmail
+        /// The address exists but ownership has not been proven yet.
+        case verificationRequired
+        /// Credentials were rejected.
+        case invalidCredentials
+        /// Throttled. Wait and retry — never a paywall.
+        case rateLimited
+        /// The address isn't a usable mailbox, or the password is too short.
+        case invalidInput
+        /// No usable connection.
+        case offline
+        /// Email sign-in is down or unconfigured. Never "we sent you an email".
+        case serviceUnavailable
+        /// The credentials were correct, but the address is already the
+        /// verified identity of a DIFFERENT canonical account — a second
+        /// provider subject presenting the same spelling. The server refuses
+        /// rather than merging, because merging would hand this person someone
+        /// else's history and entitlement.
+        ///
+        /// Reachable ONLY from `/v1/auth/email/login`, and only AFTER the auth
+        /// provider accepted the password for this address. Retrying can never
+        /// succeed, so collapsing it into `unknownFailure` — "that didn't work,
+        /// try again" — left the person in a loop with no exit. It is its own
+        /// shape so it can carry its own next step.
+        case addressAlreadyLinked
+        /// Anything else.
+        case unknownFailure
+
+        /// Map a transport failure to an outcome by SHAPE alone.
+        static func from(_ error: Error) -> EmailAuthOutcome {
+            if let backend = error as? TonoBackendError {
+                switch backend {
+                case .offline, .network: return .offline
+                case .http(let code, _):
+                    switch code {
+                    case 400:      return .invalidInput
+                    case 401:      return .invalidCredentials
+                    case 403:      return .verificationRequired
+                    case 409:      return .addressAlreadyLinked
+                    case 429:      return .rateLimited
+                    case 500...599: return .serviceUnavailable
+                    default:       return .unknownFailure
+                    }
+                default: return .unknownFailure
+                }
+            }
+            if let urlError = error as? URLError {
+                return Self.offlineCodes.contains(urlError.code) ? .offline : .unknownFailure
+            }
+            return .unknownFailure
+        }
+
+        /// The transport codes that mean "no usable connection" rather than
+        /// "the request was answered badly". Mirrors the set
+        /// `ConsumerErrorCopy.isOffline` uses, so both surfaces agree about
+        /// when it is true to say "check your connection".
+        private static let offlineCodes: Set<URLError.Code> = [
+            .notConnectedToInternet,
+            .networkConnectionLost,
+            .cannotConnectToHost,
+            .cannotFindHost,
+            .dataNotAllowed,
+            .internationalRoamingOff,
+            .secureConnectionFailed,
+        ]
     }
 
-    /// Verify the 6-digit OTP. On success, the backend:
-    ///   1. links this device's `device_id` to the email (or migrates
-    ///      an existing anonymous row to the canonical email row)
-    ///   2. returns a fresh `api_token` (per-device)
-    ///   3. marks `email` on the iOS keychain so the user stays signed in
-    ///      across reinstalls (next install will re-trigger this flow)
-    /// Throws `TonoBackendError.tooManyDevices(current, max)` if the email
-    /// already has the max allowed device rows.
+    /// Begin an email registration. The provider sends the verification link;
+    /// nothing is signed in until it is followed and the person logs in.
+    ///
+    /// Returns `.checkYourEmail` for both a fresh and an already-registered
+    /// address — that is the server's anti-enumerating contract, mirrored here
+    /// so the app cannot become an account oracle either.
     @discardableResult
-    public func verifyEmailOTP(
-        email: String,
-        otp: String,
-    ) async throws -> TonoMe {
-        let body: [String: Any] = [
-            "email": email,
-            "otp": otp,
-            "device_id": SharedKeychain.get(KeychainKeys.deviceID) ?? "",
-        ]
-        let resp: [String: Any] = try await postObject(
-            path: "/v1/auth/verify-otp",
-            json: body,
-            authorize: false
+    public func registerWithEmail(email: String, password: String) async throws -> EmailAuthOutcome {
+        _ = try await postObject(
+            path: "/v1/auth/email/register",
+            json: [
+                "email": email,
+                "password": password,
+                "source_surface": "ios",
+                "app_version": Self.appBuild,
+            ],
+            authorize: SharedKeychain.get(KeychainKeys.apiToken) != nil
         )
-        // Persist the new api_token (per-device, server-issued).
+        return .checkYourEmail
+    }
+
+    /// Sign in. On success the backend has already converged this device onto
+    /// the ONE canonical account for this person — the same account a web or
+    /// Android sign-in resolves — so history and entitlement follow.
+    @discardableResult
+    public func signInWithEmail(email: String, password: String) async throws -> TonoMe {
+        let resp: [String: Any] = try await postObject(
+            path: "/v1/auth/email/login",
+            json: [
+                "email": email,
+                "password": password,
+                "source_surface": "ios",
+                "app_version": Self.appBuild,
+            ],
+            authorize: SharedKeychain.get(KeychainKeys.apiToken) != nil
+        )
+        if let deviceID = resp["device_id"] as? String, !deviceID.isEmpty {
+            SharedKeychain.set(deviceID, forKey: KeychainKeys.deviceID)
+        }
         if let token = resp["api_token"] as? String, !token.isEmpty {
             SharedKeychain.set(token, forKey: KeychainKeys.apiToken)
         }
-        // Persist the email so future installs (fresh device_id) can
-        // auto-claim the same identity on first sign-in.
-        SharedKeychain.set(email, forKey: KeychainKeys.signedInEmail)
-        // Re-read /v1/me to get the canonical user shape.
+        if let credential = resp["device_credential"] as? String, !credential.isEmpty {
+            SharedKeychain.set(credential, forKey: KeychainKeys.deviceCredential)
+        }
+        persistAccountID(resp["account_id"] as? String)
+        // `signedInEmail` is what `StoreKitManager.isIdentifiedAccount` reads,
+        // so it is written ONLY here — after the server confirmed a verified
+        // identity. Writing it earlier would let an unverified device buy.
+        if let verified = resp["email_verified"] as? Bool, verified,
+           let address = resp["email"] as? String, !address.isEmpty {
+            SharedKeychain.set(address, forKey: KeychainKeys.signedInEmail)
+            SharedKeychain.set("true", forKey: KeychainKeys.hasRecoveryIdentity)
+        }
         return try await me()
+    }
+
+    public func signInWithApple(identityToken: String, nonce: String) async throws -> TonoMe {
+        try await signInWithNativeProvider(
+            path: "/v1/auth/apple",
+            payload: ["identity_token": identityToken, "nonce": nonce, "link": false]
+        )
+    }
+
+    public func signInWithGoogle(idToken: String) async throws -> TonoMe {
+        try await signInWithNativeProvider(
+            path: "/v1/auth/google", payload: ["id_token": idToken, "link": false]
+        )
+    }
+
+    private func signInWithNativeProvider(
+        path: String, payload: [String: Any]
+    ) async throws -> TonoMe {
+        _ = try await registerIfNeeded(platform: "ios", appVersion: Self.appBuild)
+        let response: [String: Any] = try await postObject(
+            path: path, json: payload, authorize: true
+        )
+        persistAccountID(response["account_id"] as? String)
+        SharedKeychain.set("true", forKey: KeychainKeys.hasRecoveryIdentity)
+        if let address = response["email"] as? String, !address.isEmpty {
+            SharedKeychain.set(address, forKey: KeychainKeys.signedInEmail)
+        }
+        return try await me()
+    }
+
+    /// Resend the verification link. Anti-enumerating, like register.
+    @discardableResult
+    public func resendVerification(email: String) async throws -> EmailAuthOutcome {
+        _ = try await postObject(
+            path: "/v1/auth/email/resend",
+            json: ["email": email, "source_surface": "ios", "app_version": Self.appBuild],
+            authorize: false
+        )
+        return .checkYourEmail
+    }
+
+    /// Begin password recovery. Anti-enumerating, like register.
+    @discardableResult
+    public func requestPasswordReset(email: String) async throws -> EmailAuthOutcome {
+        _ = try await postObject(
+            path: "/v1/auth/email/reset",
+            json: ["email": email, "source_surface": "ios", "app_version": Self.appBuild],
+            authorize: false
+        )
+        return .checkYourEmail
+    }
+
+    /// Sign this device out. The server rotates the bearer, so the credential
+    /// this app holds stops working immediately; the canonical account and its
+    /// entitlement are untouched on the server, and signing back in returns the
+    /// person to exactly the same account.
+    ///
+    /// EVERY device secret goes, not just the bearer. Dropping the bearer alone
+    /// is not a sign-out: `registerIfNeeded` re-presents the stored
+    /// `deviceCredential` for the stored `deviceID`, the server recognises that
+    /// pair as the same device row, and the next person to open the app lands
+    /// back in the previous person's account — history, style memory and Pro
+    /// included. Clearing the device identity means the app comes back as a
+    /// fresh anonymous device, and only an email sign-in can reach the account
+    /// again.
+    ///
+    /// Local state is cleared even if the network call fails: a person on a bad
+    /// connection must still be able to sign out of a shared device.
+    public func signOut() async {
+        _ = try? await postObject(path: "/v1/auth/email/logout", json: [:], authorize: true)
+        SharedKeychain.delete(KeychainKeys.apiToken)
+        SharedKeychain.delete(KeychainKeys.signedInEmail)
+        SharedKeychain.delete(KeychainKeys.hasRecoveryIdentity)
+        SharedKeychain.delete(KeychainKeys.accountID)
+        SharedKeychain.delete(KeychainKeys.deviceCredential)
+        SharedKeychain.delete(KeychainKeys.deviceID)
+        // Account-switch isolation: wipe this device's personal content caches
+        // (drafts, learned style, memory facts, recipients) so the next person
+        // to sign in on a shared device never inherits them. The canonical
+        // account still owns everything server-side. The keyboard/share/iMessage
+        // extensions read the same App Group, so clearing here clears them too.
+        SharedStore.clearPersonalData()
+    }
+
+    /// The address this device is signed in as, or `nil` when anonymous.
+    ///
+    /// Read by Settings so it can describe the account truthfully. Written only
+    /// by `signInWithEmail`, after the server confirmed a verified identity —
+    /// so a `nil` here and a refused purchase are always the same fact.
+    public var signedInEmailAddress: String? {
+        guard let address = SharedKeychain.get(KeychainKeys.signedInEmail),
+              !address.isEmpty else { return nil }
+        return address
+    }
+
+    /// The shipped build number, used as the audit tag on registration events.
+    static var appBuild: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
     }
 
     /// Lightweight health check used by Settings to confirm reachability.
@@ -390,6 +680,31 @@ public final class TonoBackend: @unchecked Sendable {
             throw e
         } catch {
             throw TonoBackendError.network(error.localizedDescription)
+        }
+    }
+
+    /// Fail-closed probe of whether the live backend can honor an Apple StoreKit
+    /// purchase, read from the existing `/health` contract's `apple_configured`
+    /// boolean. NEVER throws: every transport or contract failure folds to a
+    /// non-`.ready` verdict, because a charge must not be initiated on doubt.
+    ///
+    /// This is the initiation-time capability the purchase gate consults BEFORE
+    /// `product.purchase(...)`. Post-payment `/v1/me` reconciliation cannot
+    /// refund a charge, so it is not a substitute for this check. Uses the same
+    /// short-timeout GET as `health()`; only the body interpretation differs.
+    public func fetchApplePurchaseCapability() async -> ApplePurchaseCapability {
+        guard let url = URL(string: "/health", relativeTo: baseURL) else {
+            return .unavailable
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.timeoutInterval = 8
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            let status = (response as? HTTPURLResponse)?.statusCode
+            return PurchaseCapabilityGate.evaluate(httpStatus: status, body: data)
+        } catch {
+            return .unavailable
         }
     }
 
@@ -601,7 +916,10 @@ public final class TonoBackend: @unchecked Sendable {
                     let (bytes, response) = try await URLSession.shared.bytes(for: urlReq)
                     guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
                         let code = (response as? HTTPURLResponse)?.statusCode ?? -1
-                        continuation.yield(.error("Server error (\(code))"))
+                        // Build 113: hand on the status, not a sentence about
+                        // it. Stringifying here is what lost the 401 / 402 /
+                        // 429 distinction on every streaming surface.
+                        continuation.yield(.failure(status: code))
                         continuation.finish()
                         return
                     }
@@ -726,6 +1044,13 @@ public final class TonoBackend: @unchecked Sendable {
         try await get(path: "/v1/digest")
     }
 
+    /// The signed-in account's own payment/subscription timeline. Owner-scoped
+    /// server-side by the bearer's account — there is no account-id parameter,
+    /// so this device can only ever read its own account's billing.
+    public func paymentHistory() async throws -> PaymentHistoryResponse {
+        try await get(path: "/v1/account/payment-history")
+    }
+
     public func checkout(interval: String) async throws -> URL {
         struct Req: Encodable { let interval: String }
         struct Resp: Decodable { let url: String }
@@ -826,9 +1151,10 @@ public final class TonoBackend: @unchecked Sendable {
     }
 
     /// POST with a free-form [String: Any] body, returns the raw JSON dict.
-    /// Used for the email-identity endpoints (`/v1/auth/request-link` and
-    /// `/v1/auth/verify-otp`) which need a non-Codable shape on the iOS side
-    /// (OTP codes, free-form errors).
+    /// Used for the `/v1/auth/email/*` endpoints, whose responses differ by
+    /// operation (an accepted registration carries no session; a login carries
+    /// a whole one) and which are read field-by-field rather than decoded into
+    /// one shape.
     private func postObject(
         path: String,
         json: [String: Any],
@@ -918,7 +1244,12 @@ public final class TonoBackend: @unchecked Sendable {
         return try await execute(req)
     }
 
-    private func buildRequest<In: Encodable>(
+    /// Build 117 — relaxed from `private` to module-internal, and NOTHING else
+    /// about it changed. `ReadTheAsk.swift` builds its request with this exact
+    /// function so the new path inherits the bearer, the content type, the
+    /// timeout and the `notRegistered` gate rather than growing a second,
+    /// slightly-different copy of them.
+    func buildRequest<In: Encodable>(
         path: String, method: String, body: In?, authorize: Bool
     ) throws -> URLRequest {
         guard let url = URL(string: path, relativeTo: baseURL) else {
@@ -940,7 +1271,11 @@ public final class TonoBackend: @unchecked Sendable {
         return req
     }
 
-    private func execute<Out: Decodable>(_ req: URLRequest) async throws -> Out {
+    /// Build 117 — relaxed from `private` to module-internal for the same
+    /// reason `buildRequest` was. Read the Ask needs the 401 / 402 / 429
+    /// distinction this function preserves; re-implementing it beside this one
+    /// is how that distinction gets lost again.
+    func execute<Out: Decodable>(_ req: URLRequest) async throws -> Out {
         let data: Data
         let response: URLResponse
         do {

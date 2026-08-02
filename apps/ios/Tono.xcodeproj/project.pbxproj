@@ -7,6 +7,41 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A1180000000000000000B011 /* RewriteProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F001 /* RewriteProvider.swift */; };
+		A1180000000000000000B012 /* RewriteProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F001 /* RewriteProvider.swift */; };
+		A1180000000000000000B013 /* RewriteProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F001 /* RewriteProvider.swift */; };
+		A1180000000000000000B014 /* RewriteProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F001 /* RewriteProvider.swift */; };
+		A1180000000000000000B015 /* RewriteProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F001 /* RewriteProvider.swift */; };
+		A1220000000000000000B011 /* PurchaseCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1220000000000000000F001 /* PurchaseCapability.swift */; };
+		A1220000000000000000B012 /* PurchaseCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1220000000000000000F001 /* PurchaseCapability.swift */; };
+		A1220000000000000000B013 /* PurchaseCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1220000000000000000F001 /* PurchaseCapability.swift */; };
+		A1220000000000000000B014 /* PurchaseCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1220000000000000000F001 /* PurchaseCapability.swift */; };
+		A1220000000000000000B015 /* PurchaseCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1220000000000000000F001 /* PurchaseCapability.swift */; };
+		A1220000000000000000B066 /* Build122PurchaseGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1220000000000000000F006 /* Build122PurchaseGateTests.swift */; };
+		A1180000000000000000B021 /* PrivateCloudCompute.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F002 /* PrivateCloudCompute.swift */; };
+		A1180000000000000000B022 /* PrivateCloudCompute.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F002 /* PrivateCloudCompute.swift */; };
+		A1180000000000000000B023 /* PrivateCloudCompute.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F002 /* PrivateCloudCompute.swift */; };
+		A1180000000000000000B024 /* PrivateCloudCompute.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F002 /* PrivateCloudCompute.swift */; };
+		A1180000000000000000B025 /* PrivateCloudCompute.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F002 /* PrivateCloudCompute.swift */; };
+		A1180000000000000000B031 /* AppIntentRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F003 /* AppIntentRouting.swift */; };
+		A1180000000000000000B035 /* AppIntentRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F003 /* AppIntentRouting.swift */; };
+		A1180000000000000000B041 /* ToneVariantEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F004 /* ToneVariantEntity.swift */; };
+		A1180000000000000000B051 /* AppleIntelligenceIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F005 /* AppleIntelligenceIntents.swift */; };
+		A1180000000000000000B065 /* Build118AppleIntelligenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F006 /* Build118AppleIntelligenceTests.swift */; };
+		B115C0FFEE0000000000F015 /* LocalCoachRewrite.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */; };
+		B115C0FFEE0000000000F021 /* Build115LocalCoachTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F002 /* Build115LocalCoachTests.swift */; };
+		B116C0FFEE0000000000F021 /* Build116SelectedFirstTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B116C0FFEE0000000000F002 /* Build116SelectedFirstTests.swift */; };
+		B116A11B0E0000000000F021 /* Build116AirplaneModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B116A11B0E0000000000F002 /* Build116AirplaneModeTests.swift */; };
+		B115ADA7000000000000F022 /* Build115AdaptiveLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115ADA7000000000000F002 /* Build115AdaptiveLayoutTests.swift */; };
+		B115ADA7000000000000F044 /* Build115IPadSurfaceLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115ADA7000000000000F004 /* Build115IPadSurfaceLayoutTests.swift */; };
+		B115C0FFEE0000000000F011 /* LocalCoachRewrite.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */; };
+		B115C0FFEE0000000000F012 /* LocalCoachRewrite.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */; };
+		B115C0FFEE0000000000F013 /* LocalCoachRewrite.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */; };
+		B115C0FFEE0000000000F014 /* LocalCoachRewrite.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */; };
+		CE0000000000000000000010 /* ConsumerErrorCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE0000000000000000000001 /* ConsumerErrorCopy.swift */; };
+		CE0000000000000000000011 /* ConsumerErrorCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE0000000000000000000001 /* ConsumerErrorCopy.swift */; };
+		CE0000000000000000000012 /* ConsumerErrorCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE0000000000000000000001 /* ConsumerErrorCopy.swift */; };
+		CE0000000000000000000013 /* ConsumerErrorCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE0000000000000000000001 /* ConsumerErrorCopy.swift */; };
 		01B5DA16281CE5533AAA9E35 /* StoreKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8341350101744023555C179 /* StoreKitManager.swift */; };
 		038D31802AAA9BAC17E903DD /* TonoBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80AB8E621E4EDC9A59A7258D /* TonoBackend.swift */; };
 		064C6BE46F8BF7A326369F1B /* OpenAIToneAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F77E6FE218D103FFC22A1D7C /* OpenAIToneAnalyzer.swift */; };
@@ -46,9 +81,9 @@
 		2006FA0CC979F68A4F917014 /* MockToneAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C69903847843E133412E1E5 /* MockToneAnalyzer.swift */; };
 		20D1B23B844C847F7AB362C3 /* RecipientMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58D322318012F6E3758FBE16 /* RecipientMemory.swift */; };
 		255C57EC2FEFADD136CC95C4 /* MessagesViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C15A6D1DB3DF8DFB596C677 /* MessagesViewController.swift */; };
-		26A32AFB6BA4EE68D7300F89 /* PlaygroundView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 217A3D33DCC3DE654CA907C5 /* PlaygroundView.swift */; };
 		2A1053919D15380BA5597C24 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9B37E5A81C027DBCC41C8EA9 /* Assets.xcassets */; };
 		2F986D1C30D60DF7044A1827 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FCE9DA4E023C12BADC4BC12 /* HomeView.swift */; };
+		B115ADA7000000000000F011 /* AdaptiveLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115ADA7000000000000F001 /* AdaptiveLayout.swift */; };
 		3445E8532232C012E7274043 /* CoachDraftIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3861F3AF2390477CF4D567E /* CoachDraftIntent.swift */; };
 		3636B8D05701682C16720B5A /* SharedUserDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 772DD67FA1CD9CF09D426AF5 /* SharedUserDefaults.swift */; };
 		3781BE8282934F1F04FC4365 /* ContactsSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E33B6F18B213E414885CCCA /* ContactsSync.swift */; };
@@ -63,6 +98,7 @@
 		9C5D3E7B2E1F8A9C3D4E5F6A /* OnDeviceAppleRewrite.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F9B5C7A9E2C7B6A5D1E0F32 /* OnDeviceAppleRewrite.swift */; };
 		511B5CB9D0506AE3B0B7BA9A /* RecipientMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58D322318012F6E3758FBE16 /* RecipientMemory.swift */; };
 		51381AED82774B5C91E484A7 /* CoachView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B88FDB62F52944069CC31478 /* CoachView.swift */; };
+		B116C0BE1600000000000002 /* TonoConnectivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = B116C0BE1600000000000001 /* TonoConnectivity.swift */; };
 		53164013FEB9099C4ACC2C71 /* MetricKitReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 640260545EC970E83D72B3B0 /* MetricKitReporter.swift */; };
 		58FF045E71513B824C5D593F /* DraftHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6B4784B7C394FD81347488C /* DraftHistory.swift */; };
 		5A3F5B2DEE787882EB6A04AC /* MemoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C73FA31B4F44D8110957849 /* MemoryView.swift */; };
@@ -112,6 +148,7 @@
 		C0E707D6242E36DA94356BE9 /* KeyboardRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65C4FC72401862C2052D7F44 /* KeyboardRootView.swift */; };
 		C2C9DD7206A65B1579A5190A /* RecipientMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58D322318012F6E3758FBE16 /* RecipientMemory.swift */; };
 		C89EABB2DBA692A1FF5AC255 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 822A94BEAD307E044D2E1547 /* SettingsView.swift */; };
+		B1115E770000000000000002 /* RecipientsManagerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1115E770000000000000001 /* RecipientsManagerView.swift */; };
 		C9B979F056F3D84FB316577F /* SharedUserDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 772DD67FA1CD9CF09D426AF5 /* SharedUserDefaults.swift */; };
 		C9E4BE5B5759944FF1CF021C /* StyleMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78AA6203719949C25622DA78 /* StyleMemory.swift */; };
 		CAC1F787FB6D455F9E2ED646 /* ToneEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F4E27FA018027D2D4B0C8AD /* ToneEngine.swift */; };
@@ -131,8 +168,30 @@
 		F9F9FEC515BC480346923B7B /* CrashReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4673C08A34AA91DC050C1D33 /* CrashReporter.swift */; };
 		FD235F56501E8926FED5616B /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA287EC754705B7065C31935 /* KeyboardViewController.swift */; };
 		850000000000000000000001 /* SpellingCorrection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 850000000000000000000004 /* SpellingCorrection.swift */; };
+		A60000000000000000000006 /* LocalIntelligence.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60000000000000000000004 /* LocalIntelligence.swift */; };
+		A70000000000000000000002 /* LocalIntelligence.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60000000000000000000004 /* LocalIntelligence.swift */; };
+		A60000000000000000000005 /* LocalIntelligence.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60000000000000000000004 /* LocalIntelligence.swift */; };
+		A60000000000000000000003 /* TonoStripRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60000000000000000000001 /* TonoStripRouting.swift */; };
+		A60000000000000000000002 /* TonoStripRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60000000000000000000001 /* TonoStripRouting.swift */; };
 		850000000000000000000002 /* SpellingCorrection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 850000000000000000000004 /* SpellingCorrection.swift */; };
 		850000000000000000000003 /* SpellingCorrectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 850000000000000000000005 /* SpellingCorrectionTests.swift */; };
+		A6000000000000000000000C /* Build106LocalIntelligenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6000000000000000000000B /* Build106LocalIntelligenceTests.swift */; };
+		A6000000000000000000000A /* Build106MultilineCursorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60000000000000000000009 /* Build106MultilineCursorTests.swift */; };
+		A60000000000000000000008 /* Build106SuggestionRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60000000000000000000007 /* Build106SuggestionRoutingTests.swift */; };
+		A71070000000000000000002 /* Build107CoachSkeletonTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71070000000000000000001 /* Build107CoachSkeletonTests.swift */; };
+		A71070000000000000000004 /* Build107ToneTargetResetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71070000000000000000003 /* Build107ToneTargetResetTests.swift */; };
+		A71090000000000000000002 /* Build109StripRoleAndDocumentIntegrityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71090000000000000000001 /* Build109StripRoleAndDocumentIntegrityTests.swift */; };
+		A71110000000000000000002 /* Build111CursorSensitivityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71110000000000000000001 /* Build111CursorSensitivityTests.swift */; };
+		B112C0FFEE0000000000A112 /* Build112UISurfaceContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B112C0FFEE0000000000B112 /* Build112UISurfaceContractTests.swift */; };
+		B113C0FFEE0000000000A113 /* Build113FailureCopyRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B113C0FFEE0000000000B113 /* Build113FailureCopyRuntimeTests.swift */; };
+		B114C0FFEE0000000000A114 /* Build114RewriteAlternativesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B114C0FFEE0000000000B114 /* Build114RewriteAlternativesTests.swift */; };
+		B114E0FFEE0000000000A115 /* Build114EmailAccountTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B114E0FFEE0000000000B115 /* Build114EmailAccountTests.swift */; };
+		A71110000000000000000004 /* Build111CoachReconnectTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71110000000000000000003 /* Build111CoachReconnectTests.swift */; };
+		5ED0C7000000000000000002 /* SetupDoctor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ED0C7000000000000000001 /* SetupDoctor.swift */; };
+		5ED0C7000000000000000003 /* SetupDoctor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ED0C7000000000000000001 /* SetupDoctor.swift */; };
+		5ED0C7000000000000000004 /* SetupDoctor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ED0C7000000000000000001 /* SetupDoctor.swift */; };
+		5ED0C7000000000000000006 /* SetupDoctorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ED0C7000000000000000005 /* SetupDoctorView.swift */; };
+		5ED0C7000000000000000008 /* SetupDoctorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ED0C7000000000000000007 /* SetupDoctorTests.swift */; };
 		860000000000000000000001 /* CoachContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 860000000000000000000003 /* CoachContractTests.swift */; };
 		950000000000000000000001 /* Build95CoachContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 950000000000000000000002 /* Build95CoachContractTests.swift */; };
 		950000000000000000000011 /* Build95LifecycleClockTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 950000000000000000000012 /* Build95LifecycleClockTests.swift */; };
@@ -164,11 +223,18 @@
 		970000000000000000000203 /* EmojiKeyboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 970000000000000000000003 /* EmojiKeyboard.swift */; };
 		970000000000000000000210 /* Build97KeyboardGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 970000000000000000000010 /* Build97KeyboardGeometryTests.swift */; };
 		970000000000000000000211 /* Build97BackspaceStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 970000000000000000000011 /* Build97BackspaceStateTests.swift */; };
+		990000000000000000000101 /* SpaceCursorEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 990000000000000000000001 /* SpaceCursorEngine.swift */; };
+		990000000000000000000201 /* SpaceCursorEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 990000000000000000000001 /* SpaceCursorEngine.swift */; };
+		990000000000000000000210 /* SpaceCursorGestureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 990000000000000000000010 /* SpaceCursorGestureTests.swift */; };
 		970000000000000000000212 /* Build97LayerNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 970000000000000000000012 /* Build97LayerNavigationTests.swift */; };
 		970000000000000000000213 /* Build97EmojiTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 970000000000000000000013 /* Build97EmojiTests.swift */; };
 		970000000000000000000220 /* Build97KeyboardRow3VisibleBoundsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 970000000000000000000020 /* Build97KeyboardRow3VisibleBoundsTests.swift */; };
 		970000000000000000000230 /* Build98PunctuationKeyTitleInvarianceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 970000000000000000000021 /* Build98PunctuationKeyTitleInvarianceTests.swift */; };
 		970000000000000000000240 /* Build99CoachSurfaceLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 970000000000000000000022 /* Build99CoachSurfaceLifecycleTests.swift */; };
+		B117REA0000000000000011 /* ReadTheAsk.swift in Sources */ = {isa = PBXBuildFile; fileRef = B117REA0000000000000001 /* ReadTheAsk.swift */; };
+		B117REA0000000000000012 /* ReadTheAsk.swift in Sources */ = {isa = PBXBuildFile; fileRef = B117REA0000000000000001 /* ReadTheAsk.swift */; };
+		B117REA0000000000000021 /* ReadTheAskView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B117REA0000000000000002 /* ReadTheAskView.swift */; };
+		B117REA0000000000000031 /* Build117ReadTheAskTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B117REA0000000000000003 /* Build117ReadTheAskTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -219,12 +285,25 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A1180000000000000000F001 /* RewriteProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewriteProvider.swift; sourceTree = "<group>"; };
+		A1220000000000000000F001 /* PurchaseCapability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PurchaseCapability.swift; sourceTree = "<group>"; };
+		A1180000000000000000F002 /* PrivateCloudCompute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateCloudCompute.swift; sourceTree = "<group>"; };
+		A1180000000000000000F003 /* AppIntentRouting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIntentRouting.swift; sourceTree = "<group>"; };
+		A1180000000000000000F004 /* ToneVariantEntity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToneVariantEntity.swift; sourceTree = "<group>"; };
+		A1180000000000000000F005 /* AppleIntelligenceIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleIntelligenceIntents.swift; sourceTree = "<group>"; };
+		A1180000000000000000F006 /* Build118AppleIntelligenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build118AppleIntelligenceTests.swift; sourceTree = "<group>"; };
+		A1220000000000000000F006 /* Build122PurchaseGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build122PurchaseGateTests.swift; sourceTree = "<group>"; };
+		B115C0FFEE0000000000F002 /* Build115LocalCoachTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build115LocalCoachTests.swift; sourceTree = "<group>"; };
+		B116C0FFEE0000000000F002 /* Build116SelectedFirstTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build116SelectedFirstTests.swift; sourceTree = "<group>"; };
+		B116A11B0E0000000000F002 /* Build116AirplaneModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build116AirplaneModeTests.swift; sourceTree = "<group>"; };
+		B115ADA7000000000000F002 /* Build115AdaptiveLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build115AdaptiveLayoutTests.swift; sourceTree = "<group>"; };
+		B115ADA7000000000000F004 /* Build115IPadSurfaceLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build115IPadSurfaceLayoutTests.swift; sourceTree = "<group>"; };
+		B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalCoachRewrite.swift; sourceTree = "<group>"; };
 		045FE2F8B15471B8BFD56595 /* ContactsAccessTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ContactsAccessTests.swift; sourceTree = "<group>"; };
 		1590C6120760B6DE05CC4AB9 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		1A5B6B766BC79F63A5B21178 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		1AEE8A1C65E51602F4AD7330 /* TonoShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TonoShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		1B3DE7D6D3E9558EBAB94A9A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		217A3D33DCC3DE654CA907C5 /* PlaygroundView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaygroundView.swift; sourceTree = "<group>"; };
 		2850931F0F01200197FC84B7 /* TonoMessagesExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TonoMessagesExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		890000000000000000000003 /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		8A0000000000000000000001 /* LiveToneClassifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveToneClassifier.swift; sourceTree = "<group>"; };
@@ -266,8 +345,11 @@
 		772DD67FA1CD9CF09D426AF5 /* SharedUserDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedUserDefaults.swift; sourceTree = "<group>"; };
 		78AA6203719949C25622DA78 /* StyleMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StyleMemory.swift; sourceTree = "<group>"; };
 		7FCE9DA4E023C12BADC4BC12 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		B115ADA7000000000000F001 /* AdaptiveLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveLayout.swift; sourceTree = "<group>"; };
+		CE0000000000000000000001 /* ConsumerErrorCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsumerErrorCopy.swift; sourceTree = "<group>"; };
 		80AB8E621E4EDC9A59A7258D /* TonoBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoBackend.swift; sourceTree = "<group>"; };
 		822A94BEAD307E044D2E1547 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		B1115E770000000000000001 /* RecipientsManagerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipientsManagerView.swift; sourceTree = "<group>"; };
 		8C71600DCEEEFF51AE070EA1 /* TonoMessagesExtension.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = TonoMessagesExtension.entitlements; sourceTree = "<group>"; };
 		92219FEC38B911DE3D75FC8F /* TonoAnalytics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoAnalytics.swift; sourceTree = "<group>"; };
 		59A99B14322C64F30B091061 /* AppleRewriteBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleRewriteBridge.swift; sourceTree = "<group>"; };
@@ -281,7 +363,24 @@
 		A834BA4FC850457268EEDDD3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		AA287EC754705B7065C31935 /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
 		850000000000000000000004 /* SpellingCorrection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpellingCorrection.swift; sourceTree = "<group>"; };
+		A60000000000000000000004 /* LocalIntelligence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalIntelligence.swift; sourceTree = "<group>"; };
+		A60000000000000000000001 /* TonoStripRouting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoStripRouting.swift; sourceTree = "<group>"; };
 		850000000000000000000005 /* SpellingCorrectionTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SpellingCorrectionTests.swift; sourceTree = "<group>"; };
+		A6000000000000000000000B /* Build106LocalIntelligenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build106LocalIntelligenceTests.swift; sourceTree = "<group>"; };
+		A60000000000000000000009 /* Build106MultilineCursorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build106MultilineCursorTests.swift; sourceTree = "<group>"; };
+		A60000000000000000000007 /* Build106SuggestionRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build106SuggestionRoutingTests.swift; sourceTree = "<group>"; };
+		A71070000000000000000001 /* Build107CoachSkeletonTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build107CoachSkeletonTests.swift; sourceTree = "<group>"; };
+		A71070000000000000000003 /* Build107ToneTargetResetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build107ToneTargetResetTests.swift; sourceTree = "<group>"; };
+		A71090000000000000000001 /* Build109StripRoleAndDocumentIntegrityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build109StripRoleAndDocumentIntegrityTests.swift; sourceTree = "<group>"; };
+		A71110000000000000000001 /* Build111CursorSensitivityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build111CursorSensitivityTests.swift; sourceTree = "<group>"; };
+		B112C0FFEE0000000000B112 /* Build112UISurfaceContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build112UISurfaceContractTests.swift; sourceTree = "<group>"; };
+		B113C0FFEE0000000000B113 /* Build113FailureCopyRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build113FailureCopyRuntimeTests.swift; sourceTree = "<group>"; };
+		B114C0FFEE0000000000B114 /* Build114RewriteAlternativesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build114RewriteAlternativesTests.swift; sourceTree = "<group>"; };
+		B114E0FFEE0000000000B115 /* Build114EmailAccountTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build114EmailAccountTests.swift; sourceTree = "<group>"; };
+		A71110000000000000000003 /* Build111CoachReconnectTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build111CoachReconnectTests.swift; sourceTree = "<group>"; };
+		5ED0C7000000000000000001 /* SetupDoctor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupDoctor.swift; sourceTree = "<group>"; };
+		5ED0C7000000000000000005 /* SetupDoctorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupDoctorView.swift; sourceTree = "<group>"; };
+		5ED0C7000000000000000007 /* SetupDoctorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupDoctorTests.swift; sourceTree = "<group>"; };
 		860000000000000000000003 /* CoachContractTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CoachContractTests.swift; sourceTree = "<group>"; };
 		950000000000000000000002 /* Build95CoachContractTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build95CoachContractTests.swift; sourceTree = "<group>"; };
 		950000000000000000000012 /* Build95LifecycleClockTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build95LifecycleClockTests.swift; sourceTree = "<group>"; };
@@ -299,6 +398,7 @@
 		B3861F3AF2390477CF4D567E /* CoachDraftIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachDraftIntent.swift; sourceTree = "<group>"; };
 		B44BF0A224058437A1D2B6CB /* OnboardingEntryPointsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = OnboardingEntryPointsView.swift; sourceTree = "<group>"; };
 		B88FDB62F52944069CC31478 /* CoachView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachView.swift; sourceTree = "<group>"; };
+		B116C0BE1600000000000001 /* TonoConnectivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoConnectivity.swift; sourceTree = "<group>"; };
 		B92542DA54DA284DBFA670F3 /* Tono.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Tono.entitlements; sourceTree = "<group>"; };
 		BE2A01C91155C67976C8B54C /* ShareRootView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ShareRootView.swift; sourceTree = "<group>"; };
 		C8209946856E4958F336751B /* TonoKeyboard.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TonoKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -312,6 +412,8 @@
 		FF7D2CE21D5E50685F393B6E /* UserMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserMemory.swift; sourceTree = "<group>"; };
 		970000000000000000000001 /* TonoKeyboardGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoKeyboardGeometry.swift; sourceTree = "<group>"; };
 		970000000000000000000002 /* BackspaceRepeatEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackspaceRepeatEngine.swift; sourceTree = "<group>"; };
+		990000000000000000000001 /* SpaceCursorEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceCursorEngine.swift; sourceTree = "<group>"; };
+		990000000000000000000010 /* SpaceCursorGestureTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SpaceCursorGestureTests.swift; sourceTree = "<group>"; };
 		970000000000000000000003 /* EmojiKeyboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmojiKeyboard.swift; sourceTree = "<group>"; };
 		970000000000000000000010 /* Build97KeyboardGeometryTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build97KeyboardGeometryTests.swift; sourceTree = "<group>"; };
 		970000000000000000000011 /* Build97BackspaceStateTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build97BackspaceStateTests.swift; sourceTree = "<group>"; };
@@ -320,6 +422,9 @@
 		970000000000000000000020 /* Build97KeyboardRow3VisibleBoundsTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build97KeyboardRow3VisibleBoundsTests.swift; sourceTree = "<group>"; };
 		970000000000000000000021 /* Build98PunctuationKeyTitleInvarianceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build98PunctuationKeyTitleInvarianceTests.swift; sourceTree = "<group>"; };
 		970000000000000000000022 /* Build99CoachSurfaceLifecycleTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build99CoachSurfaceLifecycleTests.swift; sourceTree = "<group>"; };
+		B117REA0000000000000001 /* ReadTheAsk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadTheAsk.swift; sourceTree = "<group>"; };
+		B117REA0000000000000002 /* ReadTheAskView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadTheAskView.swift; sourceTree = "<group>"; };
+		B117REA0000000000000003 /* Build117ReadTheAskTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build117ReadTheAskTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -373,6 +478,14 @@
 		7CCA65BB1F5C2B14CEB12B39 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				B117REA0000000000000003 /* Build117ReadTheAskTests.swift */,
+				A1180000000000000000F006 /* Build118AppleIntelligenceTests.swift */,
+				A1220000000000000000F006 /* Build122PurchaseGateTests.swift */,
+				B115ADA7000000000000F002 /* Build115AdaptiveLayoutTests.swift */,
+				B115ADA7000000000000F004 /* Build115IPadSurfaceLayoutTests.swift */,
+				B115C0FFEE0000000000F002 /* Build115LocalCoachTests.swift */,
+				B116C0FFEE0000000000F002 /* Build116SelectedFirstTests.swift */,
+				B116A11B0E0000000000F002 /* Build116AirplaneModeTests.swift */,
 				045FE2F8B15471B8BFD56595 /* ContactsAccessTests.swift */,
 				860000000000000000000003 /* CoachContractTests.swift */,
 				950000000000000000000002 /* Build95CoachContractTests.swift */,
@@ -390,6 +503,19 @@
 				8D0000000000000000000005 /* Build97LiveTonePositiveOpportunityTests.swift */,
 				8D0000000000000000000006 /* Build97ShippingPathTests.swift */,
 				850000000000000000000005 /* SpellingCorrectionTests.swift */,
+				A6000000000000000000000B /* Build106LocalIntelligenceTests.swift */,
+				A60000000000000000000009 /* Build106MultilineCursorTests.swift */,
+				A60000000000000000000007 /* Build106SuggestionRoutingTests.swift */,
+				A71070000000000000000001 /* Build107CoachSkeletonTests.swift */,
+				A71070000000000000000003 /* Build107ToneTargetResetTests.swift */,
+				A71090000000000000000001 /* Build109StripRoleAndDocumentIntegrityTests.swift */,
+				A71110000000000000000001 /* Build111CursorSensitivityTests.swift */,
+				B112C0FFEE0000000000B112 /* Build112UISurfaceContractTests.swift */,
+				B113C0FFEE0000000000B113 /* Build113FailureCopyRuntimeTests.swift */,
+				B114C0FFEE0000000000B114 /* Build114RewriteAlternativesTests.swift */,
+				B114E0FFEE0000000000B115 /* Build114EmailAccountTests.swift */,
+				A71110000000000000000003 /* Build111CoachReconnectTests.swift */,
+				5ED0C7000000000000000007 /* SetupDoctorTests.swift */,
 				970000000000000000000010 /* Build97KeyboardGeometryTests.swift */,
 				970000000000000000000011 /* Build97BackspaceStateTests.swift */,
 				970000000000000000000012 /* Build97LayerNavigationTests.swift */,
@@ -397,6 +523,7 @@
 				970000000000000000000020 /* Build97KeyboardRow3VisibleBoundsTests.swift */,
 				970000000000000000000021 /* Build98PunctuationKeyTitleInvarianceTests.swift */,
 				970000000000000000000022 /* Build99CoachSurfaceLifecycleTests.swift */,
+				990000000000000000000010 /* SpaceCursorGestureTests.swift */,
 			);
 			name = Tests;
 			path = Tests;
@@ -417,6 +544,12 @@
 		8CDBA1B22180BBD9A85B4846 /* Shared */ = {
 			isa = PBXGroup;
 			children = (
+				B117REA0000000000000001 /* ReadTheAsk.swift */,
+				B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */,
+				A1180000000000000000F001 /* RewriteProvider.swift */,
+				A1220000000000000000F001 /* PurchaseCapability.swift */,
+				A1180000000000000000F002 /* PrivateCloudCompute.swift */,
+				A1180000000000000000F003 /* AppIntentRouting.swift */,
 				59A99B14322C64F30B091061 /* AppleRewriteBridge.swift */,
 				664006D51FBA77935CCA67AA /* AnthropicToneAnalyzer.swift */,
 				940000000000000000000004 /* CoachVariantSettings.swift */,
@@ -443,8 +576,10 @@
 				58D322318012F6E3758FBE16 /* RecipientMemory.swift */,
 				424F033D1993931EF9CFEF4D /* SharedKeychain.swift */,
 				772DD67FA1CD9CF09D426AF5 /* SharedUserDefaults.swift */,
+				5ED0C7000000000000000001 /* SetupDoctor.swift */,
 				4F9B5C7A9E2C7B6A5D1E0F32 /* OnDeviceAppleRewrite.swift */,
 				2A8C2F1D3B4E5F6A7C8D9E0F /* OnDeviceAppleRewriteTests.swift */,
+				CE0000000000000000000001 /* ConsumerErrorCopy.swift */,
 				A8341350101744023555C179 /* StoreKitManager.swift */,
 				78AA6203719949C25622DA78 /* StyleMemory.swift */,
 				4F4E27FA018027D2D4B0C8AD /* ToneEngine.swift */,
@@ -472,16 +607,22 @@
 		ACBF71996DDD904FF659BD91 /* App */ = {
 			isa = PBXGroup;
 			children = (
+				B117REA0000000000000002 /* ReadTheAskView.swift */,
+				B115ADA7000000000000F001 /* AdaptiveLayout.swift */,
 				B3861F3AF2390477CF4D567E /* CoachDraftIntent.swift */,
+				A1180000000000000000F004 /* ToneVariantEntity.swift */,
+				A1180000000000000000F005 /* AppleIntelligenceIntents.swift */,
 				B88FDB62F52944069CC31478 /* CoachView.swift */,
+				B116C0BE1600000000000001 /* TonoConnectivity.swift */,
 				6EDBB4F550AF48643771E5BF /* DigestView.swift */,
 				7FCE9DA4E023C12BADC4BC12 /* HomeView.swift */,
 				A834BA4FC850457268EEDDD3 /* Info.plist */,
 				8A0000000000000000000005 /* PrivacyInfo.xcprivacy */,
 				3C73FA31B4F44D8110957849 /* MemoryView.swift */,
 				600B6DD9AC9FC36C6BB8ED14 /* OnboardingCalibrationView.swift */,
-				217A3D33DCC3DE654CA907C5 /* PlaygroundView.swift */,
 				822A94BEAD307E044D2E1547 /* SettingsView.swift */,
+				B1115E770000000000000001 /* RecipientsManagerView.swift */,
+				5ED0C7000000000000000005 /* SetupDoctorView.swift */,
 				B92542DA54DA284DBFA670F3 /* Tono.entitlements */,
 				3BEE71892FA8D9333320C272 /* Tono.storekit */,
 				DF0A4C99BE251A2D39F2EAC6 /* TonoApp.swift */,
@@ -513,6 +654,8 @@
 				AA287EC754705B7065C31935 /* KeyboardViewController.swift */,
 				870000000000000000000004 /* TonoKeyboardVisualStyle.swift */,
 				850000000000000000000004 /* SpellingCorrection.swift */,
+				A60000000000000000000004 /* LocalIntelligence.swift */,
+				A60000000000000000000001 /* TonoStripRouting.swift */,
 				6EE5759E683FD2ECA633D8FC /* TonoCoachClient.swift */,
 				8B0000000000000000000010 /* LiveToneEngine.swift */,
 				8B0000000000000000000011 /* LiveToneIndicatorView.swift */,
@@ -528,6 +671,7 @@
 				970000000000000000000001 /* TonoKeyboardGeometry.swift */,
 				970000000000000000000002 /* BackspaceRepeatEngine.swift */,
 				970000000000000000000003 /* EmojiKeyboard.swift */,
+				990000000000000000000001 /* SpaceCursorEngine.swift */,
 			);
 			path = AppleFidelity;
 			sourceTree = "<group>";
@@ -730,6 +874,13 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B115C0FFEE0000000000F011 /* LocalCoachRewrite.swift in Sources */,
+				A1180000000000000000B012 /* RewriteProvider.swift in Sources */,
+				A1220000000000000000B012 /* PurchaseCapability.swift in Sources */,
+				A1180000000000000000B022 /* PrivateCloudCompute.swift in Sources */,
+				CE0000000000000000000011 /* ConsumerErrorCopy.swift in Sources */,
+				A60000000000000000000005 /* LocalIntelligence.swift in Sources */,
+				A60000000000000000000002 /* TonoStripRouting.swift in Sources */,
 				AC41C81596FDF580237DDAD9 /* AnthropicToneAnalyzer.swift in Sources */,
 				3E19380F8F3D0E3399CF3504 /* AppleRewriteBridge.swift in Sources */,
 				7550DEA84F0587C8385AAFF3 /* ContactsSync.swift in Sources */,
@@ -743,6 +894,7 @@
 				970000000000000000000101 /* TonoKeyboardGeometry.swift in Sources */,
 				970000000000000000000102 /* BackspaceRepeatEngine.swift in Sources */,
 				970000000000000000000103 /* EmojiKeyboard.swift in Sources */,
+				990000000000000000000101 /* SpaceCursorEngine.swift in Sources */,
 				850000000000000000000001 /* SpellingCorrection.swift in Sources */,
 				FD395AA136FAAF23914CA72A /* TonoCoachClient.swift in Sources */,
 				53164013FEB9099C4ACC2C71 /* MetricKitReporter.swift in Sources */,
@@ -753,6 +905,7 @@
 				C2C9DD7206A65B1579A5190A /* RecipientMemory.swift in Sources */,
 				6A419FF921198D93A073AB0E /* SharedKeychain.swift in Sources */,
 				A4FDDCB7F7C0264C39FF6732 /* SharedUserDefaults.swift in Sources */,
+				5ED0C7000000000000000003 /* SetupDoctor.swift in Sources */,
 				8A0000000000000000000011 /* LiveToneClassifier.swift in Sources */,
 				8A0000000000000000000012 /* LiveToneSession.swift in Sources */,
 				8A0000000000000000000013 /* LiveTonePrivacy.swift in Sources */,
@@ -781,6 +934,12 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B117REA0000000000000012 /* ReadTheAsk.swift in Sources */,
+				B115C0FFEE0000000000F012 /* LocalCoachRewrite.swift in Sources */,
+				A1180000000000000000B013 /* RewriteProvider.swift in Sources */,
+				A1220000000000000000B013 /* PurchaseCapability.swift in Sources */,
+				A1180000000000000000B023 /* PrivateCloudCompute.swift in Sources */,
+				CE0000000000000000000012 /* ConsumerErrorCopy.swift in Sources */,
 				A950D38EBA2B8E065632F65A /* ShareRootView.swift in Sources */,
 				44FC072890D0B17F577A883D /* ShareViewController.swift in Sources */,
 				6E859BC8FB332A3E2B18687C /* AnthropicToneAnalyzer.swift in Sources */,
@@ -810,6 +969,35 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B117REA0000000000000031 /* Build117ReadTheAskTests.swift in Sources */,
+				B115C0FFEE0000000000F015 /* LocalCoachRewrite.swift in Sources */,
+				A1180000000000000000B015 /* RewriteProvider.swift in Sources */,
+				A1220000000000000000B015 /* PurchaseCapability.swift in Sources */,
+				A1180000000000000000B025 /* PrivateCloudCompute.swift in Sources */,
+				A1180000000000000000B035 /* AppIntentRouting.swift in Sources */,
+				A1180000000000000000B065 /* Build118AppleIntelligenceTests.swift in Sources */,
+				A1220000000000000000B066 /* Build122PurchaseGateTests.swift in Sources */,
+				B115ADA7000000000000F022 /* Build115AdaptiveLayoutTests.swift in Sources */,
+				B115ADA7000000000000F044 /* Build115IPadSurfaceLayoutTests.swift in Sources */,
+				B115C0FFEE0000000000F021 /* Build115LocalCoachTests.swift in Sources */,
+				B116C0FFEE0000000000F021 /* Build116SelectedFirstTests.swift in Sources */,
+				B116A11B0E0000000000F021 /* Build116AirplaneModeTests.swift in Sources */,
+				A6000000000000000000000C /* Build106LocalIntelligenceTests.swift in Sources */,
+				A6000000000000000000000A /* Build106MultilineCursorTests.swift in Sources */,
+				A60000000000000000000008 /* Build106SuggestionRoutingTests.swift in Sources */,
+				A71070000000000000000002 /* Build107CoachSkeletonTests.swift in Sources */,
+				A71070000000000000000004 /* Build107ToneTargetResetTests.swift in Sources */,
+				A71090000000000000000002 /* Build109StripRoleAndDocumentIntegrityTests.swift in Sources */,
+				A71110000000000000000002 /* Build111CursorSensitivityTests.swift in Sources */,
+				B112C0FFEE0000000000A112 /* Build112UISurfaceContractTests.swift in Sources */,
+				B113C0FFEE0000000000A113 /* Build113FailureCopyRuntimeTests.swift in Sources */,
+				B114C0FFEE0000000000A114 /* Build114RewriteAlternativesTests.swift in Sources */,
+				B114E0FFEE0000000000A115 /* Build114EmailAccountTests.swift in Sources */,
+				A71110000000000000000004 /* Build111CoachReconnectTests.swift in Sources */,
+				5ED0C7000000000000000004 /* SetupDoctor.swift in Sources */,
+				5ED0C7000000000000000008 /* SetupDoctorTests.swift in Sources */,
+				A60000000000000000000006 /* LocalIntelligence.swift in Sources */,
+				A60000000000000000000003 /* TonoStripRouting.swift in Sources */,
 				4A7F52C5EC4E98E266267D4E /* ContactsAccessTests.swift in Sources */,
 				850000000000000000000002 /* SpellingCorrection.swift in Sources */,
 				850000000000000000000003 /* SpellingCorrectionTests.swift in Sources */,
@@ -848,6 +1036,8 @@
 				970000000000000000000201 /* TonoKeyboardGeometry.swift in Sources */,
 				970000000000000000000202 /* BackspaceRepeatEngine.swift in Sources */,
 				970000000000000000000203 /* EmojiKeyboard.swift in Sources */,
+				990000000000000000000201 /* SpaceCursorEngine.swift in Sources */,
+				990000000000000000000210 /* SpaceCursorGestureTests.swift in Sources */,
 				970000000000000000000210 /* Build97KeyboardGeometryTests.swift in Sources */,
 				970000000000000000000211 /* Build97BackspaceStateTests.swift in Sources */,
 				970000000000000000000212 /* Build97LayerNavigationTests.swift in Sources */,
@@ -864,6 +1054,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B115C0FFEE0000000000F013 /* LocalCoachRewrite.swift in Sources */,
+				A1180000000000000000B014 /* RewriteProvider.swift in Sources */,
+				A1220000000000000000B014 /* PurchaseCapability.swift in Sources */,
+				A1180000000000000000B024 /* PrivateCloudCompute.swift in Sources */,
+				CE0000000000000000000013 /* ConsumerErrorCopy.swift in Sources */,
 				3C85BFB4E498791114E7670D /* AnthropicToneAnalyzer.swift in Sources */,
 				0D6E4F8C3F2A9B0D4E5F6A7B /* AppleRewriteBridge.swift in Sources */,
 				3781BE8282934F1F04FC4365 /* ContactsSync.swift in Sources */,
@@ -893,6 +1088,17 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B117REA0000000000000021 /* ReadTheAskView.swift in Sources */,
+				B117REA0000000000000011 /* ReadTheAsk.swift in Sources */,
+				B115C0FFEE0000000000F014 /* LocalCoachRewrite.swift in Sources */,
+				A1180000000000000000B011 /* RewriteProvider.swift in Sources */,
+				A1220000000000000000B011 /* PurchaseCapability.swift in Sources */,
+				A1180000000000000000B021 /* PrivateCloudCompute.swift in Sources */,
+				A1180000000000000000B031 /* AppIntentRouting.swift in Sources */,
+				A1180000000000000000B041 /* ToneVariantEntity.swift in Sources */,
+				A1180000000000000000B051 /* AppleIntelligenceIntents.swift in Sources */,
+				CE0000000000000000000010 /* ConsumerErrorCopy.swift in Sources */,
+				A70000000000000000000002 /* LocalIntelligence.swift in Sources */,
 				ACD65ABC66C16A8CF9A1228B /* AnthropicToneAnalyzer.swift in Sources */,
 				940000000000000000000003 /* CoachVariantSettings.swift in Sources */,
 				2F8A6B0E514C1D2F6A7B8C9D /* AppleRewriteBridge.swift in Sources */,
@@ -914,6 +1120,7 @@
 				8E0000000000000000000002 /* LiveToneOpportunitySession.swift in Sources */,
 				8E0000000000000000000003 /* LiveToneOpportunityCounters.swift in Sources */,
 				8E0000000000000000000004 /* LiveToneOpportunityFixtures.swift in Sources */,
+				B115ADA7000000000000F011 /* AdaptiveLayout.swift in Sources */,
 				2F986D1C30D60DF7044A1827 /* HomeView.swift in Sources */,
 				5A3F5B2DEE787882EB6A04AC /* MemoryView.swift in Sources */,
 				BCE86246C1AA22B4751B06C8 /* MetricKitReporter.swift in Sources */,
@@ -922,12 +1129,15 @@
 				3A9B7C1F625D2E3A7B8C9D0E /* OnDeviceAppleRewrite.swift in Sources */,
 				A3D6E3007ACDF66C3251C56E /* OnboardingCalibrationView.swift in Sources */,
 				09855EF291E1E11F38AA72AC /* OpenAIToneAnalyzer.swift in Sources */,
-				26A32AFB6BA4EE68D7300F89 /* PlaygroundView.swift in Sources */,
 				51381AED82774B5C91E484A7 /* CoachView.swift in Sources */,
+				B116C0BE1600000000000002 /* TonoConnectivity.swift in Sources */,
 				511B5CB9D0506AE3B0B7BA9A /* RecipientMemory.swift in Sources */,
 				C89EABB2DBA692A1FF5AC255 /* SettingsView.swift in Sources */,
+				B1115E770000000000000002 /* RecipientsManagerView.swift in Sources */,
 				BD9E5A023D82845158A938D9 /* SharedKeychain.swift in Sources */,
 				C9B979F056F3D84FB316577F /* SharedUserDefaults.swift in Sources */,
+				5ED0C7000000000000000002 /* SetupDoctor.swift in Sources */,
+				5ED0C7000000000000000006 /* SetupDoctorView.swift in Sources */,
 				01B5DA16281CE5533AAA9E35 /* StoreKitManager.swift in Sources */,
 				B4D2FE13BAC21B8C41C5185C /* StyleMemory.swift in Sources */,
 				7F047DD75ED87391C5FF4865 /* ToneEngine.swift in Sources */,

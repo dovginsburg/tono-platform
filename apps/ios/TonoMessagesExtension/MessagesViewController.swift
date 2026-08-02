@@ -84,7 +84,9 @@ class MessagesViewController: MSMessagesAppViewController {
         conversation.insertText(text) { [weak self] error in
             DispatchQueue.main.async {
                 if let error {
-                    completion("Couldn’t insert the rewrite: \(error.localizedDescription)")
+                    // Build 112: never hand the host's own failure text to the
+                    // user — say what happened and what to do.
+                    completion(ConsumerErrorCopy.message(for: error, action: .insertRewrite))
                 } else {
                     // Collapse back to compact so the user is looking at their
                     // freshly-inserted draft in the input bar.
@@ -285,6 +287,13 @@ struct MessagesRootView: View {
         errorMessage = nil
     }
 
+    /// Outcomes of a rewrite request that are not failures of anything the
+    /// user can see. Kept separate from the transport's error type so they
+    /// never inherit its description.
+    private enum MessagesRewriteOutcome: Error {
+        case noDistinctRewrite
+    }
+
     private func requestRewrite(axis: String) {
         let source = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard isRegistered else {
@@ -309,21 +318,29 @@ struct MessagesRootView: View {
                 let rewrite = result.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 guard result.status == "ok", !rewrite.isEmpty,
                       normalized(rewrite) != normalized(source) else {
-                    throw TonoBackendError.decoding(
-                        result.reason == "no_distinct_rewrite"
-                            ? "No distinct rewrite yet. Tap the tone again to retry."
-                            : "Tono did not return a distinct rewrite. Try again."
-                    )
+                    // Build 112: this was thrown as a decoding failure, so the
+                    // sentence reached the user wrapped in that failure's own
+                    // description. It is its own outcome — a distinct rewrite
+                    // the user can ask for again — and carries no technical
+                    // cause, so it keeps its own case and its own copy.
+                    throw MessagesRewriteOutcome.noDistinctRewrite
                 }
                 await MainActor.run {
                     resultText = rewrite
+                    isLoading = false
+                }
+            } catch MessagesRewriteOutcome.noDistinctRewrite {
+                await MainActor.run {
+                    selectedAxis = nil
+                    resultText = ""
+                    errorMessage = "No distinct rewrite yet. Tap the tone again to retry."
                     isLoading = false
                 }
             } catch {
                 await MainActor.run {
                     selectedAxis = nil
                     resultText = ""
-                    errorMessage = error.localizedDescription
+                    errorMessage = ConsumerErrorCopy.message(for: error, action: .coachDraft)
                     isLoading = false
                 }
             }
@@ -332,9 +349,11 @@ struct MessagesRootView: View {
 
     private func insert(_ text: String) {
         errorMessage = nil
-        onInsertMessage(text) { failure in
-            if let failure {
-                errorMessage = failure
+        // The controller hands back finished consumer copy, never a failure —
+        // the binding is named for that so nothing raw can slip in unnoticed.
+        onInsertMessage(text) { problem in
+            if let problem {
+                errorMessage = problem
             } else {
                 didInsert = true
             }

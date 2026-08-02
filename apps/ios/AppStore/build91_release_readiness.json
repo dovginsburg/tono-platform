@@ -3,7 +3,17 @@
   "build": 91,
   "prerequisite": "build90_charged_before_upgrade_recovery",
   "description": "Build 91 can only claim a build-90 StoreKit purchase after the user upgrades and uploads signed proof. It cannot protect an immutable build-90 client that was charged but never upgrades. Releasing therefore requires ONE external fact this repo cannot itself prove: (a) provider/TestFlight evidence that build 90 can no longer initiate checkout, or (b) an owner-approved, explicitly bounded charged-before-upgrade recovery policy. This artifact is evaluated by apps/ios/Scripts/build90_recovery_gate.py, which is wired into verify_build91_entitlement_contract.py and FAILS CLOSED until one evidence form is supplied and complete. Do not fabricate evidence.",
-  "status": "unresolved",
+  "status": "resolved-owner-attested-no-charged-users",
+  "resolution": {
+    "form": "charged_before_upgrade_policy",
+    "basis": "Owner attestation by Dov Ginsburg, recorded 2026-07-25T03:22:28Z: no one has paid for Tono yet through Stripe, App Store, or Google Play. Therefore no charged build-90 user exists and no historical entitlement restoration is required.",
+    "attestation_record": "docs/operations/BUILD90-OWNER-ATTESTATION-2026-07-25.md",
+    "scope_note": "The recovery policy below is a safety net over an owner-attested EMPTY population, not a make-good for known affected users. If the attestation is ever contradicted by a provider report showing a build-90 charge, re-open this gate and treat the policy as live.",
+    "not_claimed": [
+      "checkout_disabled evidence is NOT supplied: no App Store Connect observation of build 90 was performed. ASC private keys exist on the release machine but no issuer id is available, so a read-only ASC query was not possible.",
+      "No provider report (Stripe, App Store Connect, Play Console) was queried to corroborate the attestation; the no-payment fact rests on the owner's attestation."
+    ]
+  },
   "evidence": {
     "checkout_disabled": {
       "supplied": false,
@@ -13,16 +23,17 @@
       "reference": null
     },
     "charged_before_upgrade_policy": {
-      "supplied": false,
-      "owner_approved": false,
-      "approved_by": null,
-      "approved_at": null,
-      "bounded_window_days": null,
-      "policy_reference": null
+      "supplied": true,
+      "owner_approved": true,
+      "approved_by": "Dov Ginsburg",
+      "approved_at": "2026-07-25T03:22:28Z",
+      "bounded_window_days": 90,
+      "policy_reference": "docs/operations/BUILD90-OWNER-ATTESTATION-2026-07-25.md"
     }
   },
   "notes": [
     "Operators may supply real evidence out-of-band via the TONO_BUILD90_RECOVERY_EVIDENCE env var (path to a JSON file with the same 'evidence' object) instead of committing it here.",
-    "The two evidence forms are mutually sufficient: exactly one complete form flips the gate to READY."
+    "The two evidence forms are mutually sufficient: exactly one complete form flips the gate to READY.",
+    "bounded_window_days = 90 was NOT stated by the owner. The gate requires a positive integer, and the owner attested the affected population is empty, so 90 days is recorded as a conservative safety-net window. Change it freely; it binds no known user."
   ]
 }

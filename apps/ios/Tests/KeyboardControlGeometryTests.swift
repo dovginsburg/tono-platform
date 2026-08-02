@@ -221,11 +221,16 @@ final class KeyboardControlGeometryTests: XCTestCase {
     }
 
     func testSemanticCoachAxisOrderAndExactTonoitTokens() {
+        // Build 115 inserts `warmer` second: it is a RESULT axis produced by the
+        // on-device route (never a selectable chip), and this order is the order
+        // a local set renders in — Warmer, Clearer, Funnier.
         XCTAssertEqual(
             TonoCoachPalette.orderedAxes.map(\.rawValue),
-            ["safer", "clearer", "funnier", "affectionate", "professional", "concise", "custom"]
+            ["safer", "warmer", "clearer", "funnier", "affectionate", "professional",
+             "concise", "custom"]
         )
         XCTAssertEqual(Self.hex(TonoCoachPalette.Axis.safer.accent), "34D399")
+        XCTAssertEqual(Self.hex(TonoCoachPalette.Axis.warmer.accent), "FB923C")
         XCTAssertEqual(Self.hex(TonoCoachPalette.Axis.clearer.accent), "38BDF8")
         XCTAssertEqual(Self.hex(TonoCoachPalette.Axis.funnier.accent), "FBBF24")
         XCTAssertEqual(Self.hex(TonoCoachPalette.Axis.affectionate.accent), "F472B6")

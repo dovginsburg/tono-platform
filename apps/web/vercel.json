@@ -19,6 +19,10 @@
     { "source": "/api/checkout", "destination": "/app/api/checkout" },
     { "source": "/api/health", "destination": "/app/api/health" },
     { "source": "/api/analyze", "destination": "/app/api/analyze" },
-    { "source": "/api/me", "destination": "/app/api/me" }
+    { "source": "/api/me", "destination": "/app/api/me" },
+    { "source": "/api/account/:path*", "destination": "/app/api/account/:path*" },
+    { "source": "/api/portal", "destination": "/app/api/portal" },
+    { "source": "/api/passkey/:path*", "destination": "/app/api/passkey/:path*" },
+    { "source": "/api/auth/:path*", "destination": "/app/api/auth/:path*" }
   ]
 }

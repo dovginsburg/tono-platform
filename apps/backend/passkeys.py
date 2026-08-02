@@ -62,7 +62,12 @@ _CHALLENGE_TTL_SECONDS = 300
 
 
 def _rp_id() -> str:
-    return os.environ.get("WEBAUTHN_RP_ID", "localhost")
+    value = os.environ.get("WEBAUTHN_RP_ID")
+    if value:
+        return value.strip().lower()
+    if os.environ.get("TONO_ENV", "development").lower() in {"development", "test"}:
+        return "localhost"
+    raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "passkeys are not configured")
 
 
 def _rp_name() -> str:
@@ -70,8 +75,18 @@ def _rp_name() -> str:
 
 
 def _expected_origins() -> list[str]:
-    raw = os.environ.get("WEBAUTHN_ORIGIN", "http://localhost:3300")
-    return [o.strip() for o in raw.split(",") if o.strip()]
+    raw = os.environ.get("WEBAUTHN_ORIGIN")
+    if not raw:
+        if os.environ.get("TONO_ENV", "development").lower() in {"development", "test"}:
+            return ["http://localhost:3300"]
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "passkeys are not configured")
+    origins = [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
+    if not origins or any(
+        not origin.startswith("https://") and not origin.startswith("http://localhost:")
+        for origin in origins
+    ):
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "passkey origins are invalid")
+    return origins
 
 
 # ---------------------------------------------------------------------------

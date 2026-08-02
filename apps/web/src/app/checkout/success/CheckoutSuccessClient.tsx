@@ -13,6 +13,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
+import { apiPath } from '@/lib/auth-redirects'
 
 type MeResponse = {
   device_id?: string | null
@@ -102,7 +103,7 @@ export default function CheckoutSuccessClient() {
     async function tick() {
       if (cancelled) return
       try {
-        const res = await fetch('/api/me', { cache: 'no-store' })
+        const res = await fetch(apiPath('/api/me'), { cache: 'no-store' })
         if (!res.ok) {
           // 502 etc — try again until timeout
           setErrorMsg(null)

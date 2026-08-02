@@ -25,4 +25,9 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("androidx.core:core-ktx:1.12.0")
+
+    // Build 114 — the email account contract (outcome shapes, normalization,
+    // consumer copy) is deliberately pure Kotlin, so it is provable by ordinary
+    // JVM unit tests rather than only by running the app on a device.
+    testImplementation("junit:junit:4.13.2")
 }

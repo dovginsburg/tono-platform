@@ -441,6 +441,9 @@ def compute_me_fields(user: User, store: Store) -> dict[str, Any]:
     subscription_renews_at = (
         user.account.subscription_renews_at if identified else user.subscription_renews_at
     )
+    coupon_pro_expires_at = (
+        user.account.coupon_pro_expires_at if identified else user.coupon_pro_expires_at
+    )
     return dict(
         device_id=user.device_id,
         plan=user.plan_resolved,
@@ -449,7 +452,17 @@ def compute_me_fields(user: User, store: Store) -> dict[str, Any]:
         daily_limit=limit,
         subscription_status=subscription_status,
         subscription_renews_at=subscription_renews_at,
+        coupon_pro_expires_at=coupon_pro_expires_at,
         account_id=user.account_id,
+        # Build 114 — the account-path fields every client already decodes.
+        # The iOS `TonoMe` has declared `email` / `email_verified_at` since
+        # 2026-07-03 while the server returned neither, so the app could never
+        # tell a signed-in person from an anonymous one. These are pure
+        # projections of account state and grant nothing: `is_pro` above
+        # remains the sole entitlement answer.
+        email=user.account.email if user.account else None,
+        email_verified_at=user.account.email_verified_at if user.account else None,
+        lifecycle_state=user.account.lifecycle_state if user.account else "anonymous",
     )
 
 
@@ -728,3 +741,110 @@ def get_set_token_sender() -> Optional[AppStoreServerSetTokenSender]:
         return None
     default_env = "Production" if "Production" in clients else next(iter(clients))
     return AppStoreServerSetTokenSender(clients, default_env)
+
+
+# ---------------------------------------------------------------------------
+# Readiness probe (non-secret observability — contract §5)
+# ---------------------------------------------------------------------------
+
+
+def _safe_catalog_version() -> str:
+    try:
+        return catalog.catalog_version()
+    except catalog.CatalogError:
+        return "unknown"
+
+
+@router.get("/v1/app-store/readiness")
+def app_store_readiness(config: AppStoreConfigDep) -> dict[str, Any]:
+    """Non-secret readiness probe. Mirrors the Google Play readiness contract
+    (see google_play.google_play_readiness) so operators and monitors can
+    confirm which Apple credentials are wired without exposing any secret
+    value (contract §5).
+
+    The endpoint always answers 200 with booleans + already-public identifiers:
+      - ``verification_configured`` — the trusted Apple root (PEM) is wired so
+        signed-data (JWS) verification can run.
+      - ``production_verification_enabled`` — the app's numeric Apple id is
+        wired, so the Production environment verifier can be built. Sandbox
+        works without it.
+      - ``sandbox_verification_enabled`` — Sandbox environment is allowed and
+        its verifier can be built from the same root.
+      - ``provider_api_configured`` — the App Store Server API credentials
+        (issuer id / key id / private key) are all wired, so the
+        current-provider lookup + Set-App-Account-Token sender can be built.
+      - ``set_token_sender_configured`` — the Set-App-Account-Token
+        reconciliation sender is available (alias of ``provider_api_configured``
+        for symmetry with google_play's separate push-auth reporting).
+      - ``bundle_id`` / ``product_ids`` / ``environments`` / ``catalog_version``
+        — already-public identifiers from the configuration + catalog.
+
+    ``ready`` is the single end-to-end answer: verification is configured AND
+    the production-class path is usable (Production verifier OR the
+    current-provider Set-App-Account-Token sender, both of which the live
+    iOS paywall relies on). Sandbox-only configurations can verify a TestFlight
+    purchase but cannot drive Set-App-Account-Token against Production, so
+    they are still 'ready' as long as the production endpoint is reachable
+    through one of those seams.
+
+    No secret value (PEM bytes, API key, private key) is ever returned: only
+    booleans + the non-secret bundle id / product ids / catalog version.
+    """
+    root_pem = os.environ.get("TONO_APPLE_ROOT_CA_PEM", "").strip()
+    verification_configured = bool(root_pem)
+
+    raw_app_id = os.environ.get("TONO_APPLE_APP_APPLE_ID", "").strip()
+    production_verification_enabled = bool(
+        verification_configured and raw_app_id and "Production" in config.environments
+    )
+    sandbox_verification_enabled = bool(
+        verification_configured and "Sandbox" in config.environments
+    )
+
+    issuer = os.environ.get("TONO_APPLE_ISSUER_ID", "").strip()
+    key_id = os.environ.get("TONO_APPLE_KEY_ID", "").strip()
+    raw_priv = os.environ.get("TONO_APPLE_PRIVATE_KEY", "").strip()
+    provider_api_configured = bool(issuer and key_id and raw_priv)
+
+    # Set-App-Account-Token sender is built from the same credentials; alias
+    # for symmetry with the Google Play readiness surface that reports
+    # push_auth_configured alongside verification_configured.
+    set_token_sender_configured = provider_api_configured
+
+    # End-to-end readiness:
+    #   - signed-data verification is configured (PEM + at least one allowed
+    #     environment), AND
+    #   - either the provider API is wired (covers Production end-to-end and
+    #     Set-App-Account-Token reconciliation), OR the configuration is
+    #     Sandbox-only (TestFlight can verify a purchase end-to-end via the
+    #     sandbox verifier alone — the SUBSCRIBED grant is visible without
+    #     the App Store Server API).
+    # The only path that is NOT 'ready' is: no PEM at all, OR a PEM that
+    # cannot build any environment verifier (e.g. Production-only with no
+    # app Apple id) AND no provider API fallback.
+    ready = bool(
+        verification_configured
+        and (production_verification_enabled or sandbox_verification_enabled)
+        and (
+            provider_api_configured
+            or (
+                sandbox_verification_enabled
+                and not production_verification_enabled
+            )
+        )
+    )
+
+    return {
+        "provider": "app_store",
+        "verification_configured": verification_configured,
+        "production_verification_enabled": production_verification_enabled,
+        "sandbox_verification_enabled": sandbox_verification_enabled,
+        "provider_api_configured": provider_api_configured,
+        "set_token_sender_configured": set_token_sender_configured,
+        "bundle_id": config.bundle_id,
+        "product_ids": sorted(config.product_ids),
+        "environments": sorted(config.environments),
+        "app_apple_id_configured": bool(raw_app_id),
+        "catalog_version": _safe_catalog_version(),
+        "ready": ready,
+    }

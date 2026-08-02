@@ -55,10 +55,22 @@ struct MemoryView: View {
                         ToolbarItem(placement: .navigationBarLeading) {
                             Button("Clear all") { showClearConfirm = true }
                                 .foregroundColor(.red)
-                                .font(.system(size: 14))
+                                // Declared in `TonoTextStyle.memoryClearAll`,
+                                // which carries `face: .standard` because this
+                                // button shipped `.font(.system(size: 14))`
+                                // with no `design:` argument, i.e. SF Pro. Only
+                                // the Dynamic Type scaling is new; the typeface
+                                // is the one that was approved.
+                                .tonoFont(.memoryClearAll)
                         }
                     }
                 }
+                // Build 115 — iPad. A grouped list of short facts running the
+                // full 1,032pt of an iPad is a line of text with a quarter-mile
+                // of empty space after it. The list keeps its own full-bleed
+                // background and its CONTENT takes a readable measure.
+                .tonoReadableColumn(.reading)
+                .background(Color(.systemGroupedBackground))
                 .onAppear { facts = UserMemory.allFacts() }
                 .sheet(isPresented: $showAddSheet) {
                     AddMemoryFactView { content, category in
@@ -96,16 +108,16 @@ struct MemoryView: View {
         Section {
             VStack(spacing: 12) {
                 Image(systemName: "brain")
-                    .font(.system(size: 40))
+                    .tonoGlyphFont(size: 40, relativeTo: .largeTitle)
                     .foregroundColor(.secondary)
                 Text("No memories yet")
-                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                    .tonoFont(size: 17, weight: .semibold, relativeTo: .body)
                 Text("Tono learns from your rewrite choices. After a few sessions, it will recognize patterns here and use them to personalize future rewrites automatically.")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
                 Button("Add something manually") { showAddSheet = true }
-                    .font(.system(size: 14, design: .rounded))
+                    .tonoFont(size: 14, relativeTo: .subheadline)
                     .padding(.top, 4)
             }
             .frame(maxWidth: .infinity)
@@ -139,13 +151,13 @@ private struct MemoryProTeaser: View {
             VStack(spacing: 24) {
                 VStack(spacing: 8) {
                     Image(systemName: "brain")
-                        .font(.system(size: 40))
+                        .tonoGlyphFont(size: 40, relativeTo: .largeTitle)
                         .foregroundColor(.purple)
                     Text("Tono learns how you communicate")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .tonoFont(size: 20, weight: .bold, relativeTo: .title3)
                         .multilineTextAlignment(.center)
                     Text("After a few sessions, Tono builds a picture of how you write — and quietly adjusts rewrites to sound like you at your best.")
-                        .font(.system(size: 14, design: .rounded))
+                        .tonoFont(size: 14, relativeTo: .subheadline)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 8)
@@ -154,16 +166,16 @@ private struct MemoryProTeaser: View {
 
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Example — what Pro subscribers see")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .tonoFont(size: 11, weight: .semibold, relativeTo: .caption2)
                         .foregroundColor(.secondary)
                     ForEach(exampleFacts, id: \.text) { fact in
                         HStack(spacing: 10) {
                             Image(systemName: fact.icon)
-                                .font(.system(size: 12))
+                                .tonoGlyphFont(size: 12, relativeTo: .caption)
                                 .foregroundColor(.purple)
                                 .frame(width: 18)
                             Text(fact.text)
-                                .font(.system(size: 14, design: .rounded))
+                                .tonoFont(size: 14, relativeTo: .subheadline)
                         }
                     }
                 }
@@ -175,15 +187,20 @@ private struct MemoryProTeaser: View {
 
                 Button(action: onUpgrade) {
                     Text("Unlock memory →")
-                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .tonoFont(size: 16, weight: .semibold, relativeTo: .callout)
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
                         .background(Color.purple)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
+                // The one action on this screen. A call to action stretched to
+                // a reading measure stops reading as a button, so it keeps the
+                // narrower form measure inside the wider column.
+                .tonoReadableColumn(.form)
             }
             .padding(24)
+            .tonoReadableColumn(.reading)
         }
     }
 }
@@ -196,7 +213,7 @@ private struct FactRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(fact.content)
-                .font(.system(size: 14, design: .rounded))
+                .tonoFont(size: 14, relativeTo: .subheadline)
             HStack(spacing: 6) {
                 if fact.source == .inferred {
                     Label("Learned", systemImage: "sparkles")
@@ -254,11 +271,13 @@ private struct AddMemoryFactView: View {
                     .pickerStyle(.segmented)
                 }
                 Section {
-                    Text("Stored only on your device. Sent as a short hint alongside your draft — never stored on the server.")
+                    Text("Stored only on this device. Used as a short hint alongside your draft, and never kept afterwards.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
             }
+            .tonoReadableColumn(.form)
+            .background(Color(.systemGroupedBackground))
             .navigationTitle("Add Memory")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -65,6 +65,7 @@ public enum SharedKeychain {
         delete(KeychainKeys.accountID)
         delete(KeychainKeys.deviceCredential)
         delete(KeychainKeys.signedInEmail)
+        delete(KeychainKeys.hasRecoveryIdentity)
         delete(KeychainKeys.apiKey)
     }
 
@@ -108,4 +109,6 @@ public enum KeychainKeys {
     ///   - re-claim the same account on a fresh install
     ///   - power the "use this email to recover" prompt in onboarding
     public static let signedInEmail = "signedInEmail"
+    /// Set only after the server verifies a recoverable email/provider identity.
+    public static let hasRecoveryIdentity = "hasRecoveryIdentity"
 }

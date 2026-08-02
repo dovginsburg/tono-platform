@@ -13,6 +13,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { apiPath } from '@/lib/auth-redirects';
+import { dropLegacyHistory, historyStorageKey } from '@/lib/history-store';
 
 type Axis = 'warmer' | 'clearer' | 'funnier' | 'safer';
 
@@ -72,7 +74,7 @@ export function RewriteEditor({
   // closed. We surface only the plan (entitled vs. trial-required).
   const loadPlan = useCallback(async () => {
     try {
-      const res = await fetch('/api/me', { cache: 'no-store' });
+      const res = await fetch(apiPath('/api/me'), { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
         setPlan({ plan: data.plan ?? 'anonymous', is_pro: !!data.is_pro });
@@ -94,7 +96,7 @@ export function RewriteEditor({
     setPerception(null);
     setSelected(null);
     try {
-      const res = await fetch('/api/analyze', {
+      const res = await fetch(apiPath('/api/analyze'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: draft }),
@@ -123,14 +125,17 @@ export function RewriteEditor({
       setRewrites(suggestions);
       setPerception({ risk_level: data.risk_level, subtext: data.subtext });
 
-      // Persist to history (localStorage v1)
-      saveToHistory({
-        id: crypto.randomUUID(),
-        timestamp: Date.now(),
-        draft,
-        suggestions,
-        perception: data.perception || '',
-      });
+      // Persist to per-account local history
+      saveToHistory(
+        {
+          id: crypto.randomUUID(),
+          timestamp: Date.now(),
+          draft,
+          suggestions,
+          perception: data.perception || '',
+        },
+        userId,
+      );
     } catch (e) {
       setError("couldn't reach tono. check your connection and try again.");
     } finally {
@@ -279,7 +284,10 @@ export function RewriteEditor({
               <span className="count">
                 <strong>{draft.length}</strong> chars
               </span>
-              <span>saved · just now</span>
+              {/* The draft lives in this tab only until you rewrite — we don't
+                  persist what you're typing, so we don't claim to. Completed
+                  rewrites are saved to on-device history after you rewrite. */}
+              <span>{draft.trim() ? 'not saved yet' : ''}</span>
             </div>
           </div>
 
@@ -404,14 +412,24 @@ export function RewriteEditor({
             />
             tono is online
           </span>
-          <span>draft auto-saved</span>
+          <span>rewrites saved on this device</span>
           {!hasApiToken && (
             <span style={{ color: 'var(--warning, #F59E0B)' }}>
               (rewrites need an active trial or subscription)
             </span>
           )}
         </div>
-        <div>v0.1 · <span style={{ color: 'var(--text-softer)' }}>user: {userId.slice(0, 8)}…</span></div>
+        {/* No raw account/user id in the UI — show the signed-in address (or
+            nothing) instead of an opaque identifier fragment. */}
+        <div>
+          v0.1
+          {email ? (
+            <>
+              {' · '}
+              <span style={{ color: 'var(--text-softer)' }}>{email}</span>
+            </>
+          ) : null}
+        </div>
       </footer>
     </div>
   );
@@ -553,15 +571,20 @@ function estimateReadTime(text: string): string {
   return `${seconds}s read`;
 }
 
-// ── history (localStorage v1) ──────────────────────────────────────
-function saveToHistory(entry: HistoryEntry) {
+// ── history (localStorage, per-account namespaced) ─────────────────
+// Written under a key scoped to the signed-in account (historyStorageKey) so a
+// second account on the same browser can never read the first's rewrites. The
+// unattributable pre-namespacing global blob is dropped on write.
+function saveToHistory(entry: HistoryEntry, userId: string) {
   if (typeof window === 'undefined') return;
   try {
-    const raw = window.localStorage.getItem('tono:history');
+    dropLegacyHistory(window.localStorage);
+    const key = historyStorageKey(userId);
+    const raw = window.localStorage.getItem(key);
     const list: HistoryEntry[] = raw ? JSON.parse(raw) : [];
     list.unshift(entry);
     // cap to last 50 — localStorage quota, etc.
-    window.localStorage.setItem('tono:history', JSON.stringify(list.slice(0, 50)));
+    window.localStorage.setItem(key, JSON.stringify(list.slice(0, 50)));
   } catch {
     // localStorage may be disabled (private mode); ignore.
   }

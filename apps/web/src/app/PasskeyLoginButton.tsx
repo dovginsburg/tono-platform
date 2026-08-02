@@ -8,7 +8,7 @@
 
 import { useState } from 'react';
 import { startAuthentication } from '@simplewebauthn/browser';
-import { sanitizeNextPath } from '@/lib/auth-redirects';
+import { apiPath, sanitizeNextPath } from '@/lib/auth-redirects';
 
 export default function PasskeyLoginButton() {
   const [busy, setBusy] = useState(false);
@@ -19,7 +19,11 @@ export default function PasskeyLoginButton() {
     setBusy(true);
     try {
       // 1. Ask the server for a challenge (also mints the pending device).
-      const startRes = await fetch('/api/passkey/login/start', { method: 'POST' });
+      const startRes = await fetch(apiPath('/api/passkey/login/start'), { method: 'POST' });
+      if (startRes.status === 503) {
+        setError('passkeys are not configured here yet. use email, Apple, or Google.');
+        return;
+      }
       if (!startRes.ok) {
         setError("couldn't start a passkey sign-in. try another method.");
         return;
@@ -41,7 +45,7 @@ export default function PasskeyLoginButton() {
       }
 
       // 3. Verify server-side; on success the session cookie is set.
-      const finishRes = await fetch('/api/passkey/login/finish', {
+      const finishRes = await fetch(apiPath('/api/passkey/login/finish'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ credential: assertion }),

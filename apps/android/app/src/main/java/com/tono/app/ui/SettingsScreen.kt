@@ -12,6 +12,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.tono.app.BuildConfig
 import com.tono.app.billing.PlayBillingManager
 import com.tono.app.notifications.DigestScheduler
 import com.tono.shared.flags.FeatureFlag
@@ -22,11 +23,14 @@ import com.tono.shared.storage.RecipientMemory
 import com.tono.shared.storage.SharedKeys
 import com.tono.shared.storage.SharedStore
 import com.tono.shared.storage.UserMemory
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 // Mirrors ios/App/SettingsView.swift
 // Voice, memory, feature toggles, plan status — no Stripe on Android (Play Billing).
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     onNavigateToMemory: () -> Unit = {},
@@ -47,10 +51,21 @@ fun SettingsScreen(
         )
     }
 
-    LaunchedEffect(Unit) {
+    // Build 114 — the account sheet, and a nonce that forces the Account rows to
+    // re-read the shared state after a sign-in or a sign-out so the keyboard and
+    // this screen agree on the same pass rather than at the next launch.
+    var showAccountSheet by remember { mutableStateOf(false) }
+    var accountRevision by remember { mutableIntStateOf(0) }
+
+    suspend fun reloadMe() {
         runCatching { me = TonoBackend.me() }
-            .onFailure { meError = "Could not reach the Tono backend." }
+            // Build 114: this used to name the backend on a consumer screen.
+            // A person cannot act on where a failure happened, only on what to
+            // do next.
+            .onFailure { meError = "Couldn't load your account just now. Try again in a moment." }
     }
+
+    LaunchedEffect(accountRevision) { reloadMe() }
 
     Column(
         Modifier
@@ -70,12 +85,75 @@ fun SettingsScreen(
                 Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
             }
+
+            key(accountRevision) {
+                EmailAccountRows(
+                    accountId = me?.accountId ?: SharedStore.getString(SharedKeys.ACCOUNT_ID),
+                    onOpenSheet = { showAccountSheet = true },
+                    onSignedOut = {
+                        me = null
+                        meError = null
+                        // A sign-out leaves this device holding no credential at
+                        // all, so it is returned to an anonymous registration on
+                        // the same pass. Waiting until the next launch would
+                        // leave Coach, the keyboard and this screen failing with
+                        // nothing a person could act on — and would have Play's
+                        // still-active purchase re-verified against no account,
+                        // which surfaces as a verification failure they did not
+                        // cause. Registering first, then refreshing, means the
+                        // entitlement is re-read against the account that now
+                        // owns this device.
+                        scope.launch {
+                            runCatching {
+                                withContext(Dispatchers.IO) {
+                                    TonoBackend.registerIfNeeded(
+                                        appVersion = BuildConfig.VERSION_NAME,
+                                    )
+                                }
+                            }
+                            accountRevision++
+                            PlayBillingManager.refresh()
+                        }
+                    },
+                )
+            }
+
+            PromoCodeRows(
+                isAuthorized = me != null,
+                onRedeemed = {
+                    // The backend method already refreshed the canonical
+                    // entitlement and cache. Re-read it for this visible screen.
+                    accountRevision++
+                    PlayBillingManager.refresh()
+                },
+            )
+
             Text(
-                "Rewrites run on the Tono backend — your API key never leaves the server.",
+                // Build 114: the old sentence named the backend and an API key.
+                // What a person actually owns is the draft, and the fact that it
+                // is not kept.
+                "Your draft is only used for coaching, and only when you ask. It isn't kept.",
                 color = Color.Gray,
                 fontSize = 12.sp,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             )
+        }
+
+        if (showAccountSheet) {
+            ModalBottomSheet(onDismissRequest = { showAccountSheet = false }) {
+                EmailAccountSheet(
+                    onSignedIn = {
+                        showAccountSheet = false
+                        // A sign-in converges this device on the canonical
+                        // account, so the entitlement it already owns is
+                        // re-read here: a returning subscriber must not have to
+                        // tap Restore to stop seeing the paywall.
+                        accountRevision++
+                        PlayBillingManager.refresh()
+                    },
+                    onDismiss = { showAccountSheet = false },
+                )
+            }
         }
 
         // Voice section
@@ -275,10 +353,19 @@ fun SettingsScreen(
             }
         }
 
+        // Payment history — the account's billing timeline across every store.
+        SettingsSection(title = "Payment history") {
+            PaymentHistorySection()
+        }
+
         // Privacy section
         SettingsSection(title = "Privacy") {
             Text(
-                "Tono sends your draft to our backend, which calls the LLM. Drafts are not stored. Your bearer token is kept in EncryptedSharedPreferences backed by Android Keystore — never in plain SharedPreferences.",
+                // Build 114: the old sentence described plumbing — a proxy, an
+                // LLM, a bearer, a preferences file. What a person can act on is
+                // what happens to their draft and where their sign-in lives.
+                "Your draft is sent for coaching only when you ask, and it isn't kept. Your sign-in " +
+                    "is stored encrypted on this device, and your password is never stored at all.",
                 color    = Color.Gray,
                 fontSize = 12.sp,
                 modifier = Modifier.padding(16.dp),

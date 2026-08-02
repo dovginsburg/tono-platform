@@ -2,6 +2,9 @@ package com.tono.ime
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.tono.ime.keyboard.KeyLayer
+import com.tono.ime.keyboard.KeyboardTypingState
+import com.tono.ime.keyboard.ShiftState
 import com.tono.shared.analytics.AnalyticsEvent
 import com.tono.shared.analytics.CrashReporter
 import com.tono.shared.analytics.TonoAnalytics
@@ -49,6 +52,67 @@ class CoachViewModel : ViewModel() {
 
     private val _selectedRecipient = MutableStateFlow<Recipient?>(null)
     val selectedRecipient: StateFlow<Recipient?> = _selectedRecipient
+
+    // ─── Typing surface state ──────────────────────────────────────────────
+    // A pure state machine owns shift/caps/layer; the ViewModel mirrors it into
+    // StateFlows so Compose recomposes the keys. No keystroke is ever tracked,
+    // stored, or sent — the only text these methods touch is the single key
+    // label, handed straight back to the IME service to commit locally.
+    private val typing = KeyboardTypingState()
+
+    private val _layer = MutableStateFlow(typing.layer)
+    val layer: StateFlow<KeyLayer> = _layer
+
+    private val _shift = MutableStateFlow(typing.shift)
+    val shift: StateFlow<ShiftState> = _shift
+
+    // True in password/PIN fields: keep typing, but hide the draft preview,
+    // recipient chips, and Coach/Read — those read the field and must fail
+    // closed. Mirrors iOS LiveToneEligibility secure-field gating.
+    private val _secureField = MutableStateFlow(false)
+    val secureField: StateFlow<Boolean> = _secureField
+
+    // Label for the return key, adapted to the host field's IME action
+    // (Go/Search/Send/Next/Done/return).
+    private val _returnLabel = MutableStateFlow("return")
+    val returnLabel: StateFlow<String> = _returnLabel
+
+    /** Compute the text to commit for a tapped character key; consumes one-shot shift. */
+    fun onCharacterKey(key: String): String {
+        val text = typing.commitFor(key)
+        _shift.value = typing.shift
+        return text
+    }
+
+    /** Shift tap. [nowMs] injected for deterministic double-tap detection. */
+    fun onShiftKey(nowMs: Long = System.currentTimeMillis()) {
+        typing.onShiftTapped(nowMs)
+        _shift.value = typing.shift
+    }
+
+    /** Flip letters ↔ symbols. */
+    fun onSwitchLayer() {
+        typing.toggleLayer()
+        _layer.value = typing.layer
+    }
+
+    /** Re-arm auto-cap from the (at most two) characters before the cursor. */
+    fun onAutoCapitalize(textBeforeCursor: String) {
+        typing.applyAutoCapitalization(textBeforeCursor)
+        _shift.value = typing.shift
+    }
+
+    /** Called when a field is focused: reset typing state and field posture. */
+    fun onFieldStarted(autoCap: Boolean, secure: Boolean, returnLabel: String) {
+        typing.resetForNewField(autoCap)
+        _layer.value = typing.layer
+        _shift.value = typing.shift
+        _secureField.value = secure
+        _returnLabel.value = returnLabel
+        // A secure field can't host the Coach/Read result surface — never leave
+        // the keyboard stuck showing a prior draft's analysis.
+        if (secure && _mode.value !is KeyboardMode.Keyboard) _mode.value = KeyboardMode.Keyboard
+    }
 
     // C4: detect edit-after-insert
     private var lastInsertedRewrite: String? = null

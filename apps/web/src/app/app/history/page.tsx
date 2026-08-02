@@ -2,6 +2,8 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import Link from 'next/link';
+import { createClient } from '@/lib/supabase-client';
+import { dropLegacyHistory, historyStorageKey } from '@/lib/history-store';
 
 // Mirrors HistoryEntry in /app/app/editor-client.tsx
 type Rewrite = {
@@ -32,12 +34,13 @@ const AXIS_HEX: Record<Rewrite['axis'], string> = {
   safer: '#34D399',
 };
 
-const STORAGE_KEY = 'tono:history';
-
-function readHistory(): HistoryEntry[] {
-  if (typeof window === 'undefined') return [];
+// History is namespaced per account (see lib/history-store). The reader must
+// use the SAME account id the editor wrote under, so this page resolves the
+// signed-in id from the Supabase browser session before touching storage.
+function readHistory(key: string | null): HistoryEntry[] {
+  if (typeof window === 'undefined' || !key) return [];
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(key);
     if (!raw) return [];
     const list = JSON.parse(raw) as HistoryEntry[];
     return Array.isArray(list) ? list : [];
@@ -46,10 +49,10 @@ function readHistory(): HistoryEntry[] {
   }
 }
 
-function writeHistory(list: HistoryEntry[]) {
-  if (typeof window === 'undefined') return;
+function writeHistory(key: string | null, list: HistoryEntry[]) {
+  if (typeof window === 'undefined' || !key) return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+    window.localStorage.setItem(key, JSON.stringify(list));
   } catch {
     // ignore (private mode / quota)
   }
@@ -77,10 +80,31 @@ export default function HistoryPage() {
   const [query, setQuery] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  const [storageKey, setStorageKey] = useState<string | null>(null);
 
   useEffect(() => {
-    setItems(readHistory());
-    setHydrated(true);
+    let cancelled = false;
+    (async () => {
+      // Resolve the signed-in account id so we read the same per-account
+      // namespace the editor wrote under. A different account (or none) reads a
+      // different key and therefore cannot see this account's history.
+      let userId: string | null = null;
+      try {
+        const { data } = await createClient().auth.getUser();
+        userId = data.user?.id ?? null;
+      } catch {
+        userId = null;
+      }
+      if (cancelled) return;
+      if (typeof window !== 'undefined') dropLegacyHistory(window.localStorage);
+      const key = historyStorageKey(userId);
+      setStorageKey(key);
+      setItems(readHistory(key));
+      setHydrated(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const filtered = useMemo(() => {
@@ -96,17 +120,17 @@ export default function HistoryPage() {
 
   const clearAll = useCallback(() => {
     if (!confirm('Clear all rewrite history? This cannot be undone.')) return;
-    writeHistory([]);
+    writeHistory(storageKey, []);
     setItems([]);
-  }, []);
+  }, [storageKey]);
 
   const removeOne = useCallback((id: string) => {
     setItems((cur) => {
       const next = cur.filter((e) => e.id !== id);
-      writeHistory(next);
+      writeHistory(storageKey, next);
       return next;
     });
-  }, []);
+  }, [storageKey]);
 
   const copy = useCallback(async (entry: HistoryEntry, axis: Rewrite['axis']) => {
     const r = entry.suggestions.find((s) => s.axis === axis);
@@ -153,8 +177,9 @@ export default function HistoryPage() {
           <div>
             <h1 style={h1}>history</h1>
             <p style={subtitle}>
-              your last {items.length === 0 ? '' : '50 '}
-              rewrites, kept on this device. nothing leaves your browser.
+              {items.length === 0
+                ? 'your rewrites are kept on this device. nothing leaves your browser.'
+                : 'your last 50 rewrites, kept on this device. nothing leaves your browser.'}
             </p>
           </div>
           {hydrated && items.length > 0 && (
@@ -184,6 +209,7 @@ export default function HistoryPage() {
         ) : items.length === 0 ? (
           <EmptyState
             label="no rewrites yet"
+            hint="history is stored on this device only — it's never uploaded. a new browser or phone starts empty here, even though your account, plan, and billing follow you everywhere."
             cta={
               <Link href="/app" style={primaryBtn}>
                 write your first →
@@ -259,10 +285,11 @@ export default function HistoryPage() {
   );
 }
 
-function EmptyState({ label, cta }: { label: string; cta?: React.ReactNode }) {
+function EmptyState({ label, hint, cta }: { label: string; hint?: string; cta?: React.ReactNode }) {
   return (
     <div style={empty}>
       <p style={emptyLabel}>{label}</p>
+      {hint && <p style={emptyHint}>{hint}</p>}
       {cta && <div style={{ marginTop: 20 }}>{cta}</div>}
     </div>
   );
@@ -548,6 +575,14 @@ const emptyLabel: React.CSSProperties = {
   fontSize: 15,
   margin: 0,
   color: TEXT_SOFTER,
+};
+
+const emptyHint: React.CSSProperties = {
+  fontSize: 13,
+  lineHeight: 1.55,
+  margin: '10px auto 0',
+  maxWidth: 420,
+  color: MUTED,
 };
 
 const primaryBtn: React.CSSProperties = {

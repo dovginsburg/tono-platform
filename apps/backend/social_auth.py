@@ -40,6 +40,27 @@ _JWKS_TTL_SECONDS = 3600
 class IdentityClaims:
     sub: str
     email: Optional[str] = None
+    nonce: Optional[str] = None
+    # True only when the provider itself attests the address is verified. Apple
+    # and Google both publish this claim; we default to False (fail closed) so an
+    # address can never drive verified-email account convergence unless the token
+    # actually proved it. Apple encodes the flag as a JSON string ("true"), so we
+    # coerce truthy spellings uniformly.
+    email_verified: bool = False
+
+
+def _claim_email_verified(claims: dict) -> bool:
+    """Coerce a provider ``email_verified`` claim to a strict bool.
+
+    Apple sends it as the string ``"true"``/``"false"``; Google as a JSON bool.
+    Anything not an affirmative true (missing, false, unexpected) reads as
+    UNVERIFIED so it cannot be the thing that merges two accounts."""
+    value = claims.get("email_verified")
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    return False
 
 
 IdentityVerifier = Callable[[str], "Any"]  # async (token: str) -> IdentityClaims
@@ -104,7 +125,49 @@ async def verify_apple_identity_token(identity_token: str) -> IdentityClaims:
         claims = _decode_with_jwk(identity_token, jwk, audience=client_id, issuer=APPLE_ISSUER)
     except jwt.PyJWTError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"invalid Apple identity token: {exc}")
-    return IdentityClaims(sub=claims["sub"], email=claims.get("email"))
+    return IdentityClaims(
+        sub=claims["sub"],
+        email=claims.get("email"),
+        nonce=claims.get("nonce"),
+        email_verified=_claim_email_verified(claims),
+    )
+
+
+async def verify_apple_web_identity_token(identity_token: str) -> IdentityClaims:
+    """Verify an Apple identity token from the WEB Sign in with Apple flow.
+
+    Identical cryptography to the native path (`verify_apple_identity_token`) —
+    same Apple JWKS, same RS256, same issuer — but the audience is the Apple
+    **Services ID** the website owns (`APPLE_WEB_CLIENT_ID`, e.g. ``tonoit.com``)
+    rather than the native app's client id (`APPLE_CLIENT_ID`, ``com.tonoit.app``).
+
+    Keeping the two audiences on two verifiers (instead of one that accepts
+    both) means the native endpoint can never be satisfied by a web-audience
+    token and vice versa, while both still resolve to the SAME ``apple_sub`` —
+    Apple issues one stable subject per person across a primary App ID and the
+    Services ID grouped under it — so native iOS and web Apple sign-ins converge
+    onto one canonical account for free (see ``server._resolve_provider_signin``).
+
+    Fails closed: unconfigured audience ⇒ 503; any signature/issuer/audience/
+    expiry failure ⇒ 401, before any account state is touched.
+    """
+    client_id = os.environ.get("APPLE_WEB_CLIENT_ID")
+    if not client_id:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Apple web sign-in not configured"
+        )
+    try:
+        header = jwt.get_unverified_header(identity_token)
+        jwk = await _apple_jwks.get_key(header["kid"])
+        claims = _decode_with_jwk(identity_token, jwk, audience=client_id, issuer=APPLE_ISSUER)
+    except jwt.PyJWTError as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"invalid Apple identity token: {exc}")
+    return IdentityClaims(
+        sub=claims["sub"],
+        email=claims.get("email"),
+        nonce=claims.get("nonce"),
+        email_verified=_claim_email_verified(claims),
+    )
 
 
 async def verify_google_id_token(id_token: str) -> IdentityClaims:
@@ -117,7 +180,11 @@ async def verify_google_id_token(id_token: str) -> IdentityClaims:
         claims = _decode_with_jwk(id_token, jwk, audience=client_id, issuer=list(GOOGLE_ISSUERS))
     except jwt.PyJWTError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"invalid Google ID token: {exc}")
-    return IdentityClaims(sub=claims["sub"], email=claims.get("email"))
+    return IdentityClaims(
+        sub=claims["sub"],
+        email=claims.get("email"),
+        email_verified=_claim_email_verified(claims),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +195,10 @@ async def verify_google_id_token(id_token: str) -> IdentityClaims:
 
 def get_apple_verifier() -> IdentityVerifier:
     return verify_apple_identity_token
+
+
+def get_apple_web_verifier() -> IdentityVerifier:
+    return verify_apple_web_identity_token
 
 
 def get_google_verifier() -> IdentityVerifier:

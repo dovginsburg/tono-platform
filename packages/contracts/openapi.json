@@ -19,6 +19,72 @@
         "title": "AdminFlagOverrideRequest",
         "type": "object"
       },
+      "AdminRegistrationsResponse": {
+        "description": "Aggregate registration reporting. Every field is a count or a\ncount-by-category; there is deliberately no field that could hold an\naddress, an account id, or an event detail.",
+        "properties": {
+          "by_app_build": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By App Build",
+            "type": "object"
+          },
+          "by_lifecycle_state": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Lifecycle State",
+            "type": "object"
+          },
+          "by_source_surface": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Source Surface",
+            "type": "object"
+          },
+          "created_in_window": {
+            "title": "Created In Window",
+            "type": "integer"
+          },
+          "days": {
+            "title": "Days",
+            "type": "integer"
+          },
+          "events_in_window": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Events In Window",
+            "type": "object"
+          },
+          "registrations_total": {
+            "title": "Registrations Total",
+            "type": "integer"
+          },
+          "signed_in_in_window": {
+            "title": "Signed In In Window",
+            "type": "integer"
+          },
+          "verified_in_window": {
+            "title": "Verified In Window",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "days",
+          "registrations_total",
+          "by_lifecycle_state",
+          "by_source_surface",
+          "by_app_build",
+          "created_in_window",
+          "verified_in_window",
+          "signed_in_in_window",
+          "events_in_window"
+        ],
+        "title": "AdminRegistrationsResponse",
+        "type": "object"
+      },
       "AdminUpdateFlagRequest": {
         "properties": {
           "enabled": {
@@ -350,12 +416,58 @@
             "default": false,
             "title": "Link",
             "type": "boolean"
+          },
+          "nonce": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nonce"
           }
         },
         "required": [
           "identity_token"
         ],
         "title": "AppleSignInRequest",
+        "type": "object"
+      },
+      "AppleWebSignInRequest": {
+        "properties": {
+          "app_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Version"
+          },
+          "identity_token": {
+            "title": "Identity Token",
+            "type": "string"
+          },
+          "nonce": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nonce"
+          }
+        },
+        "required": [
+          "identity_token"
+        ],
+        "title": "AppleWebSignInRequest",
         "type": "object"
       },
       "AxisEventRequest": {
@@ -488,6 +600,221 @@
           "revoked_devices"
         ],
         "title": "DeleteAccountResponse",
+        "type": "object"
+      },
+      "EmailAcceptedResponse": {
+        "description": "The single anti-enumerating answer for register / resend / reset.\n\n`status` is a constant. There is intentionally no field that varies with\nwhether the address exists, whether it is already verified, or whether the\nperson has an account \u2014 those are exactly the bits an attacker wants.",
+        "properties": {
+          "status": {
+            "const": "verification_pending",
+            "default": "verification_pending",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "EmailAcceptedResponse",
+        "type": "object"
+      },
+      "EmailAddressRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "app_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Version"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "source_surface": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Surface"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "title": "EmailAddressRequest",
+        "type": "object"
+      },
+      "EmailLoginRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "app_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Version"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "password": {
+            "title": "Password",
+            "type": "string"
+          },
+          "source_surface": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Surface"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "EmailLoginRequest",
+        "type": "object"
+      },
+      "EmailLogoutResponse": {
+        "properties": {
+          "signed_out": {
+            "title": "Signed Out",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "signed_out"
+        ],
+        "title": "EmailLogoutResponse",
+        "type": "object"
+      },
+      "EmailRegisterRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "app_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Version"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "password": {
+            "title": "Password",
+            "type": "string"
+          },
+          "promo_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Promo Code"
+          },
+          "source_surface": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Surface"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "EmailRegisterRequest",
+        "type": "object"
+      },
+      "EmailSessionResponse": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "api_token": {
+            "title": "Api Token",
+            "type": "string"
+          },
+          "device_credential": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Credential"
+          },
+          "device_id": {
+            "title": "Device Id",
+            "type": "string"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "email_verified": {
+            "default": false,
+            "title": "Email Verified",
+            "type": "boolean"
+          },
+          "is_pro": {
+            "title": "Is Pro",
+            "type": "boolean"
+          },
+          "plan": {
+            "title": "Plan",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_id",
+          "api_token",
+          "account_id",
+          "plan",
+          "is_pro"
+        ],
+        "title": "EmailSessionResponse",
         "type": "object"
       },
       "EventRequest": {
@@ -728,6 +1055,17 @@
             "title": "Account Id",
             "type": "string"
           },
+          "coupon_pro_expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coupon Pro Expires At"
+          },
           "daily_limit": {
             "title": "Daily Limit",
             "type": "integer"
@@ -736,9 +1074,36 @@
             "title": "Device Id",
             "type": "string"
           },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "email_verified_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email Verified At"
+          },
           "is_pro": {
             "title": "Is Pro",
             "type": "boolean"
+          },
+          "lifecycle_state": {
+            "default": "anonymous",
+            "title": "Lifecycle State",
+            "type": "string"
           },
           "plan": {
             "title": "Plan",
@@ -779,6 +1144,7 @@
           "daily_limit",
           "subscription_status",
           "subscription_renews_at",
+          "coupon_pro_expires_at",
           "account_id"
         ],
         "title": "MeResponse",
@@ -1071,6 +1437,192 @@
         "title": "PasskeyRegisterVerifyResponse",
         "type": "object"
       },
+      "PaymentHistoryItem": {
+        "properties": {
+          "amount_minor": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount Minor"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "effective_at": {
+            "title": "Effective At",
+            "type": "string"
+          },
+          "entitlement": {
+            "title": "Entitlement",
+            "type": "string"
+          },
+          "entitlement_state": {
+            "title": "Entitlement State",
+            "type": "string"
+          },
+          "environment": {
+            "title": "Environment",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "grant_kind": {
+            "title": "Grant Kind",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_current": {
+            "title": "Is Current",
+            "type": "boolean"
+          },
+          "ownership_type": {
+            "title": "Ownership Type",
+            "type": "string"
+          },
+          "product_id": {
+            "title": "Product Id",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "purchase_state": {
+            "title": "Purchase State",
+            "type": "string"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "trial_consumed": {
+            "title": "Trial Consumed",
+            "type": "boolean"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "provider",
+          "product_id",
+          "entitlement",
+          "ownership_type",
+          "grant_kind",
+          "entitlement_state",
+          "purchase_state",
+          "is_current",
+          "trial_consumed",
+          "environment",
+          "effective_at",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "PaymentHistoryItem",
+        "type": "object"
+      },
+      "PaymentHistoryResponse": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "coupon_pro_expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coupon Pro Expires At"
+          },
+          "is_pro": {
+            "title": "Is Pro",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PaymentHistoryItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "plan": {
+            "title": "Plan",
+            "type": "string"
+          },
+          "subscription_renews_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subscription Renews At"
+          },
+          "subscription_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subscription Status"
+          }
+        },
+        "required": [
+          "account_id",
+          "plan",
+          "is_pro",
+          "items"
+        ],
+        "title": "PaymentHistoryResponse",
+        "type": "object"
+      },
       "PortalRequest": {
         "properties": {
           "return_url": {
@@ -1099,6 +1651,107 @@
           "url"
         ],
         "title": "PortalResponse",
+        "type": "object"
+      },
+      "ReadAskRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "locale": {
+            "default": "en",
+            "description": "BCP-47 locale for the reading.",
+            "title": "Locale",
+            "type": "string"
+          },
+          "mode": {
+            "description": "Must be exactly 'read_ask'. Stated by the caller, never inferred.",
+            "enum": [
+              "rewrite",
+              "read_ask"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "text": {
+            "description": "The message the user received.",
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "mode"
+        ],
+        "title": "ReadAskRequest",
+        "type": "object"
+      },
+      "ReadAskResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "ask": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ask"
+          },
+          "by_when": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "By When"
+          },
+          "mode": {
+            "const": "read_ask",
+            "default": "read_ask",
+            "title": "Mode",
+            "type": "string"
+          },
+          "plan": {
+            "title": "Plan",
+            "type": "string"
+          },
+          "possible_readings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Possible Readings",
+            "type": "array"
+          },
+          "status": {
+            "default": "ok",
+            "enum": [
+              "ok",
+              "no_ask",
+              "declined"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "unclear": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unclear"
+          }
+        },
+        "required": [
+          "plan"
+        ],
+        "title": "ReadAskResponse",
         "type": "object"
       },
       "RedeemCouponRequest": {
@@ -1236,6 +1889,38 @@
           "account_id"
         ],
         "title": "RegisterResponse",
+        "type": "object"
+      },
+      "RegistrationEventsResponse": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "email_verified": {
+            "title": "Email Verified",
+            "type": "boolean"
+          },
+          "events": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "lifecycle_state": {
+            "title": "Lifecycle State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "lifecycle_state",
+          "email_verified",
+          "events"
+        ],
+        "title": "RegistrationEventsResponse",
         "type": "object"
       },
       "RewriteSuggestion": {
@@ -1476,6 +2161,15 @@
             ],
             "title": "Preferred Voice"
           },
+          "prior_versions": {
+            "description": "Build 114 \u2014 the rewrite this person read and REJECTED, for the SAME source message and the SAME user-selected tone. Present only on the one permitted retry; an initial request omits it entirely. At most one, because the contract allows exactly one additional generation. Never logged, and it does not affect the preflight decision or model routing.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1,
+            "title": "Prior Versions",
+            "type": "array"
+          },
           "recipient_hint": {
             "anyOf": [
               {
@@ -1641,6 +2335,17 @@
           "access_token": {
             "title": "Access Token",
             "type": "string"
+          },
+          "app_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Version"
           }
         },
         "required": [
@@ -2078,6 +2783,47 @@
         "summary": "Admin Age Out Events"
       }
     },
+    "/admin/registrations": {
+      "get": {
+        "description": "How registration is going, for whoever runs the product.\n\nThe Build 114 brief asks Tono to TRACK registrations, not merely to record\nthem: `/v1/account/registration-events` answers \"what happened to my\naccount\" for one signed-in person and is scoped by their own bearer, which\nis the right shape for support and the wrong shape for knowing whether\nsignup works at all.\n\nCounts only. The response model above has no field an address could travel\nin, and `Store.registration_metrics` selects nothing but counts and the\ngrouping columns the store itself sanitized on write \u2014 so this endpoint\ncould not identify a person even if an operator wanted it to. That is why\nit is safe to expose an aggregate over a table whose per-row contents are\notherwise deliberately unreadable from outside.\n\nAdmin-secret protected like every other `/admin` route; without a\nconfigured `TONO_ADMIN_SECRET` it answers 403 rather than opening.",
+        "operationId": "admin_registrations_admin_registrations_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminRegistrationsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Registrations"
+      }
+    },
     "/admin/stats": {
       "get": {
         "description": "Aggregate product analytics: axis usage, registration count, active pro count.",
@@ -2185,6 +2931,50 @@
           }
         ],
         "summary": "Api Analyze Variant"
+      }
+    },
+    "/api/read-ask": {
+      "post": {
+        "description": "Read what a received message is asking. Authenticated, entitled,\nrate-limited; the server holds the LLM API key.",
+        "operationId": "api_read_ask_api_read_ask_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadAskRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadAskResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Api Read Ask"
       }
     },
     "/health": {
@@ -2380,6 +3170,54 @@
         "summary": "Delete Account"
       }
     },
+    "/v1/account/payment-history": {
+      "get": {
+        "description": "The caller's OWN payment/subscription timeline.\n\nScoped by the bearer's account \u2014 there is no account id parameter, so one\nperson can never read another's billing. Every row is an entitlement grant\nto THIS account joined to the store purchase that produced it; no raw\nprovider/transaction identifier is exposed. The header carries the live\nentitlement projection (identical to /v1/me) so a client can render the\ncurrent plan even when the account has no per-purchase rows (e.g. a founder\ncoupon grant, which is entitlement without a provider purchase).",
+        "operationId": "account_payment_history_v1_account_payment_history_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentHistoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Account Payment History"
+      }
+    },
+    "/v1/account/registration-events": {
+      "get": {
+        "description": "The caller's OWN registration/verification history.\n\nScoped by the bearer's account \u2014 there is no account id parameter, so one\nperson cannot read another's history. Every row carries a timestamp, the\nsource surface and the app build; none carries a password, a token or a\nverification link (see the `account_registration_events` table comment).",
+        "operationId": "account_registration_events_v1_account_registration_events_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrationEventsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Account Registration Events"
+      }
+    },
     "/v1/analyze": {
       "post": {
         "description": "Tone-analysis passthrough kept for backward compatibility with the\nhost-app Playground tab and integration tests. There is NO anonymous or\nfree rewrite path: the caller must present a valid bearer token\n(``CurrentUser`` -> 401 otherwise) AND hold a server-authoritative rewrite\nentitlement (the shared gate -> a DISTINCT 402 otherwise), both enforced\nBEFORE the per-IP window and BEFORE any provider invocation. Mirrors the\ngate on /api/analyze and /api/analyze/variant, so this route can never be\nthe free/anonymous rewrite bypass it once was.",
@@ -2462,6 +3300,30 @@
           }
         },
         "summary": "App Store Notifications",
+        "tags": [
+          "app-store"
+        ]
+      }
+    },
+    "/v1/app-store/readiness": {
+      "get": {
+        "description": "Non-secret readiness probe. Mirrors the Google Play readiness contract\n(see google_play.google_play_readiness) so operators and monitors can\nconfirm which Apple credentials are wired without exposing any secret\nvalue (contract \u00a75).\n\nThe endpoint always answers 200 with booleans + already-public identifiers:\n  - ``verification_configured`` \u2014 the trusted Apple root (PEM) is wired so\n    signed-data (JWS) verification can run.\n  - ``production_verification_enabled`` \u2014 the app's numeric Apple id is\n    wired, so the Production environment verifier can be built. Sandbox\n    works without it.\n  - ``sandbox_verification_enabled`` \u2014 Sandbox environment is allowed and\n    its verifier can be built from the same root.\n  - ``provider_api_configured`` \u2014 the App Store Server API credentials\n    (issuer id / key id / private key) are all wired, so the\n    current-provider lookup + Set-App-Account-Token sender can be built.\n  - ``set_token_sender_configured`` \u2014 the Set-App-Account-Token\n    reconciliation sender is available (alias of ``provider_api_configured``\n    for symmetry with google_play's separate push-auth reporting).\n  - ``bundle_id`` / ``product_ids`` / ``environments`` / ``catalog_version``\n    \u2014 already-public identifiers from the configuration + catalog.\n\n``ready`` is the single end-to-end answer: verification is configured AND\nthe production-class path is usable (Production verifier OR the\ncurrent-provider Set-App-Account-Token sender, both of which the live\niOS paywall relies on). Sandbox-only configurations can verify a TestFlight\npurchase but cannot drive Set-App-Account-Token against Production, so\nthey are still 'ready' as long as the production endpoint is reachable\nthrough one of those seams.\n\nNo secret value (PEM bytes, API key, private key) is ever returned: only\nbooleans + the non-secret bundle id / product ids / catalog version.",
+        "operationId": "app_store_readiness_v1_app_store_readiness_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response App Store Readiness V1 App Store Readiness Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "App Store Readiness",
         "tags": [
           "app-store"
         ]
@@ -2556,6 +3418,249 @@
           }
         ],
         "summary": "Auth Apple"
+      }
+    },
+    "/v1/auth/apple/web": {
+      "post": {
+        "operationId": "auth_apple_web_v1_auth_apple_web_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppleWebSignInRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebSignInResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Auth Apple Web"
+      }
+    },
+    "/v1/auth/email/login": {
+      "post": {
+        "description": "Sign in with email and password.\n\nTwo independent gates, both fail-closed:\n\n  1. The provider must accept the credentials AND consider the address\n     confirmed. Supabase withholds a session for an unconfirmed address,\n     which surfaces as 403 `email_verification_required`.\n  2. We re-verify the returned access token cryptographically through the\n     SAME verifier the web callback uses, and refuse to proceed unless its\n     `email_verified` claim is true. So even a misconfigured project with\n     confirmations switched off cannot mint a verified identity here.",
+        "operationId": "auth_email_login_v1_auth_email_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailLoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Auth Email Login"
+      }
+    },
+    "/v1/auth/email/logout": {
+      "post": {
+        "description": "Sign this DEVICE out, and mean it.\n\nDeliberately local and provider-independent: the bearer the caller just\npresented stops working before this returns, so logging out of a shared\ndevice never depends on a reachable provider or a good network.\n\n`sign_out_device` is used rather than `rotate_token` because rotating alone\nis not a sign-out: the device also holds a durable credential that lets it\nre-register itself into the same row, so the next `/v1/register` would hand\nit a working bearer for an account it was just signed out of. See the store\nmethod for the full argument.\n\nThe canonical account, its history, its entitlement and its registration\naudit are untouched \u2014 signing back in returns the person to exactly the\nsame account. The sign-out event is recorded BEFORE the unlink, while the\naccount is still known.",
+        "operationId": "auth_email_logout_v1_auth_email_logout_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailLogoutResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Auth Email Logout"
+      }
+    },
+    "/v1/auth/email/register": {
+      "post": {
+        "description": "Start an email registration.\n\nAnswers `verification_pending` for every outcome that depends on whether\nthe address is already registered \u2014 which is the whole anti-enumeration\nproperty. It does NOT answer that way when the provider refused the\nsubmitted address or password on its own validation rules: that is a fact\nabout the input, and reporting it is the difference between a person\nfixing their password and a person waiting forever for mail that was\nnever sent.\n\nThe canonical account is bound here, BEFORE verification, so that an\nanonymous device that has been coaching drafts for weeks upgrades in place\n\u2014 its account UUID, history, usage and any purchase ownership all survive\nthe registration. The account stays in the `pending` lifecycle state and\nunidentified until the person proves the address, so binding early costs\nno access.",
+        "operationId": "auth_email_register_v1_auth_email_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailRegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailAcceptedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Auth Email Register"
+      }
+    },
+    "/v1/auth/email/resend": {
+      "post": {
+        "description": "Resend the verification link. Anti-enumerating: an unknown address and\nan already-verified address produce the identical accepted answer.\n\nThe bearer is OPTIONAL and changes nothing a caller can observe \u2014 the\nresponse, the rate gate and the provider call are identical with and without\nit. It is read only to decide whether this caller's `source_surface` claim\nmay be attributed to the account being audited (see `_record_email_audit`).",
+        "operationId": "auth_email_resend_v1_auth_email_resend_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailAddressRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailAcceptedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Auth Email Resend"
+      }
+    },
+    "/v1/auth/email/reset": {
+      "post": {
+        "description": "Begin password recovery. Anti-enumerating for the same reason as\nresend: the answer is identical whether or not the address is known.\n\nThe link the provider mails lands on the web callback, which recognises a\nrecovery and hands the person a screen where they choose and confirm a new\npassword (`apps/web/src/app/auth/password`). That destination is the whole\npoint of this endpoint: an emailed recovery link with nowhere to set a\npassword is a dead end, not a recovery.\n\nThe bearer is optional and observationally inert \u2014 see `auth_email_resend`.",
+        "operationId": "auth_email_reset_v1_auth_email_reset_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailAddressRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailAcceptedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Auth Email Reset"
       }
     },
     "/v1/auth/google": {
@@ -2898,7 +4003,7 @@
     },
     "/v1/coupon/redeem": {
       "post": {
-        "description": "Redeem a promo/coupon code. Grants Pro access for the code's duration.",
+        "description": "Redeem for the identified canonical account proven by this bearer.",
         "operationId": "redeem_coupon_v1_coupon_redeem_post",
         "requestBody": {
           "content": {

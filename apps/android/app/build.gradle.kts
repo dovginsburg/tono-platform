@@ -20,8 +20,18 @@ android {
         applicationId = "com.tono.myapp"
         minSdk = 26
         targetSdk = 35
-        // Bump on every build (parity with iOS MARKETING_VERSION fix on b3184ea)
-        versionCode = 13
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // Android Build 120 makes coupon redemption canonical-account based while
+        // preserving the Build 118 IME attach repair. iOS remains
+        // CFBundleVersion 117 because this is an Android-only repair successor.
+        //
+        // Source floor is 114 (Build 114 alignment commit); codes 16–113 were
+        // burned by that jump and cannot be reused. Live codes observed on
+        // Google Play: 13 (internal) and 15 (alpha draft); 119 strictly exceeds
+        // both.
+        //
+        // One-way door: Google Play requires versionCode to increase strictly.
+        versionCode = 120
         versionName = "1.1"
     }
 
@@ -91,4 +101,11 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.test:core-ktx:1.5.0")
+
+    androidTestImplementation("androidx.test.ext:junit:1.1.5")
+    androidTestImplementation("androidx.test:runner:1.5.2")
+    androidTestImplementation("androidx.test:rules:1.5.0")
+    androidTestImplementation("androidx.test:core-ktx:1.5.0")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
 }

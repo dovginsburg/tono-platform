@@ -24,6 +24,12 @@ public enum CoachToneChipContract {
     public static func accentHex(for axis: String) -> String? {
         switch axis.lowercased() {
         case "safer": return "34D399"
+        // Build 115. `warmer` is a RESULT axis, not a chip: the on-device route
+        // always produces Warmer alongside Clearer and Funnier, and the card
+        // renderer only draws axes this contract knows. It is deliberately
+        // absent from `CoachOptionalVariant`, so it can never be selected as a
+        // chip and can never be sent to the connected variant allowlist.
+        case "warmer": return "FB923C"
         case "clearer": return "38BDF8"
         case "funnier": return "FBBF24"
         case "affectionate": return "F472B6"
@@ -277,6 +283,114 @@ public enum ShortcutRewriteStyle: String, CaseIterable, Hashable {
     }
 }
 
+// MARK: - App Intent · enable / disable a tone variant (local-only)
+//
+// The "Set Tono Tone Variant" App Intent (App/AppleIntelligenceIntents.swift)
+// turns one optional keyboard tone on or off. It is local-only: it edits the
+// same device-local two-optional-tone selection the keyboard already honors
+// (`CoachVariantSettings`), reads no message text, sends nothing, and touches
+// no account. The DECISION — what a request does to the settings and what to
+// tell the person — lives here as a pure function so it is testable without
+// AppIntents, and so the intent stays a thin wrapper (the same shape as
+// `CoachDraftIntent` delegating to `ShortcutRewrite`).
+
+/// Pure policy for the tone-variant configuration intent.
+public enum ToneVariantConfiguration {
+
+    /// The honest result of one enable/disable request. Every case says exactly
+    /// what happened, and `didChange` is the single source of truth for whether
+    /// the caller should persist.
+    public enum Outcome: Equatable {
+        case enabled(CoachOptionalVariant)
+        case disabled(CoachOptionalVariant)
+        case alreadyEnabled(CoachOptionalVariant)
+        case alreadyDisabled(CoachOptionalVariant)
+        /// Safer is a mandatory pipeline stage, not an optional variant — it is
+        /// always on and cannot be toggled.
+        case saferIsAlwaysOn
+        /// The two-optional cap is reached; nothing changed.
+        case capReached(max: Int)
+        /// Custom cannot be enabled without a valid stored directive.
+        case customNeedsInstruction
+        /// The axis is not a variant this app knows; nothing changed.
+        case unknownVariant(String)
+
+        /// Whether the settings actually changed and must be saved.
+        public var didChange: Bool {
+            switch self {
+            case .enabled, .disabled: return true
+            default:                  return false
+            }
+        }
+
+        /// A truthful, user-facing sentence for the intent's dialog.
+        public var message: String {
+            switch self {
+            case .enabled(let v):        return "Turned on the \(v.displayName) tone."
+            case .disabled(let v):       return "Turned off the \(v.displayName) tone."
+            case .alreadyEnabled(let v): return "The \(v.displayName) tone is already on."
+            case .alreadyDisabled(let v):return "The \(v.displayName) tone is already off."
+            case .saferIsAlwaysOn:
+                return "Safer is always on — it can't be turned off."
+            case .capReached(let max):
+                return "You can keep \(max) optional tones at a time. Turn one off first, then add another."
+            case .customNeedsInstruction:
+                return "Add a Custom style instruction in Tono before turning the Custom tone on."
+            case .unknownVariant(let axis):
+                return "\(axis.capitalized) isn't a tone you can turn on or off."
+            }
+        }
+    }
+
+    /// Apply an enable/disable request to a settings value.
+    ///
+    /// Pure: same inputs → same output, no I/O. Returns the (possibly unchanged)
+    /// settings and the honest outcome. The caller persists only when
+    /// `outcome.didChange`.
+    public static func apply(
+        enable: Bool,
+        variantAxis: String,
+        to settings: CoachVariantSettings
+    ) -> (settings: CoachVariantSettings, outcome: Outcome) {
+        let axis = variantAxis.lowercased()
+
+        // Safer is mandatory. It is not a `CoachOptionalVariant`, and saying so
+        // is more honest than an "unknown tone" refusal for a tone that plainly
+        // exists and is plainly always on.
+        if axis == "safer" {
+            return (settings, .saferIsAlwaysOn)
+        }
+        guard let variant = CoachOptionalVariant(rawValue: axis) else {
+            return (settings, .unknownVariant(variantAxis))
+        }
+
+        var updated = settings
+        if enable {
+            if updated.enabled.contains(variant) {
+                return (settings, .alreadyEnabled(variant))
+            }
+            // Custom needs a valid stored directive before it can be enabled —
+            // the same rule `canEnable` enforces, named explicitly so the intent
+            // can tell the person what to do rather than silently failing.
+            if variant == .custom, !updated.isCustomInstructionValid {
+                return (settings, .customNeedsInstruction)
+            }
+            let ok = updated.set(variant, enabled: true)
+            if ok {
+                return (updated, .enabled(variant))
+            }
+            // The only remaining reason `set` refuses an enable is the cap.
+            return (settings, .capReached(max: CoachVariantSettings.maximumOptionalCount))
+        } else {
+            if !updated.enabled.contains(variant) {
+                return (settings, .alreadyDisabled(variant))
+            }
+            updated.set(variant, enabled: false)
+            return (updated, .disabled(variant))
+        }
+    }
+}
+
 /// Pure resolver + validator for the Shortcut rewrite lane. Encapsulates the
 /// Custom 120-char rule and the "never return the source draft as a successful
 /// rewrite" no-op guard so the App Intent stays a thin wrapper and the behavior
@@ -338,6 +452,12 @@ public enum ShortcutRewrite {
     /// comparison — a byte-for-byte mirror of the iMessage extension's
     /// `normalized(_:)` so a rewrite that only churns casing or punctuation is
     /// still caught as a no-op.
+    ///
+    /// Build 115 added a third lane — the on-device keyboard route — whose
+    /// validator applies the identical rule from `LocalCoachValidator`. The two
+    /// are separate declarations because this file is not a member of every
+    /// bundle that one is, and `testTheNoOpNormalizerIsOneRuleSharedWithTheShortcutLane`
+    /// pins them to the same answer so they cannot drift apart unnoticed.
     public static func normalizedForNoOp(_ text: String) -> String {
         text.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)

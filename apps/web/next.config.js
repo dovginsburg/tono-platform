@@ -15,23 +15,36 @@ const nextConfig = {
   // API rewrites so the browser doesn't need to know about the backend,
   // and so Supabase auth + REST look same-origin to the browser —
   // required for cookie-based sessions to stick (Sherlock's runbook #1).
+  //
+  // Returning an ARRAY puts every entry in Next's `afterFiles` phase, which is
+  // consulted only AFTER filesystem routes. So a rewrite whose source collides
+  // with a handler under src/app/api is dead config that never fires — and,
+  // worse, it reads as the live definition of that path. `/api/checkout` and
+  // `/api/analyze` used to be declared here as direct backend proxies while the
+  // real requests were served by the route handlers, which additionally enforce
+  // the same-origin CSRF guard and swap the httpOnly cookie for a bearer.
+  // Moving those entries to `beforeFiles` would have silently dropped both.
+  // Only paths with NO handler behind them belong here; the collision is
+  // guarded by src/lib/next-rewrites.test.ts.
+  //
+  // Apex SEO (/sitemap.xml, /robots.txt) is served by vercel.json's rewrite to
+  // /app/sitemap.xml — declaring it here produced `/app/sitemap.xml ->
+  // /app/sitemap.xml`, since basePath applies to source AND destination.
   async rewrites() {
     return [
-      // SEO surface at the apex so /sitemap.xml and /robots.txt return 200
-      // (basePath is applied to the destination, so /sitemap.xml → /app/sitemap.xml).
-      { source: '/sitemap.xml', destination: '/sitemap.xml' },
-      { source: '/robots.txt', destination: '/robots.txt' },
-
-      // Tono backend
+      // Tono backend — no route handler exists for either of these.
       { source: '/api/tono/:path*', destination: 'https://api.tonoit.com/v1/:path*' },
       { source: '/api/health', destination: 'https://api.tonoit.com/health' },
-      // Stripe checkout (called by ProCheckoutButton on /pricing and /upgrade→/pricing)
-      { source: '/api/checkout', destination: 'https://api.tonoit.com/v1/checkout' },
-      // Authenticated analyze (uses bearer token + rate limit)
-      { source: '/api/analyze', destination: 'https://api.tonoit.com/api/analyze' },
 
       // Dedicated Tono Supabase project. The environment contract above fails
       // closed when staging/production refs are shared or mismatched.
+      //
+      // `/auth/:path*` deliberately spans `/auth/callback`, which is OURS —
+      // src/app/auth/callback/route.ts exchanges the OAuth code and mints the
+      // backend bearer. It wins because these are afterFiles rewrites. Do NOT
+      // promote this block to `beforeFiles`: that would proxy the callback to
+      // Supabase and break sign-in. Recorded in
+      // src/lib/next-rewrites.test.ts::ACKNOWLEDGED_OVERLAPS.
       ...(supabaseDeployment ? [
         { source: '/auth/:path*', destination: `${supabaseDeployment.url}/auth/v1/:path*` },
         { source: '/rest/:path*', destination: `${supabaseDeployment.url}/rest/v1/:path*` },

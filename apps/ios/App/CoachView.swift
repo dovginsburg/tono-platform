@@ -16,6 +16,21 @@
 import SwiftUI
 
 struct CoachView: View {
+    // Build 116 — what the app KNOWS about having a connection, observed for
+    // the life of the process instead of inferred from the last request's
+    // outcome. Before this, a rewrite on screen with no request in flight left
+    // the surface with no connectivity input at all: turning on Airplane Mode
+    // changed nothing, the Coach control stayed as available as it had looked a
+    // second earlier, and finding out cost a doomed request AND the rewrite.
+    //
+    // Injectable so the lifecycle can be driven exactly in tests — a simulator
+    // has no radio to switch off. Production always gets the shared observer.
+    @ObservedObject private var connectivity: TonoConnectivity
+
+    init(connectivity: TonoConnectivity = .shared) {
+        _connectivity = ObservedObject(wrappedValue: connectivity)
+    }
+
     @State private var prefs = TonePreferences()
 
     @State private var draft: String = ""
@@ -46,24 +61,70 @@ struct CoachView: View {
     // Whether /v1/register has ever succeeded this install.
     @State private var hasRegistered: Bool = false
 
+    // Build 117 — what the person has asked Tono to do with this message.
+    // Rewrite is where Coach has always opened and where it still opens; the
+    // mode is a choice the person makes, never one Tono works out for itself.
+    @State private var mode: TonoRequestMode = .rewrite
+
+    // Build 117 — the received message, its reading and the draft made from it.
+    // Held for one flow and cleared the moment the person leaves Read the Ask or
+    // turns it off. Nothing in it is ever written to disk.
+    @StateObject private var readAskSession = ReadTheAskSession()
+
+    /// The Read the Ask editor's buffer. Local `@State` for the same reason
+    /// `draft` is: an editor bound through an `ObservableObject` republishes to
+    /// this whole surface on every keystroke. Cleared together with the session
+    /// by `clearReadTheAsk()` — the two are never cleared apart.
+    @State private var readAskText: String = ""
+
+    @State private var showActivationSheet = false
+    @State private var readTheAskEnabled = ReadTheAskActivation().isEnabled
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    hero
-                    draftEditor
-                    coachButton
-                    if let err = errorMessage {
-                        errorBanner(err)
+                    // Build 117 — the only new navigation. No new root tab: the
+                    // root stays Coach · This Week · Settings.
+                    ReadTheAskModeSelector(mode: $mode)
+                    Text(ReadTheAskCopy.modeSelectorCaption)
+                        .tonoFont(size: 13, relativeTo: .footnote)
+                        .foregroundColor(.white.opacity(0.6))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    // The chosen surface, in a group that spans the column.
+                    //
+                    // The `.frame` is load-bearing and was found the hard way.
+                    // A `switch` in a ViewBuilder is `_ConditionalContent` — ONE
+                    // child of this stack rather than the several the rewrite
+                    // screen used to contribute directly — and a group sizes to
+                    // its widest child, not to the column. That silently pulled
+                    // the whole Coach surface 100pt narrower than its measure
+                    // and off-centre on a landscape phone
+                    // (`Build115IPadSurfaceLayoutTests
+                    // .testPhoneLandscapeIsCappedAndCentredOnPurpose` caught it:
+                    // 97pt of inset on the left against 196pt on the right).
+                    // Spanning the column restores exactly the geometry the
+                    // approved screen had, at every width.
+                    VStack(alignment: .leading, spacing: 18) {
+                        switch mode {
+                        case .rewrite:
+                            rewriteSurface
+                        case .readAsk:
+                            readAskSurface
+                        }
                     }
-                    if let a = analysis {
-                        resultsCard(a)
-                    } else if !hasCoachedOnce && !loading {
-                        emptyState
-                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     Spacer(minLength: 20)
                 }
                 .padding(20)
+                // Build 115 — iPad. Everything above is one authored column:
+                // hero, editor, action, results. Reading and writing are a
+                // single focused task, so the column stays one column at every
+                // width and simply stops growing past a readable measure. On a
+                // phone this is the identity (see AdaptiveLayout.swift), which
+                // is why the approved iPhone screen is untouched.
+                .tonoReadableColumn(.reading)
             }
             .background(Color.black.ignoresSafeArea())
             .navigationTitle("Coach this")
@@ -89,6 +150,52 @@ struct CoachView: View {
             }
         }
         .animation(.easeOut(duration: 0.18), value: showExplainer)
+        // Build 116 — a failure sentence is about one attempt under one set of
+        // conditions. When the conditions change, it stops being current, so it
+        // goes rather than sitting under a contradicting notice. The rewrite
+        // and the draft are untouched: they are the person's, not the network's.
+        .onChange(of: connectivity.status) { _, _ in
+            errorMessage = nil
+        }
+        // Build 117 — the first tap on Read the Ask asks before it does
+        // anything. Nothing is read and nothing is sent until the person has
+        // seen this sheet and moved the switch themselves.
+        .onChange(of: mode) { _, newMode in
+            readTheAskEnabled = ReadTheAskActivation().isEnabled
+            if newMode == .readAsk && !readTheAskEnabled {
+                showActivationSheet = true
+            }
+            if newMode == .rewrite {
+                // Changing modes clears the unsaved one-flow context
+                // immediately — the message, the reading and the draft. Leaving
+                // a received message sitting behind a tab the person walked away
+                // from is exactly the retention the contract rules out.
+                clearReadTheAsk()
+            }
+        }
+        // Build 117 — a withdrawal takes effect where the person is, not where
+        // they made it. Settings is one push away from this screen, so switching
+        // Read the Ask off there has to reach a Coach surface that is still
+        // holding a received message — and it has to reach it now.
+        .onReceive(NotificationCenter.default.publisher(for: .readTheAskActivationChanged)) { _ in
+            readTheAskEnabled = ReadTheAskActivation().isEnabled
+            guard !readTheAskEnabled else { return }
+            clearReadTheAsk()
+            if mode == .readAsk { mode = .rewrite }
+        }
+        .sheet(isPresented: $showActivationSheet) {
+            ReadTheAskActivationSheet { enabled in
+                ReadTheAskActivation().setEnabled(enabled)
+                readTheAskEnabled = enabled
+                if !enabled {
+                    // Declined, or confirmed with the switch still off. Either
+                    // way the feature is off, so the surface goes back to the
+                    // one that works.
+                    clearReadTheAsk()
+                    mode = .rewrite
+                }
+            }
+        }
         .task {
             await bootstrap()
             // Onboarding polish: first time the user sees Coach without a
@@ -103,15 +210,110 @@ struct CoachView: View {
         }
     }
 
+    // MARK: - The two surfaces
+
+    /// Build 117 — the rewrite surface, unchanged. Every element and every
+    /// ordering below is exactly what shipped in Build 116, moved into a named
+    /// sub-view and not otherwise touched; the only difference is that a person
+    /// now arrives here by choosing Rewrite rather than by there being nothing
+    /// else to choose.
+    ///
+    /// What is actually pinned, precisely — because a comment that claims more
+    /// than its tests deliver is worse than no comment:
+    /// `testTheRewritePathStillPostsTheUnchangedCoachRequest` reads the bytes
+    /// this path posts and requires `"mode":"coach"` and one request per tap;
+    /// `testTheRewriteSurfaceStillDeliversItsRewrite` drives it end to end;
+    /// `testTheRewriteSurfaceRendersTheSameElementsInTheSameOrder` reads the
+    /// laid-out accessibility tree; and the whole Build 112/114/115/116 rewrite
+    /// suite runs against it unmodified.
+    @ViewBuilder
+    private var rewriteSurface: some View {
+        hero
+        draftEditor
+        coachButton
+        // Build 116 — the current fact outranks the stale one. An error
+        // sentence describes an attempt made in a network world that no longer
+        // exists; while there is no connection, the connection is the thing to
+        // say.
+        if isOffline {
+            offlineNotice
+        } else if let err = errorMessage {
+            errorBanner(err)
+        }
+        if let a = analysis {
+            resultsCard(a)
+        } else if !hasCoachedOnce && !loading {
+            emptyState
+        }
+    }
+
+    /// Build 117 — Read the Ask. When the toggle is off this is a sentence and a
+    /// way to turn it on, and nothing else: no editor to paste into, no action
+    /// to tap, no request that could be made. An inactive entry point is one
+    /// that cannot act, not one that acts and then apologises.
+    @ViewBuilder
+    private var readAskSurface: some View {
+        if readTheAskEnabled {
+            ReadTheAskPanel(
+                receivedText: $readAskText, session: readAskSession, isOffline: isOffline
+            )
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(ReadTheAskCopy.offNotice)
+                    .tonoFont(size: 15, relativeTo: .subheadline)
+                    .foregroundColor(.white.opacity(0.8))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(ReadTheAskCopy.settingsDisclosure)
+                    .tonoFont(size: 13, relativeTo: .footnote)
+                    .foregroundColor(.white.opacity(0.55))
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    showActivationSheet = true
+                } label: {
+                    Text("Turn on Read the Ask")
+                        .tonoFont(size: 15, weight: .semibold, relativeTo: .subheadline)
+                        .frame(maxWidth: .infinity)
+                        .frame(minHeight: ReadTheAskModeSelector.minimumTouchTarget)
+                        .background(Color.purple)
+                        .foregroundColor(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+                .accessibilityHint("Opens the Read the Ask privacy settings.")
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white.opacity(0.05))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+        }
+    }
+
+    /// The whole one-flow context, gone in one call. One function so the two
+    /// halves — the editor's buffer and the session record — can never be
+    /// cleared apart, which is the only way a received message survives a
+    /// withdrawal.
+    private func clearReadTheAsk() {
+        readAskText = ""
+        readAskSession.clear()
+    }
+
+    /// Leaving Read the Ask, or switching it off, also stops a reading that is
+    /// still in flight. The panel owns that task and cancels it in
+    /// `onDisappear`, which is what every path through here triggers.
+    ///
+    /// Clearing the buffer is NOT what stops it, though an earlier note here
+    /// said so: `run()` captures the text before it awaits, and the response
+    /// lands on the session rather than the buffer, so a cleared buffer would
+    /// have watched the reading come back anyway.
+
     // MARK: - Sub-views
 
     private var hero: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Paste a message. Get a coach.")
-                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .tonoFont(size: 22, weight: .bold, relativeTo: .title2)
                 .foregroundColor(.white)
             Text("Tono rewrites your draft warmer, clearer, funnier, or safer — so it lands how you intend.")
-                .font(.system(size: 13, design: .rounded))
+                .tonoFont(size: 13, relativeTo: .footnote)
                 .foregroundColor(.white.opacity(0.65))
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -133,7 +335,7 @@ struct CoachView: View {
                     if draft.isEmpty {
                         Text("e.g. \"hey can u send me the file tmrw thanks\"")
                             .foregroundColor(.white.opacity(0.35))
-                            .font(.system(size: 15, design: .rounded))
+                            .tonoFont(size: 15, relativeTo: .subheadline)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 18)
                             .allowsHitTesting(false)
@@ -150,7 +352,7 @@ struct CoachView: View {
                 }
                 Image(systemName: loading ? "hourglass" : "sparkles")
                 Text(loading ? "Coaching…" : "Coach")
-                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                    .tonoFont(size: 17, weight: .semibold, relativeTo: .body)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
@@ -159,10 +361,45 @@ struct CoachView: View {
             .clipShape(RoundedRectangle(cornerRadius: 14))
         }
         .disabled(!canSubmit)
+        // Gated rather than inert: the control reports that it cannot act AND
+        // the notice below it says why, in the same breath. VoiceOver gets the
+        // reason too, because a dimmed capsule is not a sentence.
+        .accessibilityLabel(isOffline ? "Coach, unavailable without a connection" : "Coach")
     }
 
+    /// Build 116 — the app's own connectivity fact. `checking` is not offline:
+    /// nothing is claimed and nothing is gated until something is known.
+    private var isOffline: Bool { connectivity.isOffline }
+
     private var canSubmit: Bool {
-        !loading && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !loading
+            && !isOffline
+            && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// The plain-language statement of the only fact the person needs. Two
+    /// forms, because "your rewrite is still here" is true only when there is
+    /// one, and a reassurance that is false is worse than none.
+    ///
+    /// Says nothing about how Tono works, what it talks to, or why a request
+    /// would have failed — this is not a failure, it is a condition.
+    private var offlineNotice: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "wifi.slash")
+                .foregroundColor(.white.opacity(0.7))
+            Text(
+                analysis == nil
+                    ? "No internet connection. Check Wi-Fi or cellular to coach a draft."
+                    : "No internet connection. Your rewrite is still here — check Wi-Fi or cellular to coach again."
+            )
+            .tonoFont(size: 13, relativeTo: .footnote)
+            .foregroundColor(.white)
+            .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     private var emptyState: some View {
@@ -170,11 +407,11 @@ struct CoachView: View {
             HStack(spacing: 8) {
                 Image(systemName: "lightbulb")
                 Text("How it works")
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .tonoFont(size: 14, weight: .semibold, relativeTo: .subheadline)
             }
             .foregroundColor(.white.opacity(0.7))
             Text("1. Type or paste a draft above.\n2. Tap Coach.\n3. Read the rewrite, copy it, send it.")
-                .font(.system(size: 13, design: .rounded))
+                .tonoFont(size: 13, relativeTo: .footnote)
                 .foregroundColor(.white.opacity(0.55))
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -190,7 +427,7 @@ struct CoachView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundColor(.yellow)
             Text(message)
-                .font(.system(size: 13, design: .rounded))
+                .tonoFont(size: 13, relativeTo: .footnote)
                 .foregroundColor(.white)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
@@ -220,11 +457,11 @@ struct CoachView: View {
                 riskBadge(for: parsedRisk)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(parsedRisk.displayName)
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .tonoFont(size: 15, weight: .semibold, relativeTo: .subheadline)
                         .foregroundColor(.white)
                     if !a.perception.isEmpty {
                         Text(a.perception)
-                            .font(.system(size: 13, design: .rounded))
+                            .tonoFont(size: 13, relativeTo: .footnote)
                             .foregroundColor(.white.opacity(0.7))
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -245,7 +482,7 @@ struct CoachView: View {
                                     Image(systemName: axis.glyph)
                                     Text(axis.displayName)
                                 }
-                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                .tonoFont(size: 12, weight: .semibold, relativeTo: .caption)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 6)
                                 .background(selectedAxis == axis ? Color.purple : Color.white.opacity(hasSuggestion ? 0.10 : 0.04))
@@ -264,17 +501,17 @@ struct CoachView: View {
                     HStack(spacing: 6) {
                         Image(systemName: s.axis.glyph)
                         Text("\(s.axis.displayName) rewrite")
-                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .tonoFont(size: 12, weight: .semibold, relativeTo: .caption)
                             .foregroundColor(.white.opacity(0.6))
                     }
                     Text(s.text)
-                        .font(.system(size: 17, weight: .medium, design: .rounded))
+                        .tonoFont(size: 17, weight: .medium, relativeTo: .body)
                         .foregroundColor(.white)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                     if let rationale = s.rationale, !rationale.isEmpty {
                         Text(rationale)
-                            .font(.system(size: 12, design: .rounded))
+                            .tonoFont(size: 12, relativeTo: .caption)
                             .foregroundColor(.white.opacity(0.55))
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -286,7 +523,7 @@ struct CoachView: View {
                                 Image(systemName: "doc.on.doc")
                                 Text("Copy")
                             }
-                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .tonoFont(size: 13, weight: .semibold, relativeTo: .footnote)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
                             .background(Color.white.opacity(0.10))
@@ -295,7 +532,7 @@ struct CoachView: View {
                         }
                         if let after = s.riskAfter {
                             Label(after.displayName, systemImage: after.systemIcon)
-                                .font(.system(size: 12, design: .rounded))
+                                .tonoFont(size: 12, relativeTo: .caption)
                                 .foregroundColor(.white.opacity(0.6))
                         }
                     }
@@ -310,10 +547,22 @@ struct CoachView: View {
                 Divider().background(Color.white.opacity(0.08))
                 VStack(alignment: .leading, spacing: 8) {
                     Text("All rewrites")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .tonoFont(size: 12, weight: .semibold, relativeTo: .caption)
                         .foregroundColor(.white.opacity(0.6))
-                    ForEach(mapped) { s in
-                        rewriteRow(s)
+                    // Build 115 — iPad. These are PARALLEL alternatives, not a
+                    // sequence: warmer, clearer, funnier and safer are four
+                    // answers to the same draft, and comparing them is the
+                    // whole point. Two columns where there is room lets a
+                    // person read two side by side instead of scrolling
+                    // between them. At every phone PORTRAIT width this resolves
+                    // to one column and is frame-for-frame the stack it
+                    // replaced; a phone in LANDSCAPE is 844–956pt wide, so it
+                    // takes the capped measure and does get two columns, which
+                    // is intentional and separately tested.
+                    AdaptiveItemGrid(.coachAlternateRewrites) {
+                        ForEach(mapped) { s in
+                            rewriteRow(s)
+                        }
                     }
                 }
             }
@@ -324,7 +573,7 @@ struct CoachView: View {
                     Image(systemName: u.isPro ? "checkmark.seal.fill" : "circle.dotted")
                         .foregroundColor(u.isPro ? .green : .white.opacity(0.5))
                     Text(u.isPro ? "Pro · unlimited" : "Subscribe for unlimited rewrites")
-                        .font(.system(size: 11, design: .rounded))
+                        .tonoFont(size: 11, relativeTo: .caption2)
                         .foregroundColor(.white.opacity(0.45))
                     Spacer()
                 }
@@ -339,17 +588,20 @@ struct CoachView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Image(systemName: s.axis.glyph)
-                    .font(.system(size: 11))
+                    .tonoGlyphFont(size: 11, relativeTo: .caption2)
                 Text(s.axis.displayName)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .tonoFont(size: 12, weight: .semibold, relativeTo: .caption)
             }
             .foregroundColor(.white.opacity(0.7))
             Text(s.text)
-                .font(.system(size: 14, design: .rounded))
+                .tonoFont(size: 14, relativeTo: .subheadline)
                 .foregroundColor(.white.opacity(0.85))
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.vertical, 4)
+        // Build 115 — iPad. Two rewrites side by side would otherwise be read
+        // axis-name, axis-name, text, text. Each rewrite stays one stop.
+        .accessibilityElement(children: .contain)
     }
 
     private func riskBadge(for level: RiskLevel) -> some View {
@@ -361,7 +613,7 @@ struct CoachView: View {
             }
         }()
         return Image(systemName: level.systemIcon)
-            .font(.system(size: 22))
+            .tonoGlyphFont(size: 22, relativeTo: .title2)
             .foregroundColor(tint)
     }
 
@@ -389,11 +641,22 @@ struct CoachView: View {
     private func runCoach() async {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        // Build 116 — Coach is an online-only action, so it is gated on the
+        // connectivity the app OBSERVES, before a request is built. The
+        // disabled control is the visible half of the gate; this is the half
+        // that makes "zero egress" true no matter how the action is reached —
+        // an accessibility activation, a hardware keyboard, a future caller.
+        guard !connectivity.isOffline else { return }
 
         await MainActor.run {
             loading = true
             errorMessage = nil
-            analysis = nil
+            // Build 116 — the delivered rewrite is deliberately NOT cleared
+            // here. Clearing it meant every attempt destroyed the answer the
+            // person already had before it knew whether it could produce
+            // another one, so the first tap after losing connection cost them
+            // the rewrite they were reading. A result is replaced by a better
+            // result, never by the hope of one.
             hasCoachedOnce = true
         }
 
@@ -403,6 +666,10 @@ struct CoachView: View {
                 appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0"
             )
 
+            // Build 117 — the mode is stated at the call site and mapped by the
+            // one legacy adapter, so the wire this established path posts is
+            // byte-for-byte the `"coach"` it has always posted while the CALLER
+            // no longer relies on a default to say what it meant.
             let response = try await TonoBackend.shared.analyze(
                 text: trimmed,
                 preferredVoice: prefs.preferredVoice,
@@ -410,7 +677,7 @@ struct CoachView: View {
                 recipientHint: nil,
                 contextHints: nil,
                 threadContext: nil,
-                mode: .coach
+                mode: try TonoLegacyAnalysisMode.analysisMode(for: .rewrite)
             )
 
             // Pick the default featured axis: warmer if available, otherwise first.
@@ -440,7 +707,7 @@ struct CoachView: View {
             }
         } catch {
             await MainActor.run {
-                errorMessage = error.localizedDescription
+                errorMessage = "Something went wrong. Try again in a moment."
                 loading = false
             }
         }
@@ -448,22 +715,31 @@ struct CoachView: View {
 
     // MARK: - Error formatting (matches SettingsView pattern)
 
+    /// Build 112: one short sentence about what the user can do next. The
+    /// raw message a failure carries is never rendered — it named transports
+    /// and status codes, which is implementation detail, not guidance.
     private func prettyError(_ e: TonoBackendError) -> String {
         switch e {
         case .offline:
             return "No internet connection. Check Wi-Fi or cellular and try again."
-        case .network(let m):
-            return "Network error: \(m)"
-        case .http(let code, let msg):
-            let trimmed = msg.count > 200 ? String(msg.prefix(200)) + "…" : msg
-            if code == 429 {
-                return "Active trial or subscription required. Open Settings to continue."
+        case .network:
+            return "Couldn't connect. Check your connection and try again."
+        case .http(let code, _):
+            // 402 is the server-authoritative entitlement gate; 429 is the
+            // per-IP rate limit. Build 113: these two were folded into one
+            // branch, so a subscriber who simply went too fast was told to buy
+            // a subscription they already have. Untrue copy on the flagship
+            // Coach surface, and it contradicts TonoBackend's own invariant.
+            switch code {
+            case 401: return "Your sign-in expired. Open Settings → Account to sign in again."
+            case 402: return "An active trial or subscription is required. Open Settings to continue."
+            case 429: return "Too many requests right now. Wait a minute and try again."
+            default: return "Something went wrong. Try again in a moment."
             }
-            return trimmed.isEmpty ? "Server error \(code)" : "Server error \(code): \(trimmed)"
         case .notRegistered:
             return "Account not set up yet. Open Settings → Account and tap ‘Set up Tono’."
-        case .decoding(let m):
-            return "Bad response: \(m)"
+        case .decoding:
+            return "Something went wrong. Try again in a moment."
         case .tooManyDevices(let current, let max):
             return "This email is already on \(current) devices (max \(max))."
         }
@@ -477,10 +753,13 @@ struct CoachView: View {
     private var explainerOverlay: some View {
         VStack(spacing: 16) {
             Image(systemName: "sparkles")
-                .font(.system(size: 36))
+                .tonoGlyphFont(size: 36, relativeTo: .largeTitle)
                 .foregroundColor(.purple)
             Text("How Coach works")
-                .font(.system(size: 22, weight: .bold, design: .rounded))
+                // Declared in `TonoTextStyle.coachExplainerTitle` — the app's
+                // own rounded face, pinned so a blanket face change is caught
+                // from the rounded direction as well as the standard one.
+                .tonoFont(.coachExplainerTitle)
                 .foregroundColor(.white)
             VStack(alignment: .leading, spacing: 10) {
                 explainerLine(number: "1", text: "Type or paste a draft message.")
@@ -488,7 +767,7 @@ struct CoachView: View {
                 explainerLine(number: "3", text: "Pick the rewrite that sounds like you. Copy. Send.")
             }
             .padding(.top, 4)
-            Text("Tono needs a one-time setup before it can reach our server (≈2 seconds).")
+            Text("Tono finishes a one-time setup before your first rewrite (about 2 seconds).")
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.6))
                 .multilineTextAlignment(.center)
@@ -504,7 +783,7 @@ struct CoachView: View {
                     }
                 } label: {
                     Text("Got it")
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .tonoFont(size: 15, weight: .semibold, relativeTo: .subheadline)
                         .padding(.horizontal, 18)
                         .padding(.vertical, 10)
                         .background(Color.purple)
@@ -515,13 +794,17 @@ struct CoachView: View {
                     explainerDismissed = true
                     showExplainer = false
                 }
-                .font(.system(size: 14, design: .rounded))
+                .tonoFont(size: 14, relativeTo: .subheadline)
                 .foregroundColor(.white.opacity(0.6))
             }
             .padding(.top, 6)
         }
         .padding(28)
-        .frame(maxWidth: 340)
+        // Build 115 — iPad. A hard 340pt card is right on a phone and is the
+        // "tiny island" on an iPad: the same card marooned in a 1,032pt field.
+        // The compact branch returns exactly the approved 340 (and, unlike the
+        // frame it replaces, still fits a 320pt iPhone SE).
+        .tonoDialogWidth()
         .background(Color(white: 0.08))
         .clipShape(RoundedRectangle(cornerRadius: 22))
         .overlay(
@@ -531,16 +814,41 @@ struct CoachView: View {
         .shadow(color: .black.opacity(0.5), radius: 20, y: 10)
     }
 
-    private func explainerLine(number: String, text: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+    /// The numbered step badge.
+    ///
+    /// Its own view so it can read `dynamicTypeSize`, because a digit inside a
+    /// fixed frame with `.clipShape(Circle())` over it is CUT rather than
+    /// wrapped when it outgrows the frame — and the first Dynamic Type pass did
+    /// exactly that, giving the digit the 2.2× text ceiling (28.6pt at the
+    /// accessibility sizes) inside a hard 22pt circle. Both numbers now come
+    /// from `TonoStepBadge`, which scales them together against the same text
+    /// style and the same decorative ceiling, so the digit's line box stays a
+    /// constant fraction of the circle at every size — and at the default size
+    /// both are exactly the approved 13pt and 22pt.
+    ///
+    /// Deliberately not `private`: `Build115AdaptiveLayoutTests` hosts this
+    /// exact view and measures its laid-out size, so the assertion is about the
+    /// badge that ships rather than about a replica of it.
+    struct StepBadge: View {
+        let number: String
+        @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+        var body: some View {
+            let diameter = TonoStepBadge.diameter(dynamicTypeSize: dynamicTypeSize)
             Text(number)
-                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .font(Font(TonoStepBadge.font(dynamicTypeSize: dynamicTypeSize)))
                 .foregroundColor(.purple)
-                .frame(width: 22, height: 22)
+                .frame(width: diameter, height: diameter)
                 .background(Color.purple.opacity(0.18))
                 .clipShape(Circle())
+        }
+    }
+
+    private func explainerLine(number: String, text: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            StepBadge(number: number)
             Text(text)
-                .font(.system(size: 14, design: .rounded))
+                .tonoFont(size: 14, relativeTo: .subheadline)
                 .foregroundColor(.white.opacity(0.85))
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)

@@ -177,6 +177,9 @@ struct ShortcutRewriteIntentError: LocalizedError {
 @available(iOS 16.0, *)
 struct TonoShortcutsProvider: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
+        // The explicit "Coach this text" action — the ONLY intent that performs
+        // network generation, and it keeps its account/entitlement/provider
+        // gates (see CoachDraftIntent.perform). Preserved verbatim.
         AppShortcut(
             intent: CoachDraftIntent(),
             phrases: [
@@ -186,6 +189,18 @@ struct TonoShortcutsProvider: AppShortcutsProvider {
             ],
             shortTitle: "Rewrite Draft",
             systemImageName: "sparkles"
+        )
+        // Local-only setup action. Opens the app to keyboard setup; reads and
+        // sends nothing. Discoverable as a spoken shortcut and in Spotlight.
+        AppShortcut(
+            intent: OpenKeyboardSetupIntent(),
+            phrases: [
+                "Set up \(.applicationName)",
+                "Open \(.applicationName) keyboard setup",
+                "Fix my \(.applicationName) keyboard",
+            ],
+            shortTitle: "Keyboard Setup",
+            systemImageName: "keyboard"
         )
     }
 }

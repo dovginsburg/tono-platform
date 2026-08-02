@@ -34,9 +34,8 @@ function NewsletterStrip() {
 // mobile is a prominent "Home" link above the column stack — Dov
 // requirement, "back to home from any page."
 //
-// Newsletter signup is wired to a no-op endpoint for now; backend
-// integration is a TODO and the form is a stub that shows a success
-// state locally.
+// There is no newsletter form: the strip above is a mailto link, so nothing
+// here fakes a success state or posts to a no-op endpoint.
 //
 // Crisis / support line is intentionally absent — Tono is not a
 // clinical product. (ParentScript's footer is the one that needs

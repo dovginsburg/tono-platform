@@ -9,6 +9,11 @@ import WidgetKit
 @main
 struct TonoApp: App {
     init() {
+        // Build 116 — one connectivity observer, started once, for the life of
+        // the process. Started here rather than by a view so that no surface's
+        // appearance, recreation or teardown can decide whether the app is able
+        // to notice a connection coming or going.
+        TonoConnectivity.shared.start()
         StoreKitManager.shared.start()
         // A1: crash + OOM reporting (no-op until FIREBASE_ENABLED is set in build flags).
         CrashReporter.configure()
@@ -28,17 +33,21 @@ struct RootView: View {
     @State private var prefs = TonePreferences()
     @State private var showOnboarding = false
     @State private var showEntryPointsOnboarding = false
+    /// Presented when the "Open Tono Keyboard Setup" App Intent left a one-shot
+    /// route. Local-only: the intent reads and sends nothing; this just shows
+    /// the existing setup screen (which owns the sanctioned iOS-settings jump).
+    @State private var showKeyboardSetup = false
     @Environment(\.requestReview) var requestReview
 
     var body: some View {
         TabView {
-            // v0: single-screen "Coach this" is the home tab. Settings
-            // is also reachable from a gear in CoachView's toolbar.
+            // Build 112: ONE Coach experience. The separate in-app rehearsal
+            // tab was removed — it duplicated this screen's draft editor,
+            // action, results and request path with a second one. Coach is the
+            // single host-app coaching surface; Settings is also reachable from
+            // a gear in CoachView's toolbar.
             CoachView()
                 .tabItem { Label("Coach", systemImage: "sparkles") }
-
-            PlaygroundView()
-                .tabItem { Label("Playground", systemImage: "keyboard") }
 
             DigestView()
                 .tabItem { Label("This Week", systemImage: "chart.line.uptrend.xyaxis") }
@@ -48,11 +57,34 @@ struct RootView: View {
         }
         .tint(.purple)
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            // Build 116 — the observer keeps running while backgrounded, so
+            // this is a re-assertion rather than the primary path. It makes the
+            // foreground transition deterministic instead of dependent on
+            // whether an update happened to be delivered off screen — which is
+            // exactly the trip the person takes to reach Airplane Mode.
+            TonoConnectivity.shared.refresh()
             promptReviewIfEarned()
             NotificationManager.shared.ensureNudgeScheduled()
             WidgetCenter.shared.reloadAllTimelines()
+            consumePendingAppIntentRoute()
         }
-        .task { await fetchFeaturesAndOnboard() }
+        .task {
+            // Cold launch via the intent: the didBecomeActive notification can
+            // fire before this view subscribes, so also consume once here. The
+            // read-and-clear signal makes the double check idempotent.
+            consumePendingAppIntentRoute()
+            await fetchFeaturesAndOnboard()
+        }
+        .sheet(isPresented: $showKeyboardSetup) {
+            NavigationStack {
+                SetupDoctorView()
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showKeyboardSetup = false }
+                        }
+                    }
+            }
+        }
         .fullScreenCover(isPresented: $showEntryPointsOnboarding) {
             OnboardingEntryPointsView {
                 // After entry-points tiles, fall through to calibration
@@ -68,6 +100,18 @@ struct RootView: View {
             OnboardingCalibrationView {
                 showOnboarding = false
             }
+        }
+    }
+
+    /// Present the screen a local-only App Intent asked for, once. The signal is
+    /// read-and-cleared, so a route shows its screen a single time rather than on
+    /// every foreground.
+    private func consumePendingAppIntentRoute() {
+        switch AppIntentRouteSignal().consumePending() {
+        case .keyboardSetup:
+            showKeyboardSetup = true
+        case .none:
+            break
         }
     }
 
