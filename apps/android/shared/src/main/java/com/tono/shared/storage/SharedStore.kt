@@ -56,4 +56,36 @@ object SharedStore {
     fun putInt(key: String, value: Int) = prefs.edit().putInt(key, value).apply()
 
     fun remove(key: String) = prefs.edit().remove(key).apply()
+
+    /**
+     * Clears device-local PERSONAL content caches on sign-out / account switch:
+     * drafts, recipients, learned per-recipient style weights, memory facts,
+     * recent sessions, and the last-perception mirrors. Without this a shared
+     * device would carry one account's data to the next signed-in account —
+     * the same account-switch isolation defect the web and iOS caches had.
+     *
+     * It deliberately does NOT touch device identity/session (owned by
+     * SecureStore), nor app settings/flags (provider, backend URL, onboarding,
+     * feature flags), which are not personal content.
+     */
+    fun clearPersonalData() {
+        val editor = prefs.edit()
+        listOf(
+            SharedKeys.DRAFT_HISTORY,
+            SharedKeys.RECENT_SESSIONS,
+            SharedKeys.MEMORY_FACTS,
+            SharedKeys.RECIPIENTS,
+            SharedKeys.LAST_PERCEPTION,
+            SharedKeys.LAST_RISK_LEVEL,
+            SharedKeys.COACH_USE_COUNT,
+            SharedKeys.LAST_COACH_DATE,
+            SharedKeys.LAST_WEEKLY_DIGEST,
+            SharedKeys.LAST_REWRITE_VOICE,
+        ).forEach { editor.remove(it) }
+        // Per-recipient axis-weight keys are suffixed (tc.axisWeights.<id>).
+        prefs.all.keys
+            .filter { it == SharedKeys.AXIS_WEIGHTS || it.startsWith(SharedKeys.AXIS_WEIGHTS + ".") }
+            .forEach { editor.remove(it) }
+        editor.apply()
+    }
 }

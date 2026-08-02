@@ -843,6 +843,9 @@ struct SettingsView: View {
                     }
                 }
             }
+            NavigationLink(destination: PaymentHistoryView()) {
+                Text("Payment history")
+            }
             Text("Unlimited rewrites, thread context, style memory, per-recipient coaching, and a weekly digest. Manage or cancel anytime in Apple ID subscriptions.")
                 .font(.caption).foregroundColor(.secondary)
         }
@@ -1625,5 +1628,145 @@ struct AccountDeletionView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Payment history
+
+/// The account's billing timeline. Reads the owner-scoped backend endpoint
+/// (server-scoped by the bearer's account — this device can only ever see its
+/// own account's billing) and renders each subscription/purchase as a
+/// human-readable row. Never shows a raw provider or transaction id.
+///
+/// Defined here (not in a new file) because the Xcode project references
+/// sources individually and its generator manifest is stale; folding the view
+/// into an already-built file keeps the project untouched.
+struct PaymentHistoryView: View {
+    @State private var items: [PaymentHistoryItem] = []
+    @State private var isLoading = true
+    @State private var errorMessage: String?
+
+    var body: some View {
+        List {
+            if isLoading {
+                HStack { Spacer(); ProgressView(); Spacer() }
+            } else if let errorMessage {
+                Section {
+                    Text(errorMessage)
+                        .foregroundColor(.secondary)
+                    Button("Retry") { Task { await load() } }
+                }
+            } else if items.isEmpty {
+                Section {
+                    Text("No purchases yet. When you subscribe — here, on the web, or on an Android phone — every payment shows up here, tied to this account.")
+                        .foregroundColor(.secondary)
+                }
+            } else {
+                ForEach(items) { item in
+                    PaymentHistoryRow(item: item)
+                }
+                Section {
+                    // Honest cross-platform billing model: history is unified per
+                    // account and readable on every platform; a subscription is
+                    // managed wherever it was bought (Apple here, the web billing
+                    // portal for card purchases, Google Play on Android).
+                    Text("Your billing history is unified across web, iOS and Android. Manage or cancel a subscription where you bought it — an Apple purchase in Apple ID subscriptions, a web purchase in the web billing portal.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .navigationTitle("Payment history")
+        .task { await load() }
+    }
+
+    private func load() async {
+        isLoading = true
+        errorMessage = nil
+        do {
+            items = try await TonoBackend.shared.paymentHistory().items
+        } catch {
+            errorMessage = ConsumerErrorCopy.message(for: error, action: .paymentHistory)
+        }
+        isLoading = false
+    }
+}
+
+private struct PaymentHistoryRow: View {
+    let item: PaymentHistoryItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(productLabel)
+                    .font(.headline)
+                Spacer()
+                Text(statusLabel)
+                    .font(.subheadline)
+                    .foregroundColor(item.isCurrent ? .accentColor : .secondary)
+            }
+            Text(subtitle)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            if let price = priceLabel {
+                Text("plan price " + price)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            if let expiresAt = item.expiresAt {
+                Text((item.isCurrent ? "renews / ends " : "ended ") + shortDate(expiresAt))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    /// A verified price string, present ONLY when both the normalized minor-unit
+    /// amount and an ISO currency arrived from the backend. Never fabricated.
+    private var priceLabel: String? {
+        guard let minor = item.amountMinor, let code = item.currency else { return nil }
+        let amount = Decimal(minor) / 100
+        let fmt = NumberFormatter()
+        fmt.numberStyle = .currency
+        fmt.currencyCode = code.uppercased()
+        return fmt.string(from: amount as NSDecimalNumber)
+    }
+
+    private var productLabel: String {
+        switch item.productId {
+        case "com.tonoit.pro.monthly": return "Tono Pro — monthly"
+        case "com.tonoit.pro.yearly":  return "Tono Pro — yearly"
+        default:                        return item.productId
+        }
+    }
+
+    private var providerLabel: String {
+        switch item.provider {
+        case "stripe":      return "web (card / wallet)"
+        case "apple":       return "Apple"
+        case "google_play": return "Google Play"
+        default:            return item.provider
+        }
+    }
+
+    private var subtitle: String {
+        var parts = ["via " + providerLabel]
+        if item.grantKind == "family" { parts.append("family sharing") }
+        if item.environment == "Sandbox" { parts.append("sandbox") }
+        return parts.joined(separator: " · ")
+    }
+
+    private var statusLabel: String {
+        if item.isCurrent { return "active" }
+        if item.entitlementState == "revoked" { return "revoked" }
+        if item.purchaseState == "refunded" { return "refunded" }
+        if item.purchaseState == "expired" { return "expired" }
+        return item.purchaseState
+    }
+
+    /// ISO-8601 → YYYY-MM-DD without a date formatter dependency.
+    private func shortDate(_ iso: String) -> String {
+        String(iso.prefix(while: { $0 != "T" }))
     }
 }

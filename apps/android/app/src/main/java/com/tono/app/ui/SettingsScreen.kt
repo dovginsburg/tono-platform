@@ -353,6 +353,11 @@ fun SettingsScreen(
             }
         }
 
+        // Payment history — the account's billing timeline across every store.
+        SettingsSection(title = "Payment history") {
+            PaymentHistorySection()
+        }
+
         // Privacy section
         SettingsSection(title = "Privacy") {
             Text(

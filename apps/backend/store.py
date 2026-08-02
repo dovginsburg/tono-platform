@@ -816,6 +816,16 @@ class Store:
             # re-issue the slot as a brand-new device instead of answering a
             # permanent 409 (see `sign_out_device`).
             "ALTER TABLE users ADD COLUMN signed_out_at TEXT",
+            # Verified plan price for a store purchase, captured ONLY where the
+            # provider hands us an authoritative, already-normalized amount
+            # (Stripe's recurring price `unit_amount` + ISO `currency`).
+            # `amount_minor` is integer minor units (e.g. 399 = $3.99); it is
+            # NEVER a parsed amount string and NEVER a raw transaction id. Left
+            # NULL for providers whose verified payloads we don't normalize
+            # (Apple/Google here) so the timeline shows a price only when it is
+            # provably correct, never a guess.
+            "ALTER TABLE provider_purchases ADD COLUMN amount_minor INTEGER",
+            "ALTER TABLE provider_purchases ADD COLUMN currency TEXT",
         ):
             with contextlib.suppress(sqlite3.OperationalError):
                 self._conn.execute(stmt)
@@ -3331,10 +3341,17 @@ class Store:
         stripe_status: str,
         period_end_ms: int,
         product_id: str = "stripe_pro",
+        amount_minor: Optional[int] = None,
+        currency: Optional[str] = None,
         force: bool = False,
     ) -> str:
         """Project one verified Stripe subscription event into provider_purchases and
         entitlement_grants using the same append-only, version-guarded model as Apple IAP.
+
+        ``amount_minor``/``currency`` carry the plan's authoritative recurring
+        price (Stripe ``unit_amount`` + ISO currency); when absent the stored
+        value is preserved rather than wiped, so a later event that omits the
+        price never blanks a known one.
 
         period_end_ms (current_period_end × 1000) is the monotonic version oracle:
         older events with a smaller period_end_ms cannot override a newer fact.
@@ -3360,6 +3377,8 @@ class Store:
                     lifecycle_state=lifecycle_state,
                     period_end_ms=period_end_ms,
                     product_id=product_id,
+                    amount_minor=amount_minor,
+                    currency=currency,
                     force=force,
                 )
                 cur.execute("COMMIT")
@@ -3375,6 +3394,7 @@ class Store:
         self, cur, now, *,
         account_id, subscription_id, stripe_status,
         lifecycle_state, period_end_ms, product_id,
+        amount_minor=None, currency=None,
         force=False,
     ) -> str:
         cur.execute(
@@ -3403,10 +3423,12 @@ class Store:
                       SET lifecycle_state = ?, latest_signed_ms = ?,
                           latest_transaction_id = ?, product_id = ?,
                           app_account_token = COALESCE(?, app_account_token),
+                          amount_minor = COALESCE(?, amount_minor),
+                          currency = COALESCE(?, currency),
                           expires_ms = ?, updated_at = ?
                     WHERE id = ?""",
                 (lifecycle_state, period_end_ms, subscription_id, product_id,
-                 account_id, period_end_ms, now, existing["id"]),
+                 account_id, amount_minor, currency, period_end_ms, now, existing["id"]),
             )
             purchase_id = existing["id"]
         else:
@@ -3415,10 +3437,12 @@ class Store:
                 """INSERT INTO provider_purchases
                        (id, provider, original_transaction_id, latest_transaction_id, product_id,
                         environment, ownership_type, app_account_token, lifecycle_state,
-                        latest_signed_ms, expires_ms, trial_consumed, created_at, updated_at)
-                     VALUES (?, 'stripe', ?, ?, ?, 'production', 'PURCHASED', ?, ?, ?, ?, 0, ?, ?)""",
+                        latest_signed_ms, expires_ms, amount_minor, currency, trial_consumed,
+                        created_at, updated_at)
+                     VALUES (?, 'stripe', ?, ?, ?, 'production', 'PURCHASED', ?, ?, ?, ?, ?, ?, 0, ?, ?)""",
                 (purchase_id, subscription_id, subscription_id, product_id,
-                 account_id, lifecycle_state, period_end_ms, period_end_ms, now, now),
+                 account_id, lifecycle_state, period_end_ms, period_end_ms,
+                 amount_minor, currency, now, now),
             )
 
         # Grant or revoke entitlement for the account
@@ -4492,6 +4516,63 @@ class Store:
             cur = self._conn.cursor()
             cur.execute("SELECT * FROM entitlement_grants WHERE account_id = ?", (account_id,))
             return [dict(r) for r in cur.fetchall()]
+
+        return self._run(_do).result()
+
+    def list_account_payment_history(self, account_id: str) -> list[dict]:
+        """The account's billing timeline: every entitlement grant this account
+        holds, joined to the store purchase that backs it, newest first.
+
+        Owner-scoped by ``account_id`` (the caller's own account — there is no
+        cross-account read). It deliberately exposes NO raw provider or
+        transaction identifiers (no ``original_transaction_id``, no Stripe
+        subscription id): only the opaque grant id plus the catalog product,
+        ownership, lifecycle and timestamps a person needs to understand their
+        own billing. A store purchase never appears here unless it produced a
+        grant to THIS account, so a family beneficiary sees their access grant
+        without seeing the purchaser's ownership lineage.
+        """
+
+        def _do() -> list[dict]:
+            cur = self._conn.cursor()
+            cur.execute(
+                """SELECT g.id            AS id,
+                          g.grant_kind    AS grant_kind,
+                          g.state         AS entitlement_state,
+                          g.effective_at  AS effective_at,
+                          g.expires_at    AS expires_at,
+                          g.revoked_at    AS revoked_at,
+                          g.created_at    AS created_at,
+                          g.updated_at    AS updated_at,
+                          p.provider      AS provider,
+                          p.product_id    AS product_id,
+                          p.ownership_type AS ownership_type,
+                          p.environment   AS environment,
+                          p.lifecycle_state AS purchase_state,
+                          p.amount_minor  AS amount_minor,
+                          p.currency      AS currency,
+                          p.trial_consumed AS trial_consumed
+                     FROM entitlement_grants g
+                     JOIN provider_purchases p ON p.id = g.purchase_id
+                    WHERE g.account_id = ?
+                    ORDER BY g.created_at DESC, g.id DESC""",
+                (account_id,),
+            )
+            now = _now_iso()
+            rows: list[dict] = []
+            for r in cur.fetchall():
+                d = dict(r)
+                # ``is_current`` is the projection a client should render as the
+                # live badge: an active grant that has not lapsed. It mirrors the
+                # entitlement rule in ``_account_has_active_grant`` (lexical ISO
+                # UTC compare) so the timeline and the paywall never disagree.
+                d["is_current"] = bool(
+                    d.get("entitlement_state") == "active"
+                    and (not d.get("expires_at") or d["expires_at"] > now)
+                )
+                d["trial_consumed"] = bool(d.get("trial_consumed"))
+                rows.append(d)
+            return rows
 
         return self._run(_do).result()
 

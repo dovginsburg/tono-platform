@@ -247,3 +247,69 @@ final class Build122PurchaseGateTests: XCTestCase {
         return String(source[startIndex..<source.endIndex])
     }
 }
+
+// MARK: - Account / payment-history / password-reveal contract
+//
+// Source-reading tests (mirroring the readSource approach above) for the
+// account-payment-history work. These assert what the shipped UI and storage
+// code do, since XCTest cannot drive SwiftUI or the App Group defaults here.
+final class AccountPaymentHistoryContractTests: XCTestCase {
+
+    func testPasswordFieldHasAnAccessibleRevealToggle() throws {
+        let source = try Self.readSource("App/OnboardingEntryPointsView.swift")
+        XCTAssertTrue(source.contains("passwordVisible"), "a reveal state must exist")
+        // The reveal flips between a masked SecureField and a plain TextField
+        // bound to the same value, and the button is labelled for VoiceOver.
+        XCTAssertTrue(source.contains("SecureField(\"Password\""))
+        XCTAssertTrue(source.contains("TextField(\"Password\""))
+        XCTAssertTrue(source.contains("\"Show password\""))
+        XCTAssertTrue(source.contains("\"Hide password\""))
+    }
+
+    func testSignOutClearsDeviceLocalPersonalCachesForAccountIsolation() throws {
+        let backend = try Self.readSource("Shared/TonoBackend.swift")
+        // signOut must purge personal content caches, not only the keychain.
+        let signOut = backend.range(of: "public func signOut() async {").map {
+            String(backend[$0.lowerBound...])
+        } ?? ""
+        XCTAssertTrue(
+            signOut.contains("SharedStore.clearPersonalData()"),
+            "sign-out must clear device-local personal caches"
+        )
+        let store = try Self.readSource("Shared/SharedUserDefaults.swift")
+        XCTAssertTrue(store.contains("func clearPersonalData()"))
+        // It clears personal content...
+        for key in ["draftHistory", "memoryFacts", "recentSessions", "recipients", "axisWeights"] {
+            XCTAssertTrue(store.contains("SharedKeys.\(key)"), "clears \(key)")
+        }
+        // ...but the method body must not touch device identity or onboarding.
+        if let body = store.range(of: "public static func clearPersonalData()").map({
+            String(store[$0.lowerBound...]).prefix(1200)
+        }) {
+            XCTAssertFalse(body.contains("onboardingDone"), "must not clear onboarding")
+            XCTAssertFalse(body.contains("apiToken"), "must not clear identity")
+        }
+    }
+
+    func testPaymentHistoryUsesOwnerScopedEndpointWithNoRawIdentifiers() throws {
+        let backend = try Self.readSource("Shared/TonoBackend.swift")
+        XCTAssertTrue(
+            backend.contains("get(path: \"/v1/account/payment-history\")"),
+            "owner-scoped endpoint, no account-id parameter"
+        )
+        let settings = try Self.readSource("App/SettingsView.swift")
+        XCTAssertTrue(settings.contains("struct PaymentHistoryView"))
+        XCTAssertTrue(settings.contains("PaymentHistoryView()"), "mounted from Settings")
+        // No raw provider/transaction identifiers surfaced by the view or model.
+        XCTAssertFalse(settings.contains("original_transaction_id"))
+        XCTAssertFalse(backend.contains("original_transaction_id"))
+        XCTAssertFalse(settings.contains("app_account_token"))
+    }
+
+    private static func readSource(_ relative: String, file: StaticString = #filePath) throws -> String {
+        let root = URL(fileURLWithPath: "\(file)")
+            .deletingLastPathComponent()   // .../Tests
+            .deletingLastPathComponent()   // .../apps/ios
+        return try String(contentsOf: root.appendingPathComponent(relative), encoding: .utf8)
+    }
+}

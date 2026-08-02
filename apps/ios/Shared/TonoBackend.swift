@@ -213,6 +213,69 @@ public struct CouponRedemption: Decodable {
     }
 }
 
+/// One row of the account's billing timeline. Mirrors the backend
+/// PaymentHistoryItem — carries NO raw provider or transaction identifier.
+public struct PaymentHistoryItem: Decodable, Identifiable {
+    public let id: String
+    public let provider: String
+    public let productId: String
+    public let entitlement: String
+    public let ownershipType: String
+    public let grantKind: String
+    public let entitlementState: String
+    public let purchaseState: String
+    public let isCurrent: Bool
+    public let trialConsumed: Bool
+    /// Verified plan price in integer minor units (399 = $3.99), present only
+    /// where the provider gave an authoritative normalized amount (Stripe).
+    /// Null for providers we don't normalize (Apple/Google) — a client shows a
+    /// price only when both this and `currency` are present, never a guess.
+    public let amountMinor: Int?
+    public let currency: String?
+    public let environment: String
+    public let effectiveAt: String
+    public let expiresAt: String?
+    public let revokedAt: String?
+    public let createdAt: String
+    public let updatedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, provider, entitlement, environment, currency
+        case productId = "product_id"
+        case ownershipType = "ownership_type"
+        case grantKind = "grant_kind"
+        case entitlementState = "entitlement_state"
+        case purchaseState = "purchase_state"
+        case isCurrent = "is_current"
+        case trialConsumed = "trial_consumed"
+        case amountMinor = "amount_minor"
+        case effectiveAt = "effective_at"
+        case expiresAt = "expires_at"
+        case revokedAt = "revoked_at"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+}
+
+public struct PaymentHistoryResponse: Decodable {
+    public let accountId: String
+    public let plan: String
+    public let isPro: Bool
+    public let subscriptionStatus: String?
+    public let subscriptionRenewsAt: String?
+    public let couponProExpiresAt: String?
+    public let items: [PaymentHistoryItem]
+
+    enum CodingKeys: String, CodingKey {
+        case plan, items
+        case accountId = "account_id"
+        case isPro = "is_pro"
+        case subscriptionStatus = "subscription_status"
+        case subscriptionRenewsAt = "subscription_renews_at"
+        case couponProExpiresAt = "coupon_pro_expires_at"
+    }
+}
+
 public struct TonoUsage: Codable {
     public let plan: String
     public let isPro: Bool
@@ -570,6 +633,12 @@ public final class TonoBackend: @unchecked Sendable {
         SharedKeychain.delete(KeychainKeys.accountID)
         SharedKeychain.delete(KeychainKeys.deviceCredential)
         SharedKeychain.delete(KeychainKeys.deviceID)
+        // Account-switch isolation: wipe this device's personal content caches
+        // (drafts, learned style, memory facts, recipients) so the next person
+        // to sign in on a shared device never inherits them. The canonical
+        // account still owns everything server-side. The keyboard/share/iMessage
+        // extensions read the same App Group, so clearing here clears them too.
+        SharedStore.clearPersonalData()
     }
 
     /// The address this device is signed in as, or `nil` when anonymous.
@@ -973,6 +1042,13 @@ public final class TonoBackend: @unchecked Sendable {
     /// Fetch the weekly tone digest from the backend.
     public func weeklyDigest() async throws -> WeeklyDigestResponse {
         try await get(path: "/v1/digest")
+    }
+
+    /// The signed-in account's own payment/subscription timeline. Owner-scoped
+    /// server-side by the bearer's account — there is no account-id parameter,
+    /// so this device can only ever read its own account's billing.
+    public func paymentHistory() async throws -> PaymentHistoryResponse {
+        try await get(path: "/v1/account/payment-history")
     }
 
     public func checkout(interval: String) async throws -> URL {

@@ -482,6 +482,8 @@ def _handle_subscription_event(store: Store, etype: str, obj: dict) -> None:
     status_str: Optional[str] = None
     period_end: Optional[int] = None
     product_id: str = "stripe_pro"
+    amount_minor: Optional[int] = None
+    currency: Optional[str] = None
 
     if etype == "checkout.session.completed":
         device_id = obj.get("client_reference_id") or _meta(obj, "tono_device_id")
@@ -494,6 +496,7 @@ def _handle_subscription_event(store: Store, etype: str, obj: dict) -> None:
             status_str = sub.get("status")
             period_end = sub.get("current_period_end")
             product_id = _product_id_from_sub(sub)
+            amount_minor, currency = _price_from_sub(sub)
         else:
             logger.warning(
                 "Stripe checkout completion has no subscription; refusing Pro grant "
@@ -507,6 +510,7 @@ def _handle_subscription_event(store: Store, etype: str, obj: dict) -> None:
         period_end = obj.get("current_period_end")
         device_id = _meta(obj, "tono_device_id")
         product_id = _product_id_from_sub(obj)
+        amount_minor, currency = _price_from_sub(obj)
 
     # Resolve account_id from customer if not already in metadata
     if not account_id and customer_id:
@@ -577,6 +581,8 @@ def _handle_subscription_event(store: Store, etype: str, obj: dict) -> None:
             stripe_status=effective_status if is_deleted else status_str,
             period_end_ms=period_end_ms,
             product_id=product_id,
+            amount_minor=amount_minor,
+            currency=currency,
         )
 
     # ── 2. Mutable column update (backward compat) ──────────────────────────
@@ -623,6 +629,7 @@ def _handle_invoice_event(store: Store, etype: str, obj: dict) -> None:
     period_end: Optional[int] = sub.get("current_period_end")
     period_end_ms = int(period_end) * 1000 if period_end else None
     product_id = _product_id_from_sub(sub)
+    amount_minor, currency = _price_from_sub(sub)
 
     if period_end_ms is None:
         logger.warning(
@@ -643,6 +650,8 @@ def _handle_invoice_event(store: Store, etype: str, obj: dict) -> None:
         stripe_status=stripe_status,
         period_end_ms=period_end_ms,
         product_id=product_id,
+        amount_minor=amount_minor,
+        currency=currency,
     )
 
     # Skip mutable update if provider projection determined this event is stale —
@@ -777,12 +786,15 @@ def _handle_dispute_funds_reinstated(store: Store, obj: dict) -> None:
             account_id = acct.id
 
     # force=True: dispute won → explicit reinstatement beats any terminal guard.
+    _amount_minor, _currency = _price_from_sub(sub)
     store.apply_stripe_subscription_fact(
         account_id=account_id,
         subscription_id=subscription_id,
         stripe_status=stripe_status,
         period_end_ms=period_end_ms,
         product_id=_product_id_from_sub(sub),
+        amount_minor=_amount_minor,
+        currency=_currency,
         force=True,
     )
     if account_id:
@@ -872,6 +884,27 @@ def _product_id_from_sub(sub: dict) -> str:
         price = items[0].get("price") or {}
         return price.get("product") or "stripe_pro"
     return "stripe_pro"
+
+
+def _price_from_sub(sub: dict) -> tuple[Optional[int], Optional[str]]:
+    """The plan's authoritative recurring price from a Stripe subscription's
+    first line item, as (amount_minor, currency).
+
+    Stripe already reports ``unit_amount`` in integer minor units and a
+    lowercase ISO ``currency`` — we never parse a formatted string. Returns
+    (None, None) when either is missing so a purchase is only ever stamped with
+    a provably correct price, never a guess. This is the plan price (what the
+    subscription bills each period), not a per-invoice charged total; it is the
+    stable, normalized number a person recognizes as "what my plan costs".
+    """
+    items = (sub.get("items") or {}).get("data") or []
+    if items:
+        price = items[0].get("price") or {}
+        unit_amount = price.get("unit_amount")
+        currency = price.get("currency")
+        if isinstance(unit_amount, int) and isinstance(currency, str) and currency:
+            return unit_amount, currency.lower()
+    return None, None
 
 
 def _payment_method_fingerprint(sub: dict) -> Optional[str]:

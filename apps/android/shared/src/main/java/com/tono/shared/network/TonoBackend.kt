@@ -78,6 +78,42 @@ import kotlin.coroutines.resumeWithException
     val message: String,
 )
 
+/** One row of the account's billing timeline. Mirrors the backend
+ *  PaymentHistoryItem — no raw provider/transaction identifier is present. */
+@Serializable data class PaymentHistoryItem(
+    val id: String,
+    val provider: String,
+    @SerialName("product_id")        val productId: String,
+    val entitlement: String,
+    @SerialName("ownership_type")    val ownershipType: String,
+    @SerialName("grant_kind")        val grantKind: String,
+    @SerialName("entitlement_state") val entitlementState: String,
+    @SerialName("purchase_state")    val purchaseState: String,
+    @SerialName("is_current")        val isCurrent: Boolean,
+    @SerialName("trial_consumed")    val trialConsumed: Boolean = false,
+    // Verified plan price in integer minor units (399 = $3.99), present only
+    // where the provider gave an authoritative normalized amount (Stripe).
+    // Null for Apple/Google — the UI shows a price only when both are present.
+    @SerialName("amount_minor")      val amountMinor: Int? = null,
+    val currency: String? = null,
+    val environment: String,
+    @SerialName("effective_at")      val effectiveAt: String,
+    @SerialName("expires_at")        val expiresAt: String? = null,
+    @SerialName("revoked_at")        val revokedAt: String? = null,
+    @SerialName("created_at")        val createdAt: String,
+    @SerialName("updated_at")        val updatedAt: String,
+)
+
+@Serializable data class PaymentHistoryResponse(
+    @SerialName("account_id")               val accountId: String,
+    val plan: String,
+    @SerialName("is_pro")                   val isPro: Boolean,
+    @SerialName("subscription_status")      val subscriptionStatus: String? = null,
+    @SerialName("subscription_renews_at")   val subscriptionRenewsAt: String? = null,
+    @SerialName("coupon_pro_expires_at")    val couponProExpiresAt: String? = null,
+    val items: List<PaymentHistoryItem> = emptyList(),
+)
+
 object TonoBackend {
 
     private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
@@ -196,6 +232,11 @@ object TonoBackend {
     }
 
     suspend fun weeklyDigest(): WeeklyDigestResponse = get("/v1/digest")
+
+    /** The signed-in account's own payment/subscription timeline. Owner-scoped
+     *  server-side by the bearer's account — there is no account-id parameter,
+     *  so this device can only ever read its own account's billing. */
+    suspend fun paymentHistory(): PaymentHistoryResponse = get("/v1/account/payment-history")
 
     /**
      * Redeems against the account proven by the current bearer, then re-reads
@@ -380,6 +421,11 @@ object TonoBackend {
         // it; the entitlement itself still belongs to the account.
         SharedStore.putBoolean(SharedKeys.PRO_UNLOCKED, false)
         SharedStore.putString(SharedKeys.ACCOUNT_ID, null)
+        // Account-switch isolation: wipe this device's personal content caches
+        // (drafts, recipients, learned style, memory facts) so the next person
+        // to sign in on a shared device never inherits them. The canonical
+        // account still owns everything server-side.
+        SharedStore.clearPersonalData()
     }
 
     private const val SOURCE_SURFACE = "android"

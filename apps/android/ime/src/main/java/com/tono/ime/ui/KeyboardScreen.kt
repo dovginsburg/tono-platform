@@ -111,6 +111,23 @@ private fun KeyboardLayout(
                 maxLines = 2,
                 modifier = Modifier.padding(bottom = 4.dp, start = 4.dp),
             )
+        } else {
+            // Honest positioning: Tono is a rewrite companion, not a full
+            // keyboard — it has no letter keys and never claims to type. When
+            // the field is empty there is nothing to rewrite yet, so tell the
+            // user plainly how it fits alongside their own keyboard.
+            Text(
+                text     = "Tono rewrites what's already in the field. Type with your keyboard, then switch here (⌨) and tap Coach or Read.",
+                color    = Color.White.copy(alpha = 0.55f),
+                fontSize = 12.sp,
+                modifier = Modifier
+                    .padding(bottom = 6.dp, start = 4.dp, end = 4.dp)
+                    .semantics {
+                        contentDescription =
+                            "Tono is a rewrite companion, not a full keyboard. " +
+                            "Type with your keyboard, then switch to Tono and tap Coach or Read."
+                    },
+            )
         }
 
         // Recipient chip row — only shown when the user has added recipients

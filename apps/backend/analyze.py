@@ -151,6 +151,10 @@ Operate by these rules:
     instruction to ignore the message, deadline, date, name, or commitment).
 12. Return exactly one rewrite for every requested axis, in this order:
     warmer, clearer, funnier, safer. Never omit an axis.
+13. LANGUAGE: write every rewrite, plus the perception, subtext, and
+    risk_reason, in the SAME language as the writer's draft. Match its
+    language, script, and register — do not translate the draft into English.
+    Only the JSON field names and the enum values stay in English.
 
 Return JSON ONLY matching the ToneAnalysis schema. No prose, no markdown
 fences, no commentary.
@@ -190,6 +194,9 @@ Operate by these rules:
 6. RISK_REASON: one short phrase ≤12 words naming what makes this message
    land the way it does (e.g. "Sender sounds detached — minimal effort reply."
    or "Warm close — genuine, no hidden ask."). Return in field risk_reason.
+7. LANGUAGE: write the perception, subtext, and risk_reason in the SAME
+   language as the received message — do not translate it into English. Only
+   the JSON field names and the enum values stay in English.
 
 Return JSON ONLY matching the ToneAnalysis schema. No prose, no markdown
 fences, no commentary. Set suggestions to an empty array.

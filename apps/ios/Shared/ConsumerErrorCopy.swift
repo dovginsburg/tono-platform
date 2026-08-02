@@ -46,6 +46,8 @@ public enum ConsumerErrorCopy {
         case restore
         /// Handing a finished rewrite back to the host app's compose field.
         case insertRewrite
+        /// Loading the account's payment/billing history.
+        case paymentHistory
     }
 
     /// What the user can do next. Derived from the failure's case alone.
@@ -88,6 +90,7 @@ public enum ConsumerErrorCopy {
         case .purchase:       return "Purchase couldn't be completed."
         case .restore:        return "Restore couldn't be completed."
         case .insertRewrite:  return "Couldn't add the rewrite to your message."
+        case .paymentHistory: return "Couldn't load your payment history."
         }
     }
 

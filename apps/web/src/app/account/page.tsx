@@ -11,7 +11,9 @@ import Link from 'next/link'
 import { cookies } from 'next/headers'
 import ManageBillingButton from './ManageBillingButton'
 import PasskeyManager from './PasskeyManager'
+import PaymentHistory from './PaymentHistory'
 import PromoRedemption from './PromoRedemption'
+import SignOutButton from './SignOutButton'
 
 export const metadata: Metadata = {
   title: 'your account — tono',
@@ -110,7 +112,7 @@ export default async function AccountPage() {
                 plan
               </h2>
               <p className="mt-2 text-[22px] font-bold text-tono-text">
-                {me?.is_pro ? 'tono pro' : 'free'}
+                {me?.is_pro ? 'tono pro' : 'no active plan'}
               </p>
               {me?.subscription_status ? (
                 <p className="mt-1 text-[13px] text-tono-text-soft">
@@ -158,6 +160,10 @@ export default async function AccountPage() {
             </section>
 
             <section className="pt-2 border-t border-tono-border">
+              <PaymentHistory />
+            </section>
+
+            <section className="pt-2 border-t border-tono-border">
               <PromoRedemption />
             </section>
 
@@ -166,14 +172,7 @@ export default async function AccountPage() {
             </section>
 
             <section className="pt-2 border-t border-tono-border">
-              <form action="/app/api/auth/signout" method="post" className="mt-6">
-                <button
-                  type="submit"
-                  className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-[12px] bg-transparent border border-tono-border-strong text-tono-text hover:border-tono-accent font-semibold transition min-h-[44px] text-[14px]"
-                >
-                  sign out
-                </button>
-              </form>
+              <SignOutButton />
             </section>
           </div>
         )}

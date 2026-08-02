@@ -11,6 +11,7 @@ import {
   type EmailAuthOutcome,
 } from '@/lib/email-auth';
 import { APP_ENTRY_PATH, apiPath, LOGIN_PATH } from '@/lib/auth-redirects';
+import PasswordField from '../../PasswordField';
 
 /**
  * The password-choosing form.
@@ -86,15 +87,13 @@ export function ResetPasswordForm() {
         >
           new password
         </label>
-        <input
+        <PasswordField
           id="new-password"
-          type="password"
           required
           minLength={MIN_PASSWORD_LENGTH}
           value={password}
-          onChange={(e) => setPassword(e.target.value)}
+          onChange={setPassword}
           autoComplete="new-password"
-          className="w-full bg-tono-bg-elev text-tono-text border border-tono-border rounded-[12px] px-4 py-3 text-[14px] outline-none focus:border-tono-border-strong min-h-[48px] placeholder:text-tono-muted"
           placeholder={`at least ${MIN_PASSWORD_LENGTH} characters`}
         />
       </div>
@@ -105,15 +104,13 @@ export function ResetPasswordForm() {
         >
           type it again
         </label>
-        <input
+        <PasswordField
           id="confirm-password"
-          type="password"
           required
           minLength={MIN_PASSWORD_LENGTH}
           value={confirmation}
-          onChange={(e) => setConfirmation(e.target.value)}
+          onChange={setConfirmation}
           autoComplete="new-password"
-          className="w-full bg-tono-bg-elev text-tono-text border border-tono-border rounded-[12px] px-4 py-3 text-[14px] outline-none focus:border-tono-border-strong min-h-[48px] placeholder:text-tono-muted"
         />
       </div>
 

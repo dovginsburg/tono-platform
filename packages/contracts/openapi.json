@@ -1402,6 +1402,194 @@
         "title": "PasskeyRegisterVerifyResponse",
         "type": "object"
       },
+      "PaymentHistoryItem": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "effective_at": {
+            "title": "Effective At",
+            "type": "string"
+          },
+          "entitlement": {
+            "title": "Entitlement",
+            "type": "string"
+          },
+          "entitlement_state": {
+            "title": "Entitlement State",
+            "type": "string"
+          },
+          "environment": {
+            "title": "Environment",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "grant_kind": {
+            "title": "Grant Kind",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_current": {
+            "title": "Is Current",
+            "type": "boolean"
+          },
+          "amount_minor": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Verified plan price in integer minor units (399 = $3.99); present only for providers with an authoritative normalized amount (Stripe), else null.",
+            "title": "Amount Minor"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Lowercase ISO currency code paired with amount_minor; null when no verified amount is available.",
+            "title": "Currency"
+          },
+          "ownership_type": {
+            "title": "Ownership Type",
+            "type": "string"
+          },
+          "product_id": {
+            "title": "Product Id",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "purchase_state": {
+            "title": "Purchase State",
+            "type": "string"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "trial_consumed": {
+            "title": "Trial Consumed",
+            "type": "boolean"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "provider",
+          "product_id",
+          "entitlement",
+          "ownership_type",
+          "grant_kind",
+          "entitlement_state",
+          "purchase_state",
+          "is_current",
+          "trial_consumed",
+          "environment",
+          "effective_at",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "PaymentHistoryItem",
+        "type": "object"
+      },
+      "PaymentHistoryResponse": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "coupon_pro_expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coupon Pro Expires At"
+          },
+          "is_pro": {
+            "title": "Is Pro",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PaymentHistoryItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "plan": {
+            "title": "Plan",
+            "type": "string"
+          },
+          "subscription_renews_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subscription Renews At"
+          },
+          "subscription_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subscription Status"
+          }
+        },
+        "required": [
+          "account_id",
+          "plan",
+          "is_pro",
+          "items"
+        ],
+        "title": "PaymentHistoryResponse",
+        "type": "object"
+      },
       "PortalRequest": {
         "properties": {
           "return_url": {
@@ -2947,6 +3135,30 @@
           }
         ],
         "summary": "Delete Account"
+      }
+    },
+    "/v1/account/payment-history": {
+      "get": {
+        "description": "The caller's OWN payment/subscription timeline.\n\nScoped by the bearer's account \u2014 there is no account id parameter, so one\nperson can never read another's billing. Every row is an entitlement grant\nto THIS account joined to the store purchase that produced it; no raw\nprovider/transaction identifier is exposed. The header carries the live\nentitlement projection (identical to /v1/me) so a client can render the\ncurrent plan even when the account has no per-purchase rows (e.g. a founder\ncoupon grant, which is entitlement without a provider purchase).",
+        "operationId": "account_payment_history_v1_account_payment_history_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentHistoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Account Payment History"
       }
     },
     "/v1/account/registration-events": {

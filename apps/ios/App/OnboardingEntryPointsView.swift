@@ -444,6 +444,7 @@ struct EmailSignInSheet: View {
 
     @State private var email: String = ""
     @State private var password: String = ""
+    @State private var passwordVisible: Bool = false
     @State private var step: Step = .signIn
     @State private var isWorking: Bool = false
     /// The last thing that happened, as a shape. Never an `Error`.
@@ -661,13 +662,40 @@ struct EmailSignInSheet: View {
     }
 
     private func passwordField(isNew: Bool) -> some View {
-        SecureField("Password", text: $password)
-            .textContentType(isNew ? .newPassword : .password)
+        // A password field with an accessible reveal control. SwiftUI's
+        // SecureField cannot itself unmask, so we overlay a SecureField and a
+        // plain TextField and show one at a time; the eye button flips
+        // `passwordVisible`. Both fields bind the SAME `password` state, so the
+        // value is never duplicated or lost when toggling. Every password field
+        // in the product must let a person verify what they typed.
+        HStack(spacing: 8) {
+            ZStack {
+                SecureField("Password", text: $password)
+                    .textContentType(isNew ? .newPassword : .password)
+                    .opacity(passwordVisible ? 0 : 1)
+                    .accessibilityHidden(passwordVisible)
+                TextField("Password", text: $password)
+                    .textContentType(isNew ? .newPassword : .password)
+                    .opacity(passwordVisible ? 1 : 0)
+                    .accessibilityHidden(!passwordVisible)
+            }
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled(true)
-            .textFieldStyle(.roundedBorder)
-            .disabled(isWorking)
             .accessibilityLabel("Password")
+
+            Button {
+                passwordVisible.toggle()
+            } label: {
+                Image(systemName: passwordVisible ? "eye.slash" : "eye")
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .disabled(isWorking)
+            .accessibilityLabel(passwordVisible ? "Hide password" : "Show password")
+            .accessibilityAddTraits(passwordVisible ? [.isSelected] : [])
+        }
+        .textFieldStyle(.roundedBorder)
+        .disabled(isWorking)
     }
 
     /// The one rendered failure/notice surface. It reads a mapped sentence, so

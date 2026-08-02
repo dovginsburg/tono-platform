@@ -120,6 +120,41 @@ public enum SharedStore {
     public static var defaults: UserDefaults {
         UserDefaults(suiteName: suiteName) ?? .standard
     }
+
+    /// Clears device-local PERSONAL content caches on sign-out / account switch:
+    /// the draft-history ring, learned per-recipient style weights, memory facts,
+    /// the recent-session inference window, saved recipients, and the
+    /// last-perception mirrors. Without this a shared device would carry one
+    /// account's drafts and learned style to the next signed-in account — the
+    /// account-switch isolation the canonical account already guarantees
+    /// server-side.
+    ///
+    /// It deliberately does NOT touch device identity/session (owned by the
+    /// Keychain via `SharedKeychain`), nor app settings/onboarding/flags, which
+    /// are not personal content.
+    public static func clearPersonalData() {
+        let d = defaults
+        let keys = [
+            SharedKeys.draftHistory,
+            SharedKeys.memoryFacts,
+            SharedKeys.recentSessions,
+            SharedKeys.recipients,
+            SharedKeys.lastPerception,
+            SharedKeys.lastRiskLevel,
+            SharedKeys.coachUseCount,
+            SharedKeys.lastCoachDate,
+            SharedKeys.lastWeeklyDigest,
+            SharedKeys.lastRewriteVoice,
+            SharedKeys.recentRewrites,
+        ]
+        for key in keys { d.removeObject(forKey: key) }
+        // Per-recipient axis-weight keys are suffixed "tc.axisWeights.<UUID>";
+        // remove the global key and every per-recipient variant.
+        for key in d.dictionaryRepresentation().keys
+        where key == SharedKeys.axisWeights || key.hasPrefix(SharedKeys.axisWeights + ".") {
+            d.removeObject(forKey: key)
+        }
+    }
 }
 
 /// Tri-state entitlement (build 91 §7). Fail-closed: only `.entitled` presents

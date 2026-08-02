@@ -1687,6 +1687,119 @@ def account_registration_events(
 
 
 # ---------------------------------------------------------------------------
+# Account payment / billing history. Authenticated; owner-scoped read of the
+# account's own subscription timeline. The purchase/entitlement data has always
+# been modelled server-side (provider_purchases + entitlement_grants), mutated
+# by every Stripe/Apple/Google path, but had no read contract until now — the
+# namesake gap of this worktree. This exposes it WITHOUT any raw provider or
+# transaction identifier (contract §7: no raw IDs, no vanity-only totals).
+# ---------------------------------------------------------------------------
+
+
+class PaymentHistoryItem(BaseModel):
+    # Opaque grant id — a UUID handle for this timeline row, NOT a provider or
+    # transaction identifier. Safe to render as a list key.
+    id: str
+    provider: str  # 'stripe' | 'apple' | 'google_play'
+    product_id: str  # catalog product (e.g. com.tonoit.pro.monthly)
+    entitlement: str  # canonical entitlement this grant confers ('pro')
+    ownership_type: str  # 'PURCHASED' | 'FAMILY_SHARED'
+    grant_kind: str  # 'direct' | 'family'
+    entitlement_state: str  # 'active' | 'revoked'
+    purchase_state: str  # 'active' | 'expired' | 'refunded' | 'revoked' | ...
+    # True when this grant is the live entitlement (active and not lapsed).
+    is_current: bool
+    trial_consumed: bool
+    # Verified plan price, present ONLY where the provider gave an authoritative,
+    # already-normalized amount (Stripe recurring price). ``amount_minor`` is
+    # integer minor units (399 = $3.99); ``currency`` is a lowercase ISO code.
+    # Both are null for providers we don't normalize (Apple/Google) — a client
+    # renders a price only when both are present, never a fabricated one.
+    amount_minor: Optional[int] = None
+    currency: Optional[str] = None
+    environment: str  # 'Production' | 'Sandbox'
+    effective_at: str
+    expires_at: Optional[str] = None
+    revoked_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class PaymentHistoryResponse(BaseModel):
+    account_id: str
+    # Current entitlement summary — the same projection /v1/me returns, so the
+    # timeline header and the rest of the app never disagree on Pro status.
+    plan: str
+    is_pro: bool
+    subscription_status: Optional[str] = None
+    subscription_renews_at: Optional[str] = None
+    coupon_pro_expires_at: Optional[str] = None
+    # Newest first. Empty for an account that never purchased (never a lie about
+    # entitlement — an anonymous device with a coupon still reads is_pro above).
+    items: list[PaymentHistoryItem]
+
+
+@app.get("/v1/account/payment-history", response_model=PaymentHistoryResponse)
+def account_payment_history(
+    user: CurrentUser, store: StoreDep
+) -> PaymentHistoryResponse:
+    """The caller's OWN payment/subscription timeline.
+
+    Scoped by the bearer's account — there is no account id parameter, so one
+    person can never read another's billing. Every row is an entitlement grant
+    to THIS account joined to the store purchase that produced it; no raw
+    provider/transaction identifier is exposed. The header carries the live
+    entitlement projection (identical to /v1/me) so a client can render the
+    current plan even when the account has no per-purchase rows (e.g. a founder
+    coupon grant, which is entitlement without a provider purchase).
+    """
+    if not user.account_id:
+        # Contract §1: every device resolves to a canonical account. A null here
+        # is a legacy row; backfill so the read has a principal.
+        reloaded = store.ensure_account(user.device_id)
+        if reloaded is not None:
+            user = reloaded
+    if not user.account_id:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, "no canonical account for this device"
+        )
+    projection = compute_me_fields(user, store)
+    rows = store.list_account_payment_history(user.account_id)
+    items = [
+        PaymentHistoryItem(
+            id=row["id"],
+            provider=row["provider"],
+            product_id=row["product_id"],
+            entitlement="pro",
+            ownership_type=row["ownership_type"],
+            grant_kind=row["grant_kind"],
+            entitlement_state=row["entitlement_state"],
+            purchase_state=row["purchase_state"],
+            is_current=bool(row["is_current"]),
+            trial_consumed=bool(row["trial_consumed"]),
+            amount_minor=row.get("amount_minor"),
+            currency=row.get("currency"),
+            environment=row["environment"],
+            effective_at=row["effective_at"],
+            expires_at=row.get("expires_at"),
+            revoked_at=row.get("revoked_at"),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+        for row in rows
+    ]
+    return PaymentHistoryResponse(
+        account_id=user.account_id,
+        plan=projection["plan"],
+        is_pro=projection["is_pro"],
+        subscription_status=projection["subscription_status"],
+        subscription_renews_at=projection["subscription_renews_at"],
+        coupon_pro_expires_at=projection["coupon_pro_expires_at"],
+        items=items,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Account deletion. Authenticated; revokes every session/device and private
 # datum, and tombstones the account so append-only billing/provider audit
 # facts stay valid (see store.delete_account).

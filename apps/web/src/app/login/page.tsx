@@ -18,6 +18,7 @@ import {
   type EmailAuthOutcome,
 } from '@/lib/email-auth';
 import PasskeyLoginButton from '../PasskeyLoginButton';
+import PasswordField from '../PasswordField';
 
 // Build 114 remediation — one vocabulary for this page.
 //
@@ -50,6 +51,17 @@ function classifyAuthFailure(error: unknown): EmailAuthOutcome {
 }
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+
+// Capability gate for the Apple/Google OAuth buttons.
+//
+// Those buttons can only complete a sign-in through a configured Supabase
+// project. When either public value is absent at build time, the provider
+// client cannot start an OAuth flow, so rendering the buttons would give a
+// person a control that fails the instant they click it. We fail closed and
+// omit them entirely — mirroring how passkeys surface an honest "not configured
+// here yet" state rather than a dead button. Email/password + passkeys remain.
+const OAUTH_CONFIGURED = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
 // build a basePath-aware redirect URI:
 //   on tonoit.com, callback URL is https://tonoit.com/app/auth/callback
@@ -250,24 +262,30 @@ export default function LoginPage() {
             pick one, copy, send.
           </p>
 
-          {/* OAuth buttons */}
+          {/* OAuth buttons — rendered only when the provider is configured
+              (fail-closed capability gate); passkeys always render with their
+              own honest not-configured state. */}
           <div className="space-y-2.5">
-            <button
-              type="button"
-              onClick={() => oauth('google')}
-              className="w-full inline-flex items-center justify-center gap-3 px-5 py-3 rounded-[12px] bg-tono-bg-elev hover:bg-tono-bg-card text-tono-text border border-tono-border hover:border-tono-border-strong font-semibold text-[14px] transition min-h-[48px]"
-              aria-label="Continue with Google"
-            >
-              <GoogleIcon /> continue with google
-            </button>
-            <button
-              type="button"
-              onClick={() => oauth('apple')}
-              className="w-full inline-flex items-center justify-center gap-3 px-5 py-3 rounded-[12px] bg-tono-bg-elev hover:bg-tono-bg-card text-tono-text border border-tono-border hover:border-tono-border-strong font-semibold text-[14px] transition min-h-[48px]"
-              aria-label="Continue with Apple"
-            >
-              <AppleIcon /> continue with apple
-            </button>
+            {OAUTH_CONFIGURED ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => oauth('google')}
+                  className="w-full inline-flex items-center justify-center gap-3 px-5 py-3 rounded-[12px] bg-tono-bg-elev hover:bg-tono-bg-card text-tono-text border border-tono-border hover:border-tono-border-strong font-semibold text-[14px] transition min-h-[48px]"
+                  aria-label="Continue with Google"
+                >
+                  <GoogleIcon /> continue with google
+                </button>
+                <button
+                  type="button"
+                  onClick={() => oauth('apple')}
+                  className="w-full inline-flex items-center justify-center gap-3 px-5 py-3 rounded-[12px] bg-tono-bg-elev hover:bg-tono-bg-card text-tono-text border border-tono-border hover:border-tono-border-strong font-semibold text-[14px] transition min-h-[48px]"
+                  aria-label="Continue with Apple"
+                >
+                  <AppleIcon /> continue with apple
+                </button>
+              </>
+            ) : null}
             <PasskeyLoginButton />
           </div>
 
@@ -345,17 +363,15 @@ export default function LoginPage() {
               >
                 password
               </label>
-              <input
+              <PasswordField
                 id="password"
-                type="password"
                 required
                 minLength={mode === 'create' ? MIN_PASSWORD_LENGTH : undefined}
                 placeholder={
                   mode === 'create' ? `at least ${MIN_PASSWORD_LENGTH} characters` : undefined
                 }
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-tono-bg-elev text-tono-text border border-tono-border rounded-[12px] px-4 py-3 text-[14px] outline-none focus:border-tono-border-strong min-h-[48px] placeholder:text-tono-muted"
+                onChange={setPassword}
                 autoComplete={mode === 'create' ? 'new-password' : 'current-password'}
               />
             </div>
