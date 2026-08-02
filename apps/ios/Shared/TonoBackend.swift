@@ -614,6 +614,31 @@ public final class TonoBackend: @unchecked Sendable {
         }
     }
 
+    /// Fail-closed probe of whether the live backend can honor an Apple StoreKit
+    /// purchase, read from the existing `/health` contract's `apple_configured`
+    /// boolean. NEVER throws: every transport or contract failure folds to a
+    /// non-`.ready` verdict, because a charge must not be initiated on doubt.
+    ///
+    /// This is the initiation-time capability the purchase gate consults BEFORE
+    /// `product.purchase(...)`. Post-payment `/v1/me` reconciliation cannot
+    /// refund a charge, so it is not a substitute for this check. Uses the same
+    /// short-timeout GET as `health()`; only the body interpretation differs.
+    public func fetchApplePurchaseCapability() async -> ApplePurchaseCapability {
+        guard let url = URL(string: "/health", relativeTo: baseURL) else {
+            return .unavailable
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.timeoutInterval = 8
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            let status = (response as? HTTPURLResponse)?.statusCode
+            return PurchaseCapabilityGate.evaluate(httpStatus: status, body: data)
+        } catch {
+            return .unavailable
+        }
+    }
+
     public func analyze(
         text: String,
         preferredVoice: String?,

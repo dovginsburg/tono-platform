@@ -1577,9 +1577,9 @@ final class Build115LocalCoachTests: XCTestCase {
     /// Every shipped bundle is the currently prepared iOS build and the
     /// marketing version is unchanged.
     ///
-    /// BUILD 121 RELEASE-IDENTITY UPDATE — this assertion tracks the prepared
+    /// BUILD 122 RELEASE-IDENTITY UPDATE — this assertion tracks the prepared
     /// release. The suite's Build 115/117 behavior evidence remains historical.
-    func testAllFourShippedBundlesArePreparedBuild121() throws {
+    func testAllFourShippedBundlesArePreparedBuild122() throws {
         let guardScript = try Self.source("Scripts/bump-build.sh")
         var expected: String?
         for line in guardScript.split(separator: "\n") {
@@ -1588,14 +1588,14 @@ final class Build115LocalCoachTests: XCTestCase {
             expected = trimmed.dropFirst("EXPECTED_BUILD=".count)
                 .trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
         }
-        XCTAssertEqual(expected, "121", "the build guard must pin the reviewed number")
+        XCTAssertEqual(expected, "122", "the build guard must pin the reviewed number")
         for relative in ["App/Info.plist", "KeyboardExtension/Info.plist",
                          "ShareExtension/Info.plist", "TonoMessagesExtension/Info.plist"] {
             let data = try Data(contentsOf: Self.sourceRoot().appendingPathComponent(relative))
             let plist = try PropertyListSerialization.propertyList(
                 from: data, options: [], format: nil
             ) as? [String: Any]
-            XCTAssertEqual(plist?["CFBundleVersion"] as? String, "121", "\(relative)")
+            XCTAssertEqual(plist?["CFBundleVersion"] as? String, "122", "\(relative)")
             XCTAssertEqual(plist?["CFBundleShortVersionString"] as? String, "1.1", "\(relative)")
         }
     }

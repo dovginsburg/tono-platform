@@ -58,6 +58,10 @@ public enum ConsumerErrorCopy {
         case waitAndRetry
         case signInBeforeSubscribing
         case contactSupport
+        /// build 122: the backend cannot honor an Apple charge right now (not
+        /// Apple-configured, or a malformed readiness contract). No charge was
+        /// made; the next step is to wait rather than to check the connection.
+        case purchasesTemporarilyUnavailable
         case tooManyDevices(current: Int, max: Int)
     }
 
@@ -105,6 +109,8 @@ public enum ConsumerErrorCopy {
             return "Wait a minute and try again."
         case .signInBeforeSubscribing:
             return "Sign in with your email first so your subscription follows you if you reinstall."
+        case .purchasesTemporarilyUnavailable:
+            return "Subscriptions aren't available right now. No charge was made. Please try again later."
         case .contactSupport:
             return "Try again, and contact support@tonoit.com if it keeps happening."
         case .tooManyDevices:
@@ -160,6 +166,14 @@ public enum ConsumerErrorCopy {
                 return .finishSetup
             case .needsIdentifiedAccount:
                 return .signInBeforeSubscribing
+            case .appleNotConfigured:
+                // Server is reachable but cannot honor an Apple charge — waiting,
+                // not reconnecting, is the honest next step.
+                return .purchasesTemporarilyUnavailable
+            case .purchaseCapabilityUnavailable:
+                // Couldn't reach the readiness contract at all — same next step
+                // as any other unreachable-backend failure.
+                return .checkConnection
             }
         }
 

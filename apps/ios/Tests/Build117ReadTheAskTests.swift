@@ -1426,15 +1426,15 @@ final class Build117ReadTheAskTests: XCTestCase {
     // 11. Build identity
     // ═══════════════════════════════════════════════════════════════════
 
-    /// The four currently prepared bundles and the archive guard agree on 121.
+    /// The four currently prepared bundles and the archive guard agree on 122.
     /// This release-identity assertion moves with the prepared iOS release;
     /// the rest of this suite remains immutable Build 117 feature evidence.
-    func testEveryShippedBundleDeclaresPreparedBuild121() throws {
+    func testEveryShippedBundleDeclaresPreparedBuild122() throws {
         let root = sourceRoot()
         let guardScript = try String(
             contentsOf: root.appendingPathComponent("Scripts/bump-build.sh"), encoding: .utf8
         )
-        XCTAssertTrue(guardScript.contains("EXPECTED_BUILD=\"121\""), "the release authority is not 121")
+        XCTAssertTrue(guardScript.contains("EXPECTED_BUILD=\"122\""), "the release authority is not 122")
 
         for relative in [
             "App/Info.plist", "KeyboardExtension/Info.plist",
@@ -1444,7 +1444,7 @@ final class Build117ReadTheAskTests: XCTestCase {
             let plist = try PropertyListSerialization.propertyList(
                 from: data, options: [], format: nil
             ) as? [String: Any]
-            XCTAssertEqual(plist?["CFBundleVersion"] as? String, "121", relative)
+            XCTAssertEqual(plist?["CFBundleVersion"] as? String, "122", relative)
             XCTAssertEqual(
                 plist?["CFBundleShortVersionString"] as? String, "1.1",
                 "\(relative): the marketing version is not this build's to change"

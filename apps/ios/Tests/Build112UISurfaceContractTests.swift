@@ -221,6 +221,10 @@ final class Build112UISurfaceContractTests: XCTestCase {
         "Wait a minute and try again.",
         "Sign in with your email first so your subscription follows you if you reinstall.",
         "Try again, and contact support@tonoit.com if it keeps happening.",
+        // Build 122 — the backend cannot honor an Apple charge right now
+        // (apple_configured false / malformed readiness). No charge was made;
+        // waiting is the honest next step, not reconnecting.
+        "Subscriptions aren't available right now. No charge was made. Please try again later.",
     ]
 
     /// The four sentences the repair brief names verbatim — proof the mapper
@@ -965,10 +969,10 @@ final class Build112UISurfaceContractTests: XCTestCase {
     /// catches a wholesale one). A real release edits the literal here on
     /// purpose, which is the point — release identity should not be able to
     /// change without somebody saying so.
-    /// BUILD 121 RELEASE-IDENTITY UPDATE — this contract follows the currently
+    /// BUILD 122 RELEASE-IDENTITY UPDATE — this contract follows the currently
     /// prepared iOS release, not the immutable Build 117 feature evidence in
     /// the historical suite. The marketing version remains 1.1.
-    func testAllFourShippedBundlesArePreparedBuild121AtVersion11() throws {
+    func testAllFourShippedBundlesArePreparedBuild122AtVersion11() throws {
         let root = Self.sourceRoot()
         let guardScript = try Self.source("Scripts/bump-build.sh")
         let expected = try XCTUnwrap(
@@ -976,7 +980,7 @@ final class Build112UISurfaceContractTests: XCTestCase {
             "Scripts/bump-build.sh must pin EXPECTED_BUILD — it is the release authority"
         )
         XCTAssertEqual(
-            expected, "121",
+            expected, "122",
             "the single build guard authority must pin the reviewed build number"
         )
         for relative in Self.shippedPlists {

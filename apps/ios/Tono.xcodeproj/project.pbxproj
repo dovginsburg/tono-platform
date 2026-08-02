@@ -12,6 +12,12 @@
 		A1180000000000000000B013 /* RewriteProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F001 /* RewriteProvider.swift */; };
 		A1180000000000000000B014 /* RewriteProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F001 /* RewriteProvider.swift */; };
 		A1180000000000000000B015 /* RewriteProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F001 /* RewriteProvider.swift */; };
+		A1220000000000000000B011 /* PurchaseCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1220000000000000000F001 /* PurchaseCapability.swift */; };
+		A1220000000000000000B012 /* PurchaseCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1220000000000000000F001 /* PurchaseCapability.swift */; };
+		A1220000000000000000B013 /* PurchaseCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1220000000000000000F001 /* PurchaseCapability.swift */; };
+		A1220000000000000000B014 /* PurchaseCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1220000000000000000F001 /* PurchaseCapability.swift */; };
+		A1220000000000000000B015 /* PurchaseCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1220000000000000000F001 /* PurchaseCapability.swift */; };
+		A1220000000000000000B066 /* Build122PurchaseGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1220000000000000000F006 /* Build122PurchaseGateTests.swift */; };
 		A1180000000000000000B021 /* PrivateCloudCompute.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F002 /* PrivateCloudCompute.swift */; };
 		A1180000000000000000B022 /* PrivateCloudCompute.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F002 /* PrivateCloudCompute.swift */; };
 		A1180000000000000000B023 /* PrivateCloudCompute.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F002 /* PrivateCloudCompute.swift */; };
@@ -280,11 +286,13 @@
 
 /* Begin PBXFileReference section */
 		A1180000000000000000F001 /* RewriteProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewriteProvider.swift; sourceTree = "<group>"; };
+		A1220000000000000000F001 /* PurchaseCapability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PurchaseCapability.swift; sourceTree = "<group>"; };
 		A1180000000000000000F002 /* PrivateCloudCompute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateCloudCompute.swift; sourceTree = "<group>"; };
 		A1180000000000000000F003 /* AppIntentRouting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIntentRouting.swift; sourceTree = "<group>"; };
 		A1180000000000000000F004 /* ToneVariantEntity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToneVariantEntity.swift; sourceTree = "<group>"; };
 		A1180000000000000000F005 /* AppleIntelligenceIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleIntelligenceIntents.swift; sourceTree = "<group>"; };
 		A1180000000000000000F006 /* Build118AppleIntelligenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build118AppleIntelligenceTests.swift; sourceTree = "<group>"; };
+		A1220000000000000000F006 /* Build122PurchaseGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build122PurchaseGateTests.swift; sourceTree = "<group>"; };
 		B115C0FFEE0000000000F002 /* Build115LocalCoachTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build115LocalCoachTests.swift; sourceTree = "<group>"; };
 		B116C0FFEE0000000000F002 /* Build116SelectedFirstTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build116SelectedFirstTests.swift; sourceTree = "<group>"; };
 		B116A11B0E0000000000F002 /* Build116AirplaneModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build116AirplaneModeTests.swift; sourceTree = "<group>"; };
@@ -472,6 +480,7 @@
 			children = (
 				B117REA0000000000000003 /* Build117ReadTheAskTests.swift */,
 				A1180000000000000000F006 /* Build118AppleIntelligenceTests.swift */,
+				A1220000000000000000F006 /* Build122PurchaseGateTests.swift */,
 				B115ADA7000000000000F002 /* Build115AdaptiveLayoutTests.swift */,
 				B115ADA7000000000000F004 /* Build115IPadSurfaceLayoutTests.swift */,
 				B115C0FFEE0000000000F002 /* Build115LocalCoachTests.swift */,
@@ -538,6 +547,7 @@
 				B117REA0000000000000001 /* ReadTheAsk.swift */,
 				B115C0FFEE0000000000F001 /* LocalCoachRewrite.swift */,
 				A1180000000000000000F001 /* RewriteProvider.swift */,
+				A1220000000000000000F001 /* PurchaseCapability.swift */,
 				A1180000000000000000F002 /* PrivateCloudCompute.swift */,
 				A1180000000000000000F003 /* AppIntentRouting.swift */,
 				59A99B14322C64F30B091061 /* AppleRewriteBridge.swift */,
@@ -866,6 +876,7 @@
 			files = (
 				B115C0FFEE0000000000F011 /* LocalCoachRewrite.swift in Sources */,
 				A1180000000000000000B012 /* RewriteProvider.swift in Sources */,
+				A1220000000000000000B012 /* PurchaseCapability.swift in Sources */,
 				A1180000000000000000B022 /* PrivateCloudCompute.swift in Sources */,
 				CE0000000000000000000011 /* ConsumerErrorCopy.swift in Sources */,
 				A60000000000000000000005 /* LocalIntelligence.swift in Sources */,
@@ -926,6 +937,7 @@
 				B117REA0000000000000012 /* ReadTheAsk.swift in Sources */,
 				B115C0FFEE0000000000F012 /* LocalCoachRewrite.swift in Sources */,
 				A1180000000000000000B013 /* RewriteProvider.swift in Sources */,
+				A1220000000000000000B013 /* PurchaseCapability.swift in Sources */,
 				A1180000000000000000B023 /* PrivateCloudCompute.swift in Sources */,
 				CE0000000000000000000012 /* ConsumerErrorCopy.swift in Sources */,
 				A950D38EBA2B8E065632F65A /* ShareRootView.swift in Sources */,
@@ -960,9 +972,11 @@
 				B117REA0000000000000031 /* Build117ReadTheAskTests.swift in Sources */,
 				B115C0FFEE0000000000F015 /* LocalCoachRewrite.swift in Sources */,
 				A1180000000000000000B015 /* RewriteProvider.swift in Sources */,
+				A1220000000000000000B015 /* PurchaseCapability.swift in Sources */,
 				A1180000000000000000B025 /* PrivateCloudCompute.swift in Sources */,
 				A1180000000000000000B035 /* AppIntentRouting.swift in Sources */,
 				A1180000000000000000B065 /* Build118AppleIntelligenceTests.swift in Sources */,
+				A1220000000000000000B066 /* Build122PurchaseGateTests.swift in Sources */,
 				B115ADA7000000000000F022 /* Build115AdaptiveLayoutTests.swift in Sources */,
 				B115ADA7000000000000F044 /* Build115IPadSurfaceLayoutTests.swift in Sources */,
 				B115C0FFEE0000000000F021 /* Build115LocalCoachTests.swift in Sources */,
@@ -1042,6 +1056,7 @@
 			files = (
 				B115C0FFEE0000000000F013 /* LocalCoachRewrite.swift in Sources */,
 				A1180000000000000000B014 /* RewriteProvider.swift in Sources */,
+				A1220000000000000000B014 /* PurchaseCapability.swift in Sources */,
 				A1180000000000000000B024 /* PrivateCloudCompute.swift in Sources */,
 				CE0000000000000000000013 /* ConsumerErrorCopy.swift in Sources */,
 				3C85BFB4E498791114E7670D /* AnthropicToneAnalyzer.swift in Sources */,
@@ -1077,6 +1092,7 @@
 				B117REA0000000000000011 /* ReadTheAsk.swift in Sources */,
 				B115C0FFEE0000000000F014 /* LocalCoachRewrite.swift in Sources */,
 				A1180000000000000000B011 /* RewriteProvider.swift in Sources */,
+				A1220000000000000000B011 /* PurchaseCapability.swift in Sources */,
 				A1180000000000000000B021 /* PrivateCloudCompute.swift in Sources */,
 				A1180000000000000000B031 /* AppIntentRouting.swift in Sources */,
 				A1180000000000000000B041 /* ToneVariantEntity.swift in Sources */,

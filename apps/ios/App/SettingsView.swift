@@ -1123,6 +1123,13 @@ Payment will be charged to your Apple ID account at confirmation of purchase. Th
         .onChange(of: store.isPro) { isPro in
             if isPro { onDismiss() }
         }
+        // build 122: resolve the live Apple purchase capability before any tap
+        // so the buy button is disabled (not just refused post-tap) when the
+        // backend cannot honor a charge. The authoritative fail-closed gate is
+        // in StoreKitManager.purchase; this is defense-in-depth.
+        .task {
+            await store.refreshApplePurchaseCapability()
+        }
         .sheet(isPresented: $showSignInForPurchase) {
             EmailSignInSheet(
                 onSuccess: {
@@ -1148,7 +1155,20 @@ Payment will be charged to your Apple ID account at confirmation of purchase. Th
             showSignInForPurchase = true
             return
         }
+        // build 122: even if the disabled state is somehow bypassed, route the
+        // tap through the model gate so a non-ready capability surfaces an
+        // honest refusal instead of a silent charge.
         Task { await store.purchase(product) }
+    }
+
+    /// build 122: the resolved capability is a non-`.ready`, non-`.unknown`
+    /// state — the backend cannot honor a charge right now. `.unknown` (still
+    /// probing) shows nothing so the paywall doesn't flash a false alarm.
+    private var showsCapabilityNotice: Bool {
+        switch store.applePurchaseCapability {
+        case .ready, .unknown: return false
+        case .notConfigured, .unavailable, .malformed: return true
+        }
     }
 
     private var headerSection: some View {
@@ -1218,12 +1238,22 @@ Payment will be charged to your Apple ID account at confirmation of purchase. Th
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)
             }
+            if showsCapabilityNotice {
+                Text("Subscriptions aren't available right now. No charge will be made. Please try again later.")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.6))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            }
             ForEach(store.products, id: \.id) { product in
                 ProductRow(
                     product: product,
                     isLoading: store.isLoading,
                     isEligibleForFreeTrial: store.isEligibleForFreeTrial(product),
-                    isIdentified: store.isIdentifiedAccount
+                    isIdentified: store.isIdentifiedAccount,
+                    // build 122: disable the buy button unless the live backend
+                    // readiness contract confirms Apple purchases can be honored.
+                    purchaseEnabled: store.applePurchaseCapability.allowsPurchaseInitiation
                 ) {
                     initiatePurchase(product)
                 }
@@ -1319,6 +1349,9 @@ private struct ProductRow: View {
     // build 101: when false, the buy button tap routes to sign-in rather than
     // initiating a purchase directly. Displayed as a subtle "sign in first" label.
     let isIdentified: Bool
+    // build 122: when false, the live backend cannot honor an Apple charge, so
+    // the buy button is disabled before any tap can reach `product.purchase`.
+    let purchaseEnabled: Bool
     let onPurchase: () -> Void
 
     private var isYearly: Bool { product.id.contains("yearly") }
@@ -1367,7 +1400,8 @@ private struct ProductRow: View {
             .clipShape(RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.plain)
-        .disabled(isLoading)
+        .opacity(purchaseEnabled ? 1 : 0.4)
+        .disabled(isLoading || !purchaseEnabled)
     }
 
     /// Renders intro-offer disclosure only for an eligible StoreKit account.
