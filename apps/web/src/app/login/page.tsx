@@ -11,8 +11,25 @@ import {
   isGoogleWebOAuthEnabled,
 } from '@/lib/social-auth';
 import PasskeyLoginButton from '../PasskeyLoginButton';
+import { appleWebSignInEnabled, APPLE_WEB_UNAVAILABLE_COPY } from '@/lib/apple-oauth-binding';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+
+// Product-branding gate for the web "Continue with Apple" button (fail closed).
+//
+// Supabase drives Apple sign-in with the Services ID configured on its Apple
+// provider — a dashboard value invisible to this bundle. On the shared project
+// that binding is a SIBLING PRODUCT's, so clicking Apple would land a Tono user
+// on that other product's consent screen. We therefore render Apple ONLY when an
+// operator has attested — via NEXT_PUBLIC_APPLE_WEB_SERVICES_ID — that the
+// binding is Tono's own. Default (today's live state, env unset): the button is
+// hidden and truthful recovery copy points at Google/email. See
+// src/lib/apple-oauth-binding.ts. The literal env reads stay inline so Next
+// inlines them at build time.
+const APPLE_OAUTH_ENABLED = appleWebSignInEnabled(
+  process.env.NEXT_PUBLIC_APPLE_WEB_SERVICES_ID,
+  process.env.NEXT_PUBLIC_APPLE_WEB_EXPECTED_SERVICES_ID,
+);
 
 // build a basePath-aware redirect URI:
 //   on tonoit.com, callback URL is https://tonoit.com/app/auth/callback
@@ -121,8 +138,14 @@ export default function LoginPage() {
             pick one, copy, send.
           </p>
 
-          {/* Sign-in options. Social OAuth is gated OFF by default (see
-              social-auth.ts); passkey is always available. */}
+          {/* Sign-in options. Both web OAuth providers are gated OFF by default
+              (see social-auth.ts for the incident). Each provider re-enables only
+              behind its OWN literal-true flag — enabling one never enables the
+              other. Apple additionally requires an operator-attested Tono product
+              binding (APPLE_OAUTH_ENABLED, see apple-oauth-binding.ts): it renders
+              only when its flag AND the binding pass, so no one is sent into a
+              sibling product's consent screen. When Apple is unavailable a truthful
+              line explains why. Passkey is always available. */}
           <div className="space-y-2.5">
             {googleOAuthEnabled && (
               <button
@@ -134,7 +157,7 @@ export default function LoginPage() {
                 <GoogleIcon /> continue with google
               </button>
             )}
-            {appleOAuthEnabled && (
+            {appleOAuthEnabled && APPLE_OAUTH_ENABLED ? (
               <button
                 type="button"
                 onClick={() => oauth('apple')}
@@ -143,6 +166,13 @@ export default function LoginPage() {
               >
                 <AppleIcon /> continue with apple
               </button>
+            ) : (
+              <p
+                role="note"
+                className="text-[12px] text-tono-muted leading-[1.5] px-1 py-1"
+              >
+                {APPLE_WEB_UNAVAILABLE_COPY}
+              </p>
             )}
             <PasskeyLoginButton />
           </div>
