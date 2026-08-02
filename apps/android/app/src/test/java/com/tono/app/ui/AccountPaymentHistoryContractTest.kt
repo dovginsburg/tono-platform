@@ -84,18 +84,23 @@ class AccountPaymentHistoryContractTest {
     }
 
     @Test
-    fun imeHonestlyPositionsItselfAsARewriteCompanionNotAFullKeyboard() {
+    fun imeIsNowARealTypingKeyboardWithExplicitTapCoach() {
         val screen = source("ime/src/main/java/com/tono/ime/ui/KeyboardScreen.kt")
-        // With an empty field the IME must state plainly that it doesn't type —
-        // it rewrites what's already there — so it never poses as a full keyboard.
-        assertTrue(
-            "explains it rewrites existing field text",
-            screen.contains("Tono rewrites what's already in the field"),
-        )
-        assertTrue(
-            "accessibility copy says it is not a full keyboard",
+        // The IME now types — it renders a real QWERTY from the shared layout —
+        // so the earlier "rewrite companion, not a full keyboard" copy is gone.
+        assertTrue("renders real key rows", screen.contains("KeyboardLayout.rows(layer)"))
+        assertTrue("has a character key that commits", screen.contains("onKey(raw)"))
+        assertFalse(
+            "the temporary 'not a full keyboard' copy is removed now that it types",
             screen.contains("not a full keyboard"),
         )
+        assertFalse(
+            "the temporary 'rewrite companion' copy is removed",
+            screen.contains("rewrite companion"),
+        )
+        // Coach/Read remain explicit, tap-only actions layered on top.
+        assertTrue("Coach stays explicit-tap", screen.contains("viewModel.runCoach()"))
+        assertTrue("Read stays explicit-tap", screen.contains("viewModel.runRead()"))
     }
 
     private fun repoRoot(): File {

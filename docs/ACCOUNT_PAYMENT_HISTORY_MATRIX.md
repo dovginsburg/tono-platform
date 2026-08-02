@@ -87,11 +87,24 @@ competitor/integration briefs, then fixed the findings still valid:
   readable natively on web, iOS and Android; a subscription is managed where it
   was bought (Apple ID subscriptions / web billing portal / Google Play). iOS
   payment-history view now states this.
-- **Android IME repositioned honestly** (`ime/ui/KeyboardScreen.kt`): the IME has
-  no letter keys and cannot type. Rather than ship a keyboard that can't type or
-  build a full QWERTY, the empty-field state now states plainly that Tono
-  rewrites what's already in the field — type with your keyboard, then switch to
-  Tono and tap Coach/Read. It is a rewrite companion, not a full keyboard.
+- **Android IME is now a real typing keyboard** (`ime/keyboard/`, `ime/ui/KeyboardScreen.kt`,
+  `ime/TonoImeService.kt`): the earlier pass honestly repositioned the IME as a
+  rewrite companion *because it had no letter keys*. That gap is now closed. The
+  keyboard implements a full alphabetic surface via `InputConnection` — QWERTY
+  letters with a shift / one-shot / caps-lock machine, a 123/ABC numeric-symbol
+  layer, space, backspace, host-adaptive return (Go/Search/Send/Next/Done or a
+  newline), and the system keyboard switch — mirroring the proven iOS
+  `KeyboardViewController`. The pure state machine (`KeyboardTypingState`),
+  layout, and editor policies (`EditorPolicies`: secure-field / auto-cap /
+  return-action) are framework-free and unit-tested. Coach and Read stay
+  **explicit-tap only**, layered on top; typing is committed locally and is never
+  logged, retained, sent, or used for analytics. In password / PIN fields the
+  keyboard still types but the field-reading Coach/Read strip is replaced by an
+  honest note and disabled — the same fail-closed posture as iOS
+  `LiveToneEligibility`. The temporary "rewrite companion, not a full keyboard"
+  copy has been removed now that it is no longer true. Real-device typing
+  acceptance (keystroke capture on hardware) remains unearned — compilation and
+  the JVM/instrumented tests do not prove it.
 
 Deliberately NOT done (out of the product's honest scope this pass): server-sync
 of rewrite history, an Android share-sheet/ProcessText "Coach this text" entry

@@ -19,6 +19,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tono.ime.CoachViewModel
 import com.tono.ime.KeyboardMode
+import com.tono.ime.keyboard.KeyLayer
+import com.tono.ime.keyboard.KeyboardLayout
+import com.tono.ime.keyboard.ShiftState
+import com.tono.ime.keyboard.displayLabel
+import com.tono.ime.keyboard.shiftAccessibilityLabel
+import com.tono.ime.keyboard.shiftGlyph
 import com.tono.shared.models.AnalysisMode
 import com.tono.shared.models.RewriteAxis
 import com.tono.shared.models.RewriteSuggestion
@@ -26,46 +32,64 @@ import com.tono.shared.models.RiskLevel
 import com.tono.shared.models.ToneAnalysis
 import com.tono.shared.storage.Recipient
 
-// Mirrors ios/KeyboardExtension/KeyboardRootView.swift
+// Mirrors ios/KeyboardExtension/KeyboardViewController.swift — a full QWERTY
+// keyboard with Tono's Coach/Read layered on top as explicit, tap-only actions.
 
-private val Purple       = Color(0xFF9B59B6)
-private val PurpleDark   = Color(0xFF7D3C98)
-private val AmberWarn    = Color(0xFFF39C12)
-private val RedError     = Color(0xFFE74C3C)
-private val GreenOk      = Color(0xFF27AE60)
-private val Surface      = Color(0xFF1C1C1E)
-private val SurfaceVariant = Color(0xFF2C2C2E)
+private val Purple         = Color(0xFF9B59B6)
+private val AmberWarn      = Color(0xFFF39C12)
+private val RedError       = Color(0xFFE74C3C)
+private val GreenOk        = Color(0xFF27AE60)
+private val Surface        = Color(0xFF1C1C1E)
+private val KeyFill        = Color(0xFF3A3A3C)
+private val SpecialKeyFill = Color(0xFF2C2C2E)
+
+// Every key clears the 44dp accessibility minimum touch target.
+private val KeyHeight = 46.dp
 
 @Composable
 fun KeyboardScreen(
     viewModel: CoachViewModel,
     draft: String,
-    onInsertText: (String) -> Unit,
+    onKey: (String) -> Unit,
+    onShift: () -> Unit,
+    onSwitchLayer: () -> Unit,
     onDeleteBackward: () -> Unit,
-    onInsertSpace: () -> Unit,
+    onReturn: () -> Unit,
+    onInsertText: (String) -> Unit,
     onSwitchIme: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val mode              by viewModel.mode.collectAsState()
     val recipients        by viewModel.recipients.collectAsState()
     val selectedRecipient by viewModel.selectedRecipient.collectAsState()
+    val layer             by viewModel.layer.collectAsState()
+    val shift             by viewModel.shift.collectAsState()
+    val secureField       by viewModel.secureField.collectAsState()
+    val returnLabel       by viewModel.returnLabel.collectAsState()
 
     Box(
         modifier = modifier
             .fillMaxWidth()
             .background(Surface)
-            .heightIn(min = 260.dp),
+            .heightIn(min = 300.dp),
     ) {
         when (val m = mode) {
-            is KeyboardMode.Keyboard -> KeyboardLayout(
+            is KeyboardMode.Keyboard -> TypingKeyboard(
                 draft             = draft,
                 recipients        = recipients,
                 selectedRecipient = selectedRecipient,
+                layer             = layer,
+                shift             = shift,
+                secureField       = secureField,
+                returnLabel       = returnLabel,
                 onSelectRecipient = { viewModel.selectRecipient(it) },
                 onCoach           = { viewModel.runCoach() },
                 onRead            = { viewModel.runRead() },
+                onKey             = onKey,
+                onShift           = onShift,
+                onSwitchLayer     = onSwitchLayer,
                 onDeleteBackward  = onDeleteBackward,
-                onInsertSpace     = onInsertSpace,
+                onReturn          = onReturn,
                 onSwitchIme       = onSwitchIme,
             )
             is KeyboardMode.Loading -> LoadingView()
@@ -89,112 +113,230 @@ fun KeyboardScreen(
 // ─── Keyboard layout ──────────────────────────────────────────────────────────
 
 @Composable
-private fun KeyboardLayout(
+private fun TypingKeyboard(
+    draft: String,
+    recipients: List<Recipient>,
+    selectedRecipient: Recipient?,
+    layer: KeyLayer,
+    shift: ShiftState,
+    secureField: Boolean,
+    returnLabel: String,
+    onSelectRecipient: (Recipient) -> Unit,
+    onCoach: () -> Unit,
+    onRead: () -> Unit,
+    onKey: (String) -> Unit,
+    onShift: () -> Unit,
+    onSwitchLayer: () -> Unit,
+    onDeleteBackward: () -> Unit,
+    onReturn: () -> Unit,
+    onSwitchIme: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp)) {
+
+        // Coach/Read read the field, so they only appear where reading is
+        // allowed. In secure fields the keyboard still types; the analysis
+        // strip is replaced by a plain, honest note.
+        if (secureField) {
+            Text(
+                text     = "Password field — Tono types on your device. Coach and Read are off here.",
+                color    = Color.White.copy(alpha = 0.55f),
+                fontSize = 12.sp,
+                modifier = Modifier
+                    .padding(horizontal = 6.dp, vertical = 6.dp)
+                    .semantics {
+                        contentDescription =
+                            "Password field. Tono types on your device. " +
+                            "Coach and Read are turned off here."
+                    },
+            )
+        } else {
+            CoachStrip(
+                draft             = draft,
+                recipients        = recipients,
+                selectedRecipient = selectedRecipient,
+                onSelectRecipient = onSelectRecipient,
+                onCoach           = onCoach,
+                onRead            = onRead,
+            )
+        }
+
+        Spacer(Modifier.height(6.dp))
+
+        // ─── Character rows ───────────────────────────────────────────────
+        val rows = KeyboardLayout.rows(layer)
+        rows.forEachIndexed { index, row ->
+            val isLastRow = index == rows.lastIndex
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                if (isLastRow) {
+                    if (layer == KeyLayer.LETTERS) {
+                        SpecialKey(
+                            label       = shiftGlyph(shift),
+                            description = shiftAccessibilityLabel(shift),
+                            highlighted = shift != ShiftState.NONE,
+                            onClick     = onShift,
+                            modifier    = Modifier.weight(1.5f),
+                        )
+                    } else {
+                        Spacer(Modifier.weight(1.5f))
+                    }
+                }
+
+                // Row 2 of letters is inset by half a key on each side to
+                // reproduce the QWERTY stagger, exactly like iOS makeIndentedRow.
+                val indent = layer == KeyLayer.LETTERS && index == 1
+                if (indent) Spacer(Modifier.weight(0.5f))
+
+                row.forEach { key ->
+                    CharKey(
+                        label   = displayLabel(key, layer, shift),
+                        raw     = key,
+                        onKey   = onKey,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+
+                if (indent) Spacer(Modifier.weight(0.5f))
+
+                if (isLastRow) {
+                    SpecialKey(
+                        label       = "⌫",
+                        description = "Delete",
+                        onClick     = onDeleteBackward,
+                        modifier    = Modifier.weight(1.5f),
+                    )
+                }
+            }
+        }
+
+        // ─── Bottom action row ────────────────────────────────────────────
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 3.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            SpecialKey(
+                label       = if (layer == KeyLayer.LETTERS) "123" else "ABC",
+                description = if (layer == KeyLayer.LETTERS) "Numbers and symbols" else "Letters",
+                onClick     = onSwitchLayer,
+                modifier    = Modifier.weight(1.6f),
+            )
+            SpecialKey(
+                label       = "⌨",
+                description = "Switch keyboard",
+                onClick     = onSwitchIme,
+                modifier    = Modifier.weight(1.2f),
+            )
+            SpecialKey(
+                label       = "space",
+                description = "Space",
+                onClick     = { onKey(" ") },
+                modifier    = Modifier.weight(4f),
+            )
+            SpecialKey(
+                label       = returnLabel,
+                description = returnLabel,
+                highlighted = true,
+                onClick     = onReturn,
+                modifier    = Modifier.weight(2f),
+            )
+        }
+    }
+}
+
+// Draft preview + the explicit Coach/Read actions. Coach/Read never fire on
+// typing — only when the user taps these buttons.
+@Composable
+private fun CoachStrip(
     draft: String,
     recipients: List<Recipient>,
     selectedRecipient: Recipient?,
     onSelectRecipient: (Recipient) -> Unit,
     onCoach: () -> Unit,
     onRead: () -> Unit,
-    onDeleteBackward: () -> Unit,
-    onInsertSpace: () -> Unit,
-    onSwitchIme: () -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp)) {
-
-        // Draft preview
-        if (draft.isNotEmpty()) {
+    Column {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(
-                text     = draft.takeLast(120),
-                color    = Color.White.copy(alpha = 0.5f),
+                text     = if (draft.isEmpty()) "Type a message, then tap Coach" else draft.takeLast(120),
+                color    = if (draft.isEmpty()) Color.White.copy(alpha = 0.4f) else Color.White.copy(alpha = 0.75f),
                 fontSize = 13.sp,
-                maxLines = 2,
-                modifier = Modifier.padding(bottom = 4.dp, start = 4.dp),
+                maxLines = 1,
+                modifier = Modifier.weight(1f),
             )
-        } else {
-            // Honest positioning: Tono is a rewrite companion, not a full
-            // keyboard — it has no letter keys and never claims to type. When
-            // the field is empty there is nothing to rewrite yet, so tell the
-            // user plainly how it fits alongside their own keyboard.
-            Text(
-                text     = "Tono rewrites what's already in the field. Type with your keyboard, then switch here (⌨) and tap Coach or Read.",
-                color    = Color.White.copy(alpha = 0.55f),
-                fontSize = 12.sp,
-                modifier = Modifier
-                    .padding(bottom = 6.dp, start = 4.dp, end = 4.dp)
-                    .semantics {
-                        contentDescription =
-                            "Tono is a rewrite companion, not a full keyboard. " +
-                            "Type with your keyboard, then switch to Tono and tap Coach or Read."
-                    },
+            Spacer(Modifier.width(6.dp))
+            ActionButton(
+                label   = "Read",
+                onClick = onRead,
+                modifier = Modifier.semantics {
+                    contentDescription = "Read — interpret a message you received"
+                },
+            )
+            Spacer(Modifier.width(6.dp))
+            ActionButton(
+                label   = "Coach",
+                onClick = onCoach,
+                primary = true,
+                modifier = Modifier.semantics {
+                    contentDescription = "Coach — analyze your draft and suggest rewrites"
+                },
             )
         }
 
-        // Recipient chip row — only shown when the user has added recipients
         if (recipients.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
             RecipientChipRow(
                 recipients        = recipients,
                 selectedRecipient = selectedRecipient,
                 onSelect          = onSelectRecipient,
             )
-            Spacer(Modifier.height(4.dp))
         }
+    }
+}
 
-        // Action row
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment     = Alignment.CenterVertically,
-        ) {
-            // Globe — switch IME
-            KeyButton(
-                icon     = "⌨",
-                label    = "Switch keyboard",
-                onClick  = onSwitchIme,
-                modifier = Modifier.semantics { contentDescription = "Switch keyboard" },
-            )
+// ─── Keys ───────────────────────────────────────────────────────────────────
 
-            // Space
-            KeyButton(
-                label   = "space",
-                onClick = onInsertSpace,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 4.dp)
-                    .semantics { contentDescription = "Space" },
-            )
+@Composable
+private fun CharKey(
+    label: String,
+    raw: String,
+    onKey: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .height(KeyHeight)
+            .background(KeyFill, RoundedCornerShape(6.dp))
+            .clickable { onKey(raw) }
+            // The typed letter is the label; TalkBack reads it in its display case.
+            .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = Color.White, fontSize = 18.sp)
+    }
+}
 
-            // Backspace
-            KeyButton(
-                icon     = "⌫",
-                label    = "Delete",
-                onClick  = onDeleteBackward,
-                modifier = Modifier.semantics { contentDescription = "Delete" },
-            )
-
-            Spacer(Modifier.width(8.dp))
-
-            // Read button
-            ActionButton(
-                label    = "Read",
-                onClick  = onRead,
-                modifier = Modifier.semantics {
-                    contentDescription = "Read — interpret a message you received"
-                },
-            )
-
-            Spacer(Modifier.width(6.dp))
-
-            // Coach button
-            ActionButton(
-                label    = "Coach",
-                onClick  = onCoach,
-                primary  = true,
-                modifier = Modifier.semantics {
-                    contentDescription = "Coach — analyze your draft"
-                },
-            )
-        }
+@Composable
+private fun SpecialKey(
+    label: String,
+    description: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    highlighted: Boolean = false,
+) {
+    Box(
+        modifier = modifier
+            .height(KeyHeight)
+            .background(if (highlighted) Purple else SpecialKeyFill, RoundedCornerShape(6.dp))
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = description },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -221,7 +363,7 @@ private fun RecipientChipRow(
             Box(
                 Modifier
                     .background(
-                        if (selected) Purple else SurfaceVariant,
+                        if (selected) Purple else SpecialKeyFill,
                         RoundedCornerShape(16.dp),
                     )
                     .clickable { onSelect(recipient) }
@@ -245,24 +387,6 @@ private fun RecipientChipRow(
 }
 
 @Composable
-private fun KeyButton(
-    icon: String? = null,
-    label: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Box(
-        modifier = modifier
-            .background(SurfaceVariant, RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(icon ?: label, color = Color.White, fontSize = 15.sp)
-    }
-}
-
-@Composable
 private fun ActionButton(
     label: String,
     onClick: () -> Unit,
@@ -271,7 +395,8 @@ private fun ActionButton(
 ) {
     Box(
         modifier = modifier
-            .background(if (primary) Purple else SurfaceVariant, RoundedCornerShape(10.dp))
+            .heightIn(min = 44.dp)
+            .background(if (primary) Purple else SpecialKeyFill, RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center,
@@ -371,7 +496,7 @@ private fun RewriteChip(suggestion: RewriteSuggestion, onInsert: () -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
-            .background(SurfaceVariant, RoundedCornerShape(12.dp))
+            .background(SpecialKeyFill, RoundedCornerShape(12.dp))
             .clickable(onClick = onInsert)
             .padding(12.dp)
             .semantics { contentDescription = a11yLabel },
