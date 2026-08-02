@@ -434,6 +434,9 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     private weak var coachTryAnotherButton: UIButton?
     private weak var coachTryAnotherSpinner: UIActivityIndicatorView?
     private weak var coachAlternativeNotice: UILabel?
+    /// Build 122 — the notice's rounded, tinted host. Held so show/hide toggles
+    /// the whole banner (background + padding), not just the label inside it.
+    private weak var coachAlternativeNoticeBanner: UIView?
     private weak var coachVersionBackButton: UIButton?
     private weak var coachVersionForwardButton: UIButton?
 
@@ -4713,6 +4716,17 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             // never builds a cue, a stepper or a `Try another` at all rather
             // than building them and hiding them.
             let offersSequence = coachSequence != nil
+            // Build 122 — the failed-"Try another" banner sits ABOVE the first
+            // card, as its own row in the results stack, never inside a card.
+            // Built (hidden) only when a version sequence exists, since only
+            // "Try another" produces this failure — a set of tones has no such
+            // control. It is rebuilt hidden on every render, so a successful new
+            // version, a step back/forward, or a fresh Coach run all clear it.
+            if offersSequence {
+                let banner = makeAlternativeNoticeBanner()
+                stack.addArrangedSubview(banner)
+                coachAlternativeNoticeBanner = banner
+            }
             for (idx, s) in shown.enumerated() {
                 stack.addArrangedSubview(makeRewriteChip(
                     suggestion: s, index: idx, offersSequence: offersSequence && idx == 0
@@ -4829,19 +4843,13 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         cue.setContentCompressionResistancePriority(.required, for: .horizontal)
         chip.addSubview(cue)
 
-        // Inline failure guidance for a failed "Try another". Hidden until it
-        // has something true to say; the prior rewrite stays visible above it.
-        let notice = UILabel()
-        notice.accessibilityIdentifier = Const.idAlternativeNotice
-        notice.font = UIFontMetrics(forTextStyle: .caption2).scaledFont(
-            for: .systemFont(ofSize: 11, weight: .regular)
-        )
-        notice.adjustsFontForContentSizeCategory = true
-        notice.textColor = .secondaryLabel
-        notice.numberOfLines = 2
-        notice.isHidden = true
-        notice.translatesAutoresizingMaskIntoConstraints = false
-        chip.addSubview(notice)
+        // Build 122 — the failed-"Try another" notice is NOT a subview of this
+        // card. A TestFlight screenshot showed it rendered inside the card,
+        // where its two lines grew up over the rewrite text and left both
+        // unreadable. The owner's rule is that the warning belongs ABOVE the
+        // rewrite, never on top of it, so the notice now lives as a dedicated
+        // banner in the results stack, one row above this card
+        // (see `makeAlternativeNoticeBanner` / `presentCoachResults`).
 
         // Build 114 contract — the person must never be trapped on a worse
         // second attempt. Every version already generated stays reachable, and
@@ -4956,10 +4964,6 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             stepper.centerYAnchor.constraint(equalTo: cue.centerYAnchor),
             stepper.leadingAnchor.constraint(greaterThanOrEqualTo: axis.trailingAnchor, constant: 6),
 
-            notice.leadingAnchor.constraint(equalTo: chip.leadingAnchor, constant: 10),
-            notice.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -10),
-            notice.bottomAnchor.constraint(equalTo: actions.topAnchor, constant: -2),
-
             spinner.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -10),
             spinner.centerYAnchor.constraint(equalTo: actions.centerYAnchor),
 
@@ -4981,7 +4985,6 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         if index == 0 {
             coachTryAnotherButton = another
             coachTryAnotherSpinner = spinner
-            coachAlternativeNotice = notice
             coachVersionBackButton = back
             coachVersionForwardButton = forward
             applySequencePresentation(
@@ -5538,7 +5541,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
     }
 
     private func beginAlternativeBusyPresentation() {
-        coachAlternativeNotice?.isHidden = true
+        hideAlternativeNotice()
         coachTryAnotherSpinner?.startAnimating()
         if let button = coachTryAnotherButton {
             button.isEnabled = false
@@ -5563,9 +5566,85 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
             button.accessibilityTraits = canRetry ? [.button] : [.button, .notEnabled]
         }
         if let notice {
-            coachAlternativeNotice?.text = notice
-            coachAlternativeNotice?.isHidden = false
+            showAlternativeNotice(notice)
         }
+    }
+
+    /// Build 122 — reveal the failed-"Try another" banner above the first card
+    /// and announce it. It is a peer row of the rewrite, never a subview of it,
+    /// so it cannot overlap the rewrite text at any Dynamic Type size. The
+    /// warning is tied to the control that failed (`accessibilityValue` on
+    /// "Try another") so VoiceOver reads them as one thing, and a layout-changed
+    /// post moves focus to the banner the moment it appears.
+    private func showAlternativeNotice(_ text: String) {
+        coachAlternativeNotice?.text = text
+        coachAlternativeNoticeBanner?.isHidden = false
+        coachTryAnotherButton?.accessibilityValue = text
+        if let banner = coachAlternativeNoticeBanner {
+            UIAccessibility.post(notification: .layoutChanged, argument: banner)
+        }
+    }
+
+    /// Build 122 — hide the banner and sever its VoiceOver tie to "Try another".
+    /// Called before a retry and by every teardown, so a stale offline warning
+    /// never rides along on the next attempt or the next Coach run.
+    private func hideAlternativeNotice() {
+        coachAlternativeNoticeBanner?.isHidden = true
+        coachAlternativeNotice?.text = nil
+        coachTryAnotherButton?.accessibilityValue = nil
+    }
+
+    /// Build 122 — the failed-"Try another" banner: a compact, high-contrast,
+    /// rounded row that hosts the warning ABOVE the first rewrite card. Returns
+    /// the container (hidden) and captures its inner label in
+    /// `coachAlternativeNotice`. The label wraps freely (`numberOfLines = 0`) and
+    /// the container hugs its content vertically, so the text is always fully
+    /// readable — at the default size and at accessibility Dynamic Type — and it
+    /// can never sit on top of the rewrite, because it is a sibling row, not a
+    /// subview of the card.
+    private func makeAlternativeNoticeBanner() -> UIView {
+        let container = UIView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.backgroundColor = UIColor.systemYellow.withAlphaComponent(0.22)
+        container.layer.cornerRadius = Const.keyCornerRadius
+        container.isHidden = true
+        container.accessibilityIdentifier = "\(Const.idAlternativeNotice).banner"
+
+        let icon = UIImageView(image: UIImage(systemName: "wifi.slash"))
+        icon.tintColor = .label
+        icon.contentMode = .scaleAspectFit
+        icon.setContentHuggingPriority(.required, for: .horizontal)
+        icon.setContentCompressionResistancePriority(.required, for: .horizontal)
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.isAccessibilityElement = false
+
+        let label = UILabel()
+        label.accessibilityIdentifier = Const.idAlternativeNotice
+        // High contrast: primary label color and a semibold caption, not the
+        // secondary-label whisper the in-card note used.
+        label.font = UIFontMetrics(forTextStyle: .caption1).scaledFont(
+            for: .systemFont(ofSize: 12, weight: .semibold)
+        )
+        label.adjustsFontForContentSizeCategory = true
+        label.textColor = .label
+        label.numberOfLines = 0
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        container.addSubview(icon)
+        container.addSubview(label)
+        NSLayoutConstraint.activate([
+            icon.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
+            icon.topAnchor.constraint(equalTo: label.firstBaselineAnchor, constant: -11),
+            icon.widthAnchor.constraint(equalToConstant: 14),
+            icon.heightAnchor.constraint(equalToConstant: 14),
+
+            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6),
+            label.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
+            label.topAnchor.constraint(equalTo: container.topAnchor, constant: 6),
+            label.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -6),
+        ])
+        coachAlternativeNotice = label
+        return container
     }
 
     /// The alternative path's fail-closed gate. Unlike the initial request it
@@ -5579,8 +5658,7 @@ public final class KeyboardViewController: UIInputViewController, UICollectionVi
         guard acceptsAlternative(requestID) else { return }
         guard !coachWaitingForConnectivity else { return }
         coachWaitingForConnectivity = true
-        coachAlternativeNotice?.text = TonoCoachClient.CoachError.offline.userFacingMessage
-        coachAlternativeNotice?.isHidden = false
+        showAlternativeNotice(TonoCoachClient.CoachError.offline.userFacingMessage)
     }
 
     private func scheduleAlternativeDeadline(

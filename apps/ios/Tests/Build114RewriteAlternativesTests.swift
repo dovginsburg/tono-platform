@@ -852,4 +852,219 @@ final class Build114RewriteAlternativesTests: XCTestCase {
         )
     }
 
+    // ───────────────────────────────────────────────────────────────────
+    // Build 122 — the failed-"Try another" offline notice must render as a
+    // banner ABOVE the first rewrite card, never inside or on top of it.
+    //
+    // A TestFlight screenshot showed the offline warning drawn inside the
+    // rewrite card, where its two lines grew up over the rewrite text and left
+    // both unreadable. These tests drive a real first version, fail a real
+    // "Try another" offline, and assert the RENDERED geometry: the notice is a
+    // sibling row of the card, ordered above it, with no vertical overlap.
+    // They fail if the notice is ever a subview of the card again or loses its
+    // vertical separation.
+    // ───────────────────────────────────────────────────────────────────
+
+    private static let offlineCopy =
+        "Coach rewrites need an internet connection. "
+            + "Spelling and Live Tone keep working offline."
+
+    /// Deliver version 1 on a RENDERED card, then fail a "Try another" offline.
+    @MainActor
+    private static func renderFirstThenOfflineFailure(
+        _ controller: KeyboardViewController
+    ) throws {
+        controller.beginCoachRewrite(before: "please review this ", after: "", axis: "clearer")
+        let id = try XCTUnwrap(controller.activeCoachRequestIDForTesting)
+        controller.completeCoach(
+            requestID: id,
+            liveBefore: "please review this ",
+            liveAfter: "",
+            result: .success(Self.variant(text: "Could you take a look at this?", axis: "clearer"))
+        )
+        controller.tryAnotherTapped()
+        let altID = try XCTUnwrap(controller.alternativeRequestIDForTesting)
+        controller.completeCoachAlternative(
+            requestID: altID,
+            liveBefore: "please review this ",
+            liveAfter: "",
+            result: .failure(.offline)
+        )
+        controller.view.layoutIfNeeded()
+    }
+
+    /// The arranged row of `stack` that contains `view`, if any.
+    private static func arrangedRow(
+        containing view: UIView, in stack: UIStackView
+    ) -> UIView? {
+        stack.arrangedSubviews.first { view.isDescendant(of: $0) }
+    }
+
+    @MainActor
+    func testOfflineNoticeRendersAsABannerAboveTheCardNotInsideIt() throws {
+        let controller = Self.makeController()
+        try Self.renderFirstThenOfflineFailure(controller)
+
+        // Guard against a vacuous pass: the card must genuinely have rendered.
+        let useButton = try XCTUnwrap(
+            Self.findView(controller.view, identifier: "TonoKB.useRewrite"),
+            "the rewrite card did not render — this test would prove nothing"
+        )
+        let notice = try XCTUnwrap(
+            Self.findView(controller.view, identifier: "TonoKB.alternativeNotice") as? UILabel,
+            "the offline notice must render when a Try another fails offline"
+        )
+        XCTAssertEqual(
+            notice.text, Self.offlineCopy,
+            "the offline copy must be truthful and unchanged"
+        )
+        XCTAssertFalse(notice.isHidden, "the notice must be visible after an offline failure")
+
+        let stack = try XCTUnwrap(
+            Self.findView(controller.view, identifier: "TonoKB.rewrites") as? UIStackView,
+            "the results stack must exist"
+        )
+        let noticeRow = try XCTUnwrap(
+            Self.arrangedRow(containing: notice, in: stack),
+            "the notice must be its own row in the results stack"
+        )
+        let cardRow = try XCTUnwrap(
+            Self.arrangedRow(containing: useButton, in: stack),
+            "the card must be a row in the results stack"
+        )
+
+        // THE REGRESSION, part 1 — the notice is NOT inside the card. Before the
+        // fix it was a subview of the chip, so it shared the card's row.
+        XCTAssertFalse(
+            notice.isDescendant(of: cardRow),
+            "the offline notice must never be a subview of the rewrite card"
+        )
+        XCTAssertNotEqual(
+            ObjectIdentifier(noticeRow), ObjectIdentifier(cardRow),
+            "the notice and the card must be different rows"
+        )
+
+        // THE REGRESSION, part 2 — the notice sits ABOVE the card, with real
+        // vertical separation. Frames are compared in the shared coordinate
+        // space of the stack. A notice drawn on top of the card fails this.
+        let noticeFrame = noticeRow.convert(noticeRow.bounds, to: stack)
+        let cardFrame = cardRow.convert(cardRow.bounds, to: stack)
+        XCTAssertLessThanOrEqual(
+            noticeFrame.maxY, cardFrame.minY,
+            "the notice must end above where the card begins — no vertical overlap"
+        )
+        let noticeIndex = try XCTUnwrap(stack.arrangedSubviews.firstIndex(of: noticeRow))
+        let cardIndex = try XCTUnwrap(stack.arrangedSubviews.firstIndex(of: cardRow))
+        XCTAssertLessThan(
+            noticeIndex, cardIndex,
+            "the notice row must be ordered above the first card row"
+        )
+    }
+
+    @MainActor
+    func testOfflineNoticeWrapsAndIsFullyContainedByItsBanner() throws {
+        let controller = Self.makeController()
+        try Self.renderFirstThenOfflineFailure(controller)
+
+        let notice = try XCTUnwrap(
+            Self.findView(controller.view, identifier: "TonoKB.alternativeNotice") as? UILabel
+        )
+        // Wrapping, not truncation: at accessibility Dynamic Type the copy grows
+        // the row taller rather than clipping or spilling onto a neighbour.
+        XCTAssertEqual(
+            notice.numberOfLines, 0,
+            "the notice must wrap to as many lines as it needs, never truncate"
+        )
+        // The label is fully inside its rounded banner host, which grows with
+        // the text — so the warning can never overlap the card at any size.
+        let banner = try XCTUnwrap(
+            Self.findView(controller.view, identifier: "TonoKB.alternativeNotice.banner")
+        )
+        XCTAssertTrue(notice.isDescendant(of: banner))
+        let labelFrame = notice.convert(notice.bounds, to: banner)
+        XCTAssertTrue(
+            banner.bounds.contains(labelFrame),
+            "the notice text must sit entirely within its banner at any size"
+        )
+    }
+
+    @MainActor
+    func testTheOfflineNoticeIsAnnouncedAndTiedToTheFailedAction() throws {
+        let controller = Self.makeController()
+        try Self.renderFirstThenOfflineFailure(controller)
+
+        // VoiceOver reads the warning as the value of the control that failed,
+        // so the two are announced together rather than as loose fragments.
+        let tryAnother = try XCTUnwrap(
+            Self.findView(controller.view, identifier: "TonoKB.tryAnother")
+        )
+        XCTAssertEqual(
+            tryAnother.accessibilityValue, Self.offlineCopy,
+            "the failed Try another must carry the warning as its accessibility value"
+        )
+        // And the banner itself is an announced element carrying the copy.
+        let notice = try XCTUnwrap(
+            Self.findView(controller.view, identifier: "TonoKB.alternativeNotice") as? UILabel
+        )
+        XCTAssertEqual(
+            notice.accessibilityLabel, Self.offlineCopy,
+            "VoiceOver must announce the warning text"
+        )
+    }
+
+    @MainActor
+    func testASuccessfulNewVersionClearsTheOfflineNotice() throws {
+        let controller = Self.makeController()
+        try Self.renderFirstThenOfflineFailure(controller)
+        XCTAssertEqual(
+            (Self.findView(controller.view, identifier: "TonoKB.alternativeNotice") as? UILabel)?
+                .isHidden,
+            false,
+            "precondition: the offline banner is showing"
+        )
+
+        // Retry, and this time it succeeds: the results re-render and the stale
+        // offline warning must be gone.
+        controller.tryAnotherTapped()
+        let altID = try XCTUnwrap(controller.alternativeRequestIDForTesting)
+        controller.completeCoachAlternative(
+            requestID: altID,
+            liveBefore: "please review this ",
+            liveAfter: "",
+            result: .success(Self.variant(text: "Mind taking a quick look?", axis: "clearer"))
+        )
+        controller.view.layoutIfNeeded()
+
+        if let notice = Self.findView(controller.view, identifier: "TonoKB.alternativeNotice")
+            as? UILabel {
+            XCTAssertTrue(
+                notice.isHidden || (notice.text ?? "").isEmpty,
+                "a successful new version must clear the offline warning"
+            )
+        }
+        let tryAnother = Self.findView(controller.view, identifier: "TonoKB.tryAnother")
+        XCTAssertNil(
+            tryAnother?.accessibilityValue,
+            "the stale warning tie to Try another must be severed on success"
+        )
+    }
+
+    func testTheOfflineNoticeIsNeverAddedAsASubviewOfACard() throws {
+        let source = try Self.source("KeyboardExtension/KeyboardViewController.swift")
+        // The banner lives in the results STACK, above the cards...
+        XCTAssertTrue(
+            source.contains("stack.addArrangedSubview(banner)"),
+            "the offline notice banner must be a row in the results stack"
+        )
+        XCTAssertTrue(
+            source.contains("private func makeAlternativeNoticeBanner"),
+            "the dedicated banner factory must exist"
+        )
+        // ...and is never re-parented into a card, which is the original defect.
+        XCTAssertFalse(
+            source.contains("chip.addSubview(notice)"),
+            "the offline notice must never be a subview of a rewrite card again"
+        )
+    }
+
 }
