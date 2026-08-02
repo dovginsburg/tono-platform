@@ -5,7 +5,18 @@ import org.junit.Test
 import java.io.File
 
 class PromoCodeSurfaceContractTest {
-    private fun source(path: String): String = File(path).readText()
+    /** `user.dir` for a Gradle unit test is the module directory (`app/`), so a
+     *  bare relative path doubles the `app/` segment. Resolve every source path
+     *  from the repository root, mirroring PlayBillingManagerGateTest. */
+    private fun repoRoot(): File {
+        var dir: File? = File(System.getProperty("user.dir")!!)
+        while (dir != null && !File(dir, "apps/android/settings.gradle.kts").exists()) {
+            dir = dir.parentFile
+        }
+        return requireNotNull(dir) { "could not locate the repository root" }
+    }
+
+    private fun source(path: String): String = File(repoRoot(), "apps/android/$path").readText()
 
     @Test
     fun settingsShowsAReachablePromoInputAndApplyAction() {
