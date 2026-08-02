@@ -153,11 +153,24 @@ def _extract_claims(payload: dict) -> SupabaseClaims:
     if not sub:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Supabase token missing sub")
     email = payload.get("email")
-    meta = payload.get("user_metadata") or {}
-    # Supabase surfaces the verified flag either top-level or under
-    # user_metadata depending on provider/version — treat either truthy
-    # value as verified, and default to UNVERIFIED when absent (fail closed).
-    verified = bool(payload.get("email_verified") or meta.get("email_verified"))
+    # Verification authority — GoTrue-controlled evidence ONLY.
+    #
+    # ``user_metadata`` (GoTrue's ``raw_user_meta_data``) is USER-WRITABLE: any
+    # signed-in user can set arbitrary keys through ``auth.updateUser({ data })``.
+    # Reading ``user_metadata.email_verified`` therefore let a user FORGE verified
+    # status and, downstream, attach their identity to a stranger's canonical
+    # account by claiming that stranger's address (see
+    # server._resolve_provider_signin's verified-email convergence). We now trust
+    # only the two sources GoTrue itself controls:
+    #   * the TOP-LEVEL ``email_verified`` claim, which GoTrue mints from
+    #     ``users.email_confirmed_at`` and a user cannot set; and
+    #   * ``app_metadata`` (``raw_app_meta_data``), writable only with the
+    #     service role — never by the end user.
+    # ``user_metadata`` is deliberately NOT consulted. If neither authoritative
+    # source is present we default to UNVERIFIED (fail closed), which at worst
+    # withholds convergence — never grants it on unproven input.
+    app_meta = payload.get("app_metadata") or {}
+    verified = bool(payload.get("email_verified") or app_meta.get("email_verified"))
     return SupabaseClaims(sub=str(sub), email=email, email_verified=verified)
 
 

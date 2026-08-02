@@ -1467,8 +1467,18 @@ async def auth_email_login(
         device_credential = registration.device_credential
 
     verified_email = claims.email or normalized
+    # Thread the AUTHORITATIVE verified status into the continuity resolver. Both
+    # gates above have already proven this address is confirmed: gate 1 (the
+    # provider withheld a session for an unconfirmed address) and gate 2 (the
+    # cryptographically re-verified token's GoTrue-controlled `email_verified`
+    # claim, which raised a 403 otherwise). So `claims.email_verified` is True
+    # here by construction, and passing it lets an email/password sign-in join
+    # the one canonical account that already owns this proven address — the same
+    # verified-email convergence Apple/Google/web sign-in get. Without it, a
+    # password login stayed split from the person's existing identity.
     account = _resolve_provider_signin(
-        store, user, "supabase", claims.sub, verified_email, link=False
+        store, user, "supabase", claims.sub, verified_email, link=False,
+        email_verified=claims.email_verified,
     )
     try:
         account = store.mark_email_verified(

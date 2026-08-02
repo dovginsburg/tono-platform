@@ -108,14 +108,60 @@ semantics are unchanged.
 
 ---
 
+## Change 3 — Verification authority hardening (defense-in-depth, pre-deploy)
+
+**Files:** `apps/backend/supabase_auth.py`, `apps/backend/server.py`.
+
+Found by independent release review before backend deployment. Two trust holes
+that let the Change-2 convergence be driven by non-authoritative input:
+
+1. **`_extract_claims` trusted `user_metadata.email_verified`.** GoTrue's
+   `raw_user_meta_data` is **user-writable** (`auth.updateUser({ data })`), so a
+   signed-in user could forge `email_verified: true` and — via verified-email
+   convergence — attach their identity to a stranger's canonical account by
+   claiming that stranger's address. Now verification is derived **only** from
+   GoTrue-controlled evidence: the **top-level** `email_verified` claim (minted
+   from `users.email_confirmed_at`) and **`app_metadata`** (service-role only).
+   `user_metadata` is no longer consulted; absent authoritative evidence we
+   default UNVERIFIED (fail closed). A forged flag cannot even override an
+   authoritative `false`.
+
+2. **Email/password login did not thread verified status into the resolver.**
+   `auth_email_login` proves the address twice (provider withholds a session for
+   an unconfirmed address; the re-verified token's GoTrue `email_verified` claim
+   must be true, else 403) but then called `_resolve_provider_signin` **without**
+   `email_verified`, so a confirmed password login stayed split from the person's
+   existing identity. It now passes the authoritative `claims.email_verified`
+   (True by construction at that point), so a verified password sign-in converges
+   exactly like Apple/Google/web.
+
+Public production settings independently verified compatible: `mailer_autoconfirm
+=false`, email/apple/google enabled — so the top-level claim reflects real
+confirmation and no legitimate flow is blocked.
+
+### Adversarial tests (all new, in `test_account_continuity.py`)
+
+- `test_extract_claims_ignores_user_writable_metadata` — forged `user_metadata`
+  → UNVERIFIED; top-level and `app_metadata` → verified; forgery cannot override
+  an authoritative false.
+- `test_forged_user_metadata_token_cannot_attach_to_a_strangers_account` — a
+  genuinely-signed token whose verified flag lives only in `user_metadata`,
+  through the **real** HS256 verifier, lands on its own account, never the
+  victim's.
+- `test_confirmed_web_email_does_attach_through_the_real_verifier` — positive
+  control: an authoritatively-confirmed address still converges.
+- `test_email_password_login_threads_verification_and_converges` — a verified
+  password login joins the person's existing canonical account.
+
 ## Tests
 
-- **Backend:** `apps/backend/tests/test_account_continuity.py` (new, 8 cases):
+- **Backend:** `apps/backend/tests/test_account_continuity.py` (new, 12 cases):
   iOS→web convergence, web→iOS convergence, unverified-web-email non-merge,
   unverified-native-email non-merge, single-owner attach, never-rewrite-a-subject,
-  ambiguous-address refusal, empty/malformed address.
-  Full suite: **986 passed, 1 skipped** (`python3 -m pytest -q`, ~66s). No
-  regressions from the resolver/`social_auth` changes.
+  ambiguous-address refusal, empty/malformed address, and the four
+  verification-authority cases listed under Change 3.
+  Full suite: **990 passed, 1 skipped** (`python3 -m pytest -q`, ~73s). No
+  regressions from the resolver/`social_auth`/verification-authority changes.
 - **Web:** `apps/web/src/lib/apple-oauth-binding.test.ts` (new, 7 cases:
   fail-closed default, sibling-id rejection, Tono-shape acceptance, lookalike
   rejection, expected-id strict equality, copy content) and three added cases in
