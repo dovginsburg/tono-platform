@@ -9,6 +9,17 @@ Apply the matching SQLite or PostgreSQL script while checkout traffic is
 stopped. The active SQLite application also applies the additive schema and
 backfill idempotently during startup.
 
+`20260803_revenuecat_canary` adds the RevenueCat canary seam: a durable,
+product-specific webhook inbox (`revenuecat_events`, with a
+received/processed/failed/dead_letter state machine + retry attempts) and a
+shadow-comparison ledger (`revenuecat_shadow_observations`). It is additive and
+safe to run live — no existing table is modified. RevenueCat itself reuses the
+shared `provider_purchases` (`provider='revenuecat'`) and `entitlement_grants`
+tables, so there is exactly one deterministic entitlement writer; the canary is
+gated by `TONO_REVENUECAT_MODE` (off | shadow | authoritative). The live SQLite
+app also creates these tables idempotently at startup. Rollback is code-only:
+retaining the tables is harmless when RevenueCat is `off`.
+
 Rollback is code-only: deploy the prior application while retaining both
 ledger rows and bindings. Deleting or rewriting consumed rows reopens
 free-trial eligibility and is unsafe.
