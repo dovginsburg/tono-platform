@@ -528,10 +528,29 @@ function GoogleIcon() {
   );
 }
 
+// Canonical Apple logo glyph.
+//
+// The previous path spilled outside its `0 0 24 24` viewBox — its bounding box
+// ran to x=-4.74 on the left and y=25.06 at the bottom — so the SVG's default
+// `overflow:hidden` viewport clipped the left flank and base of the apple,
+// rendering as a malformed "bag/mug" rather than the Apple mark. This path is
+// the standard Apple glyph and sits wholly inside the viewBox (x≈2.8–19.6,
+// y≈3–21.3), centered with margin on every side. `preserveAspectRatio` is left
+// explicit and the square viewBox is drawn into a square 16×16 viewport, so the
+// mark scales uniformly and keeps its native ratio on every viewport. The icon
+// stays `aria-hidden`; the button's own `aria-label="Continue with Apple"`
+// carries the accessible name.
 function AppleIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-      <path d="M16.365 1.43c0 1.14-.43 2.21-1.13 3-.71.79-1.85 1.4-2.99 1.32-.13-1.13.43-2.31 1.13-3.07.79-.85 2.07-1.45 2.99-1.25zM21 17.21c-.6 1.39-1.3 2.74-2.2 4.01-1.2 1.69-2.91 3.79-5.02 3.81-1.88.02-2.36-1.21-4.92-1.2-2.55.02-3.1 1.23-4.97 1.21-2.11-.02-3.72-1.93-4.92-3.62-3.36-4.74-3.71-10.3-1.64-13.26 1.47-2.1 3.79-3.33 5.97-3.33 2.21 0 3.6 1.21 5.43 1.21 1.78 0 2.86-1.21 5.41-1.21 1.94 0 4.01 1.06 5.47 2.88-4.81 2.64-4.03 9.5 1.39 11.5z" />
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      preserveAspectRatio="xMidYMid meet"
+      fill="currentColor"
+      aria-hidden
+    >
+      <path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z" />
     </svg>
   );
 }
