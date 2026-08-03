@@ -43,6 +43,10 @@ const PROVIDER_LABEL: Record<string, string> = {
   stripe: 'web (card / wallet)',
   apple: 'apple',
   google_play: 'google play',
+  // RevenueCat canary (Build 123): a RevenueCat-sourced provider fact renders with
+  // its own label if the backend payment history surfaces one. Web checkout itself
+  // stays Stripe-hosted — see src/lib/revenuecat-config.ts.
+  revenuecat: 'revenuecat',
 }
 
 const PRODUCT_LABEL: Record<string, string> = {
