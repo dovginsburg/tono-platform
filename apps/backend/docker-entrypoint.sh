@@ -35,6 +35,22 @@ done
 # quoted (Render/Railway inject PORT; locally it defaults to 8765). The base
 # argv lives in the exec-form CMD so signals and arg-quoting stay correct.
 if [ "${1:-}" = "uvicorn" ]; then
+    # Predeploy integrity gate. Before the app opens the database, take a
+    # consistent, WAL-inclusive backup and run PRAGMA integrity_check on the
+    # COPY (see backend/scripts/predeploy_backup.py). This is the SAME gate the
+    # old runtime-bootstrap dockerCommand ran; it now travels inside the image
+    # so a real prebuilt image (build-time-installed deps, no runtime pip) keeps
+    # the backup/integrity guarantee instead of losing it. It runs as the
+    # unprivileged `tono` user — the identity that owns /data and will open the
+    # DB — so backups under /data/backups stay tono-owned, never root-owned.
+    #
+    # Fail closed: `set -e` (top of file) means a nonzero exit here — a corrupt
+    # backup, or predeploy raising — aborts boot before uvicorn ever starts, so
+    # the platform health check fails the deploy rather than promoting a
+    # container over a bad database. On a fresh/empty volume it is a fast no-op.
+    # Only stdlib is imported (sqlite3/os/json/time), so this does not depend on
+    # the app's third-party wheels and adds no meaningful startup latency.
+    gosu tono python -m backend.scripts.predeploy_backup
     exec gosu tono "$@" --port "${PORT:-8765}"
 fi
 
