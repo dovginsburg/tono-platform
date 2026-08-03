@@ -60,6 +60,7 @@ from . import (
     passkeys,
     payments,
     rate_limit,
+    revenuecat,
     slack,
     social_auth,
     supabase_auth,
@@ -384,6 +385,19 @@ async def _lifespan(_: "FastAPI"):
     except Exception:
         logger.exception("google-play acknowledge reconcile failed on startup; will retry")
 
+    # Best-effort drain of the RevenueCat canary inbox (contract §5). Only runs
+    # when RevenueCat is enabled (shadow/authoritative); a no-op while the kill
+    # switch is off. A transient failure leaves events durably queued for the
+    # next boot and NEVER erases an already-projected entitlement.
+    try:
+        rc_config = revenuecat.get_revenuecat_config()
+        if rc_config.enabled:
+            rtally = revenuecat.reconcile_revenuecat(store, rc_config)
+            if any(rtally.values()):
+                logger.info("revenuecat inbox reconcile: %s", rtally)
+    except Exception:
+        logger.exception("revenuecat inbox reconcile failed on startup; will retry")
+
     logger.info(
         # Build 114 adds `email=`. A project missing its auth configuration
         # fails closed at 503, which a person meets as "email sign-in isn't
@@ -556,6 +570,10 @@ async def health() -> dict[str, Any]:
         "slack_configured": bool(os.environ.get("SLACK_CLIENT_ID")),
         "apple_configured": bool(os.environ.get("TONO_APPLE_ROOT_CA_PEM")),
         "google_play_configured": bool(os.environ.get("TONO_GOOGLE_SERVICE_ACCOUNT_JSON")),
+        # RevenueCat canary kill switch: off (default) | shadow | authoritative.
+        # Presence only — the webhook secret value is never surfaced.
+        "revenuecat_mode": (os.environ.get("TONO_REVENUECAT_MODE", "off") or "off").strip().lower(),
+        "revenuecat_configured": bool(os.environ.get("TONO_REVENUECAT_WEBHOOK_AUTH")),
     }
 
 
@@ -2905,6 +2923,7 @@ app.include_router(slack.router)
 app.include_router(passkeys.router)
 app.include_router(app_store.router)
 app.include_router(google_play.router)
+app.include_router(revenuecat.router)
 
 
 # ---------------------------------------------------------------------------

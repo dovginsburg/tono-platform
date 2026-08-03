@@ -214,6 +214,53 @@ def google_play_offer_ids() -> frozenset[str]:
     )
 
 
+def revenuecat_entitlement_id_env_var() -> Optional[str]:
+    """The environment-variable NAME that supplies the RevenueCat entitlement
+    identifier mapped to the canonical Tono 'pro' entitlement. Only the NAME is
+    recorded in the catalog; the value arrives at runtime."""
+    return _provider("revenuecat").get("entitlement_id_env_var")
+
+
+def revenuecat_webhook_authorization_env_var() -> Optional[str]:
+    """The environment-variable NAME holding the RevenueCat webhook Authorization
+    secret (compared in constant time against the incoming header). Never a value."""
+    return _provider("revenuecat").get("webhook_authorization_env_var")
+
+
+def revenuecat_mode_env_var() -> Optional[str]:
+    """The environment-variable NAME of the canary kill switch
+    (off | shadow | authoritative)."""
+    return _provider("revenuecat").get("mode_env_var")
+
+
+def revenuecat_secret_api_key_env_var() -> Optional[str]:
+    """The environment-variable NAME of the optional RevenueCat REST secret key
+    used for the reconciliation re-query hook. Never a value."""
+    return _provider("revenuecat").get("secret_api_key_env_var")
+
+
+def revenuecat_offering() -> Optional[str]:
+    """The approved default RevenueCat offering identifier (non-secret)."""
+    return _provider("revenuecat").get("offering")
+
+
+def revenuecat_package_ids() -> frozenset[str]:
+    """Approved non-secret RevenueCat package identifiers (e.g. $rc_monthly)."""
+    return frozenset(
+        p["package_id"]
+        for p in _provider("revenuecat")["products"]
+        if p.get("package_id")
+    )
+
+
+def revenuecat_default_entitlement_id() -> str:
+    """The canonical entitlement id RevenueCat maps to. There is exactly one
+    canonical paid entitlement ('pro'); the runtime env var may override the
+    RevenueCat-side identifier but this is the server-side entitlement it grants."""
+    ids = sorted(canonical_entitlement_ids())
+    return ids[0] if ids else "pro"
+
+
 def stripe_price_env_var(interval: str) -> Optional[str]:
     """The environment-variable NAME holding the Stripe Price id for this
     interval, per the catalog. Never returns a secret value."""
