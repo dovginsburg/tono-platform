@@ -16,9 +16,16 @@
 //                              the v1.0 PRIMARY entry point. Directs the
 //                              user to the share sheet's "Edit Actions" menu.
 //
-//   3. "Tono Rewrite"        — explicitly marked Coming soon until a signed,
-//                              importable artifact and public install URL are
-//                              verified. The Share Sheet extension remains a
+//   3. "Tono Shortcut"       — Tono's Shortcuts actions (Rewrite Draft, Open
+//                              Tono Keyboard Setup, Set Tono Tone Variant) are
+//                              built into the app via TonoShortcutsProvider and
+//                              become discoverable inside Apple's Shortcuts app
+//                              on their own after install + first launch. This
+//                              tile does NOT claim an import file or an
+//                              auto-install: it opens Apple's Shortcuts app (via
+//                              the bounded ShortcutsAppLink launcher) and offers
+//                              step-by-step guidance for building a custom
+//                              rewrite. The Share Sheet extension remains a
 //                              separate entry point.
 //
 // "Skip" closes the sheet. Each tile marks itself complete when its action
@@ -43,6 +50,10 @@ struct OnboardingEntryPointsView: View {
     @State private var showSetupDoctor = false
     @State private var keyboardCheckMessage: String?
     @State private var scrollTarget: Int?
+    // Shortcut setup (Build 122 onboarding correction — the tile now reflects
+    // the shipped App Intents instead of the stale "Coming soon" placeholder).
+    @State private var showShortcutsGuide = false
+    @State private var shortcutsMessage: String?
     // Email identity (added 2026-07-03)
     @State private var emailDone = false
     @State private var showEmailSheet = false
@@ -114,15 +125,37 @@ struct OnboardingEntryPointsView: View {
                                 buttonLabel: "Show me how",
                                 buttonAction: markShareExtDone
                             )
-                            tile(
-                                number: 3,
-                                icon: "bolt.fill",
-                                title: "Tono Rewrite Shortcut — Coming soon",
-                                detail: shortcutDetail,
-                                isDone: false,
-                                buttonLabel: nil,
-                                buttonAction: nil
-                            )
+                            // Tile 3 and its "how to" affordance are one cell,
+                            // for the same reason tile 1 is: the extra button
+                            // belongs to this tile, so containing them keeps a
+                            // tile's own actions announced under it in both the
+                            // one- and two-column layouts.
+                            VStack(alignment: .leading, spacing: 20) {
+                                tile(
+                                    number: 3,
+                                    icon: "sparkles",
+                                    title: "Set up the Tono Shortcut",
+                                    detail: shortcutDetail,
+                                    isDone: false,
+                                    buttonLabel: "Open Shortcuts app",
+                                    buttonAction: openShortcutsApp
+                                )
+                                VStack(alignment: .leading, spacing: 8) {
+                                    if let shortcutsMessage {
+                                        Text(shortcutsMessage)
+                                            .font(.footnote)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Button("How to build a custom rewrite") {
+                                        showShortcutsGuide = true
+                                    }
+                                    .tonoFont(size: 13, weight: .semibold, relativeTo: .footnote)
+                                    .foregroundColor(.purple)
+                                    .accessibilityHint("Step-by-step: add the Rewrite Draft action and set a custom style.")
+                                }
+                                .padding(.horizontal, 16)
+                            }
+                            .accessibilityElement(children: .contain)
                             if FeatureFlags.isEnabled(.emailSignIn) {
                                 tile(
                                     number: 4,
@@ -195,6 +228,12 @@ struct OnboardingEntryPointsView: View {
                     refreshKeyboardStatus(afterSettings: false)
                 }
             }
+            .sheet(isPresented: $showShortcutsGuide) {
+                ShortcutsSetupGuide(
+                    onOpenShortcuts: openShortcutsApp,
+                    onDone: { showShortcutsGuide = false }
+                )
+            }
             .alert("Return to Tono after enabling the keyboard", isPresented: $showSettingsGuidance) {
                 Button("Not now", role: .cancel) {}
                 Button("Open Settings", action: openSettings)
@@ -217,7 +256,7 @@ struct OnboardingEntryPointsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Tono works with your keyboard, not instead of it.")
                 .tonoFont(size: 22, weight: .bold, relativeTo: .title2)
-            Text("Set up the keyboard or Share Sheet now. Shortcut and email sign-in are clearly marked until they are available, and you can finish any step later in Settings.")
+            Text("Set up the keyboard, the Share Sheet, or the Tono Shortcut now. Email sign-in is clearly marked until it's available, and you can finish any step later in Settings.")
                 .tonoFont(size: 14, relativeTo: .subheadline)
                 .foregroundColor(.secondary)
         }
@@ -236,7 +275,10 @@ struct OnboardingEntryPointsView: View {
     }
 
     private var shortcutDetail: String {
-        "Coming soon. There is no verified public Tono Rewrite Shortcut install link yet. The Share Sheet extension above remains available separately."
+        // Truthful, and careful about what it does NOT claim: nothing is
+        // imported and nothing installs itself. Tono's actions are compiled in
+        // and Apple's Shortcuts app lists them once Tono has been opened.
+        "Tono's actions are built into Apple's Shortcuts app. Open Shortcuts and search Tono to find Rewrite Draft, Open Tono Keyboard Setup, and Set Tono Tone Variant. Nothing is imported and nothing installs on its own."
     }
 
     private var emailDetail: String {
@@ -367,6 +409,21 @@ struct OnboardingEntryPointsView: View {
         scrollTarget = 4
     }
 
+    /// The one bounded action: bring Apple's Shortcuts app to the front so the
+    /// person can find Tono's built-in actions. It imports nothing and installs
+    /// nothing. If the app can't be opened it fails honestly with a message and
+    /// never crashes — the launcher reports the outcome through its completion.
+    private func openShortcutsApp() {
+        shortcutsMessage = nil
+        ShortcutsAppLink.open { success in
+            DispatchQueue.main.async {
+                if !success {
+                    shortcutsMessage = "Couldn't open the Shortcuts app. Open it from your Home Screen, then search Tono."
+                }
+            }
+        }
+    }
+
     private func finish() {
         SharedStore.defaults.set(true, forKey: SharedKeys.entryPointsOnboardingDone)
         onDone()
@@ -385,6 +442,109 @@ struct OnboardingEntryPointsView: View {
 //
 // Keeping the new key in this file's README comment so the Shared layer
 // owner can add it in the next commit without re-touching this view.
+
+// MARK: - ShortcutsSetupGuide
+
+/// The in-app, step-by-step guide for building a custom rewrite with Tono's
+/// Shortcuts action — Build 122 onboarding correction.
+///
+/// It describes exactly what the person will see in Apple's Shortcuts app and
+/// is deliberate about two honesty properties the old "Coming soon" tile could
+/// not hold:
+///
+///   * **No auto-install claim.** The actions are already built in; the guide
+///     never promises an import file or a one-tap install. It only explains how
+///     to add the `Rewrite Draft` action and run it.
+///   * **No auto-send claim.** The last step says, in plain words, that Tono
+///     returns one rewrite for the person to review and then copy or share
+///     themselves — Tono never sends the message for them.
+///
+/// Presented as a sheet from the onboarding Shortcut tile. Adaptive on iPad via
+/// `.tonoReadableColumn(.reading)`; each step is a contained accessibility
+/// element so VoiceOver reads a step's number and text together.
+struct ShortcutsSetupGuide: View {
+    let onOpenShortcuts: () -> Void
+    let onDone: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Text("Tono's actions are built into Apple's Shortcuts app. After you open Tono once, search Tono in the Shortcuts app to find Rewrite Draft, Open Tono Keyboard Setup, and Set Tono Tone Variant. Nothing is imported and nothing installs on its own.")
+                        .tonoFont(size: 14, relativeTo: .subheadline)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Button(action: onOpenShortcuts) {
+                        HStack(spacing: 6) {
+                            Text("Open Shortcuts app")
+                                .tonoFont(size: 13, weight: .semibold, relativeTo: .footnote)
+                            Image(systemName: "arrow.up.right")
+                                .tonoGlyphFont(size: 11, relativeTo: .caption2)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(Color.purple)
+                        .foregroundColor(.white)
+                        .clipShape(Capsule())
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Build a custom rewrite")
+                            .tonoFont(size: 17, weight: .semibold, relativeTo: .body)
+                        step(1, "In Apple's Shortcuts app, tap the plus button to start a new shortcut.")
+                        step(2, "Tap Add Action, search Tono, then choose Rewrite Draft.")
+                        step(3, "Set Draft Message to Ask Each Time — or to Shortcut Input when you run the shortcut from the Share Sheet.")
+                        step(4, "Set Rewrite Style to Custom.")
+                        step(5, "In Custom Style, type a 1–120 character instruction — for example, \u{201C}warm, concise, and direct\u{201D} — or set it to Ask Each Time.")
+                        step(6, "Run the shortcut. Tono returns one rewrite. Read it, then copy or share it yourself. Tono never sends your message for you.")
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("What you need")
+                            .tonoFont(size: 17, weight: .semibold, relativeTo: .body)
+                        Text("Rewrite Draft needs a signed-in Tono account, an active trial or subscription, and an internet connection.")
+                            .tonoFont(size: 13, relativeTo: .footnote)
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("Open Tono Keyboard Setup and Set Tono Tone Variant work on your device only — no account and no connection needed.")
+                            .tonoFont(size: 13, relativeTo: .footnote)
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .tonoReadableColumn(.reading)
+            }
+            .navigationTitle("Tono Shortcut setup")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done", action: onDone)
+                }
+            }
+        }
+    }
+
+    /// One numbered step, contained so VoiceOver announces the number and its
+    /// text as a single element rather than reading digits adrift from prose.
+    private func step(_ number: Int, _ text: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "\(number).circle.fill")
+                .tonoGlyphFont(size: 18, relativeTo: .body)
+                .foregroundColor(.purple)
+                .accessibilityHidden(true)
+            Text(text)
+                .tonoFont(size: 14, relativeTo: .subheadline)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Step \(number). \(text)")
+    }
+}
+
 // MARK: - EmailSignInSheet
 
 /// The email account sheet — Build 114.
