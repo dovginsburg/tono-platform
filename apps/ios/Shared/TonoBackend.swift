@@ -439,7 +439,7 @@ public final class TonoBackend: @unchecked Sendable {
     private func persistServerConfirmedEmail(from resp: [String: Any]) {
         if let verified = resp["email_verified"] as? Bool, verified,
            let address = resp["email"] as? String, !address.isEmpty {
-            SharedKeychain.set(address, forKey: KeychainKeys.signedInEmail)
+            setSignedInEmail(address)
             SharedKeychain.set("true", forKey: KeychainKeys.hasRecoveryIdentity)
         }
     }
@@ -607,6 +607,31 @@ public final class TonoBackend: @unchecked Sendable {
         let response: [String: Any] = try await postObject(
             path: path, json: payload, authorize: true
         )
+        persistProviderConvergence(response)
+        return try await me()
+    }
+
+    /// The SOLE writer of the confirmed-address key. Every path that has
+    /// server-side proof of a verified identity — email login, a native
+    /// provider (Apple/Google), or a passkey — funnels its address write here,
+    /// so `KeychainKeys.signedInEmail` (which `StoreKitManager` reads to allow a
+    /// purchase) is set in exactly one place. A no-op for an absent or empty
+    /// address, so a degraded response can never half-write it.
+    private func setSignedInEmail(_ address: String?) {
+        guard let address,
+              !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return }
+        SharedKeychain.set(address, forKey: KeychainKeys.signedInEmail)
+    }
+
+    /// Converge a native-provider or passkey sign-in onto the ONE canonical
+    /// Tono account. Apple, Google and passkeys all resolve to the same
+    /// `account_id` the backend already owns for this person, so history and
+    /// entitlement follow whichever way they signed in. `hasRecoveryIdentity`
+    /// is the explicit purchase-gate flag; the address is recorded when the
+    /// provider returned one. Nothing here grants Pro — that stays the server's
+    /// `/v1/me` projection alone.
+    private func persistProviderConvergence(_ response: [String: Any]) {
         persistAccountID(response["account_id"] as? String)
         // A native provider sign-in is itself a durable recovery identity (the
         // person's Apple/Google account) even when the provider returns no email
@@ -617,7 +642,70 @@ public final class TonoBackend: @unchecked Sendable {
         // only on the server's verification proof: a native response that never
         // carries that proof records no address, which is the honest state.
         SharedKeychain.set("true", forKey: KeychainKeys.hasRecoveryIdentity)
+        // Native/passkey convergence records the ADDRESS through the same gated
+        // writer the email lane uses — recorded only on the server's own
+        // verification proof (`email_verified`), never unconditionally from a
+        // provider response field. The recovery flag above is unconditional
+        // (a provider identity is recoverable even without an email); the
+        // address is not. One writer, one proof.
         persistServerConfirmedEmail(from: response)
+    }
+
+    // ── Passkeys / WebAuthn (native AuthenticationServices) ─────────────────
+    //
+    // The platform ceremony (Face ID / Touch ID) lives in the app target at
+    // `App/PasskeySignIn.swift`; these four methods are only the transport to
+    // the backend's WebAuthn ceremonies (`apps/backend/passkeys.py`, rpId
+    // `tonoit.com`). An "options" call returns the server-minted challenge as
+    // raw WebAuthn JSON; a "verify" call posts back exactly what the platform
+    // authenticator signed. The backend is the sole authority: a credential it
+    // does not verify writes nothing, and a verify that succeeds converges on
+    // the canonical account exactly like Apple/Google.
+
+    /// Registration options for a NEW passkey on the current account. Requires a
+    /// device bearer (the account the passkey attaches to), so it registers the
+    /// device first, then returns the raw WebAuthn creation options.
+    public func passkeyRegisterOptions() async throws -> [String: Any] {
+        _ = try await registerIfNeeded(platform: "ios", appVersion: Self.appBuild)
+        return try await postObject(
+            path: "/v1/auth/passkey/register/options", json: [:], authorize: true
+        )
+    }
+
+    /// Verify a passkey registration. `credential` is the WebAuthn JSON the
+    /// platform authenticator produced. Converges on the canonical account.
+    @discardableResult
+    public func passkeyRegisterVerify(
+        credential: [String: Any], nickname: String? = nil
+    ) async throws -> TonoMe {
+        var body: [String: Any] = ["credential": credential]
+        if let nickname, !nickname.isEmpty { body["nickname"] = nickname }
+        let response = try await postObject(
+            path: "/v1/auth/passkey/register/verify", json: body, authorize: true
+        )
+        persistProviderConvergence(response)
+        return try await me()
+    }
+
+    /// Options to sign in with an existing passkey. The public start of the
+    /// ceremony — discoverable credentials, so no allow-list and no identity is
+    /// needed until the authenticator has signed.
+    public func passkeyLoginOptions() async throws -> [String: Any] {
+        try await postObject(
+            path: "/v1/auth/passkey/login/options", json: [:], authorize: false
+        )
+    }
+
+    /// Verify a passkey assertion and converge this device onto the account the
+    /// passkey belongs to — the SAME canonical account Apple/Google/email reach.
+    @discardableResult
+    public func passkeyLoginVerify(credential: [String: Any]) async throws -> TonoMe {
+        _ = try await registerIfNeeded(platform: "ios", appVersion: Self.appBuild)
+        let response = try await postObject(
+            path: "/v1/auth/passkey/login/verify",
+            json: ["credential": credential], authorize: true
+        )
+        persistProviderConvergence(response)
         return try await me()
     }
 

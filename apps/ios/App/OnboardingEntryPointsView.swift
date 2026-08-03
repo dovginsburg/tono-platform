@@ -567,7 +567,7 @@ struct EmailSignInSheet: View {
                 .foregroundColor(.purple)
                 .accessibilityHidden(true)
             noticeView
-            Text("Open the link on this device, then come back and sign in.")
+            Text("If a link arrives, open it on this device — then come back and sign in. Already confirmed? Just sign in.")
                 .font(.callout)
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -608,11 +608,41 @@ struct EmailSignInSheet: View {
             .accessibilityLabel("Continue with Apple")
 
 #if canImport(GoogleSignIn)
-            Button("Continue with Google") { Task { await submitGoogle() } }
-                .buttonStyle(.bordered)
-                .frame(maxWidth: .infinity, minHeight: 44)
-                .disabled(isWorking)
+            // Rendered only when a real Tono Google client is configured in this
+            // build. Linking the SDK makes the button compilable; the runtime
+            // config gate is what makes SHOWING it honest — an unconfigured build
+            // shows no Google affordance rather than a tap target whose only
+            // outcome is an "unavailable" notice.
+            if GoogleSignInConfig.isConfigured {
+                Button("Continue with Google") { Task { await submitGoogle() } }
+                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .disabled(isWorking)
+            }
 #endif
+
+            // Passkey (Face ID / Touch ID). Gated OFF until an operator has
+            // provisioned Associated Domains + the AASA for tonoit.com — the
+            // ceremony cannot succeed before then, so the app must not offer it.
+            if PasskeyConfig.isEnabled {
+                Button {
+                    Task { await submitPasskey(register: false) }
+                } label: {
+                    Label("Sign in with a passkey", systemImage: "person.badge.key.fill")
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.bordered)
+                .disabled(isWorking)
+                .accessibilityLabel("Sign in with a passkey")
+
+                Button("Set up a passkey on this device") {
+                    Task { await submitPasskey(register: true) }
+                }
+                .font(.footnote.weight(.semibold))
+                .foregroundColor(.purple)
+                .disabled(isWorking)
+                .accessibilityHint("Creates a Face ID or Touch ID passkey for your Tono account.")
+            }
 
             if let providerNotice {
                 Text(providerNotice).font(.footnote).foregroundColor(.secondary)
@@ -631,8 +661,38 @@ struct EmailSignInSheet: View {
         }
     }
 
+    /// Passkey sign-in / registration. Success is reported ONLY after the
+    /// backend verified the assertion (see PasskeySignIn) — a dismissed sheet is
+    /// silent, and a missing AASA / provider is an honest failure, never a faked
+    /// success. Both a verified sign-in and a verified registration converge on
+    /// the canonical account, so either one can leave the sheet.
+    private func submitPasskey(register: Bool) async {
+        isWorking = true
+        defer { isWorking = false }
+        providerNotice = nil
+        let outcome = register ? await PasskeySignIn.register() : await PasskeySignIn.signIn()
+        switch outcome {
+        case .signedIn, .registered:
+            onSuccess()
+        case .cancelled:
+            break
+        case .unavailable:
+            providerNotice = "Passkeys aren't set up in this build yet. Use Apple or email."
+        case .failed:
+            providerNotice = "That passkey didn't work. Try again, or use Apple or email."
+        }
+    }
+
 #if canImport(GoogleSignIn)
     private func submitGoogle() async {
+        // Belt-and-suspenders: the button is already gated on this, but never
+        // call into the SDK unconfigured — GoogleSignIn raises rather than
+        // returns an error when no client is set, which no catch could soften.
+        guard GoogleSignInConfig.isConfigured else {
+            providerNotice = "Google sign-in isn't available in this build. Use Apple or email."
+            return
+        }
+        GoogleSignInConfig.configureIfPossible()
         guard let presenter = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene }).flatMap(\.windows)
             .first(where: \.isKeyWindow)?.rootViewController else {
@@ -838,15 +898,32 @@ struct EmailSignInSheet: View {
     ) -> String {
         switch outcome {
         case .checkYourEmail:
-            // The one answer that is identical for a registered and an
-            // unregistered address. It differs only by which link is waiting.
+            // The one accepted, anti-enumerating answer. The server returns 202
+            // for register/resend/reset whether the address is unknown, waiting
+            // to be confirmed, or already confirmed — and it sends NO mail for
+            // an already-confirmed address (that account's confirmation was
+            // spent long ago). So this copy must never state that a link WAS
+            // sent: a person whose address is already confirmed would then wait
+            // for mail that by design never arrives. It states the two branches
+            // conditionally instead, and names the exit an already-confirmed
+            // person actually needs — sign in, or reset a forgotten password.
             switch action {
             case .createAccount, .resendConfirmation:
-                return "Check your email. Open the link we sent to confirm your address, then sign in."
+                // Identical for both actions (see the anti-enumeration test):
+                // creating an account with an address that is already confirmed
+                // and asking to resend one both land here, and neither may be
+                // told a link is on the way when none is.
+                return "If that address still needs confirming, we'll email a link — open it, then sign in. If it's already confirmed, no new email is sent; just sign in, or use Forgot Password."
             case .resetPassword:
-                return "Check your email. Open the link we sent to choose a new password."
+                // Reset is its own link and its own next step, and is truthful
+                // the same way: only a resettable address is emailed, so the
+                // claim is conditional rather than a flat "we sent you a link".
+                return "If we can reset that address, we'll email a link to choose a new password. It can take a minute to arrive."
             case .signIn:
-                return "Check your email for the link we sent you."
+                // Not reached by the sign-in path (a sign-in either succeeds or
+                // maps to a failure shape), but the switch is exhaustive, so it
+                // still answers honestly rather than promising delivered mail.
+                return "If that address still needs confirming, we'll email a link. Once it's confirmed, sign in with your password."
             }
         case .verificationRequired:
             return "Confirm your email address first. Open the link we sent you, or ask for a new one."

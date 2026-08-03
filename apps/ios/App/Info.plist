@@ -20,6 +20,24 @@
 	<string>1.1</string>
 	<key>CFBundleVersion</key>
 	<string>122</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.tonoit.app.googlesignin</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<!-- Reversed Google client ID, supplied at provider-activation
+				     time via the $(GID_URL_SCHEME) build setting. Empty by default
+				     (fail closed); no sibling identifier is ever embedded. -->
+				<string>$(GID_URL_SCHEME)</string>
+			</array>
+		</dict>
+	</array>
+	<key>GIDClientID</key>
+	<string>$(GID_CLIENT_ID)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSApplicationQueriesSchemes</key>
@@ -32,6 +50,10 @@
 	<string>Tono uses contacts you choose to create local recipient profiles for personalized coaching.</string>
 	<key>REVENUECAT_PUBLIC_SDK_KEY</key>
 	<string>$(REVENUECAT_PUBLIC_SDK_KEY)</string>
+	<key>TONO_PASSKEYS_ENABLED</key>
+	<string>$(TONO_PASSKEYS_ENABLED)</string>
+	<key>TONO_WEBAUTHN_RP_ID</key>
+	<string>$(TONO_WEBAUTHN_RP_ID)</string>
 	<key>TonoCanonicalSHA</key>
 	<string>$(TONO_CANONICAL_SHA)</string>
 	<key>TonoSchemaRevision</key>
