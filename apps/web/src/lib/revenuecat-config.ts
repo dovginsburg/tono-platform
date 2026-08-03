@@ -11,8 +11,13 @@
 //   * The backend remains the sole entitlement authority. The web keeps reading
 //     `is_pro` from /v1/me and never trusts a client flag.
 //   * RevenueCat observes web subscriptions via its Stripe integration, attributed
-//     to the SAME canonical account UUID that already flows as the Stripe Checkout
-//     client_reference_id (accounts.id). The RevenueCat App User ID is that UUID —
+//     to the SAME canonical account UUID (accounts.id) the backend already stamps
+//     on the Stripe Customer and subscription as the `tono_account_id` metadata
+//     field (apps/backend/payments.py) — that metadata field is what the RevenueCat
+//     Stripe app must map to its App User ID so a web subscriber unifies under the
+//     same identity as their iOS/Android purchases. (The Checkout session's
+//     `client_reference_id` carries the device id, not the account UUID, so it is
+//     NOT the field to map.) The RevenueCat App User ID is that account UUID —
 //     never an email, device id, or anonymous RevenueCat id.
 //
 // This module only reads config and fails closed. It is dormant by default: with

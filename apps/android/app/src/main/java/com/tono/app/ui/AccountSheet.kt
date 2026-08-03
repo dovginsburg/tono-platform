@@ -30,6 +30,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.tono.app.billing.RevenueCatManager
 import com.tono.shared.account.EmailAccountAction
 import com.tono.shared.account.EmailAccountCopy
 import com.tono.shared.account.EmailAccountPolicy
@@ -347,6 +348,13 @@ fun EmailAccountRows(
                     // it makes first succeeds, so there is no failure branch to
                     // render and no way to end up half signed in.
                     withContext(Dispatchers.IO) { TonoBackend.signOutEmail() }
+                    // Build 123 — release the RevenueCat identity on the same pass.
+                    // signOutEmail() just cleared the canonical account UUID
+                    // (ACCOUNT_ID), so without this the RevenueCat SDK would keep the
+                    // signed-out account's customer logged in and the next person on
+                    // this device could inherit it (and its stale observation state).
+                    // A no-op when RevenueCat is dormant; lives in :app, never :ime.
+                    RevenueCatManager.signOut()
                     isSigningOut = false
                     signedInEmail = null
                     onSignedOut()

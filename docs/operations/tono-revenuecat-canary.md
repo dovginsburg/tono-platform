@@ -94,8 +94,12 @@ inbox via `revenuecat.reconcile_revenuecat(...)`.
 The web does **not** move to RevenueCat Billing or wallets — the existing Stripe
 Checkout + Customer Portal (`/v1/checkout`, `/v1/portal`) and the trial / cancel /
 refund semantics are unchanged. RevenueCat observes web subscriptions via its
-Stripe integration, attributed to the same account UUID already sent as the Stripe
-Checkout `client_reference_id`.
+Stripe integration, attributed to the canonical account UUID the backend stamps on
+the Stripe Customer and subscription as the `tono_account_id` **metadata** field
+(`apps/backend/payments.py`) — that metadata field is what the RevenueCat Stripe
+app must map to its App User ID so web unifies with iOS/Android. (The Checkout
+session's `client_reference_id` carries the *device* id, not the account UUID, so
+it is not the field to map.)
 
 ---
 

@@ -365,6 +365,13 @@ struct SettingsView: View {
             // longer holds a credential to prove one, so the shared mirror must
             // stop claiming Pro until it registers and re-reads.
             store.resetToAnonymous()
+            // Build 123 — release the RevenueCat identity on the same pass.
+            // `TonoBackend.signOut()` already cleared the canonical account UUID
+            // from the keychain, so without this the RevenueCat SDK would keep the
+            // signed-out account's customer logged in and the next person on this
+            // device could inherit it (and its stale observation state). A no-op
+            // when RevenueCat is dormant.
+            RevenueCatManager.shared.signOut()
             refreshEmailIdentity()
             refreshAccountState()
         }
@@ -1601,6 +1608,9 @@ struct AccountDeletionView: View {
                 SharedKeychain.purgeAccountSecrets()
                 await MainActor.run {
                     StoreKitManager.shared.resetToAnonymous()
+                    // Build 123 — deleting the account also releases its RevenueCat
+                    // customer on this device (keychain UUID was just purged).
+                    RevenueCatManager.shared.signOut()
                     TonePreferences.recordEntitlement(.notEntitled, isPro: false)
                 }
                 onSuccess()
@@ -1614,6 +1624,7 @@ struct AccountDeletionView: View {
                         // Account already deleted — treat as success.
                         SharedKeychain.purgeAccountSecrets()
                         StoreKitManager.shared.resetToAnonymous()
+                        RevenueCatManager.shared.signOut()
                         TonePreferences.recordEntitlement(.notEntitled, isPro: false)
                         onSuccess()
                     case .offline:
