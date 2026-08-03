@@ -48,12 +48,17 @@ android {
         debug {
             isDebuggable = true
             buildConfigField("String", "BACKEND_URL", "\"http://10.0.2.2:8765\"")
+            // RevenueCat canary kill switch (Build 123). Empty = dormant by
+            // default; the publishable goog_ key is injected per build/environment
+            // and never committed. Backend stays the sole entitlement authority.
+            buildConfigField("String", "REVENUECAT_PUBLIC_SDK_KEY", "\"\"")
         }
         release {
             isMinifyEnabled = true
             signingConfig = signingConfigs.getByName("release")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             buildConfigField("String", "BACKEND_URL", "\"https://api.tonoit.com\"")
+            buildConfigField("String", "REVENUECAT_PUBLIC_SDK_KEY", "\"\"")
             lint {
                 abortOnError = false
             }
@@ -91,6 +96,12 @@ dependencies {
 
     // Google Play Billing (mirrors StoreKit 2 on iOS)
     implementation("com.android.billingclient:billing-ktx:6.2.1")
+
+    // RevenueCat canary (Build 123). 7.x is pinned deliberately: it uses Play
+    // Billing 6.x, so it does NOT force-upgrade the existing PlayBillingManager's
+    // billing-ktx 6.2.1 (8.x would pull Billing 7.x). Additive + kill-switched;
+    // the existing Play billing path is unchanged and backend stays authoritative.
+    implementation("com.revenuecat.purchases:purchases:7.12.0")
 
     // Fragment — pinned to fix InvalidFragmentVersionForActivityResult lint error
     implementation("androidx.fragment:fragment-ktx:1.6.2")
