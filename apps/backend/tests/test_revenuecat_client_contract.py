@@ -30,7 +30,23 @@ _ANDROID_MANAGER = (
 )
 _ANDROID_GRADLE = _REPO_ROOT / "apps/android/app/build.gradle.kts"
 _ANDROID_APP = _REPO_ROOT / "apps/android/app/src/main/java/com/tono/app/TonoApplication.kt"
+_ANDROID_ACCOUNT_SHEET = (
+    _REPO_ROOT / "apps/android/app/src/main/java/com/tono/app/ui/AccountSheet.kt"
+)
+_IOS_SETTINGS = _REPO_ROOT / "apps/ios/App/SettingsView.swift"
 _WEB_CONFIG = _REPO_ROOT / "apps/web/src/lib/revenuecat-config.ts"
+_BACKEND_PAYMENTS = _REPO_ROOT / "apps/backend/payments.py"
+
+# The RevenueCat integration is Tono-only. These CODE files must never name or
+# embed another product's identity (isolated per-product project — contract §1/§6).
+_RC_CODE_FILES = (
+    _REPO_ROOT / "apps/ios/App/RevenueCatManager.swift",
+    _REPO_ROOT / "apps/android/app/src/main/java/com/tono/app/billing/RevenueCatManager.kt",
+    _REPO_ROOT / "apps/web/src/lib/revenuecat-config.ts",
+    _REPO_ROOT / "apps/backend/revenuecat.py",
+)
+# Other Tono-sibling products that share NOTHING with this canary.
+_FOREIGN_PRODUCT_TOKENS = ("tandempaws", "tandemskills", "tandem_paws", "tandem_skills")
 
 
 def _read(path: Path) -> str:
@@ -173,3 +189,94 @@ def test_catalog_declares_revenuecat_provider_mapping_pro():
     for product in rc["products"]:
         assert product["entitlement"] == "pro"
         assert product["interval"] in ("month", "year")
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle: logout / account-switch releases the RevenueCat identity
+#
+# The manager exposes signOut() (RevenueCat logOut + local state reset), but a
+# manager nobody calls is a leak: without a logout call, the SDK keeps the
+# signed-out account's customer logged in and the next person on a shared device
+# inherits it, and an anonymous->identified->identified switch can alias two
+# accounts. These lock the wiring so it cannot silently regress.
+# ---------------------------------------------------------------------------
+
+
+def test_ios_logout_and_delete_release_revenuecat_identity():
+    code = _code_only(_read(_IOS_SETTINGS))
+    # Both the sign-out path and the account-deletion path must release RC.
+    assert (
+        code.count("RevenueCatManager.shared.signOut()") >= 2
+    ), "iOS sign-out AND account deletion must call RevenueCatManager.shared.signOut()"
+    # It must sit alongside the existing local-credential teardown, not replace it.
+    assert "TonoBackend.shared.signOut()" in code
+    assert "TonoBackend.shared.deleteAccount()" in code
+
+
+def test_android_logout_releases_revenuecat_identity():
+    code = _code_only(_read(_ANDROID_ACCOUNT_SHEET))
+    assert "RevenueCatManager.signOut()" in code, (
+        "Android sign-out must call RevenueCatManager.signOut()"
+    )
+    # Called after the backend sign-out that clears the canonical ACCOUNT_ID.
+    assert "TonoBackend.signOutEmail()" in code
+    # Imported from :app billing (never :ime — the keyboard must not see identity).
+    assert "import com.tono.app.billing.RevenueCatManager" in _read(_ANDROID_ACCOUNT_SHEET)
+
+
+# ---------------------------------------------------------------------------
+# Signed-out purchase is impossible (no anonymous durable paid access)
+# ---------------------------------------------------------------------------
+
+
+def test_ios_purchase_refuses_without_canonical_account():
+    code = _code_only(_read(_IOS_MANAGER))
+    assert "Self.canonicalAccountID != nil" in code, (
+        "iOS purchase() must refuse to buy without the canonical account UUID"
+    )
+
+
+def test_android_purchase_refuses_without_canonical_account():
+    code = _code_only(_read(_ANDROID_MANAGER))
+    assert "canonicalAccountId() == null" in code, (
+        "Android purchase() must refuse to buy without the canonical account UUID"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Product isolation: this canary is Tono-only
+# ---------------------------------------------------------------------------
+
+
+def test_no_foreign_product_identifiers_in_revenuecat_source():
+    for path in _RC_CODE_FILES:
+        text = _read(path).lower()
+        for token in _FOREIGN_PRODUCT_TOKENS:
+            assert token not in text, (
+                f"{path.name} must not reference another product ({token!r}); "
+                "the RevenueCat project is isolated per product"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Web account binding: the canonical UUID reaches Stripe as tono_account_id
+# metadata (what RevenueCat's Stripe integration maps to its App User ID).
+# ---------------------------------------------------------------------------
+
+
+def test_web_documents_stripe_metadata_account_binding():
+    cfg = _read(_WEB_CONFIG)
+    assert "tono_account_id" in cfg, (
+        "web config must name the Stripe metadata field RevenueCat maps to the App User ID"
+    )
+
+
+def test_backend_checkout_stamps_account_uuid_on_stripe():
+    """The web->RevenueCat attribution the web config documents must be real: the
+    Stripe checkout stamps tono_account_id on both the Customer and the
+    subscription so RevenueCat's Stripe integration can bind the canonical UUID."""
+    pay = _read(_BACKEND_PAYMENTS)
+    assert '"tono_account_id": account_id' in pay, (
+        "checkout must stamp the canonical account UUID as Stripe tono_account_id metadata"
+    )
+    assert "subscription_data" in pay and "metadata" in pay

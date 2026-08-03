@@ -92,6 +92,19 @@ test('RevenueCat App User ID is the canonical account UUID (documented)', () => 
   assert.ok(/never an email, device id, or anonymous/i.test(cfg));
 });
 
+test('web binding names the Stripe metadata field RevenueCat maps (tono_account_id)', () => {
+  // The canonical UUID reaches Stripe as subscription/customer metadata
+  // `tono_account_id` (client_reference_id carries the device id); RevenueCat's
+  // Stripe integration must map THAT field so web unifies with iOS/Android.
+  const cfg = src('./revenuecat-config.ts');
+  assert.ok(/tono_account_id/.test(cfg), 'must name the Stripe metadata field to map');
+  // The mapped field must be the account metadata, not client_reference_id.
+  assert.ok(
+    /client_reference_id[^.]*device id/is.test(cfg),
+    'must clarify client_reference_id is the device id, not the account UUID',
+  );
+});
+
 test('payment history renders a revenuecat provider label', () => {
   const ph = src('../app/account/PaymentHistory.tsx');
   assert.ok(/revenuecat:\s*'revenuecat'/.test(ph), 'PROVIDER_LABEL must include a revenuecat entry');
