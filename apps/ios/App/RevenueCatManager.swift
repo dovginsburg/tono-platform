@@ -59,7 +59,8 @@ public final class RevenueCatManager: ObservableObject {
     @Published public var purchaseError: String?
     /// True while a purchase or restore is in flight.
     @Published public private(set) var isPurchasing: Bool = false
-    /// Localized display price per package id (e.g. "$3.99"), from the provider.
+    /// Localized display price per package id, from the provider's StoreProduct —
+    /// never a hard-coded literal (pricing always comes from the store).
     @Published public private(set) var localizedPrices: [String: String] = [:]
 
     private init() {}
