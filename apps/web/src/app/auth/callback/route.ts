@@ -24,13 +24,13 @@ import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerSupabase } from '@/lib/supabase';
 import {
-  APP_ENTRY_PATH,
   buildAppRedirect,
   buildLoginRedirect,
   buildResetRedirect,
   isRecoveryCallback,
   sanitizeNextPath,
 } from '@/lib/auth-redirects';
+import { FRAGMENT_BOUNCE_HTML } from '@/lib/auth-complete';
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -136,6 +136,20 @@ export async function GET(request: Request) {
     return NextResponse.redirect(recovery ? buildResetRedirect() : buildAppRedirect(next));
   }
 
-  // No code, no error — bounce to login
-  return NextResponse.redirect(buildLoginRedirect(APP_ENTRY_PATH));
+  // No `?code` and no `?error_description` reached the server. For OAuth/PKCE
+  // that is an empty callback → sign-in. But the backend-brokered email links
+  // (register / resend / reset) land HERE with their session in the URL
+  // FRAGMENT, which the server cannot see — so instead of bouncing blindly to
+  // login and stranding every verification and every password reset, serve a
+  // small document that reads the fragment in the browser and posts it to
+  // /api/auth/email/complete, the server half that adopts the session and routes
+  // a recovery to the password screen. See src/lib/auth-complete.ts.
+  return new NextResponse(FRAGMENT_BOUNCE_HTML, {
+    status: 200,
+    headers: {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store',
+      'x-robots-tag': 'noindex',
+    },
+  });
 }
