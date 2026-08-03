@@ -235,6 +235,7 @@
 		B117REA0000000000000012 /* ReadTheAsk.swift in Sources */ = {isa = PBXBuildFile; fileRef = B117REA0000000000000001 /* ReadTheAsk.swift */; };
 		B117REA0000000000000021 /* ReadTheAskView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B117REA0000000000000002 /* ReadTheAskView.swift */; };
 		B117REA0000000000000031 /* Build117ReadTheAskTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B117REA0000000000000003 /* Build117ReadTheAskTests.swift */; };
+		B117STROFF00000000000031 /* Build117StreamingOfflineContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B117STROFF00000000000003 /* Build117StreamingOfflineContractTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -425,6 +426,7 @@
 		B117REA0000000000000001 /* ReadTheAsk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadTheAsk.swift; sourceTree = "<group>"; };
 		B117REA0000000000000002 /* ReadTheAskView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadTheAskView.swift; sourceTree = "<group>"; };
 		B117REA0000000000000003 /* Build117ReadTheAskTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build117ReadTheAskTests.swift; sourceTree = "<group>"; };
+		B117STROFF00000000000003 /* Build117StreamingOfflineContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build117StreamingOfflineContractTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -479,6 +481,7 @@
 			isa = PBXGroup;
 			children = (
 				B117REA0000000000000003 /* Build117ReadTheAskTests.swift */,
+				B117STROFF00000000000003 /* Build117StreamingOfflineContractTests.swift */,
 				A1180000000000000000F006 /* Build118AppleIntelligenceTests.swift */,
 				A1220000000000000000F006 /* Build122PurchaseGateTests.swift */,
 				B115ADA7000000000000F002 /* Build115AdaptiveLayoutTests.swift */,
@@ -970,6 +973,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B117REA0000000000000031 /* Build117ReadTheAskTests.swift in Sources */,
+				B117STROFF00000000000031 /* Build117StreamingOfflineContractTests.swift in Sources */,
 				B115C0FFEE0000000000F015 /* LocalCoachRewrite.swift in Sources */,
 				A1180000000000000000B015 /* RewriteProvider.swift in Sources */,
 				A1220000000000000000B015 /* PurchaseCapability.swift in Sources */,

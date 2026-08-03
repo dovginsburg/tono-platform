@@ -168,6 +168,20 @@ public enum AnalysisEvent {
     /// "Try again." The status is the only fact a user's next step depends on,
     /// and a sentence is the one shape it must not travel in.
     case failure(status: Int)
+    /// Build 117: the request never reached a verdict because the device has no
+    /// usable connection. Like `.failure`, this is a SHAPE, not a sentence — it
+    /// carries no payload — so a consumer routes it to the same "check your
+    /// connection" recovery the non-streaming path already gives (by throwing
+    /// `TonoBackendError.offline`), instead of the generic "try again."
+    ///
+    /// Before this, `analyzeStream`'s terminal catch stringified an offline
+    /// `URLError` into `.error(localizedDescription)`; every consumer then
+    /// re-wrapped that string as a backend error, which `ConsumerErrorCopy`
+    /// maps to `.retry`. So an offline coach on the streaming keyboard/Share
+    /// path read "Try again." while the non-streaming path correctly read
+    /// "Check your connection…" — the F2-family collapse, for connectivity
+    /// rather than HTTP status.
+    case offline
 }
 
 /// Build 113: a streamed failure reduced to the fact that changes what the
@@ -863,6 +877,32 @@ public final class TonoBackend: @unchecked Sendable {
         throw TonoBackendError.network("invalid Coach response")
     }
 
+    /// True when a caught error means "no usable connection" rather than "the
+    /// request was answered badly". The streaming producer classifies by SHAPE
+    /// here — never by the error's message — so it can hand a payload-free
+    /// `.offline` event downstream instead of a stringified `URLError`.
+    ///
+    /// The URLError set mirrors `ConsumerErrorCopy.isOffline` and
+    /// `EmailAuthOutcome.offlineCodes` so every Tono surface agrees about when
+    /// it is true to say "check your connection". Kept in sync by
+    /// `Build117StreamingOfflineContractTests`.
+    static func isOfflineTransport(_ error: Error) -> Bool {
+        if let backend = error as? TonoBackendError, case .offline = backend { return true }
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .notConnectedToInternet,
+             .networkConnectionLost,
+             .cannotConnectToHost,
+             .cannotFindHost,
+             .dataNotAllowed,
+             .internationalRoamingOff,
+             .secureConnectionFailed:
+            return true
+        default:
+            return false
+        }
+    }
+
     /// Streaming version of analyze — returns an AsyncStream of AnalysisEvents.
     /// The caller sees perception → suggestions → complete progressively.
     public func analyzeStream(
@@ -1016,7 +1056,16 @@ public final class TonoBackend: @unchecked Sendable {
                 } catch is CancellationError {
                     continuation.finish()
                 } catch {
-                    continuation.yield(.error(error.localizedDescription))
+                    // Hand on the SHAPE of a connectivity failure, not a
+                    // stringified URLError (whose localizedDescription can name
+                    // the host). Offline → the honest "check your connection"
+                    // recovery; anything else stays the neutral prose the
+                    // consumers already route through ConsumerErrorCopy.
+                    if TonoBackend.isOfflineTransport(error) {
+                        continuation.yield(.offline)
+                    } else {
+                        continuation.yield(.error(error.localizedDescription))
+                    }
                     continuation.finish()
                 }
             }

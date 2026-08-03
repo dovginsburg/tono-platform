@@ -299,6 +299,11 @@ public final class KeyboardModel: ObservableObject {
                         // from "wait a minute" rather than saying "Try again."
                         // to all three.
                         throw StreamedFailure.http(status: status)
+                    case .offline:
+                        // Build 117: a streamed connectivity failure reaches the
+                        // same honest "No connection…" branch the non-streaming
+                        // path hits, not the generic backend/retry copy.
+                        throw TonoBackendError.offline
                     }
                 }
 
@@ -438,6 +443,11 @@ public final class KeyboardModel: ObservableObject {
                         // from "wait a minute" rather than saying "Try again."
                         // to all three.
                         throw StreamedFailure.http(status: status)
+                    case .offline:
+                        // Build 117: a streamed connectivity failure reaches the
+                        // same honest "No connection…" branch the non-streaming
+                        // path hits, not the generic backend/retry copy.
+                        throw TonoBackendError.offline
                     }
                 }
 
