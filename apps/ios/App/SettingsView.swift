@@ -1658,7 +1658,7 @@ struct PaymentHistoryView: View {
                 }
             } else if items.isEmpty {
                 Section {
-                    Text("No purchases yet. When you subscribe — here, on the web, or on an Android phone — every payment shows up here, tied to this account.")
+                    Text("No purchases yet. When you subscribe — here, on the web, or on Android — every payment shows up here, tied to this account.")
                         .foregroundColor(.secondary)
                 }
             } else {

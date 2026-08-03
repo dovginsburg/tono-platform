@@ -210,6 +210,10 @@ final class Build112UISurfaceContractTests: XCTestCase {
         "Couldn't coach this draft.",
         "Couldn't read this message.",
         "Couldn't load your weekly summary.",
+        // Build 122 — the account's billing timeline (PaymentHistoryView) routes
+        // its failure through the approved mapper, so its headline is reviewed
+        // here like every other action.
+        "Couldn't load your payment history.",
         "Purchase couldn't be completed.",
         "Restore couldn't be completed.",
         "Couldn't add the rewrite to your message.",

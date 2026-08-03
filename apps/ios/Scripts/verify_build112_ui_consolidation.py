@@ -198,6 +198,10 @@ CONSUMER_ERROR_SENTENCES = {
     "Couldn't coach this draft.",
     "Couldn't read this message.",
     "Couldn't load your weekly summary.",
+    # Build 122 — the account's billing timeline (PaymentHistoryView) routes its
+    # failure through the approved mapper, so its headline is reviewed here like
+    # every other action.
+    "Couldn't load your payment history.",
     "Purchase couldn't be completed.",
     "Restore couldn't be completed.",
     "Couldn't add the rewrite to your message.",
@@ -209,6 +213,11 @@ CONSUMER_ERROR_SENTENCES = {
     "Wait a minute and try again.",
     "Sign in with your email first so your subscription follows you if you reinstall.",
     "Try again, and contact support@tonoit.com if it keeps happening.",
+    # Build 122 — the backend cannot honor an Apple charge right now
+    # (apple_configured false / malformed readiness). No charge was made; waiting
+    # is the honest next step, not reconnecting. (Already reviewed in the Swift
+    # contract's consumerErrorSentences; this keeps the two parsers in sync.)
+    "Subscriptions aren't available right now. No charge was made. Please try again later.",
 }
 
 # The four sentences the repair brief names verbatim. They are the proof the

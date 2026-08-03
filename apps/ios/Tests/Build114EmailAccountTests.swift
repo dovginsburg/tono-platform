@@ -363,19 +363,58 @@ final class Build114EmailAccountTests: XCTestCase {
             code.contains(#"if let verified = resp["email_verified"] as? Bool, verified,"#),
             "the write must be gated on the server's own verification flag"
         )
-        // And no other target may write it either.
+        // And no other target may WRITE it either. Reading it is exactly what
+        // these surfaces are supposed to do — StoreKitManager's legacy-migration
+        // check reads `signedInEmail` and writes the DIFFERENT recovery flag, and
+        // Settings reads it for display. The earlier "file mentions set() and the
+        // key anywhere" heuristic collapsed that legitimate read-plus-other-write
+        // into a false positive, so it is tightened to a genuine write of THIS
+        // key: `SharedKeychain.set(…, forKey: KeychainKeys.signedInEmail)`.
         for relative in [
             "App/SettingsView.swift",
             "App/OnboardingEntryPointsView.swift",
             "Shared/StoreKitManager.swift",
         ] {
             let other = Self.strippingComments(try Self.source(relative))
-            XCTAssertFalse(
-                other.contains("set(") && other.contains("KeychainKeys.signedInEmail")
-                    && other.contains("SharedKeychain.set"),
+            XCTAssertNil(
+                other.range(
+                    of: #"SharedKeychain\.set\([^)]*forKey:\s*KeychainKeys\.signedInEmail"#,
+                    options: .regularExpression
+                ),
                 "\(relative) must read the confirmed address, never write it"
             )
         }
+    }
+
+    /// The native provider lane (Apple/Google) establishes a recovery identity
+    /// but is NOT a second writer of the confirmed-address key.
+    ///
+    /// It previously wrote `signedInEmail` directly from a response field that
+    /// carries no verification proof — a second path to the key the purchase
+    /// gate's legacy check and Settings' displayed address both read. The write
+    /// now lives only in the one server-proof-gated writer that every lane
+    /// converges on. Identity continuity is untouched: the recovery flag is
+    /// still set UNCONDITIONALLY here, because a provider identity is recoverable
+    /// even when Apple returns no email (Hide My Email, or a later sign-in Apple
+    /// answers without one).
+    func testTheNativeProviderLaneKeepsRecoveryIdentityButIsNoSecondAddressWriter() throws {
+        let code = Self.strippingComments(try Self.source("Shared/TonoBackend.swift"))
+        let body = try XCTUnwrap(
+            Self.body(ofFunction: "private func signInWithNativeProvider(", in: code),
+            "the native provider lane must exist"
+        )
+        XCTAssertTrue(
+            body.contains(#"SharedKeychain.set("true", forKey: KeychainKeys.hasRecoveryIdentity)"#),
+            "a native provider sign-in must set the recovery flag unconditionally"
+        )
+        XCTAssertFalse(
+            body.contains("KeychainKeys.signedInEmail"),
+            "the native lane must not be a second writer of the confirmed-address key"
+        )
+        XCTAssertTrue(
+            body.contains("persistServerConfirmedEmail("),
+            "the native lane must converge on the one server-proof-gated address writer"
+        )
     }
 
     /// Sign-out has to remove the device's ability to prove itself back into

@@ -427,6 +427,23 @@ public final class TonoBackend: @unchecked Sendable {
         SharedKeychain.set(uuid.uuidString, forKey: KeychainKeys.accountID)
     }
 
+    /// The ONE writer of `signedInEmail` — the confirmed-address key
+    /// `StoreKitManager.isIdentifiedAccount` reads on its legacy path and the
+    /// address Settings shows. Every sign-in response, from any lane, converges
+    /// here, and the address is recorded ONLY on the server's own proof that it
+    /// is verified. A single gated writer is the invariant: no path can make a
+    /// device purchase-eligible on its legacy check, or claim an address in
+    /// Settings, that the server never confirmed. The recovery flag rides the
+    /// same proof; the native-provider lane also sets it unconditionally,
+    /// because a provider identity is itself recoverable even without an email.
+    private func persistServerConfirmedEmail(from resp: [String: Any]) {
+        if let verified = resp["email_verified"] as? Bool, verified,
+           let address = resp["email"] as? String, !address.isEmpty {
+            SharedKeychain.set(address, forKey: KeychainKeys.signedInEmail)
+            SharedKeychain.set("true", forKey: KeychainKeys.hasRecoveryIdentity)
+        }
+    }
+
     // ── Email identity (Build 114) ─────────────────────────────────────────
     //
     // Build 113 and earlier shipped `requestEmailLink` / `verifyEmailOTP`
@@ -562,14 +579,11 @@ public final class TonoBackend: @unchecked Sendable {
             SharedKeychain.set(credential, forKey: KeychainKeys.deviceCredential)
         }
         persistAccountID(resp["account_id"] as? String)
-        // `signedInEmail` is what `StoreKitManager.isIdentifiedAccount` reads,
-        // so it is written ONLY here — after the server confirmed a verified
-        // identity. Writing it earlier would let an unverified device buy.
-        if let verified = resp["email_verified"] as? Bool, verified,
-           let address = resp["email"] as? String, !address.isEmpty {
-            SharedKeychain.set(address, forKey: KeychainKeys.signedInEmail)
-            SharedKeychain.set("true", forKey: KeychainKeys.hasRecoveryIdentity)
-        }
+        // `signedInEmail` is what `StoreKitManager.isIdentifiedAccount` reads on
+        // its legacy path, so it is written through the single gated writer —
+        // after the server confirmed a verified identity. Writing it on anything
+        // less would let an unverified device buy.
+        persistServerConfirmedEmail(from: resp)
         return try await me()
     }
 
@@ -594,10 +608,16 @@ public final class TonoBackend: @unchecked Sendable {
             path: path, json: payload, authorize: true
         )
         persistAccountID(response["account_id"] as? String)
+        // A native provider sign-in is itself a durable recovery identity (the
+        // person's Apple/Google account) even when the provider returns no email
+        // — Apple Hide My Email, or a re-sign-in Apple answers without one — so
+        // the recovery flag is unconditional here; this is the account-link
+        // protection that keeps the device purchase-eligible and reconnectable.
+        // The confirmed ADDRESS is a separate fact with a single writer, taken
+        // only on the server's verification proof: a native response that never
+        // carries that proof records no address, which is the honest state.
         SharedKeychain.set("true", forKey: KeychainKeys.hasRecoveryIdentity)
-        if let address = response["email"] as? String, !address.isEmpty {
-            SharedKeychain.set(address, forKey: KeychainKeys.signedInEmail)
-        }
+        persistServerConfirmedEmail(from: response)
         return try await me()
     }
 
@@ -657,9 +677,10 @@ public final class TonoBackend: @unchecked Sendable {
 
     /// The address this device is signed in as, or `nil` when anonymous.
     ///
-    /// Read by Settings so it can describe the account truthfully. Written only
-    /// by `signInWithEmail`, after the server confirmed a verified identity —
-    /// so a `nil` here and a refused purchase are always the same fact.
+    /// Read by Settings so it can describe the account truthfully. Written by
+    /// exactly one function — `persistServerConfirmedEmail` — and only after the
+    /// server confirmed a verified identity, so a `nil` here and a refused
+    /// purchase on the legacy path are always the same fact.
     public var signedInEmailAddress: String? {
         guard let address = SharedKeychain.get(KeychainKeys.signedInEmail),
               !address.isEmpty else { return nil }
