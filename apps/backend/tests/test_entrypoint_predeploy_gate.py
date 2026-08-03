@@ -59,7 +59,10 @@ def _make_stub(path: Path, body: str) -> None:
 def _run_entrypoint(tmp_path: Path, argv: list[str], *, predeploy_exit: int = 0):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for name in ("mkdir", "chown", "python", "uvicorn", "pytest"):
+    # `chmod` joins the shim set because the entrypoint now normalises the
+    # /data/backups directory mode. Stubbing it keeps this test daemon-free and
+    # host-safe (no real chown/chmod ever touches the machine).
+    for name in ("mkdir", "chown", "chmod", "python", "uvicorn", "pytest"):
         _make_stub(bin_dir / name, _SHIM)
     _make_stub(bin_dir / "gosu", _GOSU)
 
@@ -133,4 +136,95 @@ def test_non_uvicorn_command_skips_predeploy():
     assert any(c.startswith("pytest ") for c in calls), calls
     assert not any("predeploy_backup" in c for c in calls), (
         f"predeploy gate must only run on the uvicorn boot path: {calls}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# /data/backups permission prep — the fix for the exact Render deploy blocker
+# `predeploy backup: aborting deploy — unable to open database file` on a warm
+# volume carrying a pre-existing ROOT-OWNED /data/backups. The real ownership
+# proof is the opt-in Docker smoke (scripts/ci/docker_backups_permission_smoke.sh);
+# these are the fast, daemon-free contract guarantees that the entrypoint issues
+# the narrow, ordered, non-recursive fix so a regression is caught in the normal
+# suite.
+# ---------------------------------------------------------------------------
+
+def _backups_calls(calls):
+    """Index every recorded command that targets the /data/backups directory
+    itself (never a file underneath it)."""
+    mkdir = [i for i, c in enumerate(calls) if c.startswith("mkdir ") and c.rstrip().endswith("/data/backups")]
+    chown = [
+        i for i, c in enumerate(calls)
+        if c.startswith("chown ") and c.rstrip().endswith("/data/backups") and "tono:tono" in c
+    ]
+    chmod = [
+        i for i, c in enumerate(calls)
+        if c.startswith("chmod ") and c.rstrip().endswith("/data/backups") and "0700" in c
+    ]
+    return mkdir, chown, chmod
+
+
+def test_backups_dir_created_owned_and_moded_before_predeploy():
+    """On the uvicorn boot path the entrypoint must, as root, create
+    /data/backups and set its ownership (tono:tono) + mode (0700) BEFORE it
+    drops to `tono` and runs the predeploy backup. Otherwise a warm, root-owned
+    /data/backups makes the tono-run backup fail with 'unable to open database
+    file' and aborts the deploy."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        proc, calls = _run_entrypoint(
+            Path(d),
+            ["uvicorn", "backend.server:app", "--host", "0.0.0.0", "--workers", "1"],
+        )
+
+    assert proc.returncode == 0, proc.stderr
+    mkdir, chown, chmod = _backups_calls(calls)
+    predeploy = [i for i, c in enumerate(calls) if c.startswith("python ") and "predeploy_backup" in c]
+
+    assert mkdir, f"entrypoint never created /data/backups: {calls}"
+    assert chown, f"entrypoint never chowned /data/backups to tono:tono: {calls}"
+    assert chmod, f"entrypoint never set /data/backups mode to 0700: {calls}"
+    assert predeploy, f"predeploy never ran: {calls}"
+
+    # The whole point: the ownership+mode fix must precede the tono-run predeploy
+    # that writes the snapshot into that directory.
+    assert max(mkdir[0], chown[0], chmod[0]) < predeploy[0], (
+        f"/data/backups must be prepared BEFORE predeploy runs: {calls}"
+    )
+
+
+def test_backups_fix_is_never_recursive():
+    """The repair must target the single /data/backups directory, never a
+    recursive `chown -R`/`chmod -R` across the volume — that could rewrite
+    ownership of unrelated large trees or the snapshot files' own metadata."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        proc, calls = _run_entrypoint(
+            Path(d),
+            ["uvicorn", "backend.server:app", "--host", "0.0.0.0", "--workers", "1"],
+        )
+
+    assert proc.returncode == 0, proc.stderr
+    for c in calls:
+        if c.startswith(("chown ", "chmod ")):
+            assert "-R" not in c and "--recursive" not in c, f"recursive ownership change is forbidden: {c!r}"
+
+
+def test_backups_prep_runs_even_on_non_uvicorn_path():
+    """Volume ownership normalisation (including /data/backups) is unconditional
+    — it runs for any command — while the predeploy GATE stays uvicorn-only. A
+    maintenance/one-off invocation of the image must not be able to leave a
+    root-owned /data/backups behind for the next boot to trip over."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        proc, calls = _run_entrypoint(Path(d), ["pytest", "-q"])
+
+    assert proc.returncode == 0, proc.stderr
+    _, chown, chmod = _backups_calls(calls)
+    assert chown and chmod, f"/data/backups ownership+mode fix should run on any command: {calls}"
+    assert not any("predeploy_backup" in c for c in calls), (
+        f"predeploy gate must remain uvicorn-only: {calls}"
     )
