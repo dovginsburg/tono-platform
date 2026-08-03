@@ -148,6 +148,7 @@
 		C0E707D6242E36DA94356BE9 /* KeyboardRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65C4FC72401862C2052D7F44 /* KeyboardRootView.swift */; };
 		C2C9DD7206A65B1579A5190A /* RecipientMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58D322318012F6E3758FBE16 /* RecipientMemory.swift */; };
 		C89EABB2DBA692A1FF5AC255 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 822A94BEAD307E044D2E1547 /* SettingsView.swift */; };
+		ACE10000000000000000000A /* RevenueCatManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACE10000000000000000000B /* RevenueCatManager.swift */; };
 		B1115E770000000000000002 /* RecipientsManagerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1115E770000000000000001 /* RecipientsManagerView.swift */; };
 		C9B979F056F3D84FB316577F /* SharedUserDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 772DD67FA1CD9CF09D426AF5 /* SharedUserDefaults.swift */; };
 		C9E4BE5B5759944FF1CF021C /* StyleMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78AA6203719949C25622DA78 /* StyleMemory.swift */; };
@@ -350,6 +351,7 @@
 		CE0000000000000000000001 /* ConsumerErrorCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsumerErrorCopy.swift; sourceTree = "<group>"; };
 		80AB8E621E4EDC9A59A7258D /* TonoBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoBackend.swift; sourceTree = "<group>"; };
 		822A94BEAD307E044D2E1547 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		ACE10000000000000000000B /* RevenueCatManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RevenueCatManager.swift; sourceTree = "<group>"; };
 		B1115E770000000000000001 /* RecipientsManagerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipientsManagerView.swift; sourceTree = "<group>"; };
 		8C71600DCEEEFF51AE070EA1 /* TonoMessagesExtension.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = TonoMessagesExtension.entitlements; sourceTree = "<group>"; };
 		92219FEC38B911DE3D75FC8F /* TonoAnalytics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoAnalytics.swift; sourceTree = "<group>"; };
@@ -624,6 +626,7 @@
 				3C73FA31B4F44D8110957849 /* MemoryView.swift */,
 				600B6DD9AC9FC36C6BB8ED14 /* OnboardingCalibrationView.swift */,
 				822A94BEAD307E044D2E1547 /* SettingsView.swift */,
+				ACE10000000000000000000B /* RevenueCatManager.swift */,
 				B1115E770000000000000001 /* RecipientsManagerView.swift */,
 				5ED0C7000000000000000005 /* SetupDoctorView.swift */,
 				B92542DA54DA284DBFA670F3 /* Tono.entitlements */,
@@ -1137,6 +1140,7 @@
 				B116C0BE1600000000000002 /* TonoConnectivity.swift in Sources */,
 				511B5CB9D0506AE3B0B7BA9A /* RecipientMemory.swift in Sources */,
 				C89EABB2DBA692A1FF5AC255 /* SettingsView.swift in Sources */,
+				ACE10000000000000000000A /* RevenueCatManager.swift in Sources */,
 				B1115E770000000000000002 /* RecipientsManagerView.swift in Sources */,
 				BD9E5A023D82845158A938D9 /* SharedKeychain.swift in Sources */,
 				C9B979F056F3D84FB316577F /* SharedUserDefaults.swift in Sources */,
