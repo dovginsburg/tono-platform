@@ -30,6 +30,29 @@ for f in tono.db tono.db-wal tono.db-shm; do
     fi
 done
 
+# The predeploy integrity gate (below) writes timestamped rollback snapshots to
+# $DATA_DIR/backups as the unprivileged `tono` user. On a fresh volume tono
+# creates that directory itself, but a WARM volume provisioned by an older
+# lineage can carry a pre-existing ROOT-OWNED /data/backups (the backup step
+# used to run as root). tono then cannot create a snapshot inside it, and the
+# gate aborts the deploy with the exact runtime error we saw:
+#   "predeploy backup: aborting deploy — unable to open database file".
+# Fix it here, as root, with the SAME narrow discipline used for /data above:
+# ensure the single directory exists and set ITS ownership + mode directly.
+# We do NOT `chown -R` — the snapshot FILES already inside are left
+# byte-for-byte intact (unchanged owner, contents, and mtime). tono owning the
+# directory is sufficient both to write new snapshots and to prune old ones,
+# because POSIX unlink checks write permission on the *directory*, not on each
+# file. chmod 0700 guarantees the owner (now tono) has write even if the
+# directory arrived with an owner-write-less mode, keeps rollback snapshots
+# private to tono, and clears any stray setuid/setgid/sticky bits. This is
+# load-bearing, not best-effort: if it fails we fail closed HERE (set -e, no
+# `|| true`) rather than drop to a predeploy that is guaranteed to fail.
+BACKUPS_DIR="$DATA_DIR/backups"
+mkdir -p "$BACKUPS_DIR"
+chown tono:tono "$BACKUPS_DIR"
+chmod 0700 "$BACKUPS_DIR"
+
 # Drop privileges and exec. When the command is the app server, append the
 # port here so ${PORT:-8765} is expanded exactly once by the shell, safely
 # quoted (Render/Railway inject PORT; locally it defaults to 8765). The base
