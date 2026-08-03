@@ -20,6 +20,10 @@ struct TonoApp: App {
         // this only wires RevenueCat's identity/observation layer with the
         // canonical account UUID. Never creates an anonymous durable identity.
         RevenueCatManager.shared.configureIfEnabled()
+        // Google sign-in: configure the SDK once IF it is linked and a real Tono
+        // client ID is present in this build. A no-op otherwise (fail closed), so
+        // an unconfigured build never touches the SDK and shows no Google button.
+        GoogleSignInConfig.configureIfPossible()
         // A1: crash + OOM reporting (no-op until FIREBASE_ENABLED is set in build flags).
         CrashReporter.configure()
         // A2: MetricKit memory diagnostics — receives yesterday's metrics once/day.
@@ -61,6 +65,12 @@ struct RootView: View {
                 .tabItem { Label("Settings", systemImage: "gear") }
         }
         .tint(.purple)
+        .onOpenURL { url in
+            // Complete a Google OAuth redirect (reversed-client-ID scheme). A
+            // no-op unless Google is linked and configured, so any other deep
+            // link falls through untouched.
+            GoogleSignInConfig.handle(url)
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             // Build 116 — the observer keeps running while backgrounded, so
             // this is a re-assertion rather than the primary path. It makes the

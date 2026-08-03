@@ -370,9 +370,15 @@ final class Build114EmailAccountTests: XCTestCase {
             "Shared/StoreKitManager.swift",
         ] {
             let other = Self.strippingComments(try Self.source(relative))
+            // A WRITE of the confirmed-address key is uniquely `set(…, forKey:
+            // KeychainKeys.signedInEmail)`. Matching that exact form — rather than
+            // three substrings that can each land on a different line — is what
+            // lets a legitimate READ (`SharedKeychain.get(KeychainKeys.signedInEmail)`)
+            // coexist with an unrelated write of a DIFFERENT key (StoreKitManager
+            // sets `hasRecoveryIdentity` in its identity migration) without the
+            // pair reading as a false write of THIS one.
             XCTAssertFalse(
-                other.contains("set(") && other.contains("KeychainKeys.signedInEmail")
-                    && other.contains("SharedKeychain.set"),
+                other.contains("forKey: KeychainKeys.signedInEmail"),
                 "\(relative) must read the confirmed address, never write it"
             )
         }
@@ -544,30 +550,16 @@ final class Build114EmailAccountTests: XCTestCase {
         )
     }
 
-    /// This project does not link GoogleSignIn. A conditional implementation
-    /// must therefore also conditionally compile the button, not render a tap
-    /// target whose only possible result is an unavailable notice.
-    func testGoogleButtonIsAbsentWhenGoogleSignInIsNotLinked() throws {
-        let source = Self.strippingComments(
-            try Self.source("App/OnboardingEntryPointsView.swift")
-        )
-        let button = try XCTUnwrap(source.range(of: "Button(\"Continue with Google\")"))
-        let conditional = try XCTUnwrap(
-            source.range(of: "#if canImport(GoogleSignIn)", options: .backwards,
-                         range: source.startIndex..<button.lowerBound)
-        )
-        let end = try XCTUnwrap(
-            source.range(of: "#endif", range: button.upperBound..<source.endIndex)
-        )
-        XCTAssertLessThan(conditional.lowerBound, button.lowerBound)
-        XCTAssertGreaterThan(end.lowerBound, button.upperBound)
-
-        let project = try Self.repoSource("apps/ios/Tono.xcodeproj/project.pbxproj")
-        XCTAssertFalse(
-            project.contains("GoogleSignIn"),
-            "if the SDK is linked later, its client configuration must be reviewed before exposing UI"
-        )
-    }
+    // testGoogleButtonIsAbsentWhenGoogleSignInIsNotLinked was RETIRED in Build
+    // 124. That guard deliberately held the SDK UNlinked and the button compiled
+    // out, carrying the standing note "if the SDK is linked later, its client
+    // configuration must be reviewed before exposing UI." Build 124 is that
+    // review: GoogleSignIn-iOS is now linked into the app target, so the button
+    // compiles in — but it renders ONLY when a real Tono Google client is
+    // configured (GoogleSignInConfig.isConfigured), fail-closed by default, with
+    // no embedded sibling identifier or secret. Asserting the OPPOSITE (SDK not
+    // linked, button absent) here would now be false; the package-linked +
+    // config-gated + honest-UI invariants moved to Build124AuthProvidersTests.
 
     /// One password floor, stated in two places, is a drift risk — so the two
     /// are compared rather than trusted. The server remains the authority; the
