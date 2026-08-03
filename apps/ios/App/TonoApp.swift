@@ -15,6 +15,11 @@ struct TonoApp: App {
         // to notice a connection coming or going.
         TonoConnectivity.shared.start()
         StoreKitManager.shared.start()
+        // Build 123 — RevenueCat canary. A no-op unless REVENUECAT_PUBLIC_SDK_KEY
+        // is set (kill switch). The backend stays the sole entitlement authority;
+        // this only wires RevenueCat's identity/observation layer with the
+        // canonical account UUID. Never creates an anonymous durable identity.
+        RevenueCatManager.shared.configureIfEnabled()
         // A1: crash + OOM reporting (no-op until FIREBASE_ENABLED is set in build flags).
         CrashReporter.configure()
         // A2: MetricKit memory diagnostics — receives yesterday's metrics once/day.
@@ -63,6 +68,10 @@ struct RootView: View {
             // whether an update happened to be delivered off screen — which is
             // exactly the trip the person takes to reach Airplane Mode.
             TonoConnectivity.shared.refresh()
+            // Re-assert the RevenueCat identity once the canonical account UUID
+            // exists (it is minted at registration, possibly after cold launch).
+            // No-op when RevenueCat is disabled or no account is present yet.
+            RevenueCatManager.shared.identifyFromKeychain()
             promptReviewIfEarned()
             NotificationManager.shared.ensureNudgeScheduled()
             WidgetCenter.shared.reloadAllTimelines()

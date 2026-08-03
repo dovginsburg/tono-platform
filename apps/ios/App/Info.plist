@@ -30,6 +30,8 @@
 	<true/>
 	<key>NSContactsUsageDescription</key>
 	<string>Tono uses contacts you choose to create local recipient profiles for personalized coaching.</string>
+	<key>REVENUECAT_PUBLIC_SDK_KEY</key>
+	<string>$(REVENUECAT_PUBLIC_SDK_KEY)</string>
 	<key>TonoCanonicalSHA</key>
 	<string>$(TONO_CANONICAL_SHA)</string>
 	<key>TonoSchemaRevision</key>
