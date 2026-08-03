@@ -686,8 +686,15 @@ struct EmailSignInSheet: View {
             Button {
                 passwordVisible.toggle()
             } label: {
+                // The glyph is a 17pt SF Symbol, but the control a person taps
+                // must clear the 44pt guideline — same idiom the plus button in
+                // RecipientsManagerView uses. The frame centres the unchanged
+                // eye/eye.slash glyph in a 44pt box and `contentShape` makes the
+                // whole box the hit region; nothing about the icon changes.
                 Image(systemName: passwordVisible ? "eye.slash" : "eye")
                     .foregroundColor(.secondary)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
             .disabled(isWorking)
