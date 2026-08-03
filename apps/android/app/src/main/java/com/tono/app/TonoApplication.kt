@@ -2,6 +2,7 @@ package com.tono.app
 
 import android.app.Application
 import com.tono.app.billing.PlayBillingManager
+import com.tono.app.billing.RevenueCatManager
 import com.tono.app.notifications.DigestScheduler
 import com.tono.shared.analytics.CrashReporter
 import com.tono.shared.flags.FeatureFlag
@@ -25,6 +26,11 @@ class TonoApplication : Application() {
         SharedStore.putString(SharedKeys.APP_BUILD, BuildConfig.VERSION_CODE.toString())
         CrashReporter.configure(this)  // A1: no-op until Firebase added
         PlayBillingManager.start(this)
+        // Build 123 — RevenueCat canary. A no-op unless REVENUECAT_PUBLIC_SDK_KEY
+        // is set (kill switch). Backend stays the sole entitlement authority; this
+        // only wires RevenueCat's identity/observation layer with the canonical
+        // account UUID. The existing Play billing path above is unchanged.
+        RevenueCatManager.configureIfEnabled(this)
 
         DigestScheduler.createChannel(this)
 
@@ -44,7 +50,12 @@ class TonoApplication : Application() {
                 )
             }
             if (registration.isSuccess) {
-                withContext(Dispatchers.Main) { PlayBillingManager.refresh() }
+                withContext(Dispatchers.Main) {
+                    PlayBillingManager.refresh()
+                    // Re-assert the RevenueCat identity now the canonical account
+                    // UUID exists (minted at registration). No-op when disabled.
+                    RevenueCatManager.identifyFromStore()
+                }
             }
             // Pull server-side feature flags and merge into local prefs.
             // This runs even if registerIfNeeded fails (device may already be registered).

@@ -6,6 +6,14 @@
 	<string>4938S9TTBM.com.tonoit.app</string>
 	<key>aps-environment</key>
 	<string>production</string>
+	<key>com.apple.developer.applesignin</key>
+	<array>
+		<string>Default</string>
+	</array>
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>webcredentials:tonoit.com</string>
+	</array>
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>group.com.tonoit.shared</string>

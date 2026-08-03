@@ -94,6 +94,43 @@
           "offer_id": "trial-14-days"
         }
       ]
+    },
+    "revenuecat": {
+      "channel": "cross-platform",
+      "status": "canary",
+      "role": "RevenueCat is the FIRST Tono canary for unified subscription lifecycle across iOS, Android, and web/Stripe. It is an isolated per-product project: its SDK keys, entitlements, webhooks, aliases, and customer identity are NEVER shared with any other product (ParentScript/TandemSkills, TandemPaws). RevenueCat does NOT replace Tono auth, Supabase, Vercel/Render, Resend, OAuth/passkeys, branding, or domains.",
+      "app_user_id_source": "The RevenueCat App User ID is the immutable Tono-scoped Supabase account UUID (accounts.id, the same canonical principal every other provider binds via app_account_token / obfuscatedExternalAccountId / client_reference_id). Never email, device id, installation id, anonymous RevenueCat id, provider customer id, or a cross-product person id. Clients call Purchases.logIn(accountId) only after the Tono account is established; no anonymous user may own durable paid access.",
+      "entitlement_identifier_note": "The single RevenueCat entitlement identifier that maps to the canonical Tono 'pro' entitlement is supplied at runtime via the named env var; it defaults to 'pro'. RevenueCat is an isolated per-product project so the entitlement id space is not shared.",
+      "entitlement_id_env_var": "TONO_REVENUECAT_ENTITLEMENT_ID",
+      "server_product_marker": "revenuecat",
+      "canary_boundary": "A deterministic single entitlement writer is preserved. TONO_REVENUECAT_MODE gates the canary: 'off' (default, fail-closed kill switch — the webhook 503s and clients do not configure the SDK), 'shadow' (RevenueCat events are recorded as append-only provider facts and compared against the legacy projection, but do NOT write entitlement_grants — the legacy path remains the sole writer), 'authoritative' (RevenueCat writes grants for its managed channels; the legacy path is disabled for those channels — the documented rollback boundary). There is never indefinite dual authority and never a duplicate checkout.",
+      "runtime_config_note": "All secrets/keys arrive ONLY at runtime via the named environment variables/config; only the NAMES are recorded here, never any value. The supplied RevenueCat private credential is legacy v1 and the SDK key is Test Store; v2 management access and per-app production keys are separate provider gates handled by the operator, not by source.",
+      "webhook_authorization_env_var": "TONO_REVENUECAT_WEBHOOK_AUTH",
+      "secret_api_key_env_var": "TONO_REVENUECAT_SECRET_API_KEY",
+      "mode_env_var": "TONO_REVENUECAT_MODE",
+      "project_id_env_var": "TONO_REVENUECAT_PROJECT_ID",
+      "public_sdk_key_config": {
+        "ios": "Info.plist key REVENUECAT_PUBLIC_SDK_KEY (publishable appl_ key, read via Bundle.main.object(forInfoDictionaryKey:))",
+        "android": "BuildConfig field REVENUECAT_PUBLIC_SDK_KEY (publishable goog_ key)",
+        "web": "NEXT_PUBLIC_REVENUECAT_PUBLIC_SDK_KEY (publishable web billing key; web checkout stays Stripe-hosted — RevenueCat Billing/wallets are NOT introduced)"
+      },
+      "offering": "default",
+      "products": [
+        {
+          "interval": "month",
+          "entitlement": "pro",
+          "package_id": "$rc_monthly",
+          "store_product_ids": ["com.tonoit.pro.monthly"],
+          "stripe_price_env_var": "STRIPE_PRICE_PRO_MONTHLY"
+        },
+        {
+          "interval": "year",
+          "entitlement": "pro",
+          "package_id": "$rc_annual",
+          "store_product_ids": ["com.tonoit.pro.yearly"],
+          "stripe_price_env_var": "STRIPE_PRICE_PRO_YEARLY"
+        }
+      ]
     }
   }
 }
