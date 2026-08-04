@@ -251,3 +251,35 @@ sign (the new capabilities must be on the App ID) or ship a dormant provider.
   archiving (prior build numbers are consumed — see the iOS build-lane notes). This
   change set is **source-complete and provider-gated**; it is not authorized for
   upload here and none of the provider prerequisites are assumed satisfied.
+
+---
+
+## Build 126 integration reconciliation (appended)
+
+This file was written for the standalone iOS-auth change (`5202d5d`). Integrating
+it onto the validated Build 125 successor baseline (`391b51d`) — the Build 126
+candidate — reconciled one genuine contract clash and left the runtime behavior
+**stricter**, matching the newer baseline:
+
+- **Single writer, now layered.** `setSignedInEmail(_:)` remains the one raw
+  writer of `KeychainKeys.signedInEmail` (the exactly-one-writer invariant both
+  suites count). The baseline's gated helper `persistServerConfirmedEmail(from:)`
+  is preserved as the wrapper that writes the address **only on the server's own
+  `email_verified` proof**, delegating to `setSignedInEmail`. Email, Apple,
+  Google and passkey all converge through that gated wrapper.
+- **Provider convergence is gated, not unconditional.** `persistProviderConvergence`
+  sets `accountID` + `hasRecoveryIdentity` (unconditional — a provider identity is
+  recoverable even with Hide My Email) and records the address through
+  `persistServerConfirmedEmail(from: response)`. It does **not** write the address
+  unconditionally from `response["email"]`; the baseline deliberately removed that
+  path (an Apple-only sign-in records no displayed address — the honest,
+  fail-closed state).
+- **Tests adapted to the reconciled shape.** `Build114EmailAccountTests`'
+  native-lane assertion now pins `persistProviderConvergence` (where the logic
+  lives after the extraction); `Build124AuthProvidersTests`' convergence assertion
+  pins `persistServerConfirmedEmail(from: response)`. Intent is unchanged;
+  behavior is the baseline's gated writer.
+- **Build number.** All four bundles + `Scripts/bump-build.sh` + the three
+  release-identity contract tests are at **126**. RevenueCat stays dormant
+  (kill switch `off`, `purchases-ios` SPM deliberately NOT linked); GoogleSignIn
+  7.1.0 SPM is linked and compiles.
