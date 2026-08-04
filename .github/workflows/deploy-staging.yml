@@ -88,12 +88,17 @@ jobs:
         shell: bash
         run: |
           contract_sha="$(jq -r .contract_sha256 build/provenance.json)"
+          # Canonical release artifact: repo-root context + the .canonical
+          # Dockerfile so the manifest records the SAME catalog-packaged image
+          # production (Render) runs. The Railway staging deploy below is a
+          # separate, backend-context build (apps/backend/Dockerfile).
           docker build \
             --build-arg TONO_CANONICAL_SHA="$DEPLOY_SHA" \
             --build-arg TONO_SCHEMA_REVISION="$(cat schema/revision.txt)" \
             --build-arg TONO_CONTRACT_SHA256="$contract_sha" \
             --tag tono-backend:"$DEPLOY_SHA" \
-            apps/backend
+            --file apps/backend/Dockerfile.canonical \
+            .
           docker save tono-backend:"$DEPLOY_SHA" -o build/backend-image.tar
           tar -C apps/web -czf build/web-build.tar.gz .next public package.json package-lock.json
 

@@ -168,6 +168,20 @@ public enum AnalysisEvent {
     /// "Try again." The status is the only fact a user's next step depends on,
     /// and a sentence is the one shape it must not travel in.
     case failure(status: Int)
+    /// Build 117: the request never reached a verdict because the device has no
+    /// usable connection. Like `.failure`, this is a SHAPE, not a sentence — it
+    /// carries no payload — so a consumer routes it to the same "check your
+    /// connection" recovery the non-streaming path already gives (by throwing
+    /// `TonoBackendError.offline`), instead of the generic "try again."
+    ///
+    /// Before this, `analyzeStream`'s terminal catch stringified an offline
+    /// `URLError` into `.error(localizedDescription)`; every consumer then
+    /// re-wrapped that string as a backend error, which `ConsumerErrorCopy`
+    /// maps to `.retry`. So an offline coach on the streaming keyboard/Share
+    /// path read "Try again." while the non-streaming path correctly read
+    /// "Check your connection…" — the F2-family collapse, for connectivity
+    /// rather than HTTP status.
+    case offline
 }
 
 /// Build 113: a streamed failure reduced to the fact that changes what the
@@ -413,6 +427,23 @@ public final class TonoBackend: @unchecked Sendable {
         SharedKeychain.set(uuid.uuidString, forKey: KeychainKeys.accountID)
     }
 
+    /// The ONE writer of `signedInEmail` — the confirmed-address key
+    /// `StoreKitManager.isIdentifiedAccount` reads on its legacy path and the
+    /// address Settings shows. Every sign-in response, from any lane, converges
+    /// here, and the address is recorded ONLY on the server's own proof that it
+    /// is verified. A single gated writer is the invariant: no path can make a
+    /// device purchase-eligible on its legacy check, or claim an address in
+    /// Settings, that the server never confirmed. The recovery flag rides the
+    /// same proof; the native-provider lane also sets it unconditionally,
+    /// because a provider identity is itself recoverable even without an email.
+    private func persistServerConfirmedEmail(from resp: [String: Any]) {
+        if let verified = resp["email_verified"] as? Bool, verified,
+           let address = resp["email"] as? String, !address.isEmpty {
+            setSignedInEmail(address)
+            SharedKeychain.set("true", forKey: KeychainKeys.hasRecoveryIdentity)
+        }
+    }
+
     // ── Email identity (Build 114) ─────────────────────────────────────────
     //
     // Build 113 and earlier shipped `requestEmailLink` / `verifyEmailOTP`
@@ -548,14 +579,11 @@ public final class TonoBackend: @unchecked Sendable {
             SharedKeychain.set(credential, forKey: KeychainKeys.deviceCredential)
         }
         persistAccountID(resp["account_id"] as? String)
-        // `signedInEmail` is what `StoreKitManager.isIdentifiedAccount` reads,
-        // so it is written ONLY here — after the server confirmed a verified
-        // identity. Writing it earlier would let an unverified device buy.
-        if let verified = resp["email_verified"] as? Bool, verified,
-           let address = resp["email"] as? String, !address.isEmpty {
-            SharedKeychain.set(address, forKey: KeychainKeys.signedInEmail)
-            SharedKeychain.set("true", forKey: KeychainKeys.hasRecoveryIdentity)
-        }
+        // `signedInEmail` is what `StoreKitManager.isIdentifiedAccount` reads on
+        // its legacy path, so it is written through the single gated writer —
+        // after the server confirmed a verified identity. Writing it on anything
+        // less would let an unverified device buy.
+        persistServerConfirmedEmail(from: resp)
         return try await me()
     }
 
@@ -579,11 +607,105 @@ public final class TonoBackend: @unchecked Sendable {
         let response: [String: Any] = try await postObject(
             path: path, json: payload, authorize: true
         )
+        persistProviderConvergence(response)
+        return try await me()
+    }
+
+    /// The SOLE writer of the confirmed-address key. Every path that has
+    /// server-side proof of a verified identity — email login, a native
+    /// provider (Apple/Google), or a passkey — funnels its address write here,
+    /// so `KeychainKeys.signedInEmail` (which `StoreKitManager` reads to allow a
+    /// purchase) is set in exactly one place. A no-op for an absent or empty
+    /// address, so a degraded response can never half-write it.
+    private func setSignedInEmail(_ address: String?) {
+        guard let address,
+              !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return }
+        SharedKeychain.set(address, forKey: KeychainKeys.signedInEmail)
+    }
+
+    /// Converge a native-provider or passkey sign-in onto the ONE canonical
+    /// Tono account. Apple, Google and passkeys all resolve to the same
+    /// `account_id` the backend already owns for this person, so history and
+    /// entitlement follow whichever way they signed in. `hasRecoveryIdentity`
+    /// is the explicit purchase-gate flag; the address is recorded when the
+    /// provider returned one. Nothing here grants Pro — that stays the server's
+    /// `/v1/me` projection alone.
+    private func persistProviderConvergence(_ response: [String: Any]) {
         persistAccountID(response["account_id"] as? String)
+        // A native provider sign-in is itself a durable recovery identity (the
+        // person's Apple/Google account) even when the provider returns no email
+        // — Apple Hide My Email, or a re-sign-in Apple answers without one — so
+        // the recovery flag is unconditional here; this is the account-link
+        // protection that keeps the device purchase-eligible and reconnectable.
+        // The confirmed ADDRESS is a separate fact with a single writer, taken
+        // only on the server's verification proof: a native response that never
+        // carries that proof records no address, which is the honest state.
         SharedKeychain.set("true", forKey: KeychainKeys.hasRecoveryIdentity)
-        if let address = response["email"] as? String, !address.isEmpty {
-            SharedKeychain.set(address, forKey: KeychainKeys.signedInEmail)
-        }
+        // Native/passkey convergence records the ADDRESS through the same gated
+        // writer the email lane uses — recorded only on the server's own
+        // verification proof (`email_verified`), never unconditionally from a
+        // provider response field. The recovery flag above is unconditional
+        // (a provider identity is recoverable even without an email); the
+        // address is not. One writer, one proof.
+        persistServerConfirmedEmail(from: response)
+    }
+
+    // ── Passkeys / WebAuthn (native AuthenticationServices) ─────────────────
+    //
+    // The platform ceremony (Face ID / Touch ID) lives in the app target at
+    // `App/PasskeySignIn.swift`; these four methods are only the transport to
+    // the backend's WebAuthn ceremonies (`apps/backend/passkeys.py`, rpId
+    // `tonoit.com`). An "options" call returns the server-minted challenge as
+    // raw WebAuthn JSON; a "verify" call posts back exactly what the platform
+    // authenticator signed. The backend is the sole authority: a credential it
+    // does not verify writes nothing, and a verify that succeeds converges on
+    // the canonical account exactly like Apple/Google.
+
+    /// Registration options for a NEW passkey on the current account. Requires a
+    /// device bearer (the account the passkey attaches to), so it registers the
+    /// device first, then returns the raw WebAuthn creation options.
+    public func passkeyRegisterOptions() async throws -> [String: Any] {
+        _ = try await registerIfNeeded(platform: "ios", appVersion: Self.appBuild)
+        return try await postObject(
+            path: "/v1/auth/passkey/register/options", json: [:], authorize: true
+        )
+    }
+
+    /// Verify a passkey registration. `credential` is the WebAuthn JSON the
+    /// platform authenticator produced. Converges on the canonical account.
+    @discardableResult
+    public func passkeyRegisterVerify(
+        credential: [String: Any], nickname: String? = nil
+    ) async throws -> TonoMe {
+        var body: [String: Any] = ["credential": credential]
+        if let nickname, !nickname.isEmpty { body["nickname"] = nickname }
+        let response = try await postObject(
+            path: "/v1/auth/passkey/register/verify", json: body, authorize: true
+        )
+        persistProviderConvergence(response)
+        return try await me()
+    }
+
+    /// Options to sign in with an existing passkey. The public start of the
+    /// ceremony — discoverable credentials, so no allow-list and no identity is
+    /// needed until the authenticator has signed.
+    public func passkeyLoginOptions() async throws -> [String: Any] {
+        try await postObject(
+            path: "/v1/auth/passkey/login/options", json: [:], authorize: false
+        )
+    }
+
+    /// Verify a passkey assertion and converge this device onto the account the
+    /// passkey belongs to — the SAME canonical account Apple/Google/email reach.
+    @discardableResult
+    public func passkeyLoginVerify(credential: [String: Any]) async throws -> TonoMe {
+        _ = try await registerIfNeeded(platform: "ios", appVersion: Self.appBuild)
+        let response = try await postObject(
+            path: "/v1/auth/passkey/login/verify",
+            json: ["credential": credential], authorize: true
+        )
+        persistProviderConvergence(response)
         return try await me()
     }
 
@@ -643,9 +765,10 @@ public final class TonoBackend: @unchecked Sendable {
 
     /// The address this device is signed in as, or `nil` when anonymous.
     ///
-    /// Read by Settings so it can describe the account truthfully. Written only
-    /// by `signInWithEmail`, after the server confirmed a verified identity —
-    /// so a `nil` here and a refused purchase are always the same fact.
+    /// Read by Settings so it can describe the account truthfully. Written by
+    /// exactly one function — `persistServerConfirmedEmail` — and only after the
+    /// server confirmed a verified identity, so a `nil` here and a refused
+    /// purchase on the legacy path are always the same fact.
     public var signedInEmailAddress: String? {
         guard let address = SharedKeychain.get(KeychainKeys.signedInEmail),
               !address.isEmpty else { return nil }
@@ -863,6 +986,32 @@ public final class TonoBackend: @unchecked Sendable {
         throw TonoBackendError.network("invalid Coach response")
     }
 
+    /// True when a caught error means "no usable connection" rather than "the
+    /// request was answered badly". The streaming producer classifies by SHAPE
+    /// here — never by the error's message — so it can hand a payload-free
+    /// `.offline` event downstream instead of a stringified `URLError`.
+    ///
+    /// The URLError set mirrors `ConsumerErrorCopy.isOffline` and
+    /// `EmailAuthOutcome.offlineCodes` so every Tono surface agrees about when
+    /// it is true to say "check your connection". Kept in sync by
+    /// `Build117StreamingOfflineContractTests`.
+    static func isOfflineTransport(_ error: Error) -> Bool {
+        if let backend = error as? TonoBackendError, case .offline = backend { return true }
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .notConnectedToInternet,
+             .networkConnectionLost,
+             .cannotConnectToHost,
+             .cannotFindHost,
+             .dataNotAllowed,
+             .internationalRoamingOff,
+             .secureConnectionFailed:
+            return true
+        default:
+            return false
+        }
+    }
+
     /// Streaming version of analyze — returns an AsyncStream of AnalysisEvents.
     /// The caller sees perception → suggestions → complete progressively.
     public func analyzeStream(
@@ -1016,7 +1165,16 @@ public final class TonoBackend: @unchecked Sendable {
                 } catch is CancellationError {
                     continuation.finish()
                 } catch {
-                    continuation.yield(.error(error.localizedDescription))
+                    // Hand on the SHAPE of a connectivity failure, not a
+                    // stringified URLError (whose localizedDescription can name
+                    // the host). Offline → the honest "check your connection"
+                    // recovery; anything else stays the neutral prose the
+                    // consumers already route through ConsumerErrorCopy.
+                    if TonoBackend.isOfflineTransport(error) {
+                        continuation.yield(.offline)
+                    } else {
+                        continuation.yield(.error(error.localizedDescription))
+                    }
                     continuation.finish()
                 }
             }

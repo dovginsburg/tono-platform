@@ -1,5 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import {
   LEGACY_HISTORY_KEY,
@@ -81,4 +84,57 @@ test('purgeAllHistory clears every namespace and the legacy key on sign-out', ()
   assert.equal(s.getItem(historyStorageKey('B')), null)
   // Non-history keys are left alone.
   assert.equal(s.getItem('unrelated:key'), 'keep-me')
+})
+
+// Wiring guard, in the api-path.test.ts idiom: purgeAllHistory only protects a
+// shared browser if it actually runs on sign-out. The server route clears
+// session cookies but cannot reach localStorage, so EVERY client component that
+// renders a sign-out form must purge device-local history when that form
+// submits. The editor (the primary surface where drafts are written) once
+// rendered a bare sign-out form with no purge, leaving the previous person's
+// private drafts behind for whoever signed in next on that browser — exactly the
+// leak account/SignOutButton fixes. This scans the source so the two surfaces
+// can never drift apart again.
+const SIGNOUT_ACTION = /action=[{("'`][^"'`]*\/api\/auth\/signout/
+
+function walkAppFiles(): string[] {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const appDir = join(here, '..', 'app')
+  const out: string[] = []
+  const walk = (dir: string) => {
+    for (const name of readdirSync(dir)) {
+      const p = join(dir, name)
+      if (statSync(p).isDirectory()) walk(p)
+      else if (p.endsWith('.tsx') || p.endsWith('.ts')) out.push(p)
+    }
+  }
+  walk(appDir)
+  return out
+}
+
+test('every client sign-out form purges device-local history', () => {
+  const forms: string[] = []
+  const offenders: string[] = []
+  for (const file of walkAppFiles()) {
+    // The server route handler POSTs nothing; it IS the target, not a caller.
+    if (file.endsWith(`${'signout'}/route.ts`)) continue
+    const src = readFileSync(file, 'utf8')
+    if (!SIGNOUT_ACTION.test(src)) continue
+    forms.push(file)
+    // Require an actual CALL, not merely the imported identifier — a file that
+    // imports purgeAllHistory but never invokes it on submit still leaks.
+    if (!/purgeAllHistory\s*\(/.test(src)) offenders.push(file)
+  }
+  // The guard is only meaningful if it actually found the sign-out surfaces.
+  assert.ok(
+    forms.length >= 2,
+    `expected to find the editor and account sign-out forms; found ${forms.length}`
+  )
+  assert.deepEqual(
+    offenders,
+    [],
+    'a sign-out form must call purgeAllHistory(window.localStorage) on submit — ' +
+      'the server cannot clear localStorage, so without it a shared browser keeps ' +
+      `the signed-out person's private drafts: ${offenders.join(', ')}`
+  )
 })

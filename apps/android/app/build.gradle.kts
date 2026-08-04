@@ -6,6 +6,22 @@ if (keystorePropsFile.exists()) {
     keystorePropsFile.inputStream().use { keystoreProps.load(it) }
 }
 
+// RevenueCat release-injection seam (Build 126). The publishable `goog_` key and
+// the canary routing mode are supplied at BUILD time from an explicit CI Gradle
+// property (`-P<name>`) or an environment variable — NEVER committed. Precedence:
+// Gradle property > environment variable > fail-closed default. Both defaults
+// fail closed: an empty key leaves RevenueCat dormant (kill switch off), and an
+// absent/blank mode is `off` (the existing Play billing path). The runtime
+// `RevenueCatMode.parse` additionally fails closed on any unknown value, so an
+// invalid injected mode can never enable RevenueCat. The returned value is escaped
+// so it is always a safe Java String literal inside `buildConfigField`.
+fun revenueCatInjected(gradleProp: String, envVar: String, fallback: String): String {
+    val raw = (project.findProperty(gradleProp) as String?)?.takeIf { it.isNotBlank() }
+        ?: System.getenv(envVar)?.takeIf { it.isNotBlank() }
+        ?: fallback
+    return raw.replace("\\", "\\\\").replace("\"", "\\\"")
+}
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -48,12 +64,23 @@ android {
         debug {
             isDebuggable = true
             buildConfigField("String", "BACKEND_URL", "\"http://10.0.2.2:8765\"")
+            // RevenueCat canary kill switch (Build 123) + routing mode (Build 126),
+            // both injected at build time and never committed. Fail-closed defaults:
+            // key "" (dormant), mode "off" (existing Play path). See
+            // revenueCatInjected above for the property/env precedence.
+            buildConfigField("String", "REVENUECAT_PUBLIC_SDK_KEY", "\"${revenueCatInjected("revenueCatPublicSdkKey", "REVENUECAT_PUBLIC_SDK_KEY", "")}\"")
+            buildConfigField("String", "REVENUECAT_MODE", "\"${revenueCatInjected("revenueCatMode", "REVENUECAT_MODE", "off")}\"")
         }
         release {
             isMinifyEnabled = true
             signingConfig = signingConfigs.getByName("release")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             buildConfigField("String", "BACKEND_URL", "\"https://api.tonoit.com\"")
+            // Release injection seam (Build 126): CI supplies the publishable goog_
+            // key and the off/shadow/authoritative mode via Gradle property or env
+            // var; both fail closed (key "" dormant, mode "off") when unset.
+            buildConfigField("String", "REVENUECAT_PUBLIC_SDK_KEY", "\"${revenueCatInjected("revenueCatPublicSdkKey", "REVENUECAT_PUBLIC_SDK_KEY", "")}\"")
+            buildConfigField("String", "REVENUECAT_MODE", "\"${revenueCatInjected("revenueCatMode", "REVENUECAT_MODE", "off")}\"")
             lint {
                 abortOnError = false
             }
@@ -91,6 +118,12 @@ dependencies {
 
     // Google Play Billing (mirrors StoreKit 2 on iOS)
     implementation("com.android.billingclient:billing-ktx:6.2.1")
+
+    // RevenueCat canary (Build 123). 7.x is pinned deliberately: it uses Play
+    // Billing 6.x, so it does NOT force-upgrade the existing PlayBillingManager's
+    // billing-ktx 6.2.1 (8.x would pull Billing 7.x). Additive + kill-switched;
+    // the existing Play billing path is unchanged and backend stays authoritative.
+    implementation("com.revenuecat.purchases:purchases:7.12.0")
 
     // Fragment — pinned to fix InvalidFragmentVersionForActivityResult lint error
     implementation("androidx.fragment:fragment-ktx:1.6.2")

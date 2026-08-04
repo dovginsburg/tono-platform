@@ -8,8 +8,11 @@ fail-closed guard that enforces it in code.
 
 - Service: `srv-d9gg8ngk1i2s738lngd0` (externally managed, created in the
   Render dashboard).
-- Runtime: the backend Docker image (`apps/backend/Dockerfile`), one uvicorn
-  worker (`--workers 1`).
+- Runtime: the canonical backend Docker image (`apps/backend/Dockerfile.canonical`,
+  built from the repository root so it packages the commercial catalog), one
+  uvicorn worker (`--workers 1`). The self-contained `apps/backend/Dockerfile` is
+  the backend-context image Railway staging/legacy deploys build; it is not what
+  Render runs.
 - Persistent disk: mounted at `/data`, backing a single SQLite file in WAL
   mode (`/data/tono.db` + `-wal` + `-shm`).
 - DB path: `TONO_DB_PATH=/data/tono.db`, set as a service environment variable

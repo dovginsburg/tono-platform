@@ -1,0 +1,100 @@
+# Tono backend — CANONICAL production image (repository-ROOT build context).
+#
+# Build:  docker build -f apps/backend/Dockerfile.canonical .
+#
+# This is the image published to GHCR and run by Render (srv-d9gg8ngk1i2s738lngd0).
+# It is the ONLY backend image that packages the committed commercial catalog.
+# The self-contained sibling apps/backend/Dockerfile is the BACKEND-CONTEXT image
+# that Railway staging and legacy deploys build (see the note above the COPYs).
+FROM python:3.11-slim
+
+ARG TONO_CANONICAL_SHA=unknown
+ARG TONO_SCHEMA_REVISION=legacy-sqlite-unversioned
+ARG TONO_CONTRACT_SHA256=unknown
+
+LABEL org.opencontainers.image.revision="${TONO_CANONICAL_SHA}" \
+      com.tonoit.schema-revision="${TONO_SCHEMA_REVISION}" \
+      com.tonoit.contract-sha256="${TONO_CONTRACT_SHA256}"
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    TONO_CANONICAL_SHA="${TONO_CANONICAL_SHA}" \
+    TONO_SCHEMA_REVISION="${TONO_SCHEMA_REVISION}" \
+    TONO_CONTRACT_SHA256="${TONO_CONTRACT_SHA256}"
+
+# build-essential: compile any wheels that lack manylinux binaries.
+# gosu: Debian-packaged, statically-linked su/sudo replacement used by the
+#   entrypoint to drop from root to `tono` after fixing /data ownership. We
+#   install it from apt (NOT a curl-downloaded binary) so provenance is the
+#   distro's signed package feed and the image stays auditable.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential gosu \
+ && rm -rf /var/lib/apt/lists/* \
+ && gosu nobody true
+
+WORKDIR /app
+
+# IMPORTANT: this image builds from the REPOSITORY ROOT as the Docker context
+# (`docker build -f apps/backend/Dockerfile.canonical <repo-root>`), NOT from
+# apps/backend. The backend depends on one file that lives OUTSIDE apps/backend —
+# the single committed commercial catalog at
+# packages/contracts/commercial-catalog.v1.json — and a COPY can only read paths
+# inside the build context. Building with apps/backend as the context silently
+# produces an image WITHOUT that catalog, so the container fails closed the moment
+# anything reads it. Every COPY source below is therefore repo-root-relative.
+#
+# The sibling apps/backend/Dockerfile is the self-contained BACKEND-CONTEXT image
+# (`COPY requirements.txt` / `COPY .`, no catalog) that Railway staging
+# (`railway up apps/backend --path-as-root`, apps/backend/railway.toml) and legacy
+# deploys build. The two Dockerfiles MUST keep an identical runtime environment
+# (base image, system packages, user, entrypoint, CMD); they intentionally differ
+# ONLY in their COPY sources and this file's extra catalog COPY.
+# apps/backend/tests/test_docker_image_packaging.py locks both invariants.
+
+COPY apps/backend/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+COPY apps/backend /app/backend/
+
+# Package the ONE committed commercial catalog at the exact runtime path the app
+# reads — no second copy, no edit, no re-authored data. This is the single
+# versioned source of truth (packages/contracts/commercial-catalog.v1.json).
+# Production sets TONO_COMMERCIAL_CATALOG_PATH=/packages/contracts/commercial-catalog.v1.json,
+# and backend.catalog's in-container default independently resolves to the SAME
+# path (catalog.py at /app/backend -> parents[2] == "/"), so both the explicit
+# override and the computed default find this exact file. It is deliberately left
+# root-owned and world-readable (0644): the unprivileged `tono` app user reads
+# the catalog but can never tamper with this authority file (it is NOT chowned by
+# the `chown -R tono:tono /app /data` below, which covers only /app and /data).
+COPY packages/contracts/commercial-catalog.v1.json /packages/contracts/commercial-catalog.v1.json
+
+# Create the unprivileged runtime user and the /data mount point. Ownership of
+# a freshly-mounted (root-owned) volume is corrected at RUNTIME by the
+# entrypoint; this build-time chown only covers the image's own copy.
+RUN useradd --create-home --shell /bin/bash tono \
+ && mkdir -p /data \
+ && chown -R tono:tono /app /data \
+ && install -m 0755 /app/backend/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+
+# NOTE: we deliberately do NOT set `USER tono`. The container starts as root so
+# the entrypoint can chown a fresh root-owned /data volume, then gosu drops to
+# `tono` before exec — root is never the identity the application runs under.
+
+EXPOSE 8765
+
+# Single application worker on purpose: production (Render srv-d9gg8ngk1i2s738lngd0)
+# runs on a persistent disk at /data backed by one SQLite file in WAL mode.
+# Multiple workers would each run Store._init_schema() concurrently at startup,
+# racing on `PRAGMA journal_mode=WAL` against the same file, and would share a
+# single-writer SQLite database across processes with no shared-file safety
+# guarantee. One worker serializes schema init and writes. Do not raise this
+# without a genuinely concurrency-safe backing store.
+#
+# Exec-form ENTRYPOINT + CMD: the entrypoint is PID 1 (root, minimal), drops to
+# tono via gosu, and execs uvicorn so uvicorn becomes PID 1 and receives
+# SIGTERM directly for graceful shutdown. The port is appended by the
+# entrypoint as ${PORT:-8765} (Render/Railway inject PORT).
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["uvicorn", "backend.server:app", "--host", "0.0.0.0", "--workers", "1"]

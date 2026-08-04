@@ -150,6 +150,12 @@
 		C0E707D6242E36DA94356BE9 /* KeyboardRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65C4FC72401862C2052D7F44 /* KeyboardRootView.swift */; };
 		C2C9DD7206A65B1579A5190A /* RecipientMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58D322318012F6E3758FBE16 /* RecipientMemory.swift */; };
 		C89EABB2DBA692A1FF5AC255 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 822A94BEAD307E044D2E1547 /* SettingsView.swift */; };
+		ACE10000000000000000000A /* RevenueCatManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACE10000000000000000000B /* RevenueCatManager.swift */; };
+		C0091000000000000000000A /* GoogleSignInConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0091000000000000000000B /* GoogleSignInConfig.swift */; };
+		C0092000000000000000000A /* PasskeySignIn.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0092000000000000000000B /* PasskeySignIn.swift */; };
+		A1240000000000000000B0A0 /* Build124AuthProvidersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1240000000000000000F0A0 /* Build124AuthProvidersTests.swift */; };
+		609E0000000000000000000C /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 609E0000000000000000000B /* GoogleSignIn */; };
+		609E0000000000000000000F /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = 609E0000000000000000000E /* RevenueCat */; };
 		B1115E770000000000000002 /* RecipientsManagerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1115E770000000000000001 /* RecipientsManagerView.swift */; };
 		C9B979F056F3D84FB316577F /* SharedUserDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 772DD67FA1CD9CF09D426AF5 /* SharedUserDefaults.swift */; };
 		C9E4BE5B5759944FF1CF021C /* StyleMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78AA6203719949C25622DA78 /* StyleMemory.swift */; };
@@ -237,6 +243,7 @@
 		B117REA0000000000000012 /* ReadTheAsk.swift in Sources */ = {isa = PBXBuildFile; fileRef = B117REA0000000000000001 /* ReadTheAsk.swift */; };
 		B117REA0000000000000021 /* ReadTheAskView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B117REA0000000000000002 /* ReadTheAskView.swift */; };
 		B117REA0000000000000031 /* Build117ReadTheAskTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B117REA0000000000000003 /* Build117ReadTheAskTests.swift */; };
+		B117STROFF00000000000031 /* Build117StreamingOfflineContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B117STROFF00000000000003 /* Build117StreamingOfflineContractTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -352,6 +359,10 @@
 		CE0000000000000000000001 /* ConsumerErrorCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsumerErrorCopy.swift; sourceTree = "<group>"; };
 		80AB8E621E4EDC9A59A7258D /* TonoBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoBackend.swift; sourceTree = "<group>"; };
 		822A94BEAD307E044D2E1547 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		ACE10000000000000000000B /* RevenueCatManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RevenueCatManager.swift; sourceTree = "<group>"; };
+		C0091000000000000000000B /* GoogleSignInConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoogleSignInConfig.swift; sourceTree = "<group>"; };
+		C0092000000000000000000B /* PasskeySignIn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasskeySignIn.swift; sourceTree = "<group>"; };
+		A1240000000000000000F0A0 /* Build124AuthProvidersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build124AuthProvidersTests.swift; sourceTree = "<group>"; };
 		B1115E770000000000000001 /* RecipientsManagerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipientsManagerView.swift; sourceTree = "<group>"; };
 		8C71600DCEEEFF51AE070EA1 /* TonoMessagesExtension.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = TonoMessagesExtension.entitlements; sourceTree = "<group>"; };
 		92219FEC38B911DE3D75FC8F /* TonoAnalytics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoAnalytics.swift; sourceTree = "<group>"; };
@@ -429,9 +440,19 @@
 		B117REA0000000000000001 /* ReadTheAsk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadTheAsk.swift; sourceTree = "<group>"; };
 		B117REA0000000000000002 /* ReadTheAskView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadTheAskView.swift; sourceTree = "<group>"; };
 		B117REA0000000000000003 /* Build117ReadTheAskTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build117ReadTheAskTests.swift; sourceTree = "<group>"; };
+		B117STROFF00000000000003 /* Build117StreamingOfflineContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build117StreamingOfflineContractTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		609E0000000000000000000D /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				609E0000000000000000000C /* GoogleSignIn in Frameworks */,
+				609E0000000000000000000F /* RevenueCat in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		9BCE4C10CBD4D5988A75E7A8 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -483,8 +504,10 @@
 			isa = PBXGroup;
 			children = (
 				B117REA0000000000000003 /* Build117ReadTheAskTests.swift */,
+				B117STROFF00000000000003 /* Build117StreamingOfflineContractTests.swift */,
 				A1180000000000000000F006 /* Build118AppleIntelligenceTests.swift */,
 				A1220000000000000000F006 /* Build122PurchaseGateTests.swift */,
+				A1240000000000000000F0A0 /* Build124AuthProvidersTests.swift */,
 				A1220000000000000000F0A2 /* Build122ShortcutsOnboardingTests.swift */,
 				B115ADA7000000000000F002 /* Build115AdaptiveLayoutTests.swift */,
 				B115ADA7000000000000F004 /* Build115IPadSurfaceLayoutTests.swift */,
@@ -627,6 +650,9 @@
 				3C73FA31B4F44D8110957849 /* MemoryView.swift */,
 				600B6DD9AC9FC36C6BB8ED14 /* OnboardingCalibrationView.swift */,
 				822A94BEAD307E044D2E1547 /* SettingsView.swift */,
+				ACE10000000000000000000B /* RevenueCatManager.swift */,
+				C0091000000000000000000B /* GoogleSignInConfig.swift */,
+				C0092000000000000000000B /* PasskeySignIn.swift */,
 				B1115E770000000000000001 /* RecipientsManagerView.swift */,
 				5ED0C7000000000000000005 /* SetupDoctorView.swift */,
 				B92542DA54DA284DBFA670F3 /* Tono.entitlements */,
@@ -765,6 +791,7 @@
 			buildConfigurationList = 715A8CF082BA07B995045773 /* Build configuration list for PBXNativeTarget "Tono" */;
 			buildPhases = (
 				D2CE6844E9064DDAEFE492B7 /* Sources */,
+				609E0000000000000000000D /* Frameworks */,
 				F81029E3912AE8AF7C3D8EBF /* Resources */,
 				2683EAB09F60A8B296EAAE4A /* Embed Foundation Extensions */,
 				57F72FA11337D8F77D2ABF56 /* Verify Build Number */,
@@ -777,6 +804,10 @@
 				B89ED4E7E58BAF013BD4DF60 /* PBXTargetDependency */,
 			);
 			name = Tono;
+			packageProductDependencies = (
+				609E0000000000000000000B /* GoogleSignIn */,
+				609E0000000000000000000E /* RevenueCat */,
+			);
 			productName = Tono;
 			productReference = F56F7614BF83D1438A50A811 /* Tono.app */;
 			productType = "com.apple.product-type.application";
@@ -803,6 +834,10 @@
 			productRefGroup = 85162E95710B256C36998CB0 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
+			packageReferences = (
+				609E0000000000000000000A /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
+				609E00000000000000000D01 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */,
+			);
 			targets = (
 				EBE86B011C11AB11A09CEBA7 /* Tono */,
 				222A4BB5BC4EFDC252F76C97 /* TonoKeyboard */,
@@ -976,6 +1011,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B117REA0000000000000031 /* Build117ReadTheAskTests.swift in Sources */,
+				B117STROFF00000000000031 /* Build117StreamingOfflineContractTests.swift in Sources */,
 				B115C0FFEE0000000000F015 /* LocalCoachRewrite.swift in Sources */,
 				A1180000000000000000B015 /* RewriteProvider.swift in Sources */,
 				A1220000000000000000B015 /* PurchaseCapability.swift in Sources */,
@@ -983,6 +1019,7 @@
 				A1180000000000000000B035 /* AppIntentRouting.swift in Sources */,
 				A1180000000000000000B065 /* Build118AppleIntelligenceTests.swift in Sources */,
 				A1220000000000000000B066 /* Build122PurchaseGateTests.swift in Sources */,
+				A1240000000000000000B0A0 /* Build124AuthProvidersTests.swift in Sources */,
 				A1220000000000000000B0A2 /* Build122ShortcutsOnboardingTests.swift in Sources */,
 				B115ADA7000000000000F022 /* Build115AdaptiveLayoutTests.swift in Sources */,
 				B115ADA7000000000000F044 /* Build115IPadSurfaceLayoutTests.swift in Sources */,
@@ -1141,6 +1178,9 @@
 				B116C0BE1600000000000002 /* TonoConnectivity.swift in Sources */,
 				511B5CB9D0506AE3B0B7BA9A /* RecipientMemory.swift in Sources */,
 				C89EABB2DBA692A1FF5AC255 /* SettingsView.swift in Sources */,
+				ACE10000000000000000000A /* RevenueCatManager.swift in Sources */,
+				C0091000000000000000000A /* GoogleSignInConfig.swift in Sources */,
+				C0092000000000000000000A /* PasskeySignIn.swift in Sources */,
 				B1115E770000000000000002 /* RecipientsManagerView.swift in Sources */,
 				BD9E5A023D82845158A938D9 /* SharedKeychain.swift in Sources */,
 				C9B979F056F3D84FB316577F /* SharedUserDefaults.swift in Sources */,
@@ -1591,6 +1631,38 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		609E0000000000000000000A /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/google/GoogleSignIn-iOS";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 7.1.0;
+			};
+		};
+		609E00000000000000000D01 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/RevenueCat/purchases-ios-spm";
+			requirement = {
+				kind = exactVersion;
+				version = 5.83.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		609E0000000000000000000B /* GoogleSignIn */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 609E0000000000000000000A /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
+			productName = GoogleSignIn;
+		};
+		609E0000000000000000000E /* RevenueCat */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 609E00000000000000000D01 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */;
+			productName = RevenueCat;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 1121AB054D8122B413A4D902 /* Project object */;
 }

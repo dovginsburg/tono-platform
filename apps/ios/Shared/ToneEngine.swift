@@ -279,7 +279,14 @@ public struct ToneEngine: ToneAnalyzing {
                         flags: result.flags
                     ))
                 } catch {
-                    continuation.yield(.error(error.localizedDescription))
+                    // Mirror the backend streaming producer: an offline
+                    // transport becomes a payload-free `.offline` shape so the
+                    // consumer shows "check your connection", not "try again".
+                    if TonoBackend.isOfflineTransport(error) {
+                        continuation.yield(.offline)
+                    } else {
+                        continuation.yield(.error(error.localizedDescription))
+                    }
                 }
                 continuation.finish()
             }

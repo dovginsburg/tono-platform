@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { apiPath } from '@/lib/auth-redirects';
-import { dropLegacyHistory, historyStorageKey } from '@/lib/history-store';
+import { dropLegacyHistory, historyStorageKey, purgeAllHistory } from '@/lib/history-store';
 
 type Axis = 'warmer' | 'clearer' | 'funnier' | 'safer';
 
@@ -230,7 +230,24 @@ export function RewriteEditor({
             <span style={avatarStyle} title={email}>
               {(email[0] || '?').toUpperCase()}
             </span>
-            <form action="/app/api/auth/signout" method="post" style={{ display: 'inline' }}>
+            {/* The editor is where drafts are written, so its sign-out must
+                purge device-local history too — the server route clears cookies
+                but cannot reach localStorage. Without this, signing out here
+                (the primary surface) leaves the previous person's private drafts
+                on a shared browser, the exact leak account/SignOutButton fixes. */}
+            <form
+              action="/app/api/auth/signout"
+              method="post"
+              style={{ display: 'inline' }}
+              onSubmit={() => {
+                try {
+                  if (typeof window !== 'undefined') purgeAllHistory(window.localStorage);
+                } catch {
+                  // localStorage may be unavailable (private mode); the server
+                  // sign-out still proceeds.
+                }
+              }}
+            >
               <button type="submit" style={ghostBtn}>
                 sign out
               </button>

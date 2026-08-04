@@ -69,7 +69,15 @@ test('the callback never forwards provider text into the login URL', () => {
   }
   // Every bounce carries one of the reviewed codes.
   const bounces = code.match(/buildLoginRedirect\([^)]*\)/g) || [];
-  assert.ok(bounces.length >= 3, 'expected the callback to bounce on failure');
+  // Two explicit failure bounces remain: a provider `error_description`, and a
+  // failed code exchange. The former third — the "no code, no error" tail that
+  // used to bounce blindly to login — now serves the fragment-completion
+  // document instead, because the backend-brokered email links (register /
+  // resend / reset) land here with their session in the URL FRAGMENT the server
+  // cannot read. That document forwards only stable machine codes to
+  // /api/auth/email/complete and navigates only to internal reviewed paths, so
+  // it puts no provider text in any URL. See src/lib/auth-complete.ts.
+  assert.ok(bounces.length >= 2, 'expected the callback to bounce on failure');
   for (const bounce of bounces) {
     const named = ['sign_in_failed', 'link_expired', 'rate_limited', 'unavailable', 'reason'];
     const carriesCode = named.some((n) => bounce.includes(n));
@@ -79,6 +87,10 @@ test('the callback never forwards provider text into the login URL', () => {
       `every failure bounce must carry a reviewed code: ${bounce}`
     );
   }
+  assert.ok(
+    code.includes('FRAGMENT_BOUNCE_HTML'),
+    'the no-code fallback must serve the reviewed fragment-completion document'
+  );
 });
 
 test('the callback classifies a failure by status, never by message', () => {

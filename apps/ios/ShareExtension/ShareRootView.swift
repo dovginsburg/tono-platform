@@ -265,6 +265,7 @@ struct ShareAnalysisView: View {
                         case .complete(let level, let st, let rr, let f):
                             riskLevel = RiskLevel(rawValue: level) ?? .medium
                             subtext = st; reason = rr; flags = f
+                        case .offline: throw TonoBackendError.offline
                         case .error(let msg): throw ToneEngineError.backend(msg)
                         // Build 113: the status reaches the mapper intact, so
                         // Share keeps 401 / 402 / 429 apart instead of

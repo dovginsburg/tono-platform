@@ -176,12 +176,13 @@ class PlayBillingManagerGateTest {
     }
 
     @Test
-    fun android120PreservesItsCodeWhileIosAdvancesToReviewedBuild122() {
+    fun android120PreservesItsCodeWhileIosAdvancesToReviewedBuild126() {
         // Google Play Build 120 remains immutable. The reviewed convergence
         // changes shipping iOS auth and StoreKit behavior, so iOS advances to
         // the next cross-platform release identifier without changing Android.
-        // The reviewed authority is now Build 122 (fail-closed Apple purchase
-        // gate); bump-build.sh is the single source of truth it must equal.
+        // The reviewed authority is now Build 126 (coordinated auth-providers
+        // and RevenueCat candidate); bump-build.sh is the single source of
+        // truth it must equal.
         val bumpScript = File(repoRoot(), "apps/ios/Scripts/bump-build.sh")
         if (!bumpScript.exists()) return  // Android may be built without the iOS tree present.
         val expected = bumpScript.readLines()
@@ -189,8 +190,8 @@ class PlayBillingManagerGateTest {
             ?.substringAfter('=')
             ?.trim('"', '\'', ' ')
         assertEquals(
-            "iOS convergence must use the reviewed Build 122 authority",
-            "122",
+            "iOS convergence must use the reviewed Build 126 authority",
+            "126",
             expected,
         )
     }

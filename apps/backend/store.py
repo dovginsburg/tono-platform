@@ -450,6 +450,56 @@ CREATE TABLE IF NOT EXISTS provider_unresolved_events (
     created_at              TEXT NOT NULL,
     UNIQUE(provider, notification_uuid)
 );
+
+-- ── RevenueCat canary seam ──────────────────────────────────────────────────
+-- RevenueCat is the first Tono canary for a unified subscription lifecycle. It
+-- is an isolated per-product project whose events flow into the SAME provider
+-- fact + entitlement projection every other provider uses (provider_purchases
+-- provider='revenuecat' -> entitlement_grants), so there stays exactly ONE
+-- deterministic entitlement writer. These two tables are RevenueCat-specific.
+
+-- Durable, product-specific webhook inbox keyed by the RevenueCat event id (the
+-- provider's own idempotency key). Richer than the generic provider_transactions
+-- inbox: it stores the raw payload for async re-processing + reconciliation and a
+-- per-event state machine with retry attempts and a dead-letter terminal state
+-- (contract §5). UNIQUE(event_id) is the replay-safety primitive — a duplicate
+-- delivery is detected here and never re-projected.
+CREATE TABLE IF NOT EXISTS revenuecat_events (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id      TEXT NOT NULL,                 -- RevenueCat event.id (idempotency key)
+    event_type    TEXT NOT NULL,                 -- INITIAL_PURCHASE|RENEWAL|CANCELLATION|EXPIRATION|...
+    app_user_id   TEXT,                          -- RevenueCat app_user_id == canonical account UUID (or NULL)
+    store_source  TEXT,                          -- APP_STORE|PLAY_STORE|STRIPE|... (RevenueCat 'store')
+    environment   TEXT,                          -- SANDBOX|PRODUCTION
+    event_ms      INTEGER NOT NULL DEFAULT 0,    -- event_timestamp_ms (monotonic version oracle)
+    payload       TEXT NOT NULL,                 -- raw event JSON (async reprocess / reconcile)
+    state         TEXT NOT NULL,                 -- 'received'|'processed'|'failed'|'dead_letter'
+    outcome       TEXT,                          -- terminal projection outcome label
+    attempts      INTEGER NOT NULL DEFAULT 0,
+    last_error    TEXT,
+    received_at   TEXT NOT NULL,
+    processed_at  TEXT,
+    UNIQUE(event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_revenuecat_events_state ON revenuecat_events(state);
+
+-- Canary shadow ledger: for each RevenueCat event we record the RevenueCat-
+-- derived entitlement decision and the legacy projection at that instant, so a
+-- reconciler surfaces disagreements WITHOUT RevenueCat being the authority in
+-- 'shadow' mode. Append-only, deduped by event_id (contract §6/§9).
+CREATE TABLE IF NOT EXISTS revenuecat_shadow_observations (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id          TEXT NOT NULL,
+    account_id        TEXT,
+    revenuecat_active INTEGER NOT NULL,          -- RevenueCat-derived entitled? (0/1)
+    legacy_active     INTEGER NOT NULL,          -- legacy is_pro at observation time (0/1)
+    agree             INTEGER NOT NULL,          -- revenuecat_active == legacy_active (0/1)
+    mode              TEXT NOT NULL,             -- 'shadow'|'authoritative'
+    detail            TEXT,
+    created_at        TEXT NOT NULL,
+    UNIQUE(event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_revenuecat_shadow_agree ON revenuecat_shadow_observations(agree);
 """
 
 _DEFAULT_FLAGS = [
@@ -3947,6 +3997,309 @@ class Store:
                      VALUES (?, ?, 'set_app_account_token', ?, ?, 'pending', 0, ?, ?)""",
                 (str(uuid.uuid4()), provider, original_transaction_id, account_id, now, now),
             )
+
+    # ---- RevenueCat canary: durable inbox + provider projection ----
+
+    def record_revenuecat_event(
+        self,
+        *,
+        event_id: str,
+        event_type: str,
+        payload: str,
+        app_user_id: Optional[str],
+        store_source: Optional[str],
+        environment: Optional[str],
+        event_ms: int,
+    ) -> str:
+        """Insert a new revenuecat_events inbox row keyed by the RevenueCat event
+        id (the provider's own idempotency key). Returns:
+          'new'               – never seen; caller must process then mark_* it.
+          'duplicate_ok'      – already terminal (processed/dead_letter); ACK 2xx now.
+          'duplicate_pending' – seen but not terminal; re-process idempotently.
+        A genuine (non-duplicate) INSERT failure propagates so the caller returns a
+        retryable 5xx — the durable-inbox-failure contract (§5)."""
+        def _do() -> str:
+            cur = self._conn.cursor()
+            try:
+                cur.execute(
+                    "INSERT INTO revenuecat_events (event_id, event_type, app_user_id, "
+                    "store_source, environment, event_ms, payload, state, attempts, received_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, 'received', 0, ?)",
+                    (event_id, event_type, app_user_id, store_source, environment,
+                     int(event_ms or 0), payload, _now_iso()),
+                )
+                return "new"
+            except sqlite3.IntegrityError:
+                cur.execute("SELECT state FROM revenuecat_events WHERE event_id = ?", (event_id,))
+                row = cur.fetchone()
+                if row and row["state"] in ("processed", "dead_letter"):
+                    return "duplicate_ok"
+                return "duplicate_pending"
+
+        return self._run(_do).result()
+
+    def mark_revenuecat_event_processed(self, event_id: str, outcome: str) -> None:
+        """Stamp an inbox row terminally processed so replays ACK 2xx immediately."""
+        def _do() -> None:
+            self._conn.execute(
+                "UPDATE revenuecat_events SET state='processed', outcome=?, "
+                "processed_at=?, last_error=NULL WHERE event_id=?",
+                (outcome[:200], _now_iso(), event_id),
+            )
+        self._run(_do).result()
+
+    def mark_revenuecat_event_failed(self, event_id: str, error: str) -> int:
+        """Mark an event failed (retryable) and bump attempts. Returns the new
+        attempt count so the caller can escalate to dead-letter past a ceiling."""
+        def _do() -> int:
+            cur = self._conn.cursor()
+            cur.execute(
+                "UPDATE revenuecat_events SET state='failed', attempts=attempts+1, "
+                "last_error=? WHERE event_id=?",
+                ((error or "")[:2000], event_id),
+            )
+            cur.execute("SELECT attempts FROM revenuecat_events WHERE event_id=?", (event_id,))
+            row = cur.fetchone()
+            return int(row["attempts"]) if row else 0
+        return self._run(_do).result()
+
+    def mark_revenuecat_event_dead_letter(self, event_id: str, reason: str) -> None:
+        """Move an event to the terminal dead-letter state (deterministic failure
+        or retry ceiling reached). Replays then ACK 2xx and the reconciler skips it."""
+        def _do() -> None:
+            self._conn.execute(
+                "UPDATE revenuecat_events SET state='dead_letter', outcome=?, "
+                "last_error=? WHERE event_id=?",
+                (f"dead_letter:{reason}"[:200], (reason or "")[:2000], event_id),
+            )
+        self._run(_do).result()
+
+    def get_revenuecat_event(self, event_id: str) -> Optional[dict]:
+        def _do() -> Optional[dict]:
+            cur = self._conn.cursor()
+            cur.execute("SELECT * FROM revenuecat_events WHERE event_id=?", (event_id,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+        return self._run(_do).result()
+
+    def list_revenuecat_events_for_retry(
+        self, *, limit: int = 100, max_attempts: int = 8
+    ) -> list[dict]:
+        """Non-terminal events (received/failed) under the retry ceiling, oldest
+        first — the reconciler drains these. Events at/over max_attempts are left
+        for the caller to dead-letter."""
+        def _do() -> list[dict]:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT * FROM revenuecat_events WHERE state IN ('received','failed') "
+                "AND attempts < ? ORDER BY id ASC LIMIT ?",
+                (int(max_attempts), int(limit)),
+            )
+            return [dict(r) for r in cur.fetchall()]
+        return self._run(_do).result()
+
+    def apply_revenuecat_fact(
+        self,
+        *,
+        account_id: Optional[str],
+        original_transaction_id: str,
+        product_id: str,
+        lifecycle_state: str,
+        entitled: bool,
+        signed_ms: int,
+        expires_ms: Optional[int],
+        environment: str = "production",
+        hard_terminal: bool = False,
+        write_grant: bool = True,
+        force: bool = False,
+    ) -> str:
+        """Project one AUTHENTICATED RevenueCat event into provider_purchases
+        (provider='revenuecat') and — only when ``write_grant`` (authoritative
+        mode) — into entitlement_grants, using the same append-only, version-
+        guarded model as the Apple/Stripe/Google writers.
+
+        ``signed_ms`` (the RevenueCat event timestamp) is the monotonic version
+        oracle: an older non-terminal event can never override a newer stored fact,
+        and a terminal state can never be resurrected by an active event (unless
+        ``force``). ``hard_terminal`` (refund / chargeback / revoke) always wins and
+        bumps the version so no later-arriving active/older event can undo it.
+
+        In shadow mode (``write_grant=False``) the append-only provider fact is
+        still recorded for reconciliation, but NO grant is written/revoked, so the
+        legacy projection stays the sole entitlement writer (canary boundary, §6).
+        Returns the applied lifecycle_state, or 'stale' when a newer fact wins.
+        Never touches the mutable accounts.plan columns."""
+        def _do() -> str:
+            cur = self._conn.cursor()
+            now = _now_iso()
+            cur.execute("BEGIN IMMEDIATE")
+            try:
+                result = self._apply_revenuecat_fact_locked(
+                    cur, now,
+                    account_id=account_id,
+                    original_transaction_id=original_transaction_id,
+                    product_id=product_id,
+                    lifecycle_state=lifecycle_state,
+                    entitled=entitled,
+                    signed_ms=signed_ms,
+                    expires_ms=expires_ms,
+                    environment=environment,
+                    hard_terminal=hard_terminal,
+                    write_grant=write_grant,
+                    force=force,
+                )
+                cur.execute("COMMIT")
+                return result
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    cur.execute("ROLLBACK")
+                raise
+
+        return self._run(_do).result()
+
+    def _apply_revenuecat_fact_locked(
+        self, cur, now, *,
+        account_id, original_transaction_id, product_id, lifecycle_state,
+        entitled, signed_ms, expires_ms, environment,
+        hard_terminal=False, write_grant=True, force=False,
+    ) -> str:
+        cur.execute(
+            "SELECT * FROM provider_purchases WHERE provider='revenuecat' "
+            "AND original_transaction_id = ?",
+            (original_transaction_id,),
+        )
+        existing = cur.fetchone()
+
+        if existing is not None:
+            stored_ms = existing["latest_signed_ms"] or 0
+            stored_state = existing["lifecycle_state"]
+            if hard_terminal and not force:
+                # Refund/chargeback/revoke always wins; bump past the stored version.
+                signed_ms = max(signed_ms, stored_ms + 1)
+            elif not force:
+                # Out-of-order safety (contract §9): a terminal lineage is never
+                # resurrected by a non-hard event, and an older soft event (active
+                # OR expired) never overrides a newer stored fact. Only a genuine
+                # hard-terminal (above) or an explicit force reinstatement bypasses
+                # this. An equal-timestamp replay falls through as an idempotent
+                # no-op update.
+                if stored_state in _TERMINAL_STATES:
+                    return "stale"
+                if signed_ms < stored_ms:
+                    return "stale"
+
+            cur.execute(
+                """UPDATE provider_purchases
+                      SET lifecycle_state = ?, latest_signed_ms = ?,
+                          latest_transaction_id = ?, product_id = ?,
+                          app_account_token = COALESCE(?, app_account_token),
+                          expires_ms = ?, environment = ?, updated_at = ?
+                    WHERE id = ?""",
+                (lifecycle_state, signed_ms, original_transaction_id, product_id,
+                 account_id, expires_ms, environment, now, existing["id"]),
+            )
+            purchase_id = existing["id"]
+        else:
+            purchase_id = str(uuid.uuid4())
+            cur.execute(
+                """INSERT INTO provider_purchases
+                       (id, provider, original_transaction_id, latest_transaction_id, product_id,
+                        environment, ownership_type, app_account_token, lifecycle_state,
+                        latest_signed_ms, expires_ms, trial_consumed, created_at, updated_at)
+                     VALUES (?, 'revenuecat', ?, ?, ?, ?, 'PURCHASED', ?, ?, ?, ?, 0, ?, ?)""",
+                (purchase_id, original_transaction_id, original_transaction_id, product_id,
+                 environment, account_id, lifecycle_state, signed_ms, expires_ms, now, now),
+            )
+
+        # Grant/revoke ONLY in authoritative mode (shadow records the fact but
+        # never mutates entitlement — the legacy path stays the sole writer).
+        if write_grant:
+            if entitled and lifecycle_state not in _TERMINAL_STATES:
+                # Granting requires a REAL account (fail closed on a missing or
+                # unknown/attacker-supplied app_user_id — the fact is still
+                # recorded above with the claimed binding, but no grant is made).
+                if account_id and _account_exists(cur, account_id):
+                    self._upsert_grant(cur, purchase_id, account_id, "direct", expires_ms, now)
+                elif account_id:
+                    import logging as _log
+                    _log.getLogger(__name__).warning(
+                        "apply_revenuecat_fact: account_id=%s not found; fact recorded, grant skipped",
+                        account_id,
+                    )
+            else:
+                # Revoking a lineage (refund / revoke / expiry / transfer-away)
+                # never needs a beneficiary — revoke every active grant on it,
+                # even when the event carries no account_id.
+                self._revoke_grants_for_purchase(cur, purchase_id, now)
+
+        return lifecycle_state
+
+    def record_revenuecat_shadow_observation(
+        self,
+        *,
+        event_id: str,
+        account_id: Optional[str],
+        revenuecat_active: bool,
+        legacy_active: bool,
+        mode: str,
+        detail: Optional[str] = None,
+    ) -> bool:
+        """Append a canary comparison of the RevenueCat-derived entitlement against
+        the legacy projection. Idempotent by event_id. Returns True when the two
+        agree (both entitled or both not)."""
+        agree = bool(revenuecat_active) == bool(legacy_active)
+        def _do() -> None:
+            self._conn.execute(
+                "INSERT INTO revenuecat_shadow_observations "
+                "(event_id, account_id, revenuecat_active, legacy_active, agree, mode, detail, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(event_id) DO UPDATE SET account_id=excluded.account_id, "
+                "revenuecat_active=excluded.revenuecat_active, legacy_active=excluded.legacy_active, "
+                "agree=excluded.agree, mode=excluded.mode, detail=excluded.detail",
+                (event_id, account_id, 1 if revenuecat_active else 0,
+                 1 if legacy_active else 0, 1 if agree else 0, mode,
+                 (detail or None), _now_iso()),
+            )
+        self._run(_do).result()
+        return agree
+
+    def revenuecat_shadow_disagreements(self, *, limit: int = 100) -> list[dict]:
+        """Canary reconciliation hook: RevenueCat-vs-legacy disagreements, newest
+        first. In a healthy shadow this is empty."""
+        def _do() -> list[dict]:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT * FROM revenuecat_shadow_observations WHERE agree=0 "
+                "ORDER BY id DESC LIMIT ?",
+                (int(limit),),
+            )
+            return [dict(r) for r in cur.fetchall()]
+        return self._run(_do).result()
+
+    def revenuecat_shadow_summary(self) -> dict:
+        """Non-secret aggregate of the shadow canary ledger for operator readiness:
+        total observations, agreements, disagreements, and the newest observation
+        timestamp. COUNTS ONLY — no account/user identifiers — so it is safe to
+        surface on the unauthenticated readiness probe. In a healthy shadow window
+        `disagreements` is 0, which is the gate for flipping shadow -> authoritative
+        (contract §9)."""
+        def _do() -> dict:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT COUNT(*) AS total, "
+                "COALESCE(SUM(agree), 0) AS agreements, "
+                "COALESCE(SUM(1 - agree), 0) AS disagreements, "
+                "MAX(created_at) AS last_observed_at "
+                "FROM revenuecat_shadow_observations"
+            )
+            row = cur.fetchone()
+            return {
+                "total": int(row["total"] or 0),
+                "agreements": int(row["agreements"] or 0),
+                "disagreements": int(row["disagreements"] or 0),
+                "last_observed_at": row["last_observed_at"],
+            }
+        return self._run(_do).result()
 
     def apply_apple_notification(
         self,

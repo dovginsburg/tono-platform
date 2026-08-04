@@ -14,6 +14,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tono.app.BuildConfig
 import com.tono.app.billing.PlayBillingManager
+import com.tono.app.billing.RevenueCatManager
+import com.tono.app.billing.RevenueCatMode
+import com.tono.app.billing.RevenueCatPurchaseRoute
+import com.tono.app.billing.RevenueCatPurchaseRouter
 import com.tono.app.notifications.DigestScheduler
 import com.tono.shared.flags.FeatureFlag
 import com.tono.shared.flags.FeatureFlags
@@ -308,7 +312,26 @@ fun SettingsScreen(
                     Button(
                         onClick = {
                             (context as? Activity)?.let { activity ->
-                                PlayBillingManager.purchase(activity, product.id)
+                                // Build 126 — RevenueCat canary routing. off/shadow
+                                // keep the existing Play path; authoritative conducts
+                                // the purchase through RevenueCat against the canonical
+                                // account UUID (the backend still projects the grant).
+                                when (RevenueCatPurchaseRouter.route(
+                                    RevenueCatMode.parse(BuildConfig.REVENUECAT_MODE),
+                                    RevenueCatManager.isConfigured(),
+                                )) {
+                                    RevenueCatPurchaseRoute.PLAY_BILLING ->
+                                        PlayBillingManager.purchase(activity, product.id)
+                                    RevenueCatPurchaseRoute.REVENUE_CAT ->
+                                        RevenueCatManager.purchase(activity, product.id) {
+                                            // RevenueCat conducted the purchase; reflect
+                                            // Pro from the backend authority (/v1/me),
+                                            // which its webhook projects.
+                                            PlayBillingManager.reconcileEntitlementAfterExternalPurchase()
+                                        }
+                                    RevenueCatPurchaseRoute.BLOCKED_NOT_CONFIGURED ->
+                                        PlayBillingManager.reportPurchasesTemporarilyUnavailable()
+                                }
                             }
                         },
                         enabled = !billing.isLoading,
@@ -344,7 +367,24 @@ fun SettingsScreen(
                 )
             }
             Row(Modifier.padding(horizontal = 8.dp)) {
-                TextButton(onClick = PlayBillingManager::restore, enabled = !billing.isLoading) {
+                TextButton(
+                    onClick = {
+                        // Build 126 — restore never charges, so authoritative-but-
+                        // unusable safely falls back to a Play restore instead of
+                        // blocking recovery of an existing subscription.
+                        when (RevenueCatPurchaseRouter.restoreRoute(
+                            RevenueCatMode.parse(BuildConfig.REVENUECAT_MODE),
+                            RevenueCatManager.isConfigured(),
+                        )) {
+                            RevenueCatPurchaseRoute.REVENUE_CAT ->
+                                RevenueCatManager.restore {
+                                    PlayBillingManager.reconcileEntitlementAfterExternalPurchase()
+                                }
+                            else -> PlayBillingManager.restore()
+                        }
+                    },
+                    enabled = !billing.isLoading,
+                ) {
                     Text("Restore purchases")
                 }
                 TextButton(onClick = PlayBillingManager::refresh, enabled = !billing.isLoading) {

@@ -1,0 +1,47 @@
+# Docker build context = repository ROOT for the CANONICAL image (build: `docker
+# build -f apps/backend/Dockerfile.canonical .`). That image COPYs exactly
+# apps/backend/ plus the one committed catalog file
+# (packages/contracts/commercial-catalog.v1.json); nothing else is ever added to an
+# image layer. This denylist keeps the context small and — critically — guarantees
+# that no local secret, database, or dev artifact under apps/backend can be baked
+# into the image via `COPY apps/backend`. (The backend-context apps/backend/Dockerfile
+# used by Railway staging builds from apps/backend/ and does not read this file.)
+#
+# Safety invariant: NOTHING here may exclude apps/backend/** or
+# packages/contracts/commercial-catalog.v1.json — those are what the image needs.
+
+# Version control + CI metadata (large; never needed inside the image).
+.git
+.github
+
+# Python bytecode / tool caches.
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+
+# Virtualenvs (never ship a host venv into the image).
+**/.venv/
+**/venv/
+
+# Local environment files and secrets — must never be baked in.
+**/.env
+**/.env.*
+
+# SQLite databases and their WAL/SHM sidecars. Production data lives ONLY on the
+# /data persistent disk; a dev database must never enter the image.
+**/*.db
+**/*.db-*
+
+# Large sibling trees outside the backend image build context.
+apps/android
+apps/ios
+apps/web
+artifacts
+build
+docs
+schema
+supabase
+vendor
+**/node_modules/
