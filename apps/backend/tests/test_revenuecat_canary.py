@@ -737,3 +737,309 @@ def test_event_for_other_entitlement_is_ignored(rc):
     assert r.status_code == 200
     assert "ignored" in r.json()["outcome"]
     assert _me(client, tok)["is_pro"] is False
+
+
+# ---------------------------------------------------------------------------
+# §6 corrective (build 126): PROMOTIONAL admin grants are transport/idempotency
+# evidence, NOT a store-parity canary. They stay in the append-only lifetime
+# ledger but must be EXCLUDED from the shadow -> authoritative flip decision, or a
+# single intentional promotional wiring canary pins `shadow_clean` false forever
+# even when the integration is healthy. Real stores stay flip-eligible; an
+# unclassifiable store fails closed.
+# ---------------------------------------------------------------------------
+
+
+def _shadow_rows(store) -> list[dict]:
+    """Every shadow observation, raw (test-only helper — asserts evidence is
+    retained, including agreements the disagreement view omits)."""
+    def _do() -> list[dict]:
+        cur = store._conn.cursor()
+        cur.execute("SELECT * FROM revenuecat_shadow_observations ORDER BY id")
+        return [dict(r) for r in cur.fetchall()]
+    return store._run(_do).result()
+
+
+def test_promotional_disagreement_excluded_from_flip_but_kept_in_lifetime(rc):
+    """The live root cause: a RevenueCat PROMOTIONAL grant makes RC active while
+    the legacy projection correctly stays free in shadow -> a real disagreement,
+    but not a store-parity one. It must remain visible in lifetime diagnostics
+    yet be excluded from the flip gate, so a healthy integration reads clean."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+
+    r = _post(client, rc_event(event_id="promo1", app_user_id=aid, store="PROMOTIONAL",
+                               original_transaction_id="rc-promo-1"))
+    assert r.status_code == 200, r.text
+    assert _me(client, tok)["is_pro"] is False  # shadow never grants
+
+    from backend.store import get_store
+    store = get_store()
+    life = store.revenuecat_shadow_summary()
+    flip = store.revenuecat_shadow_flip_summary()
+    # Lifetime STILL records the disagreement — evidence is never rewritten.
+    assert life["total"] == 1 and life["disagreements"] == 1 and life["agreements"] == 0
+    # ...but it is excluded from the flip-eligibility decision.
+    assert flip["eligible"] == {"total": 0, "agreements": 0, "disagreements": 0}
+    assert flip["excluded_promotional"] == 1
+    assert flip["unclassified"] == 0
+
+    body = client.get("/v1/revenuecat/readiness").json()
+    assert body["shadow"]["disagreements"] == 1              # lifetime diagnostics
+    assert body["shadow_excluded_promotional"] == 1
+    assert body["shadow_flip_eligible"]["disagreements"] == 0
+    assert body["shadow_clean"] is True                      # the corrected gate
+
+
+def test_promotional_grant_and_revoke_observations_are_all_retained(rc):
+    """Reproduces the live ledger: shadow.total=3, agreements=2, disagreements=1,
+    ALL promotional (grant disagrees; two revoke/expiry observations agree). Every
+    row is retained in lifetime; none is flip-eligible; the gate is clean."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+
+    _post(client, rc_event(event_id="promo-grant", app_user_id=aid, store="PROMOTIONAL",
+                           original_transaction_id="rc-promo-1"))
+    _post(client, rc_event(event_id="promo-revoke1", etype="EXPIRATION", app_user_id=aid,
+                           store="PROMOTIONAL", expiration_ms=_past_ms(),
+                           original_transaction_id="rc-promo-1"))
+    _post(client, rc_event(event_id="promo-revoke2", etype="EXPIRATION", app_user_id=aid,
+                           store="PROMOTIONAL", expiration_ms=_past_ms(),
+                           original_transaction_id="rc-promo-1"))
+
+    from backend.store import get_store
+    store = get_store()
+    life = store.revenuecat_shadow_summary()
+    assert life["total"] == 3 and life["agreements"] == 2 and life["disagreements"] == 1
+    # Both revoke observations are physically retained (not just the disagreement).
+    ids = {row["event_id"] for row in _shadow_rows(store)}
+    assert {"promo-grant", "promo-revoke1", "promo-revoke2"} <= ids
+
+    flip = store.revenuecat_shadow_flip_summary()
+    assert flip["excluded_promotional"] == 3
+    assert flip["eligible"]["total"] == 0
+    assert flip["unclassified"] == 0
+    assert client.get("/v1/revenuecat/readiness").json()["shadow_clean"] is True
+
+
+@pytest.mark.parametrize("store_val", ["APP_STORE", "PLAY_STORE", "TEST_STORE", "STRIPE", "RC_BILLING"])
+def test_real_store_disagreement_remains_flip_blocking(rc, store_val):
+    """A disagreement from any real customer store is a genuine store-parity
+    failure and MUST still block the flip — the fix excludes promotional only."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+
+    r = _post(client, rc_event(event_id="e1", app_user_id=aid, store=store_val,
+                               original_transaction_id="otx-real"))
+    assert r.status_code == 200, r.text
+
+    body = client.get("/v1/revenuecat/readiness").json()
+    assert body["shadow_flip_eligible"]["total"] == 1
+    assert body["shadow_flip_eligible"]["disagreements"] == 1
+    assert body["shadow_excluded_promotional"] == 0
+    assert body["shadow_unclassified"] == 0
+    assert body["shadow_clean"] is False
+
+
+@pytest.mark.parametrize("store_val", ["TOTALLY_MADE_UP", "", None, 123])
+def test_unknown_or_malformed_store_fails_closed(rc, store_val):
+    """An observation whose store cannot be classified must NOT be silently
+    treated as promotional (excluded) or clean — it fails closed and blocks the
+    flip, so a store RevenueCat adds later can never smuggle a green gate."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+
+    r = _post(client, rc_event(event_id="e1", app_user_id=aid, store=store_val,
+                               original_transaction_id="otx-unknown"))
+    assert r.status_code == 200, r.text
+
+    from backend.store import get_store
+    store = get_store()
+    flip = store.revenuecat_shadow_flip_summary()
+    assert flip["excluded_promotional"] == 0        # never assumed promotional
+    assert flip["eligible"]["disagreements"] == 0   # never counted as eligible
+    assert flip["unclassified"] == 1                # fail closed
+
+    body = client.get("/v1/revenuecat/readiness").json()
+    assert body["shadow_unclassified"] == 1
+    assert body["shadow_clean"] is False
+
+
+def test_pre_migration_row_classified_from_durable_event_payload_on_backfill(rc):
+    """Existing DEPLOYED promotional rows (written before `store_source` existed)
+    must be classified after upgrade, not just new inserts. Here the durable
+    event's derived column is ALSO null, forcing recovery from the raw payload
+    JSON — the same body RevenueCat delivered. Before the backfill the row fails
+    closed (unclassified); after it, it is correctly excluded as promotional."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    _register(client)  # force app + store init
+    from backend.store import get_store, _now_iso
+    store = get_store()
+
+    def _seed():
+        cur = store._conn.cursor()
+        cur.execute(
+            "INSERT INTO revenuecat_events (event_id,event_type,app_user_id,store_source,"
+            "environment,event_ms,payload,state,attempts,received_at) "
+            "VALUES (?,?,?,?,?,?,?, 'processed',0,?)",
+            ("legacy-promo", "INITIAL_PURCHASE", "acct", None, "PRODUCTION", 1,
+             json.dumps({"event": {"id": "legacy-promo", "store": "PROMOTIONAL"}}), _now_iso()),
+        )
+        cur.execute(
+            "INSERT INTO revenuecat_shadow_observations (event_id,account_id,store_source,"
+            "revenuecat_active,legacy_active,agree,mode,detail,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            ("legacy-promo", "acct", None, 1, 0, 0, "shadow", "legacy", _now_iso()),
+        )
+    store._run(_seed).result()
+
+    # Pre-backfill: neither the observation nor the event's derived column carries
+    # the store, so the query-time join can't classify it -> fail closed.
+    flip = store.revenuecat_shadow_flip_summary()
+    assert flip["unclassified"] == 1 and flip["excluded_promotional"] == 0
+
+    # The upgrade-startup backfill recovers PROMOTIONAL from the raw payload.
+    store._backfill_revenuecat_shadow_store_source()
+    flip = store.revenuecat_shadow_flip_summary()
+    assert flip["excluded_promotional"] == 1 and flip["unclassified"] == 0
+    assert flip["eligible"]["disagreements"] == 0
+
+    def _read():
+        cur = store._conn.cursor()
+        cur.execute("SELECT store_source FROM revenuecat_shadow_observations WHERE event_id='legacy-promo'")
+        return cur.fetchone()["store_source"]
+    assert store._run(_read).result() == "PROMOTIONAL"
+
+
+def test_pre_migration_real_store_row_classified_via_join_without_backfill(rc):
+    """The other durable path: a pre-migration row whose OBSERVATION store_source
+    is null but whose durable event carries the store. The flip summary derives
+    it via the LEFT JOIN + COALESCE with no backfill run — and a real-store
+    disagreement still blocks the flip."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    _register(client)
+    from backend.store import get_store, _now_iso
+    store = get_store()
+
+    def _seed():
+        cur = store._conn.cursor()
+        cur.execute(
+            "INSERT INTO revenuecat_events (event_id,event_type,app_user_id,store_source,"
+            "environment,event_ms,payload,state,attempts,received_at) "
+            "VALUES (?,?,?,?,?,?,?, 'processed',0,?)",
+            ("legacy-app", "RENEWAL", "acct", "APP_STORE", "PRODUCTION", 1,
+             json.dumps({"event": {"id": "legacy-app", "store": "APP_STORE"}}), _now_iso()),
+        )
+        cur.execute(
+            "INSERT INTO revenuecat_shadow_observations (event_id,account_id,store_source,"
+            "revenuecat_active,legacy_active,agree,mode,detail,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            ("legacy-app", "acct", None, 1, 0, 0, "shadow", "legacy", _now_iso()),
+        )
+    store._run(_seed).result()
+
+    flip = store.revenuecat_shadow_flip_summary()   # no backfill invoked
+    assert flip["eligible"]["disagreements"] == 1
+    assert flip["unclassified"] == 0 and flip["excluded_promotional"] == 0
+    assert client.get("/v1/revenuecat/readiness").json()["shadow_clean"] is False
+
+
+def test_duplicate_delivery_does_not_double_count_shadow_observation(rc):
+    """A redelivered webhook is ACKed idempotently and never adds a second
+    observation, so a duplicate promotional/real delivery cannot inflate either
+    summary (contract §5/§8)."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+
+    body = rc_event(event_id="dup1", app_user_id=aid, store="APP_STORE",
+                    original_transaction_id="otx-dup")
+    r1 = _post(client, body)
+    r2 = _post(client, body)
+    assert r1.status_code == 200 and r2.status_code == 200
+    assert r2.json().get("duplicate") is True
+
+    from backend.store import get_store
+    store = get_store()
+    assert store.revenuecat_shadow_summary()["total"] == 1
+    flip = store.revenuecat_shadow_flip_summary()
+    assert flip["eligible"]["total"] == 1 and flip["eligible"]["disagreements"] == 1
+
+
+def test_readiness_exposes_lifetime_and_flip_eligible_and_derives_clean_from_eligible(rc):
+    """Readiness surfaces BOTH the lifetime and flip-eligible summaries, and
+    `shadow_clean` follows the eligible one: a promotional disagreement plus a
+    clean real-store agreement reads clean, because the only disagreement is
+    excluded."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+
+    _post(client, rc_event(event_id="promo", app_user_id=aid, store="PROMOTIONAL",
+                           original_transaction_id="rc-promo"))
+    _post(client, rc_event(event_id="apple-ok", etype="EXPIRATION", app_user_id=aid,
+                           store="APP_STORE", expiration_ms=_past_ms(),
+                           original_transaction_id="otx-apple"))
+
+    body = client.get("/v1/revenuecat/readiness").json()
+    assert body["shadow"]["total"] == 2 and body["shadow"]["disagreements"] == 1
+    assert body["shadow_flip_eligible"] == {"total": 1, "agreements": 1, "disagreements": 0}
+    assert body["shadow_excluded_promotional"] == 1
+    assert body["shadow_unclassified"] == 0
+    assert body["shadow_clean"] is True
+
+
+def test_readiness_flip_fields_are_counts_only_no_identifiers(rc):
+    """The new flip-eligibility fields are non-secret COUNTS — never an account,
+    event id, or store detail (contract §5/§9)."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+    _post(client, rc_event(event_id="promo", app_user_id=aid, store="PROMOTIONAL",
+                           original_transaction_id="rc-promo"))
+    _post(client, rc_event(event_id="apple", app_user_id=aid, store="APP_STORE",
+                           original_transaction_id="otx-a"))
+
+    body = client.get("/v1/revenuecat/readiness").json()
+    assert set(body["shadow_flip_eligible"]) == {"total", "agreements", "disagreements"}
+    for value in body["shadow_flip_eligible"].values():
+        assert isinstance(value, int) and not isinstance(value, bool)
+    for key in ("shadow_flip_eligible", "shadow_excluded_promotional", "shadow_unclassified"):
+        blob = str(body[key])
+        assert aid not in blob
+        assert "rc-promo" not in blob and "otx-a" not in blob
+
+
+def test_authoritative_grant_behavior_is_unchanged(rc):
+    """The patch changes only shadow-canary accounting. The authoritative writer
+    is untouched: a real-store event still grants Pro, and a PROMOTIONAL grant
+    still grants too (store class gates ONLY the shadow flip decision, never the
+    authoritative entitlement writer)."""
+    rc.state["mode"] = "authoritative"
+    client = rc.client
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+    assert _me(client, tok)["is_pro"] is False
+    r = _post(client, rc_event(event_id="e1", app_user_id=aid, store="APP_STORE"))
+    assert r.status_code == 200, r.text
+    assert r.json()["outcome"].startswith("authoritative:")
+    assert _me(client, tok)["is_pro"] is True
+
+    tok2 = _register(client)["api_token"]
+    aid2 = _account_id(client, tok2)
+    r2 = _post(client, rc_event(event_id="e2", app_user_id=aid2, store="PROMOTIONAL",
+                                original_transaction_id="otx-2"))
+    assert r2.status_code == 200, r2.text
+    assert _me(client, tok2)["is_pro"] is True

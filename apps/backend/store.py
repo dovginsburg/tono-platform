@@ -487,10 +487,20 @@ CREATE INDEX IF NOT EXISTS idx_revenuecat_events_state ON revenuecat_events(stat
 -- derived entitlement decision and the legacy projection at that instant, so a
 -- reconciler surfaces disagreements WITHOUT RevenueCat being the authority in
 -- 'shadow' mode. Append-only, deduped by event_id (contract §6/§9).
+--
+-- `store_source` (the RevenueCat 'store') is the flip-eligibility class key: a
+-- PROMOTIONAL admin grant makes RevenueCat active with NO underlying store
+-- purchase, so in shadow mode it legitimately disagrees with the (correct) free
+-- legacy projection. Promotional observations are retained here for lifetime
+-- diagnostics but EXCLUDED from the shadow->authoritative flip decision; every
+-- real customer store (App Store/Play/Stripe/...) stays a flip-eligible
+-- store-parity canary. Rows written before build 126 have store_source NULL and
+-- are backfilled from the durable revenuecat_events payload on startup.
 CREATE TABLE IF NOT EXISTS revenuecat_shadow_observations (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id          TEXT NOT NULL,
     account_id        TEXT,
+    store_source      TEXT,                      -- RevenueCat 'store': APP_STORE|PLAY_STORE|STRIPE|PROMOTIONAL|... (flip-eligibility class)
     revenuecat_active INTEGER NOT NULL,          -- RevenueCat-derived entitled? (0/1)
     legacy_active     INTEGER NOT NULL,          -- legacy is_pro at observation time (0/1)
     agree             INTEGER NOT NULL,          -- revenuecat_active == legacy_active (0/1)
@@ -541,6 +551,64 @@ _DEFAULT_FLAGS = [
 # older-or-equal active event can never resurrect it (contract §3/§15; P0
 # equal-timestamp resurrection).
 _TERMINAL_STATES = frozenset({"refunded", "revoked", "expired"})
+
+# ── RevenueCat shadow-canary flip-eligibility classes ───────────────────────
+# The `store` a shadow observation originated from decides whether it counts
+# toward the shadow->authoritative flip decision. A RevenueCat PROMOTIONAL grant
+# (dashboard/API admin entitlement) makes RevenueCat "active" with NO underlying
+# store purchase, so in shadow mode it legitimately disagrees with the (correct)
+# free legacy projection — it is an admin/transport canary, NOT a store-parity
+# canary. Promotional observations are therefore EXCLUDED from the flip gate
+# while still retained in lifetime diagnostics.
+_RC_STORE_PROMOTIONAL = frozenset({"PROMOTIONAL"})
+# Real customer stores whose events ARE store-parity canaries and stay
+# flip-eligible: a disagreement on any of these still BLOCKS the flip. Kept as an
+# explicit allowlist (not "anything that isn't promotional") so a new/unknown
+# store fails closed rather than silently counting as clean.
+_RC_STORE_ELIGIBLE = frozenset({
+    "APP_STORE", "MAC_APP_STORE", "PLAY_STORE", "AMAZON",
+    "STRIPE", "RC_BILLING", "WEB_BILLING", "PADDLE", "TEST_STORE",
+})
+
+
+def _classify_rc_store(store_source: Optional[str]) -> str:
+    """Classify a RevenueCat `store` for the shadow flip gate:
+      'promotional' – admin/dashboard grant, excluded from the flip decision;
+      'eligible'    – a real store-parity canary that counts toward the flip;
+      'unknown'     – empty or unrecognized, which FAILS CLOSED (blocks the flip
+                      and is never treated as promotional or clean).
+    Case- and whitespace-insensitive; a non-string/None store coerces to
+    'unknown' (fail closed) rather than raising."""
+    token = str(store_source or "").strip().upper()
+    if not token:
+        return "unknown"
+    if token in _RC_STORE_PROMOTIONAL:
+        return "promotional"
+    if token in _RC_STORE_ELIGIBLE:
+        return "eligible"
+    return "unknown"
+
+
+def _rc_store_from_payload(payload_text: Optional[str]) -> Optional[str]:
+    """Extract the RevenueCat `store` from a durable event payload (the raw
+    webhook JSON) so pre-migration shadow rows can be classified from the same
+    body RevenueCat delivered. Returns None on any parse error or a missing
+    store — the caller then leaves the row unclassified (fail closed), never
+    guessing a store."""
+    if not payload_text:
+        return None
+    try:
+        body = json.loads(payload_text)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(body, dict):
+        return None
+    event = body.get("event")
+    if not isinstance(event, dict):
+        return None
+    store = event.get("store")
+    return str(store) if store else None
+
 
 # The only ownership types we will build an entitlement grant for. Anything else
 # is refused before any DB mutation (contract §4/§6; P0 fail-closed ownership).
@@ -902,6 +970,13 @@ class Store:
         )
         for stmt in (
             "ALTER TABLE stripe_events ADD COLUMN processed_at TEXT",
+            # Build 126 corrective: the originating RevenueCat `store` per shadow
+            # observation, so a PROMOTIONAL admin grant can be excluded from the
+            # shadow->authoritative flip decision while staying in lifetime
+            # diagnostics. Additive; pre-existing rows are NULL here and are
+            # recovered from the durable revenuecat_events payload by
+            # _backfill_revenuecat_shadow_store_source below.
+            "ALTER TABLE revenuecat_shadow_observations ADD COLUMN store_source TEXT",
         ):
             with contextlib.suppress(sqlite3.OperationalError):
                 self._conn.execute(stmt)
@@ -915,6 +990,7 @@ class Store:
         self._backfill_email_identity()
         self._backfill_account_coupons()
         self._backfill_stripe_trial_ledger()
+        self._backfill_revenuecat_shadow_store_source()
         self._seed_feature_flags()
 
     def _backfill_account_coupons(self) -> None:
@@ -964,6 +1040,45 @@ class Store:
                        VALUES (?, ?, ?, ?)""",
                     (row["account_id"], row["code"], row["redeemed_at"], row["coupon_pro_expires_at"]),
                 )
+            cur.execute("COMMIT")
+        except Exception:
+            with contextlib.suppress(sqlite3.Error):
+                cur.execute("ROLLBACK")
+            raise
+
+    def _backfill_revenuecat_shadow_store_source(self) -> None:
+        """Classify shadow observations written before the `store_source` column
+        existed (build 126 corrective), so a pre-upgrade PROMOTIONAL admin grant
+        is distinguishable from a real store-parity canary and the flip gate is
+        computed from the RIGHT population.
+
+        The store is recovered from the durable revenuecat_events row that the
+        observation was derived from — its already-extracted `store_source`
+        column first, then the raw `payload` JSON (the same body RevenueCat
+        delivered) as a fallback — so this is a deterministic backfill from
+        durable event evidence, never a guess.
+
+        Idempotent and evidence-preserving: only rows whose `store_source` IS
+        NULL are touched, re-running re-derives the same value, a non-NULL value
+        is never rewritten, and a row we cannot classify is LEFT NULL (it then
+        fails closed in the flip summary rather than being assumed clean).
+        """
+        cur = self._conn.cursor()
+        cur.execute("BEGIN IMMEDIATE")
+        try:
+            cur.execute(
+                "SELECT o.id AS oid, e.store_source AS col_store, e.payload AS payload "
+                "  FROM revenuecat_shadow_observations o "
+                "  JOIN revenuecat_events e ON e.event_id = o.event_id "
+                " WHERE o.store_source IS NULL"
+            )
+            for row in cur.fetchall():
+                store = row["col_store"] or _rc_store_from_payload(row["payload"])
+                if store:
+                    cur.execute(
+                        "UPDATE revenuecat_shadow_observations SET store_source = ? WHERE id = ?",
+                        (str(store), row["oid"]),
+                    )
             cur.execute("COMMIT")
         except Exception:
             with contextlib.suppress(sqlite3.Error):
@@ -4242,21 +4357,26 @@ class Store:
         revenuecat_active: bool,
         legacy_active: bool,
         mode: str,
+        store_source: Optional[str] = None,
         detail: Optional[str] = None,
     ) -> bool:
         """Append a canary comparison of the RevenueCat-derived entitlement against
-        the legacy projection. Idempotent by event_id. Returns True when the two
-        agree (both entitled or both not)."""
+        the legacy projection. Idempotent by event_id (a duplicate delivery updates
+        the one row in place, never adds a second observation). `store_source` is
+        the RevenueCat `store` this observation came from; it is the flip-eligibility
+        class key (a PROMOTIONAL admin grant is excluded from the flip decision).
+        Returns True when the two agree (both entitled or both not)."""
         agree = bool(revenuecat_active) == bool(legacy_active)
         def _do() -> None:
             self._conn.execute(
                 "INSERT INTO revenuecat_shadow_observations "
-                "(event_id, account_id, revenuecat_active, legacy_active, agree, mode, detail, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "(event_id, account_id, store_source, revenuecat_active, legacy_active, agree, mode, detail, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(event_id) DO UPDATE SET account_id=excluded.account_id, "
+                "store_source=excluded.store_source, "
                 "revenuecat_active=excluded.revenuecat_active, legacy_active=excluded.legacy_active, "
                 "agree=excluded.agree, mode=excluded.mode, detail=excluded.detail",
-                (event_id, account_id, 1 if revenuecat_active else 0,
+                (event_id, account_id, (store_source or None), 1 if revenuecat_active else 0,
                  1 if legacy_active else 0, 1 if agree else 0, mode,
                  (detail or None), _now_iso()),
             )
@@ -4298,6 +4418,61 @@ class Store:
                 "agreements": int(row["agreements"] or 0),
                 "disagreements": int(row["disagreements"] or 0),
                 "last_observed_at": row["last_observed_at"],
+            }
+        return self._run(_do).result()
+
+    def revenuecat_shadow_flip_summary(self) -> dict:
+        """Flip-eligibility breakdown of the shadow ledger — the population the
+        shadow->authoritative cutover decision is ACTUALLY allowed to be computed
+        from. It separates real store-parity canaries (App Store/Play/Stripe/RC
+        Billing/Test Store/... — 'eligible') from RevenueCat PROMOTIONAL admin
+        grants ('excluded_promotional', retained in lifetime diagnostics but
+        never a flip signal, because a promotional grant makes RevenueCat active
+        with no store purchase and thus legitimately disagrees with the free
+        legacy projection in shadow mode).
+
+        The store class is derived per observation from its own `store_source`,
+        falling back to the durable revenuecat_events row for pre-migration rows
+        (LEFT JOIN on event_id + COALESCE) so existing deployed promotional rows
+        are classified correctly after upgrade, not just new inserts. An
+        observation whose store cannot be classified is counted as
+        `unclassified` and FAILS CLOSED — it is never silently folded into either
+        the eligible-clean or the excluded-promotional bucket (contract §6
+        corrective). COUNTS ONLY — no identifiers — safe for the readiness probe.
+        """
+        def _do() -> dict:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT COALESCE(o.store_source, e.store_source) AS eff_store, "
+                "       o.agree AS agree, COUNT(*) AS n "
+                "  FROM revenuecat_shadow_observations o "
+                "  LEFT JOIN revenuecat_events e ON e.event_id = o.event_id "
+                " GROUP BY eff_store, agree"
+            )
+            eligible_total = eligible_agree = eligible_disagree = 0
+            excluded_promotional = 0
+            unclassified = 0
+            for row in cur.fetchall():
+                klass = _classify_rc_store(row["eff_store"])
+                n = int(row["n"] or 0)
+                if klass == "promotional":
+                    excluded_promotional += n
+                elif klass == "eligible":
+                    eligible_total += n
+                    if int(row["agree"] or 0) == 1:
+                        eligible_agree += n
+                    else:
+                        eligible_disagree += n
+                else:  # 'unknown' -> fail closed; never promotional, never clean
+                    unclassified += n
+            return {
+                "eligible": {
+                    "total": eligible_total,
+                    "agreements": eligible_agree,
+                    "disagreements": eligible_disagree,
+                },
+                "excluded_promotional": excluded_promotional,
+                "unclassified": unclassified,
             }
         return self._run(_do).result()
 
