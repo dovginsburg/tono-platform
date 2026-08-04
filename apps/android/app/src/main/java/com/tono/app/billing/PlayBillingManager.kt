@@ -151,6 +151,56 @@ object PlayBillingManager : PurchasesUpdatedListener {
         activity.startActivity(Intent(Intent.ACTION_VIEW, uri))
     }
 
+    // ── Build 126 — RevenueCat canary seam ─────────────────────────────────
+    //
+    // In `authoritative` mode the paywall routes the purchase/restore through
+    // RevenueCatManager instead of this manager. RevenueCat conducts the Play
+    // transaction, but the Tono BACKEND remains the sole durable entitlement
+    // authority — its RevenueCat webhook projects the grant. These two seams let
+    // the RevenueCat route surface its result through the SAME UI state the
+    // paywall already renders, without duplicating a second billing surface.
+
+    /**
+     * Reconcile Pro from the backend projection (`/v1/me`) after a RevenueCat-route
+     * purchase or restore. Identical authority to the Play path in
+     * [processPurchases]: the client never grants Pro locally; it reflects what the
+     * server reports. A local `true` is never downgraded by a transient backend
+     * read (see [EntitlementDecision.isPro]).
+     */
+    fun reconcileEntitlementAfterExternalPurchase() {
+        _state.value = _state.value.copy(isLoading = true, error = null)
+        scope.launch {
+            val backend = runCatching { withContext(Dispatchers.IO) { TonoBackend.me() } }
+            backend.fold(
+                onSuccess = { me ->
+                    _state.value = _state.value.copy(
+                        isLoading = false,
+                        isPro = EntitlementDecision.isPro(_state.value.isPro, me.isPro),
+                    )
+                },
+                onFailure = {
+                    _state.value = _state.value.copy(
+                        isLoading = false,
+                        error = "Couldn't confirm your subscription just now. Check your connection and tap Retry.",
+                    )
+                },
+            )
+        }
+    }
+
+    /**
+     * Fail closed: an `authoritative` build reached the paywall without a usable
+     * RevenueCat (missing publishable key / unlinked SDK). Never silently charge
+     * through Play — surface an honest, non-charging message instead.
+     */
+    fun reportPurchasesTemporarilyUnavailable() {
+        _state.value = _state.value.copy(
+            isLoading = false,
+            message = null,
+            error = "Subscriptions can’t be started right now. Please try again later.",
+        )
+    }
+
     override fun onPurchasesUpdated(result: BillingResult, purchases: MutableList<Purchase>?) {
         when (result.responseCode) {
             BillingClient.BillingResponseCode.OK -> processPurchases(purchases.orEmpty())

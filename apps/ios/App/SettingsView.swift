@@ -1070,6 +1070,11 @@ struct SettingsView: View {
 struct PaywallView: View {
     let onDismiss: () -> Void
     @ObservedObject private var store = StoreKitManager.shared
+    // build 126: RevenueCat canary. The paywall routes purchase/restore through
+    // RevenueCatManager only in `authoritative` mode; `off`/`shadow` keep the
+    // StoreKit path below verbatim. Observed so the button state reflects an
+    // in-flight RevenueCat purchase too.
+    @ObservedObject private var rc = RevenueCatManager.shared
     // build 101: sign-in gate. When the user taps buy on an anonymous account,
     // the purchase is deferred until email identity is confirmed. After sign-in
     // the pending product is retried automatically.
@@ -1139,14 +1144,23 @@ Payment will be charged to your Apple ID account at confirmation of purchase. Th
         // in StoreKitManager.purchase; this is defense-in-depth.
         .task {
             await store.refreshApplePurchaseCapability()
+            // build 126: in authoritative mode, refresh RevenueCat offerings so
+            // package identifiers and localized prices come from the provider. In
+            // off/shadow this is a no-op (RevenueCat is dormant/observation-only)
+            // and the paywall keeps rendering StoreKit's live products.
+            if RevenueCatPurchaseRouter.route(mode: RevenueCatMode.current,
+                                              revenueCatUsable: rc.isConfigured) == .revenueCat {
+                await rc.refreshOfferings()
+            }
         }
         .sheet(isPresented: $showSignInForPurchase) {
             EmailSignInSheet(
                 onSuccess: {
                     showSignInForPurchase = false
-                    // Retry the purchase now that the account is identified.
+                    // Retry the purchase now that the account is identified — through
+                    // the same canary router the first tap used.
                     if let product = pendingProduct {
-                        Task { await store.purchase(product) }
+                        performPurchase(product)
                     }
                     pendingProduct = nil
                 },
@@ -1160,15 +1174,55 @@ Payment will be charged to your Apple ID account at confirmation of purchase. Th
 
     // Initiates a purchase or routes to sign-in if the account is anonymous.
     fileprivate func initiatePurchase(_ product: Product) {
+        // Durable paid access is never bound to an anonymous identity — this gate
+        // holds for BOTH engines. StoreKit and RevenueCat each require the
+        // canonical account UUID, so the sign-in detour is unchanged.
         guard store.isIdentifiedAccount else {
             pendingProduct = product
             showSignInForPurchase = true
             return
         }
-        // build 122: even if the disabled state is somehow bypassed, route the
-        // tap through the model gate so a non-ready capability surfaces an
-        // honest refusal instead of a silent charge.
-        Task { await store.purchase(product) }
+        performPurchase(product)
+    }
+
+    /// build 126: route an identified-account purchase to the engine selected by
+    /// the RevenueCat canary mode. `off`/`shadow` conduct the purchase through the
+    /// existing StoreKit path (byte-for-byte the prior behavior); `authoritative`
+    /// conducts it through RevenueCat against the canonical account UUID. A missing
+    /// key / unlinked SDK in authoritative mode fails closed — never a silent
+    /// downgrade to a StoreKit charge.
+    fileprivate func performPurchase(_ product: Product) {
+        switch RevenueCatPurchaseRouter.route(mode: RevenueCatMode.current,
+                                              revenueCatUsable: rc.isConfigured) {
+        case .storeKit:
+            // build 122: even if the disabled state is somehow bypassed, route the
+            // tap through the model gate so a non-ready capability surfaces an
+            // honest refusal instead of a silent charge.
+            Task { await store.purchase(product) }
+        case .revenueCat:
+            Task {
+                let outcome = await rc.purchase(packageID: Self.packageID(for: product))
+                // The backend stays the durable entitlement authority: a purchased
+                // or pending RevenueCat transaction surfaces via its webhook. Re-read
+                // the server projection so the Pro gate (`store.isPro`, which drives
+                // this sheet's dismissal) reflects it.
+                if outcome == .purchased || outcome == .pending {
+                    await store.refreshEntitlements()
+                }
+            }
+        case .blockedNotConfigured:
+            // Fail closed: authoritative requested but RevenueCat is not usable.
+            store.purchaseError =
+                "Subscriptions can’t be started right now. Please try again later."
+        }
+    }
+
+    /// Map a StoreKit product to its RevenueCat package identifier. Pricing and the
+    /// product itself still come from the store; this only selects the package.
+    private static func packageID(for product: Product) -> String {
+        product.id == StoreKitManager.ProductID.yearly
+            ? RevenueCatManager.PackageID.annual
+            : RevenueCatManager.PackageID.monthly
     }
 
     /// build 122: the resolved capability is a non-`.ready`, non-`.unknown`
@@ -1280,12 +1334,23 @@ Payment will be charged to your Apple ID account at confirmation of purchase. Th
 
     private var restoreButton: some View {
         Button("Restore purchases") {
-            Task { await store.restorePurchases() }
+            // build 126: restore never charges, so authoritative-but-unusable
+            // falls back to StoreKit restore rather than blocking recovery.
+            switch RevenueCatPurchaseRouter.restoreRoute(mode: RevenueCatMode.current,
+                                                         revenueCatUsable: rc.isConfigured) {
+            case .revenueCat:
+                Task {
+                    let outcome = await rc.restore()
+                    if outcome == .purchased { await store.refreshEntitlements() }
+                }
+            case .storeKit, .blockedNotConfigured:
+                Task { await store.restorePurchases() }
+            }
         }
         .tonoFont(size: 14, relativeTo: .subheadline)
         .foregroundColor(.white.opacity(0.5))
         .padding(.bottom, 12)
-        .disabled(store.isLoading)
+        .disabled(store.isLoading || rc.isPurchasing)
     }
 }
 

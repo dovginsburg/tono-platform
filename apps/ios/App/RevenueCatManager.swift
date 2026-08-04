@@ -286,3 +286,84 @@ private extension String {
     /// nil when the string is empty after trimming, else self — for config reads.
     var nonEmpty: String? { isEmpty ? nil : self }
 }
+
+// MARK: - Canary routing mode (off / shadow / authoritative)
+
+/// The three-state client routing mode for the RevenueCat canary, mirroring the
+/// backend `TONO_REVENUECAT_MODE` and the web `NEXT_PUBLIC_REVENUECAT_MODE`. It is
+/// read from the Info.plist key `REVENUECAT_MODE` and fails closed to `.off`.
+///
+///  - `off`:           the existing StoreKit paywall path conducts purchase and
+///                     restore; RevenueCat is dormant. Current behavior, unchanged.
+///  - `shadow`:        the existing StoreKit path still conducts the purchase — it
+///                     stays the sole deterministic writer — and RevenueCat only
+///                     observes (CustomerInfo/offerings), never granting access.
+///  - `authoritative`: RevenueCat conducts the purchase/restore lifecycle. The Tono
+///                     backend remains the sole durable entitlement projector (the
+///                     Pro gate is still `/v1/me`.is_pro, driven by the webhook).
+public enum RevenueCatMode: String, CaseIterable, Equatable {
+    case off
+    case shadow
+    case authoritative
+
+    /// Parse a raw Info.plist / environment string, failing closed to `.off` for
+    /// anything unknown, empty, placeholder, or nil.
+    public static func parse(_ raw: String?) -> RevenueCatMode {
+        switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "shadow":        return .shadow
+        case "authoritative": return .authoritative
+        default:              return .off   // fail closed: unknown/empty/nil ⇒ off
+        }
+    }
+
+    /// The mode configured for this build via the Info.plist key `REVENUECAT_MODE`.
+    public static var current: RevenueCatMode {
+        parse(Bundle.main.object(forInfoDictionaryKey: "REVENUECAT_MODE") as? String)
+    }
+}
+
+/// Which engine should conduct a paywall purchase, given the mode and whether
+/// RevenueCat is actually usable right now (real publishable key + linked SDK +
+/// successful configuration). Pure and SDK-agnostic so it is fully unit-testable
+/// without the provider or a live key.
+public enum RevenueCatPurchaseRoute: Equatable {
+    /// The legacy StoreKit path (off / shadow, and the fail-closed authoritative
+    /// fallback for restore).
+    case storeKit
+    /// RevenueCat conducts the purchase/restore (authoritative + usable).
+    case revenueCat
+    /// Authoritative was requested but RevenueCat is not usable (missing key or
+    /// unlinked SDK). A *purchase* fails closed here — we never silently charge
+    /// through the wrong engine.
+    case blockedNotConfigured
+}
+
+public enum RevenueCatPurchaseRouter {
+    /// Decide which engine conducts a **purchase**.
+    ///
+    /// `revenueCatUsable` must be true only when a real key is present, the SDK is
+    /// linked, and configuration succeeded (`RevenueCatManager.isConfigured`).
+    public static func route(mode: RevenueCatMode, revenueCatUsable: Bool) -> RevenueCatPurchaseRoute {
+        switch mode {
+        case .off, .shadow:
+            // The legacy StoreKit path is the deterministic writer; shadow only
+            // adds RevenueCat observation on top, it never conducts the purchase.
+            return .storeKit
+        case .authoritative:
+            // Fail closed: authoritative without a usable RevenueCat is blocked,
+            // not silently downgraded to a StoreKit charge.
+            return revenueCatUsable ? .revenueCat : .blockedNotConfigured
+        }
+    }
+
+    /// Decide which engine conducts a **restore**. Restore never charges, so an
+    /// authoritative-but-unusable state safely falls back to StoreKit restore
+    /// instead of blocking the user out of recovering an existing subscription.
+    public static func restoreRoute(mode: RevenueCatMode, revenueCatUsable: Bool) -> RevenueCatPurchaseRoute {
+        switch route(mode: mode, revenueCatUsable: revenueCatUsable) {
+        case .revenueCat:          return .revenueCat
+        case .storeKit,
+             .blockedNotConfigured: return .storeKit
+        }
+    }
+}

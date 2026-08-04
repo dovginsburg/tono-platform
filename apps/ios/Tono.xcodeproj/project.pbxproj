@@ -153,6 +153,7 @@
 		C0092000000000000000000A /* PasskeySignIn.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0092000000000000000000B /* PasskeySignIn.swift */; };
 		A1240000000000000000B0A0 /* Build124AuthProvidersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1240000000000000000F0A0 /* Build124AuthProvidersTests.swift */; };
 		609E0000000000000000000C /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 609E0000000000000000000B /* GoogleSignIn */; };
+		609E0000000000000000000F /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = 609E0000000000000000000E /* RevenueCat */; };
 		B1115E770000000000000002 /* RecipientsManagerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1115E770000000000000001 /* RecipientsManagerView.swift */; };
 		C9B979F056F3D84FB316577F /* SharedUserDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 772DD67FA1CD9CF09D426AF5 /* SharedUserDefaults.swift */; };
 		C9E4BE5B5759944FF1CF021C /* StyleMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78AA6203719949C25622DA78 /* StyleMemory.swift */; };
@@ -444,6 +445,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				609E0000000000000000000C /* GoogleSignIn in Frameworks */,
+				609E0000000000000000000F /* RevenueCat in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -798,6 +800,7 @@
 			name = Tono;
 			packageProductDependencies = (
 				609E0000000000000000000B /* GoogleSignIn */,
+				609E0000000000000000000E /* RevenueCat */,
 			);
 			productName = Tono;
 			productReference = F56F7614BF83D1438A50A811 /* Tono.app */;
@@ -827,6 +830,7 @@
 			projectRoot = "";
 			packageReferences = (
 				609E0000000000000000000A /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
+				609E00000000000000000D01 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */,
 			);
 			targets = (
 				EBE86B011C11AB11A09CEBA7 /* Tono */,
@@ -1629,6 +1633,14 @@
 				minimumVersion = 7.1.0;
 			};
 		};
+		609E00000000000000000D01 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/RevenueCat/purchases-ios-spm";
+			requirement = {
+				kind = exactVersion;
+				version = 5.83.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1636,6 +1648,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 609E0000000000000000000A /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
 			productName = GoogleSignIn;
+		};
+		609E0000000000000000000E /* RevenueCat */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 609E00000000000000000D01 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */;
+			productName = RevenueCat;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -75,6 +75,14 @@ object RevenueCatManager {
     val isEnabled: Boolean
         get() = publicSdkKey() != null
 
+    /** True once the RevenueCat SDK has actually been configured with a real key.
+     * The paywall routes a purchase/restore to RevenueCat only when this is true
+     * (Build 126 `authoritative` mode); otherwise the router fails closed to the
+     * existing Play path. Distinct from [isEnabled], which only reports that a key
+     * is present — configuration additionally requires the SDK to be linked and
+     * `configureIfEnabled` to have run. */
+    fun isConfigured(): Boolean = Purchases.isConfigured
+
     private fun publicSdkKey(): String? {
         val key = BuildConfig.REVENUECAT_PUBLIC_SDK_KEY.trim()
         // Empty / obvious placeholder => not configured (fail closed / dormant).

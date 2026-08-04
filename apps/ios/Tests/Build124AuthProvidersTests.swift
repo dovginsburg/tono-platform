@@ -382,3 +382,184 @@ final class Build124AuthProvidersTests: XCTestCase {
         return nil
     }
 }
+
+// MARK: - Build 126 — RevenueCat canary purchase routing
+
+/// Build 126 pins the client half of the RevenueCat canary: the three-state
+/// purchase router (`off`/`shadow`/`authoritative`) and the fail-closed identity
+/// invariants. The router is a pure, `public` value type, so its behavior is
+/// pinned EXECUTABLY (no SDK, no key, no network); the identity/isolation rules
+/// that only the SDK could exercise at runtime are pinned by reading the shipped
+/// source, exactly like `Build122PurchaseGateTests` / the Android gate tests.
+///
+/// This suite turns red if: `off`/`shadow` ever conduct a purchase through
+/// RevenueCat; `authoritative` silently downgrades to a StoreKit charge when the
+/// SDK/key is missing (instead of failing closed); the mode parser stops failing
+/// closed to `.off`; or the App User ID is ever bound to anything but the
+/// canonical server-issued account UUID.
+final class Build126RevenueCatRoutingTests: XCTestCase {
+
+    // ── 1. Mode routing (EXECUTABLE) ───────────────────────────────────────
+
+    func testOffRoutesPurchaseToStoreKitRegardlessOfRevenueCatUsability() {
+        XCTAssertEqual(RevenueCatPurchaseRouter.route(mode: .off, revenueCatUsable: true), .storeKit)
+        XCTAssertEqual(RevenueCatPurchaseRouter.route(mode: .off, revenueCatUsable: false), .storeKit)
+    }
+
+    func testShadowRoutesPurchaseToStoreKitAndNeverToRevenueCat() {
+        // shadow = observe only; the legacy StoreKit path stays the sole writer.
+        XCTAssertEqual(RevenueCatPurchaseRouter.route(mode: .shadow, revenueCatUsable: true), .storeKit)
+        XCTAssertEqual(RevenueCatPurchaseRouter.route(mode: .shadow, revenueCatUsable: false), .storeKit)
+    }
+
+    func testAuthoritativeUsesRevenueCatWhenUsable() {
+        XCTAssertEqual(RevenueCatPurchaseRouter.route(mode: .authoritative, revenueCatUsable: true), .revenueCat)
+    }
+
+    func testAuthoritativeFailsClosedWhenRevenueCatNotUsable() {
+        // The core fail-closed rule: no key / no linked SDK ⇒ blocked, NOT a
+        // silent StoreKit charge under an authoritative build.
+        XCTAssertEqual(RevenueCatPurchaseRouter.route(mode: .authoritative, revenueCatUsable: false),
+                       .blockedNotConfigured)
+    }
+
+    func testNoModeEverRoutesAnUnusableRevenueCatToTheRevenueCatEngine() {
+        for mode in RevenueCatMode.allCases {
+            XCTAssertNotEqual(RevenueCatPurchaseRouter.route(mode: mode, revenueCatUsable: false), .revenueCat,
+                              "\(mode) must never conduct a purchase through an unusable RevenueCat")
+        }
+    }
+
+    // ── 2. Restore routing (EXECUTABLE) — never charges, so it may fall back ─
+
+    func testRestoreFallsBackToStoreKitWhenAuthoritativeButUnusable() {
+        // Restore does not charge; blocking recovery would be worse than a
+        // harmless StoreKit restore. Fallback is deliberate and asymmetric to buy.
+        XCTAssertEqual(RevenueCatPurchaseRouter.restoreRoute(mode: .authoritative, revenueCatUsable: false),
+                       .storeKit)
+    }
+
+    func testRestoreUsesRevenueCatWhenAuthoritativeAndUsable() {
+        XCTAssertEqual(RevenueCatPurchaseRouter.restoreRoute(mode: .authoritative, revenueCatUsable: true),
+                       .revenueCat)
+    }
+
+    func testRestoreStaysOnStoreKitForOffAndShadow() {
+        XCTAssertEqual(RevenueCatPurchaseRouter.restoreRoute(mode: .off, revenueCatUsable: true), .storeKit)
+        XCTAssertEqual(RevenueCatPurchaseRouter.restoreRoute(mode: .shadow, revenueCatUsable: true), .storeKit)
+    }
+
+    // ── 3. Mode parsing fails closed (EXECUTABLE) ──────────────────────────
+
+    func testModeParsingFailsClosedToOff() {
+        XCTAssertEqual(RevenueCatMode.parse(nil), .off)
+        XCTAssertEqual(RevenueCatMode.parse(""), .off)
+        XCTAssertEqual(RevenueCatMode.parse("   "), .off)
+        XCTAssertEqual(RevenueCatMode.parse("garbage"), .off)
+        // An unexpanded build-setting placeholder must not be read as a real mode.
+        XCTAssertEqual(RevenueCatMode.parse("$(REVENUECAT_MODE)"), .off)
+        XCTAssertEqual(RevenueCatMode.parse("off"), .off)
+    }
+
+    func testModeParsingRecognizesRealModesCaseAndWhitespaceInsensitively() {
+        XCTAssertEqual(RevenueCatMode.parse("shadow"), .shadow)
+        XCTAssertEqual(RevenueCatMode.parse("  Shadow "), .shadow)
+        XCTAssertEqual(RevenueCatMode.parse("SHADOW"), .shadow)
+        XCTAssertEqual(RevenueCatMode.parse("authoritative"), .authoritative)
+        XCTAssertEqual(RevenueCatMode.parse(" AUTHORITATIVE "), .authoritative)
+    }
+
+    func testExactlyThreeModesExist() {
+        XCTAssertEqual(Set(RevenueCatMode.allCases), [.off, .shadow, .authoritative])
+    }
+
+    // ── 4. Identity / isolation invariants (SOURCE-SCAN, house style) ──────
+
+    private func rcSource() throws -> String {
+        try Self.source("App/RevenueCatManager.swift")
+    }
+
+    func testAppUserIDIsOnlyTheCanonicalAccountUUIDNeverDeviceOrEmail() throws {
+        let code = Self.strippingComments(try rcSource())
+        // The one identity source is the server-issued account UUID from the
+        // shared keychain — used for both configure() and logIn().
+        XCTAssertTrue(code.contains("SharedKeychain.get(KeychainKeys.accountID)"),
+                      "App User ID must derive from the canonical account UUID in the keychain")
+        XCTAssertTrue(code.contains("with(appUserID:") || code.contains("with(appUserID"),
+                      "configure must set the appUserID to the canonical UUID")
+        XCTAssertTrue(code.contains("Purchases.shared.logIn(appUserID)"),
+                      "logIn must use the canonical account UUID")
+        // It must never bind identity to a device id or email.
+        XCTAssertFalse(code.contains(".deviceID") || code.contains("deviceIdentifier"),
+                       "App User ID must never be a device id")
+        XCTAssertFalse(code.contains("logIn(email") || code.contains("appUserID: email"),
+                       "App User ID must never be an email")
+    }
+
+    func testPurchaseFailsClosedWithoutTheCanonicalAccount() throws {
+        let code = Self.strippingComments(try rcSource())
+        guard let purchase = Self.body(ofFunction: "func purchase(packageID", in: code) else {
+            return XCTFail("purchase(packageID:) not found")
+        }
+        // No anonymous durable paid access: purchase refuses without the UUID.
+        XCTAssertTrue(purchase.contains("canonicalAccountID != nil") ||
+                      purchase.contains("guard Self.canonicalAccountID"),
+                      "purchase must refuse when there is no canonical account UUID")
+    }
+
+    func testSignOutReleasesRevenueCatIdentitySoNextAccountDoesNotInherit() throws {
+        let code = Self.strippingComments(try rcSource())
+        guard let signOut = Self.body(ofFunction: "func signOut()", in: code) else {
+            return XCTFail("signOut() not found")
+        }
+        // Account switch / logout must clear stale paid state AND log out of RC.
+        XCTAssertTrue(signOut.contains("customerInfoIsPro = false"),
+                      "signOut must clear the observed paid state")
+        XCTAssertTrue(signOut.contains("Purchases.shared.logOut"),
+                      "signOut must release the RevenueCat identity")
+    }
+
+    func testPaywallRoutesThroughTheCanaryRouterNotDirectlyToOneEngine() throws {
+        let code = Self.strippingComments(try Self.source("App/SettingsView.swift"))
+        XCTAssertTrue(code.contains("RevenueCatPurchaseRouter.route(mode: RevenueCatMode.current"),
+                      "the paywall purchase must be dispatched through the canary router")
+        XCTAssertTrue(code.contains("RevenueCatPurchaseRouter.restoreRoute(mode: RevenueCatMode.current"),
+                      "the paywall restore must be dispatched through the canary router")
+    }
+
+    // ── helpers ─────────────────────────────────────────────────────────────
+
+    private static func source(_ relative: String, file: StaticString = #filePath) throws -> String {
+        let root = URL(fileURLWithPath: "\(file)")
+            .deletingLastPathComponent().deletingLastPathComponent()
+        return try String(contentsOf: root.appendingPathComponent(relative), encoding: .utf8)
+    }
+
+    private static func strippingComments(_ source: String) -> String {
+        source
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line -> Substring in
+                guard let marker = line.range(of: "//") else { return line }
+                let prefix = line[..<marker.lowerBound]
+                let quotes = prefix.filter { $0 == "\"" }.count
+                return quotes % 2 == 1 ? line : prefix
+            }
+            .joined(separator: "\n")
+    }
+
+    private static func body(ofFunction declaration: String, in code: String) -> String? {
+        guard let start = code.range(of: declaration) else { return nil }
+        var depth = 0
+        var started = false
+        var out = ""
+        for character in code[start.lowerBound...] {
+            if character == "{" { depth += 1; started = true }
+            if started { out.append(character) }
+            if character == "}" {
+                depth -= 1
+                if started && depth == 0 { return out }
+            }
+        }
+        return nil
+    }
+}

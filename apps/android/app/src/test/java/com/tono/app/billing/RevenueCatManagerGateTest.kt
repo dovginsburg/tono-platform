@@ -166,6 +166,42 @@ class RevenueCatManagerGateTest {
         }
     }
 
+    // ── Build 126 — routing wiring ─────────────────────────────────────────
+
+    @Test
+    fun theBuildDeclaresTheThreeStateModeDefaultingOff() {
+        val gradleText = source(gradle)
+        assertTrue(
+            "build.gradle.kts must declare the REVENUECAT_MODE buildConfig field",
+            gradleText.contains("REVENUECAT_MODE"),
+        )
+        assertTrue(
+            "the RevenueCat routing mode must default to off (dormant Play path)",
+            Regex("""REVENUECAT_MODE"\s*,\s*"\\"off\\""""").containsMatchIn(gradleText),
+        )
+    }
+
+    @Test
+    fun thePaywallRoutesPurchaseAndRestoreThroughTheCanaryRouter() {
+        val settings = stripComments(
+            source("app/src/main/java/com/tono/app/ui/SettingsScreen.kt"),
+        )
+        assertTrue(
+            "the paywall purchase must dispatch through RevenueCatPurchaseRouter.route",
+            settings.contains("RevenueCatPurchaseRouter.route("),
+        )
+        assertTrue(
+            "the paywall restore must dispatch through RevenueCatPurchaseRouter.restoreRoute",
+            settings.contains("RevenueCatPurchaseRouter.restoreRoute("),
+        )
+        // The authoritative branch must reconcile Pro from the backend authority —
+        // RevenueCat conducts the charge, the server still projects the grant.
+        assertTrue(
+            "the RevenueCat route must reconcile entitlement from the backend (/v1/me)",
+            settings.contains("reconcileEntitlementAfterExternalPurchase"),
+        )
+    }
+
     // ── Helpers (module-local; a unit test's user.dir is the module dir) ────
 
     private fun repoRoot(): File {

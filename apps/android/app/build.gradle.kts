@@ -52,6 +52,11 @@ android {
             // default; the publishable goog_ key is injected per build/environment
             // and never committed. Backend stays the sole entitlement authority.
             buildConfigField("String", "REVENUECAT_PUBLIC_SDK_KEY", "\"\"")
+            // RevenueCat canary routing mode (Build 126): off | shadow |
+            // authoritative. Default off preserves the existing Play billing path;
+            // it mirrors the backend TONO_REVENUECAT_MODE and the web
+            // NEXT_PUBLIC_REVENUECAT_MODE. Injected per environment, never committed.
+            buildConfigField("String", "REVENUECAT_MODE", "\"off\"")
         }
         release {
             isMinifyEnabled = true
@@ -59,6 +64,7 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             buildConfigField("String", "BACKEND_URL", "\"https://api.tonoit.com\"")
             buildConfigField("String", "REVENUECAT_PUBLIC_SDK_KEY", "\"\"")
+            buildConfigField("String", "REVENUECAT_MODE", "\"off\"")
             lint {
                 abortOnError = false
             }
