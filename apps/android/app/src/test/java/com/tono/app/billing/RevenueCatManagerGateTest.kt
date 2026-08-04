@@ -66,12 +66,13 @@ class RevenueCatManagerGateTest {
 
     @Test
     fun killSwitchIsDormantByDefault() {
-        // The build must default the publishable key to empty (no key ⇒ no SDK).
-        // Same literal the cross-client pytest contract pins: …_SDK_KEY", "\"\"".
+        // Build 126: the publishable key is INJECTED from a Gradle property / env
+        // var and defaults fail-closed to empty (no key ⇒ no SDK). Same seam the
+        // cross-client pytest contract pins.
         val g = source(gradle)
         assertTrue(
-            "the publishable key must default to empty in the build config",
-            g.contains("REVENUECAT_PUBLIC_SDK_KEY\", \"\\\"\\\"\""),
+            "the publishable key must be injected with a fail-closed empty default",
+            g.contains("revenueCatInjected(\"revenueCatPublicSdkKey\", \"REVENUECAT_PUBLIC_SDK_KEY\", \"\")"),
         )
         // And the manager must treat empty / placeholder as "not configured".
         val code = stripComments(source(manager))
@@ -169,15 +170,31 @@ class RevenueCatManagerGateTest {
     // ── Build 126 — routing wiring ─────────────────────────────────────────
 
     @Test
-    fun theBuildDeclaresTheThreeStateModeDefaultingOff() {
-        val gradleText = source(gradle)
+    fun theReleaseInjectsKeyAndModeFailClosed() {
+        val gradleText = stripComments(source(gradle))
         assertTrue(
             "build.gradle.kts must declare the REVENUECAT_MODE buildConfig field",
             gradleText.contains("REVENUECAT_MODE"),
         )
+        // The routing mode is injected from an explicit Gradle property or env var
+        // and defaults fail-closed to off — never a committed authoritative value.
         assertTrue(
-            "the RevenueCat routing mode must default to off (dormant Play path)",
-            Regex("""REVENUECAT_MODE"\s*,\s*"\\"off\\""""").containsMatchIn(gradleText),
+            "the RevenueCat mode must be injected with a fail-closed off default",
+            gradleText.contains(
+                "revenueCatInjected(\"revenueCatMode\", \"REVENUECAT_MODE\", \"off\")",
+            ),
+        )
+        // The publishable key is injected and defaults fail-closed to empty (dormant).
+        assertTrue(
+            "the RevenueCat publishable key must be injected with a fail-closed empty default",
+            gradleText.contains(
+                "revenueCatInjected(\"revenueCatPublicSdkKey\", \"REVENUECAT_PUBLIC_SDK_KEY\", \"\")",
+            ),
+        )
+        // No publishable goog_ key literal is ever committed to the build script.
+        assertFalse(
+            "a RevenueCat publishable key must never be committed",
+            Regex("goog_[A-Za-z0-9]{6,}").containsMatchIn(gradleText),
         )
     }
 

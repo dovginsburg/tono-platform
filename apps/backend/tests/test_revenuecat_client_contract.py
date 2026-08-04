@@ -123,8 +123,12 @@ def test_android_is_kill_switched():
     assert "BuildConfig.REVENUECAT_PUBLIC_SDK_KEY" in src
     gradle = _read(_ANDROID_GRADLE)
     assert 'buildConfigField("String", "REVENUECAT_PUBLIC_SDK_KEY"' in gradle
-    # Empty default => dormant by default (kill switch off).
-    assert 'REVENUECAT_PUBLIC_SDK_KEY", "\\"\\""' in gradle
+    # Build 126: the publishable goog_ key is INJECTED from a Gradle property / env
+    # var and defaults fail-closed to empty (no key => dormant, kill switch off).
+    assert (
+        'revenueCatInjected("revenueCatPublicSdkKey", "REVENUECAT_PUBLIC_SDK_KEY", "")'
+        in gradle
+    )
 
 
 def test_android_backend_stays_entitlement_authority():
