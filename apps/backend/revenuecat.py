@@ -488,6 +488,11 @@ def _project_event(store: Store, config: RevenueCatConfig, event: RevenueCatEven
         revenuecat_active=decision.entitled,
         legacy_active=legacy_active,
         mode=config.mode,
+        # The originating store is the flip-eligibility class key: a PROMOTIONAL
+        # admin grant is excluded from the shadow->authoritative flip decision
+        # (retained in lifetime diagnostics), while a real store's disagreement
+        # still blocks the flip. Carried straight from the RevenueCat event.
+        store_source=event.store_source,
         detail=f"{event.type}:{applied}",
     )
 
@@ -600,20 +605,48 @@ def revenuecat_readiness(store: StoreDep) -> dict[str, Any]:
     """Non-secret readiness probe. Reveals ONLY booleans, already-public
     identifiers, and aggregate COUNTS so an operator/monitor can see which config
     is wired and whether the shadow canary is clean, without exposing any secret
-    value or account identifier (contract §5/§9). Never raises on mode=off."""
+    value or account identifier (contract §5/§9). Never raises on mode=off.
+
+    Shadow reconciliation is reported as THREE non-secret views so the flip
+    decision is honest about what it is (and is not) counting:
+      * ``shadow`` — lifetime cumulative counts over EVERY observation, including
+        RevenueCat PROMOTIONAL admin grants. Diagnostics only; NOT the flip gate.
+      * ``shadow_flip_eligible`` — real store-parity canaries only (App Store /
+        Play / Stripe / RC Billing / Test Store / ...). This is the ONLY input to
+        ``shadow_clean``.
+      * ``shadow_excluded_promotional`` — count of PROMOTIONAL observations kept
+        in lifetime diagnostics but excluded from the flip decision, because a
+        promotional grant makes RevenueCat active with no store purchase and so
+        legitimately disagrees with the free legacy projection in shadow mode.
+    ``shadow_unclassified`` counts observations whose store could not be
+    classified; they FAIL CLOSED (block the flip) and are never assumed
+    promotional or clean. ``shadow_clean`` is true only when there are zero
+    flip-eligible disagreements AND zero unclassified observations; it degrades
+    to null (never true) on any read error."""
     mode = (os.environ.get("TONO_REVENUECAT_MODE", "off") or "off").strip().lower()
     webhook_configured = bool((os.environ.get("TONO_REVENUECAT_WEBHOOK_AUTH", "") or "").strip())
     secret_configured = bool((os.environ.get("TONO_REVENUECAT_SECRET_API_KEY", "") or "").strip())
     mode_valid = mode in _VALID_MODES
     enabled = mode in ("shadow", "authoritative")
     # Shadow-canary observability: non-secret counts only, so an operator can
-    # confirm zero disagreements over a window before flipping shadow ->
-    # authoritative. Degrades to nulls on any read error — readiness never raises.
+    # confirm zero eligible disagreements over a window before flipping shadow ->
+    # authoritative. `shadow_clean` is derived ONLY from the flip-eligible summary
+    # (promotional admin grants never enter the decision) and is fail-closed: any
+    # eligible disagreement OR any unclassifiable store blocks the flip. Degrades
+    # to nulls / shadow_clean=None on any read error — readiness never raises and
+    # never reports clean when it cannot prove cleanliness.
     try:
         shadow = store.revenuecat_shadow_summary()
-        shadow_clean = shadow["total"] == 0 or shadow["disagreements"] == 0
-    except Exception:  # noqa: BLE001
+        flip = store.revenuecat_shadow_flip_summary()
+        flip_eligible = flip["eligible"]
+        excluded_promotional = flip["excluded_promotional"]
+        unclassified = flip["unclassified"]
+        shadow_clean = flip_eligible["disagreements"] == 0 and unclassified == 0
+    except Exception:  # noqa: BLE001 — readiness never raises; fail closed
         shadow = {"total": None, "agreements": None, "disagreements": None, "last_observed_at": None}
+        flip_eligible = {"total": None, "agreements": None, "disagreements": None}
+        excluded_promotional = None
+        unclassified = None
         shadow_clean = None
     return {
         "provider": "revenuecat",
@@ -628,8 +661,13 @@ def revenuecat_readiness(store: StoreDep) -> dict[str, Any]:
         "catalog_version": _safe_catalog_version(),
         # Ready to accept webhooks: an enabled, valid mode with a webhook secret.
         "ready": bool(mode_valid and enabled and webhook_configured),
-        # Shadow reconciliation counts (no identifiers) + the flip-safety gate.
+        # Shadow reconciliation counts (no identifiers). `shadow` is lifetime
+        # (incl. promotional) diagnostics; the flip gate is derived from the
+        # eligible summary only, with unclassified stores failing closed.
         "shadow": shadow,
+        "shadow_flip_eligible": flip_eligible,
+        "shadow_excluded_promotional": excluded_promotional,
+        "shadow_unclassified": unclassified,
         "shadow_clean": shadow_clean,
     }
 
