@@ -298,8 +298,8 @@ final class Build124AuthProvidersTests: XCTestCase {
             "convergence sets the explicit purchase-gate flag"
         )
         XCTAssertTrue(
-            body.contains("setSignedInEmail(response[\"email\"] as? String)"),
-            "convergence records the address via the single writer"
+            body.contains("persistServerConfirmedEmail(from: response)"),
+            "convergence records the address via the one server-proof-gated writer"
         )
     }
 
