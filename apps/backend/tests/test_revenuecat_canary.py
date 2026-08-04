@@ -192,6 +192,10 @@ def test_readiness_is_nonsecret_and_reports_off_by_default(client):
     # No secret value is ever surfaced — only booleans + public identifiers.
     assert set(body).isdisjoint({"webhook_auth", "secret_api_key", "TONO_REVENUECAT_WEBHOOK_AUTH"})
     assert "pro" == body["entitlement_id"]
+    # With no shadow observations the canary reports clean by default.
+    assert body["shadow"]["total"] == 0
+    assert body["shadow"]["disagreements"] == 0
+    assert body["shadow_clean"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -649,6 +653,40 @@ def test_shadow_agreement_when_both_inactive(rc):
     from backend.store import get_store
     store = get_store()
     assert store.revenuecat_shadow_disagreements() == []
+
+
+def test_readiness_surfaces_shadow_summary_counts(rc):
+    """The operator can confirm the shadow canary's health from the readiness
+    probe alone — the gate for flipping shadow -> authoritative."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+    # One disagreement (RC active, legacy has no grant) + one agreement (both off).
+    _post(client, rc_event(event_id="e1", app_user_id=aid))
+    _post(client, rc_event(event_id="e2", etype="EXPIRATION", app_user_id=aid,
+                           expiration_ms=_past_ms()))
+    body = client.get("/v1/revenuecat/readiness").json()
+    shadow = body["shadow"]
+    assert shadow["total"] == 2
+    assert shadow["disagreements"] == 1
+    assert shadow["agreements"] == 1
+    assert shadow["last_observed_at"] is not None
+    # A disagreement means the shadow canary is NOT clean -> do not flip.
+    assert body["shadow_clean"] is False
+
+
+def test_readiness_shadow_summary_reveals_no_identifiers(rc):
+    """Shadow observability is COUNTS ONLY on the unauthenticated probe — never an
+    account id, event id, or per-user detail (contract §5)."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+    _post(client, rc_event(event_id="e1", app_user_id=aid))
+    shadow = client.get("/v1/revenuecat/readiness").json()["shadow"]
+    assert set(shadow) == {"total", "agreements", "disagreements", "last_observed_at"}
+    assert aid not in str(shadow)
 
 
 # ---------------------------------------------------------------------------

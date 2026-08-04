@@ -4276,6 +4276,31 @@ class Store:
             return [dict(r) for r in cur.fetchall()]
         return self._run(_do).result()
 
+    def revenuecat_shadow_summary(self) -> dict:
+        """Non-secret aggregate of the shadow canary ledger for operator readiness:
+        total observations, agreements, disagreements, and the newest observation
+        timestamp. COUNTS ONLY — no account/user identifiers — so it is safe to
+        surface on the unauthenticated readiness probe. In a healthy shadow window
+        `disagreements` is 0, which is the gate for flipping shadow -> authoritative
+        (contract §9)."""
+        def _do() -> dict:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT COUNT(*) AS total, "
+                "COALESCE(SUM(agree), 0) AS agreements, "
+                "COALESCE(SUM(1 - agree), 0) AS disagreements, "
+                "MAX(created_at) AS last_observed_at "
+                "FROM revenuecat_shadow_observations"
+            )
+            row = cur.fetchone()
+            return {
+                "total": int(row["total"] or 0),
+                "agreements": int(row["agreements"] or 0),
+                "disagreements": int(row["disagreements"] or 0),
+                "last_observed_at": row["last_observed_at"],
+            }
+        return self._run(_do).result()
+
     def apply_apple_notification(
         self,
         *,

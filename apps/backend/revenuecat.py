@@ -596,15 +596,25 @@ async def revenuecat_notifications(
 
 
 @router.get("/v1/revenuecat/readiness")
-def revenuecat_readiness() -> dict[str, Any]:
-    """Non-secret readiness probe. Reveals ONLY booleans + already-public
-    identifiers so an operator/monitor can see which config is wired without
-    exposing any secret value (contract §5). Never raises on mode=off."""
+def revenuecat_readiness(store: StoreDep) -> dict[str, Any]:
+    """Non-secret readiness probe. Reveals ONLY booleans, already-public
+    identifiers, and aggregate COUNTS so an operator/monitor can see which config
+    is wired and whether the shadow canary is clean, without exposing any secret
+    value or account identifier (contract §5/§9). Never raises on mode=off."""
     mode = (os.environ.get("TONO_REVENUECAT_MODE", "off") or "off").strip().lower()
     webhook_configured = bool((os.environ.get("TONO_REVENUECAT_WEBHOOK_AUTH", "") or "").strip())
     secret_configured = bool((os.environ.get("TONO_REVENUECAT_SECRET_API_KEY", "") or "").strip())
     mode_valid = mode in _VALID_MODES
     enabled = mode in ("shadow", "authoritative")
+    # Shadow-canary observability: non-secret counts only, so an operator can
+    # confirm zero disagreements over a window before flipping shadow ->
+    # authoritative. Degrades to nulls on any read error — readiness never raises.
+    try:
+        shadow = store.revenuecat_shadow_summary()
+        shadow_clean = shadow["total"] == 0 or shadow["disagreements"] == 0
+    except Exception:  # noqa: BLE001
+        shadow = {"total": None, "agreements": None, "disagreements": None, "last_observed_at": None}
+        shadow_clean = None
     return {
         "provider": "revenuecat",
         "mode": mode if mode_valid else "invalid",
@@ -618,6 +628,9 @@ def revenuecat_readiness() -> dict[str, Any]:
         "catalog_version": _safe_catalog_version(),
         # Ready to accept webhooks: an enabled, valid mode with a webhook secret.
         "ready": bool(mode_valid and enabled and webhook_configured),
+        # Shadow reconciliation counts (no identifiers) + the flip-safety gate.
+        "shadow": shadow,
+        "shadow_clean": shadow_clean,
     }
 
 
