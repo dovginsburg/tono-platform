@@ -1,6 +1,6 @@
 import type { Config } from 'tailwindcss';
 
-// Mirrors /Users/Ezra/Projects/team/mark-deliverables/design-tokens.json
+// Mirrors the Tono design-tokens deliverable
 // (products.tono + components.* + global.*). Two-product token tree;
 // Tono takes the dark/operate branch, ParentScript takes the light/clinical
 // branch — this app only consumes the tono branch.

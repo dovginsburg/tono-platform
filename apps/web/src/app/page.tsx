@@ -9,14 +9,15 @@
 // preview, and a real footer. The previous landing was a server-side
 // redirect into /app/app; that bounced unauthenticated visitors into
 // the auth flow before they ever saw the product. This page is the
-// marketing surface that Ezra's brief calls for: prominent wordmark,
-// product story, four-tones section, and a sign-in CTA.
+// marketing surface: prominent wordmark, product story, four-tones
+// section, and a sign-in CTA.
 //
 // Brand: docs/BRAND-TONO.md · tokens: tailwind.config.ts
 
 import Link from 'next/link'
 import ProCheckoutButton from './ProCheckoutButton'
 import DemoRewrite from './DemoRewrite'
+import { tonoMailto } from '../lib/contact'
 
 // ── Server component — no client state needed. ──────────────────────────
 export default function LandingPage() {
@@ -341,7 +342,7 @@ export default function LandingPage() {
               <ArrowIcon />
             </ProCheckoutButton>
             <a
-              href="mailto:ezra-orchestrator@agentmail.to"
+              href={tonoMailto('support')}
               className="inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-[12px] bg-transparent text-tono-text-soft hover:text-tono-text font-semibold transition min-h-[48px]"
             >
               send feedback

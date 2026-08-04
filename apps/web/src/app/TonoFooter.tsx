@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { tonoMailto } from '../lib/contact'
 
 // ── Newsletter strip — replaced the no-op NewsletterSignup form
 // (which only set local "subscribed" state) with a single email link.
@@ -11,7 +12,7 @@ function NewsletterStrip() {
           Get the next rewrite.
         </p>
         <a
-          href="mailto:ezra-orchestrator@agentmail.to"
+          href={tonoMailto('hello')}
           className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-[10px] bg-tono-accent hover:bg-tono-accent-hover text-white font-semibold transition min-h-[44px] text-[13px]"
         >
           Subscribe by email
@@ -38,8 +39,8 @@ function NewsletterStrip() {
 // here fakes a success state or posts to a no-op endpoint.
 //
 // Crisis / support line is intentionally absent — Tono is not a
-// clinical product. (ParentScript's footer is the one that needs
-// the 988 line.)
+// clinical product, so the 988 line that a mental-health surface
+// would carry does not belong here.
 
 export default function TonoFooter() {
   const year = new Date().getFullYear()
@@ -111,7 +112,7 @@ export default function TonoFooter() {
               </li>
               <li>
                 <a
-                  href="mailto:ezra-orchestrator@agentmail.to"
+                  href={tonoMailto('support')}
                   className="text-tono-text-soft hover:text-tono-text transition"
                 >
                   Feedback
@@ -146,7 +147,7 @@ export default function TonoFooter() {
               </li>
               <li>
                 <a
-                  href="mailto:ezra-orchestrator@agentmail.to"
+                  href={tonoMailto('hello')}
                   className="text-tono-text-soft hover:text-tono-text transition"
                 >
                   Press
@@ -154,7 +155,7 @@ export default function TonoFooter() {
               </li>
               <li>
                 <a
-                  href="mailto:ezra-orchestrator@agentmail.to"
+                  href={tonoMailto('hello')}
                   className="text-tono-text-soft hover:text-tono-text transition"
                 >
                   Partnerships
@@ -184,7 +185,7 @@ export default function TonoFooter() {
               </li>
               <li>
                 <a
-                  href="mailto:ezra-orchestrator@agentmail.to"
+                  href={tonoMailto('privacy')}
                   className="text-tono-text-soft hover:text-tono-text transition"
                 >
                   Data deletion
@@ -201,7 +202,7 @@ export default function TonoFooter() {
             <ul className="space-y-2 text-[13px]">
               <li>
                 <a
-                  href="mailto:ezra-orchestrator@agentmail.to"
+                  href={tonoMailto('support')}
                   className="text-tono-text-soft hover:text-tono-text transition"
                 >
                   iOS — coming soon, join the waitlist

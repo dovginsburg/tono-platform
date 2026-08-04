@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { TONO_CONTACT, tonoMailto } from '../../lib/contact'
 
 export default function PrivacyPage() {
   return (
@@ -51,13 +52,13 @@ export default function PrivacyPage() {
 
           <h2 className="text-2xl font-semibold pt-6">deletion</h2>
           <p>
-            email <a href="mailto:ezra-orchestrator@agentmail.to" className="underline">ezra-orchestrator@agentmail.to</a>{" "}
+            email <a href={tonoMailto('privacy')} className="underline">{TONO_CONTACT.privacy}</a>{" "}
             and your account + all associated data will be deleted within 7 days.
           </p>
 
           <h2 className="text-2xl font-semibold pt-6">contact</h2>
           <p>
-            questions: <a href="mailto:ezra-orchestrator@agentmail.to" className="underline">ezra-orchestrator@agentmail.to</a>
+            questions: <a href={tonoMailto('privacy')} className="underline">{TONO_CONTACT.privacy}</a>
           </p>
 
           <h2 className="text-2xl font-semibold pt-6">subscription</h2>

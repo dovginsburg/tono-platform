@@ -11,6 +11,7 @@
 
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import { TONO_CONTACT } from '../../lib/contact'
 
 export const metadata: Metadata = {
   title: 'contact — tono',
@@ -22,25 +23,25 @@ const CHANNELS = [
     label: 'support',
     title: 'help with your account',
     body: 'login trouble, billing questions, or a bug you hit. include your account email and a screenshot when you can.',
-    email: 'ezra-orchestrator@agentmail.to',
+    email: TONO_CONTACT.support,
   },
   {
     label: 'feedback',
     title: 'product feedback',
     body: 'a tone that misses, a workflow that\'s clunky, an idea you want us to hear. we read every email.',
-    email: 'ezra-orchestrator@agentmail.to',
+    email: TONO_CONTACT.support,
   },
   {
     label: 'press',
     title: 'media & partnerships',
     body: 'podcast guest pitches, product reviews, and integration partners.',
-    email: 'ezra-orchestrator@agentmail.to',
+    email: TONO_CONTACT.hello,
   },
   {
     label: 'security',
     title: 'report a vulnerability',
     body: 'responsible disclosure. we triage within 24 hours and credit reporters who follow coordinated disclosure.',
-    email: 'ezra-orchestrator@agentmail.to',
+    email: TONO_CONTACT.security,
   },
 ]
 
