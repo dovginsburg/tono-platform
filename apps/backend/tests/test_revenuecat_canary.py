@@ -17,6 +17,8 @@ writer); only `authoritative` mode grants.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import hmac
 import json
 import sqlite3
 
@@ -825,10 +827,11 @@ def test_promotional_grant_and_revoke_observations_are_all_retained(rc):
     assert client.get("/v1/revenuecat/readiness").json()["shadow_clean"] is True
 
 
-@pytest.mark.parametrize("store_val", ["APP_STORE", "PLAY_STORE", "TEST_STORE", "STRIPE", "RC_BILLING"])
+@pytest.mark.parametrize("store_val", ["APP_STORE", "PLAY_STORE", "STRIPE", "RC_BILLING"])
 def test_real_store_disagreement_remains_flip_blocking(rc, store_val):
     """A disagreement from any real customer store is a genuine store-parity
-    failure and MUST still block the flip — the fix excludes promotional only."""
+    failure and MUST still block the flip — the fix excludes promotional and
+    self-issued/TEST_STORE canaries only, never a real store."""
     rc.state["mode"] = "shadow"
     client = rc.client
     tok = _register(client)["api_token"]
@@ -842,8 +845,146 @@ def test_real_store_disagreement_remains_flip_blocking(rc, store_val):
     assert body["shadow_flip_eligible"]["total"] == 1
     assert body["shadow_flip_eligible"]["disagreements"] == 1
     assert body["shadow_excluded_promotional"] == 0
+    assert body["shadow_excluded_synthetic"] == 0
     assert body["shadow_unclassified"] == 0
     assert body["shadow_clean"] is False
+
+
+# ---------------------------------------------------------------------------
+# Synthetic / TEST_STORE canary correction: a signed self-issued integration
+# probe proves the transport/auth/idempotency path end-to-end but stands for NO
+# real customer purchase. It must stay durably auditable in the append-only
+# ledger yet NEVER qualify as real store evidence — otherwise a single signed
+# canary pins `shadow_clean` false forever and blocks the authoritative cutover
+# (the exact live-production state: shadow_flip_eligible disagreements=1). It is
+# excluded from the flip like promotional, but bucketed separately.
+# ---------------------------------------------------------------------------
+
+
+def test_classify_rc_store_buckets_synthetic_separately():
+    """Store-level classifier: TEST_STORE is 'synthetic' (case/space-insensitive),
+    distinct from promotional and from real stores; unknown still fails closed."""
+    from backend.store import _classify_rc_store
+    assert _classify_rc_store("TEST_STORE") == "synthetic"
+    assert _classify_rc_store("  test_store ") == "synthetic"
+    assert _classify_rc_store("PROMOTIONAL") == "promotional"
+    assert _classify_rc_store("APP_STORE") == "eligible"
+    assert _classify_rc_store("STRIPE") == "eligible"
+    assert _classify_rc_store("WHATEVER_NEW") == "unknown"
+    assert _classify_rc_store("") == "unknown"
+    assert _classify_rc_store(None) == "unknown"
+
+
+def test_synthetic_test_store_disagreement_excluded_from_flip_but_durably_retained(rc):
+    """The live blocker: a signed TEST_STORE canary makes RevenueCat active while
+    the legacy projection correctly stays free in shadow -> a disagreement, but a
+    synthetic one. It must be EXCLUDED from the flip (its own bucket), leave the
+    gate clean, and STILL be physically retained in the append-only ledger."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+
+    r = _post(client, rc_event(event_id="synth-1", app_user_id=aid, store="TEST_STORE",
+                               original_transaction_id="otx-synth"))
+    assert r.status_code == 200, r.text
+    assert _me(client, tok)["is_pro"] is False  # shadow never grants
+
+    from backend.store import get_store
+    store = get_store()
+    life = store.revenuecat_shadow_summary()
+    flip = store.revenuecat_shadow_flip_summary()
+    # Lifetime STILL records the disagreement — evidence is never rewritten.
+    assert life["total"] == 1 and life["disagreements"] == 1 and life["agreements"] == 0
+    # ...but it is excluded from the flip decision, in the SYNTHETIC bucket.
+    assert flip["eligible"] == {"total": 0, "agreements": 0, "disagreements": 0}
+    assert flip["excluded_synthetic"] == 1
+    assert flip["excluded_promotional"] == 0
+    assert flip["unclassified"] == 0
+    # The observation row is physically retained (durably auditable).
+    rows = _shadow_rows(store)
+    assert any(row["event_id"] == "synth-1" and (row["store_source"] or "").upper() == "TEST_STORE"
+               for row in rows)
+
+    body = client.get("/v1/revenuecat/readiness").json()
+    assert body["shadow"]["disagreements"] == 1                 # lifetime diagnostics
+    assert body["shadow_excluded_synthetic"] == 1
+    assert body["shadow_excluded_promotional"] == 0
+    assert body["shadow_flip_eligible"]["disagreements"] == 0
+    assert body["shadow_unclassified"] == 0
+    assert body["shadow_clean"] is True                         # the corrected gate
+
+
+def test_synthetic_canary_never_masks_a_real_store_disagreement(rc):
+    """A synthetic canary is excluded, but a REAL store disagreement alongside it
+    must still block the flip — the correction must not smuggle a green gate."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+
+    _post(client, rc_event(event_id="synth-a", app_user_id=aid, store="TEST_STORE",
+                           original_transaction_id="otx-synth-a"))
+    _post(client, rc_event(event_id="real-a", app_user_id=aid, store="APP_STORE",
+                           original_transaction_id="otx-real-a"))
+
+    body = client.get("/v1/revenuecat/readiness").json()
+    assert body["shadow_excluded_synthetic"] == 1
+    assert body["shadow_flip_eligible"]["total"] == 1
+    assert body["shadow_flip_eligible"]["disagreements"] == 1
+    assert body["shadow_clean"] is False                        # real store still blocks
+
+
+def test_duplicate_synthetic_event_is_idempotent_single_observation(rc):
+    """Re-delivering the SAME signed TEST_STORE event (RevenueCat retries) must
+    not double-count: one observation, one synthetic exclusion — the shadow
+    ledger keys on event_id."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+
+    body_evt = rc_event(event_id="synth-dup", app_user_id=aid, store="TEST_STORE",
+                        original_transaction_id="otx-synth-dup")
+    assert _post(client, body_evt).status_code == 200
+    assert _post(client, body_evt).status_code == 200          # replay
+
+    from backend.store import get_store
+    store = get_store()
+    flip = store.revenuecat_shadow_flip_summary()
+    assert flip["excluded_synthetic"] == 1                      # not 2
+    assert store.revenuecat_shadow_summary()["total"] == 1
+    assert len([r for r in _shadow_rows(store) if r["event_id"] == "synth-dup"]) == 1
+
+
+def test_deployed_test_store_row_reclassifies_to_synthetic_without_deletion(rc):
+    """Upgrade/migration behavior: a TEST_STORE observation already written to a
+    DEPLOYED shadow ledger (the live production row) reclassifies to the synthetic
+    bucket at read time with NO row deleted or rewritten — the append-only ledger
+    is preserved and the previously-pinned gate reads clean."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    _register(client)  # force app + store init
+    from backend.store import get_store, _now_iso
+    store = get_store()
+
+    def _seed():
+        cur = store._conn.cursor()
+        cur.execute(
+            "INSERT INTO revenuecat_shadow_observations (event_id,account_id,store_source,"
+            "revenuecat_active,legacy_active,agree,mode,detail,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            ("deployed-test-store", "acct", "TEST_STORE", 1, 0, 0, "shadow", "canary", _now_iso()),
+        )
+    store._run(_seed).result()
+
+    flip = store.revenuecat_shadow_flip_summary()
+    assert flip["excluded_synthetic"] == 1
+    assert flip["eligible"]["disagreements"] == 0
+    assert flip["unclassified"] == 0
+    # Not deleted — the exact seeded row is still physically present.
+    assert any(r["event_id"] == "deployed-test-store" for r in _shadow_rows(store))
+    assert client.get("/v1/revenuecat/readiness").json()["shadow_clean"] is True
 
 
 @pytest.mark.parametrize("store_val", ["TOTALLY_MADE_UP", "", None, 123])
@@ -1043,3 +1184,231 @@ def test_authoritative_grant_behavior_is_unchanged(rc):
                                 original_transaction_id="otx-2"))
     assert r2.status_code == 200, r2.text
     assert _me(client, tok2)["is_pro"] is True
+
+
+# ---------------------------------------------------------------------------
+# Webhook HMAC signature verification (defence in depth over Authorization).
+# Signed message is timestamp.raw_body; 5-minute replay window; fail closed on
+# missing/malformed/stale/wrong when a signing secret is configured. RevenueCat
+# provider-side signing enablement is human-only — these prove the seam now.
+# ---------------------------------------------------------------------------
+
+HMAC_SECRET = "tono-rc-test-hmac-signing-secret"
+FIXED_NOW = 1_700_000_000  # deterministic clock injected into the verifier
+
+
+@pytest.fixture
+def rc_signed(client):
+    """RevenueCat config WITH an HMAC signing secret, plus a signature verifier
+    pinned to a fixed clock so the replay window is deterministic. Authorization
+    is still configured (defence in depth)."""
+    from backend import revenuecat
+    from backend.server import app
+
+    state = {"mode": "authoritative"}
+
+    def _cfg():
+        return revenuecat.RevenueCatConfig(
+            mode=state["mode"],
+            webhook_auth=SECRET,
+            entitlement_id="pro",
+            webhook_hmac_secret=HMAC_SECRET,
+            product_ids=frozenset({PRODUCT, PRODUCT_YEAR}),
+        )
+
+    app.dependency_overrides[revenuecat.get_revenuecat_config] = _cfg
+    app.dependency_overrides[revenuecat.get_revenuecat_signature_verifier] = (
+        lambda: revenuecat.RevenueCatSignatureVerifier(HMAC_SECRET, now_s=lambda: FIXED_NOW)
+    )
+
+    class Ctx:
+        pass
+
+    ctx = Ctx()
+    ctx.state = state
+    ctx.app = app
+    ctx.client = client
+    yield ctx
+
+    app.dependency_overrides.pop(revenuecat.get_revenuecat_config, None)
+    app.dependency_overrides.pop(revenuecat.get_revenuecat_signature_verifier, None)
+
+
+def _sign(raw: bytes, ts: int = FIXED_NOW, secret: str = HMAC_SECRET) -> str:
+    msg = f"{ts}.".encode("utf-8") + raw
+    return hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+
+
+def _post_signed(client, body, *, ts=FIXED_NOW, secret=HMAC_SECRET,
+                 sig_header="__compute__", timestamp_header=None, auth=SECRET):
+    """POST with a computed (or explicit) X-RevenueCat-Webhook-Signature over the
+    EXACT bytes sent. Returns the response."""
+    raw = json.dumps(body).encode("utf-8")
+    headers = {}
+    if auth is not None:
+        headers["Authorization"] = auth
+    if sig_header == "__compute__":
+        headers["X-RevenueCat-Webhook-Signature"] = f"t={ts},v1={_sign(raw, ts, secret)}"
+    elif sig_header is not None:
+        headers["X-RevenueCat-Webhook-Signature"] = sig_header
+    if timestamp_header is not None:
+        headers["X-RevenueCat-Webhook-Timestamp"] = timestamp_header
+    return client.post("/v1/revenuecat/notifications", content=raw, headers=headers)
+
+
+def test_signed_valid_signature_is_accepted_and_projects(rc_signed):
+    """A correctly-signed, fresh event passes and is projected (authoritative)."""
+    rc_signed.state["mode"] = "authoritative"
+    client = rc_signed.client
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+    assert _me(client, tok)["is_pro"] is False
+
+    r = _post_signed(client, rc_event(event_id="sig-ok", app_user_id=aid, store="APP_STORE"))
+    assert r.status_code == 200, r.text
+    assert r.json()["outcome"].startswith("authoritative:")
+    assert _me(client, tok)["is_pro"] is True
+
+
+def test_signed_missing_signature_header_is_401(rc_signed):
+    """When signing is configured, a webhook with NO signature fails closed even
+    though its Authorization header is correct."""
+    client = rc_signed.client
+    aid = _account_id(client, _register(client)["api_token"])
+    body = rc_event(event_id="sig-missing", app_user_id=aid, store="APP_STORE")
+    r = _post_signed(client, body, sig_header=None)  # Authorization present, signature absent
+    assert r.status_code == 401, r.text
+
+
+def test_signed_malformed_signature_header_is_401(rc_signed):
+    client = rc_signed.client
+    aid = _account_id(client, _register(client)["api_token"])
+    body = rc_event(event_id="sig-malformed", app_user_id=aid, store="APP_STORE")
+    r = _post_signed(client, body, sig_header="this-is-not-a-valid-signature-header")
+    assert r.status_code == 401, r.text
+
+
+def test_signed_stale_signature_outside_replay_window_is_401(rc_signed):
+    """A signature whose timestamp is older than the 5-minute window is rejected,
+    even though the HMAC itself is correct for that timestamp (replay defence)."""
+    client = rc_signed.client
+    aid = _account_id(client, _register(client)["api_token"])
+    body = rc_event(event_id="sig-stale", app_user_id=aid, store="APP_STORE")
+    r = _post_signed(client, body, ts=FIXED_NOW - 600)  # 10 min old, correctly signed for that ts
+    assert r.status_code == 401, r.text
+
+
+def test_signed_within_replay_window_boundary_is_accepted(rc_signed):
+    """Just inside the window (299s) is accepted — proves the bound is 5 minutes,
+    not zero tolerance."""
+    rc_signed.state["mode"] = "shadow"
+    client = rc_signed.client
+    aid = _account_id(client, _register(client)["api_token"])
+    body = rc_event(event_id="sig-fresh-edge", app_user_id=aid, store="APP_STORE")
+    r = _post_signed(client, body, ts=FIXED_NOW - 299)
+    assert r.status_code == 200, r.text
+
+
+def test_signed_wrong_secret_signature_is_401(rc_signed):
+    """A well-formed signature computed under the WRONG secret is rejected."""
+    client = rc_signed.client
+    aid = _account_id(client, _register(client)["api_token"])
+    body = rc_event(event_id="sig-wrong", app_user_id=aid, store="APP_STORE")
+    r = _post_signed(client, body, secret="tono-rc-test-wrong-hmac-secret")
+    assert r.status_code == 401, r.text
+
+
+def test_signed_tampered_body_is_401(rc_signed):
+    """Signature is bound to the EXACT raw bytes: signing one body then sending a
+    different body fails, so a body swap after signing cannot pass."""
+    client = rc_signed.client
+    aid = _account_id(client, _register(client)["api_token"])
+    signed_body = rc_event(event_id="sig-tamper", app_user_id=aid, store="APP_STORE")
+    raw = json.dumps(signed_body).encode("utf-8")
+    good_sig = f"t={FIXED_NOW},v1={_sign(raw, FIXED_NOW)}"
+    tampered = json.dumps(
+        rc_event(event_id="sig-tamper", app_user_id=aid, store="PROMOTIONAL")
+    ).encode("utf-8")
+    r = client.post(
+        "/v1/revenuecat/notifications",
+        content=tampered,
+        headers={"Authorization": SECRET, "X-RevenueCat-Webhook-Signature": good_sig},
+    )
+    assert r.status_code == 401, r.text
+
+
+def test_signed_valid_signature_but_bad_authorization_is_401(rc_signed):
+    """Defence in depth: a perfectly-signed event with a WRONG Authorization header
+    is still rejected — the shared secret is not weakened by adding HMAC."""
+    client = rc_signed.client
+    aid = _account_id(client, _register(client)["api_token"])
+    body = rc_event(event_id="sig-badauth", app_user_id=aid, store="APP_STORE")
+    r = _post_signed(client, body, auth="Bearer totally-wrong-authorization")
+    assert r.status_code == 401, r.text
+
+
+def test_signed_bare_signature_with_timestamp_header_is_accepted(rc_signed):
+    """Fallback header shape: a bare hex v1 plus a separate timestamp header still
+    verifies, so a minor provider format difference does not silently disable it."""
+    rc_signed.state["mode"] = "shadow"
+    client = rc_signed.client
+    aid = _account_id(client, _register(client)["api_token"])
+    body = rc_event(event_id="sig-bare", app_user_id=aid, store="APP_STORE")
+    raw = json.dumps(body).encode("utf-8")
+    r = client.post(
+        "/v1/revenuecat/notifications",
+        content=raw,
+        headers={
+            "Authorization": SECRET,
+            "X-RevenueCat-Webhook-Signature": _sign(raw, FIXED_NOW),  # bare hex, no t=
+            "X-RevenueCat-Webhook-Timestamp": str(FIXED_NOW),
+        },
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_signed_replay_same_event_is_idempotent(rc_signed):
+    """A correctly-signed event re-delivered (same bytes, same fresh signature)
+    is durably deduped: second delivery is duplicate_ok, one observation only."""
+    rc_signed.state["mode"] = "shadow"
+    client = rc_signed.client
+    aid = _account_id(client, _register(client)["api_token"])
+    body = rc_event(event_id="sig-replay", app_user_id=aid, store="APP_STORE")
+    r1 = _post_signed(client, body)
+    assert r1.status_code == 200, r1.text
+    r2 = _post_signed(client, body)
+    assert r2.status_code == 200, r2.text
+    assert r2.json().get("duplicate") is True
+
+    from backend.store import get_store
+    store = get_store()
+    assert store.revenuecat_shadow_summary()["total"] == 1
+
+
+def test_signature_not_required_when_secret_unconfigured(rc):
+    """Backwards-compatible: without a signing secret, no signature is required —
+    Authorization remains the enforced boundary (the pre-existing behaviour)."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    aid = _account_id(client, _register(client)["api_token"])
+    r = _post(client, rc_event(event_id="unsigned-ok", app_user_id=aid, store="APP_STORE"))
+    assert r.status_code == 200, r.text  # no X-RevenueCat-Webhook-Signature sent
+
+
+def test_readiness_reports_hmac_configured_without_leaking_secret(client, monkeypatch):
+    """Readiness exposes signing-secret PRESENCE only; the secret value never
+    appears in the probe body."""
+    secret_value = "tono-rc-test-hmac-secret-must-not-appear"
+    monkeypatch.setenv("TONO_REVENUECAT_MODE", "shadow")
+    monkeypatch.setenv("TONO_REVENUECAT_WEBHOOK_AUTH", "Bearer some-authz")
+    monkeypatch.setenv("TONO_REVENUECAT_WEBHOOK_HMAC_SECRET", secret_value)
+    r = client.get("/v1/revenuecat/readiness")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["webhook_hmac_configured"] is True
+    assert secret_value not in json.dumps(body)
+
+
+def test_readiness_hmac_unconfigured_by_default(client):
+    body = client.get("/v1/revenuecat/readiness").json()
+    assert body["webhook_hmac_configured"] is False

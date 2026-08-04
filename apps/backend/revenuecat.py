@@ -65,11 +65,13 @@ use — so the suite never needs a real RevenueCat secret or network.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import hmac
 import json
 import os
+import time
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any, Callable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -162,6 +164,12 @@ class RevenueCatConfig:
     entitlement_id: str
     secret_api_key: str = ""
     project_id: str = ""
+    # HMAC signing secret for the X-RevenueCat-Webhook-Signature header. Optional
+    # so the seam can ship and be tested before RevenueCat's provider-side signing
+    # is switched on (a human-only enablement); once this is set, a valid, fresh
+    # signature becomes MANDATORY on every webhook (see the verifier). It is
+    # DEFENCE IN DEPTH — the Authorization shared secret is still enforced too.
+    webhook_hmac_secret: str = ""
     product_ids: frozenset[str] = field(default_factory=frozenset)
 
     @property
@@ -200,6 +208,7 @@ def get_revenuecat_config() -> RevenueCatConfig:
         entitlement_id=entitlement_id,
         secret_api_key=(os.environ.get("TONO_REVENUECAT_SECRET_API_KEY", "") or "").strip(),
         project_id=(os.environ.get("TONO_REVENUECAT_PROJECT_ID", "") or "").strip(),
+        webhook_hmac_secret=(os.environ.get("TONO_REVENUECAT_WEBHOOK_HMAC_SECRET", "") or "").strip(),
         product_ids=_default_product_ids(),
     )
 
@@ -255,6 +264,124 @@ def get_revenuecat_authenticator(
 
 
 RevenueCatAuthDep = Annotated[RevenueCatWebhookAuthenticator, Depends(get_revenuecat_authenticator)]
+
+
+# ---------------------------------------------------------------------------
+# Webhook HMAC signature verification (defence in depth over the Authorization
+# header). Enforced whenever a signing secret is configured on this server.
+# ---------------------------------------------------------------------------
+
+# RevenueCat attaches the signature (and its timestamp) in this header. We accept
+# the canonical Stripe-style compound form ``t=<unix_seconds>,v1=<hex>`` (one or
+# more v1 values), and — as a fallback — a bare hex signature paired with a
+# separate timestamp header, so a minor provider format change cannot silently
+# turn verification off (an unparsable header fails CLOSED).
+_SIGNATURE_HEADER = "x-revenuecat-webhook-signature"
+_TIMESTAMP_HEADER = "x-revenuecat-webhook-timestamp"
+# Replay window: a signature whose timestamp is more than this far from now (in
+# either direction) is rejected, so a captured-and-replayed body cannot be
+# re-submitted later even with its original valid signature.
+_SIGNATURE_MAX_SKEW_SECONDS = 300  # 5 minutes
+
+
+def _module_now_s() -> float:
+    return time.time()
+
+
+class RevenueCatSignatureError(RevenueCatAuthError):
+    """The X-RevenueCat-Webhook-Signature was missing, malformed, stale, or did
+    not match the HMAC of ``timestamp.raw_body`` under the configured secret.
+    Always a 401 — a webhook whose signature we cannot verify is never processed.
+    Subclasses RevenueCatAuthError so the endpoint's existing 401 mapping covers
+    it without a second handler."""
+
+
+def _parse_signature_header(raw_header: str, ts_header: str) -> tuple[int, list[str]]:
+    """Parse ``t=<unix>,v1=<hex>[,v1=<hex>]`` (order-independent), or a bare hex
+    signature plus a separate timestamp header. Returns (timestamp, [sig,...]).
+    Raises RevenueCatSignatureError on anything it cannot parse — fail closed."""
+    header = (raw_header or "").strip()
+    if not header:
+        raise RevenueCatSignatureError("missing webhook signature")
+    ts: Optional[int] = None
+    sigs: list[str] = []
+    if "=" in header:
+        for part in header.split(","):
+            part = part.strip()
+            if not part or "=" not in part:
+                continue
+            key, _, value = part.partition("=")
+            key = key.strip().lower()
+            value = value.strip()
+            if key == "t":
+                try:
+                    ts = int(value)
+                except ValueError:
+                    raise RevenueCatSignatureError("malformed signature timestamp")
+            elif key in ("v1", "sig", "signature") and value:
+                sigs.append(value)
+    else:
+        # Bare signature: the timestamp must come from the dedicated header.
+        sigs.append(header)
+    if ts is None:
+        try:
+            ts = int((ts_header or "").strip())
+        except (TypeError, ValueError):
+            raise RevenueCatSignatureError("missing signature timestamp")
+    if not sigs:
+        raise RevenueCatSignatureError("no signature value present")
+    return ts, sigs
+
+
+class RevenueCatSignatureVerifier:
+    """Verify ``HMAC-SHA256(secret, f"{timestamp}.{raw_body}")`` against the
+    provided X-RevenueCat-Webhook-Signature, in constant time, within a 5-minute
+    replay window. The signed message is the EXACT raw request bytes (never a
+    re-serialized JSON), so byte-for-byte integrity is what is proven."""
+
+    def __init__(self, secret: str, *, now_s: Callable[[], float] = _module_now_s,
+                 max_skew_seconds: int = _SIGNATURE_MAX_SKEW_SECONDS):
+        self._secret = (secret or "").encode("utf-8")
+        self._now_s = now_s
+        self._max_skew = max_skew_seconds
+
+    def _expected(self, timestamp: int, raw_body: bytes) -> str:
+        message = f"{timestamp}.".encode("utf-8") + raw_body
+        return hmac.new(self._secret, message, hashlib.sha256).hexdigest()
+
+    def verify(self, raw_body: bytes, headers) -> None:
+        if not self._secret:
+            # Defensive: a verifier is only built when a secret exists; an empty
+            # secret must never "verify" anything.
+            raise RevenueCatSignatureError("signature secret not configured")
+        ts, sigs = _parse_signature_header(
+            headers.get(_SIGNATURE_HEADER, ""), headers.get(_TIMESTAMP_HEADER, "")
+        )
+        skew = abs(self._now_s() - ts)
+        if skew > self._max_skew:
+            raise RevenueCatSignatureError("stale webhook signature (outside replay window)")
+        expected = self._expected(ts, raw_body)
+        # Constant-time compare against each candidate; accept if ANY matches so a
+        # provider that rotates keys (two v1 values during rotation) still verifies.
+        if not any(hmac.compare_digest(expected, candidate) for candidate in sigs):
+            raise RevenueCatSignatureError("webhook signature mismatch")
+
+
+def get_revenuecat_signature_verifier(
+    config: RevenueCatConfigDep,
+) -> Optional[RevenueCatSignatureVerifier]:
+    """A verifier when a signing secret is configured, else None (Authorization
+    remains the enforced boundary). Overridable in tests via
+    ``app.dependency_overrides`` to inject a fixed clock / known secret."""
+    _require_enabled(config)
+    if not config.webhook_hmac_secret:
+        return None
+    return RevenueCatSignatureVerifier(config.webhook_hmac_secret)
+
+
+RevenueCatSignatureDep = Annotated[
+    Optional[RevenueCatSignatureVerifier], Depends(get_revenuecat_signature_verifier)
+]
 
 
 # ---------------------------------------------------------------------------
@@ -540,15 +667,29 @@ async def revenuecat_notifications(
     store: StoreDep,
     config: RevenueCatConfigDep,
     authenticator: RevenueCatAuthDep,
+    signature_verifier: RevenueCatSignatureDep,
 ) -> dict[str, Any]:
     # 1) Authenticated boundary FIRST — an unauthenticated webhook is rejected
-    #    before we parse or persist anything.
+    #    before we parse or persist anything. The Authorization shared secret is
+    #    kept as defence in depth even when HMAC signing is enabled.
     try:
         authenticator.verify(request)
     except RevenueCatAuthError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"webhook authentication failed: {exc}")
 
     raw_body = await request.body()
+
+    # 2) HMAC signature over the EXACT raw body (timestamp.raw_json), enforced
+    #    whenever a signing secret is configured. Missing / malformed / stale /
+    #    wrong signatures fail CLOSED here, before any parse or persist.
+    if signature_verifier is not None:
+        try:
+            signature_verifier.verify(raw_body, request.headers)
+        except RevenueCatAuthError as exc:
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED, f"webhook signature verification failed: {exc}"
+            )
+
     try:
         body = json.loads(raw_body.decode("utf-8"))
     except Exception:  # noqa: BLE001
@@ -612,12 +753,16 @@ def revenuecat_readiness(store: StoreDep) -> dict[str, Any]:
       * ``shadow`` — lifetime cumulative counts over EVERY observation, including
         RevenueCat PROMOTIONAL admin grants. Diagnostics only; NOT the flip gate.
       * ``shadow_flip_eligible`` — real store-parity canaries only (App Store /
-        Play / Stripe / RC Billing / Test Store / ...). This is the ONLY input to
+        Play / Stripe / RC Billing / ...). This is the ONLY input to
         ``shadow_clean``.
       * ``shadow_excluded_promotional`` — count of PROMOTIONAL observations kept
         in lifetime diagnostics but excluded from the flip decision, because a
         promotional grant makes RevenueCat active with no store purchase and so
         legitimately disagrees with the free legacy projection in shadow mode.
+      * ``shadow_excluded_synthetic`` — count of self-issued/TEST_STORE
+        integration canaries: durably auditable transport probes that likewise
+        make RevenueCat active with no real purchase, so they are excluded from
+        the flip decision and never counted as real store evidence.
     ``shadow_unclassified`` counts observations whose store could not be
     classified; they FAIL CLOSED (block the flip) and are never assumed
     promotional or clean. ``shadow_clean`` is true only when there are zero
@@ -626,6 +771,7 @@ def revenuecat_readiness(store: StoreDep) -> dict[str, Any]:
     mode = (os.environ.get("TONO_REVENUECAT_MODE", "off") or "off").strip().lower()
     webhook_configured = bool((os.environ.get("TONO_REVENUECAT_WEBHOOK_AUTH", "") or "").strip())
     secret_configured = bool((os.environ.get("TONO_REVENUECAT_SECRET_API_KEY", "") or "").strip())
+    hmac_configured = bool((os.environ.get("TONO_REVENUECAT_WEBHOOK_HMAC_SECRET", "") or "").strip())
     mode_valid = mode in _VALID_MODES
     enabled = mode in ("shadow", "authoritative")
     # Shadow-canary observability: non-secret counts only, so an operator can
@@ -640,12 +786,14 @@ def revenuecat_readiness(store: StoreDep) -> dict[str, Any]:
         flip = store.revenuecat_shadow_flip_summary()
         flip_eligible = flip["eligible"]
         excluded_promotional = flip["excluded_promotional"]
+        excluded_synthetic = flip["excluded_synthetic"]
         unclassified = flip["unclassified"]
         shadow_clean = flip_eligible["disagreements"] == 0 and unclassified == 0
     except Exception:  # noqa: BLE001 — readiness never raises; fail closed
         shadow = {"total": None, "agreements": None, "disagreements": None, "last_observed_at": None}
         flip_eligible = {"total": None, "agreements": None, "disagreements": None}
         excluded_promotional = None
+        excluded_synthetic = None
         unclassified = None
         shadow_clean = None
     return {
@@ -653,6 +801,9 @@ def revenuecat_readiness(store: StoreDep) -> dict[str, Any]:
         "mode": mode if mode_valid else "invalid",
         "enabled": enabled,
         "webhook_auth_configured": webhook_configured,
+        # Presence only — the HMAC signing secret value is never surfaced. When
+        # true, a valid fresh X-RevenueCat-Webhook-Signature is MANDATORY.
+        "webhook_hmac_configured": hmac_configured,
         "reconcile_requery_configured": secret_configured,
         "writes_grants": mode == "authoritative",
         "entitlement_id": _default_entitlement_id(),
@@ -667,6 +818,7 @@ def revenuecat_readiness(store: StoreDep) -> dict[str, Any]:
         "shadow": shadow,
         "shadow_flip_eligible": flip_eligible,
         "shadow_excluded_promotional": excluded_promotional,
+        "shadow_excluded_synthetic": excluded_synthetic,
         "shadow_unclassified": unclassified,
         "shadow_clean": shadow_clean,
     }

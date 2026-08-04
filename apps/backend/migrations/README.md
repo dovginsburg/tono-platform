@@ -37,6 +37,25 @@ fails closed. The live SQLite app applies the column additively at startup (the
 from the raw event payload — via `_backfill_revenuecat_shadow_store_source`.
 Rollback is code-only: the extra column is harmless to prior code.
 
+`20260804_revenuecat_synthetic_store_exclusion` (code-only; NO schema or data
+migration) refines the flip gate one step further: a signed self-issued /
+`TEST_STORE` integration canary proves the transport/auth/idempotency path but
+stands for no real customer purchase, so — like a `PROMOTIONAL` grant — it makes
+RevenueCat active with no store and legitimately disagrees with the free legacy
+projection in `shadow` mode. Left in the real-store class it pins `shadow_clean`
+false forever (the live production state: one flip-eligible disagreement). The
+correction reclassifies `TEST_STORE` into its own `synthetic` class, excluded
+from the flip decision and reported as `shadow_excluded_synthetic`, while real
+stores (App Store/Play/Stripe/RC Billing/...) stay flip-eligible and an
+unclassifiable store still fails closed. Because the class is derived at read
+time from the already-recorded `store_source`, **no row is added, deleted, or
+rewritten** — existing deployed `TEST_STORE` observations reclassify safely on
+deploy of the new application, and the append-only ledger is preserved. Rollback
+is code-only: deploy the prior application (the extra readiness key is additive
+and harmless). Do NOT flip `TONO_REVENUECAT_MODE=authoritative` until the new
+application is live in production AND a correctly-signed synthetic event is
+proven durably stored, idempotent, and entitlement-changing.
+
 Rollback is code-only: deploy the prior application while retaining both
 ledger rows and bindings. Deleting or rewriting consumed rows reopens
 free-trial eligibility and is unsafe.
