@@ -81,11 +81,15 @@ export default function SupportPage() {
               account, billing &amp; access
             </h2>
             <p className="text-tono-text-soft">
-              you can manage your subscription — including cancelling — from your{' '}
+              where you manage or cancel depends on where you bought tono pro. for
+              an app store purchase, use apple id subscriptions. for a google play
+              purchase, use google play subscriptions. for a web purchase, use your{' '}
               <Link href="/account" className="underline hover:text-tono-text">account</Link>{' '}
-              page. tono pro is $3.99/month or $39.99/year after a 14-day free
-              trial, and renews unless cancelled. for a question about a charge,
-              a refund, or getting back into your account, email{' '}
+              page, which opens the stripe billing portal. tono pro is $3.99/month
+              or $39.99/year after a 14-day free trial, and renews unless cancelled.
+              if you're not sure where you purchased, can't access the right store
+              or account, have a question about a charge or refund, or need help
+              getting back into your account, email{' '}
               <a href={tonoMailto('support')} className="underline hover:text-tono-text">
                 {TONO_CONTACT.support}
               </a>{' '}

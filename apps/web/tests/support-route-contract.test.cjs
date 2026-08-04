@@ -99,12 +99,41 @@ test('the primary support contact is support@tonoit.com via the contact module',
 
 test('the page carries account/billing/access, privacy, and terms help links', () => {
   const src = read(PAGE_REL);
-  assert.match(src, /href="\/account"/, 'billing/access points at the account page');
+  assert.match(src, /href="\/account"/, 'web billing points at the account page');
   assert.match(src, /href="\/privacy"/, 'links the privacy page');
   assert.match(src, /href="\/terms"/, 'links the terms page');
   // "what to include" guidance so a support request is actionable on first reply.
   assert.match(src, /what to include/i);
   assert.match(src, /account/i);
+});
+
+test('subscription cancellation guidance follows the purchase channel', () => {
+  const copy = stripComments(read(PAGE_REL)).toLowerCase();
+
+  assert.match(
+    copy,
+    /app store\s+purchase[\s\S]*apple id\s+subscriptions/,
+    'App Store purchases must point to Apple ID Subscriptions',
+  );
+  assert.match(
+    copy,
+    /google play\s+purchase[\s\S]*google play\s+subscriptions/,
+    'Google Play purchases must point to Google Play subscriptions',
+  );
+  assert.match(
+    copy,
+    /web\s+purchase[\s\S]*href="\/account"[\s\S]*stripe billing portal/,
+    'web purchases must point to the account page and identify its Stripe portal',
+  );
+  assert.ok(
+    !/manage your subscription[\s\S]{0,160}href="\/account"/.test(copy),
+    'must not claim every subscription can be managed from the web account page',
+  );
+  assert.match(
+    copy,
+    /not sure where you purchased[\s\S]*can't access[\s\S]*tonomailto\('support'\)/,
+    'uncertain purchase channel and access problems must fall back to support',
+  );
 });
 
 test('the page states a clear non-emergency limitation', () => {
