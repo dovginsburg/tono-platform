@@ -69,6 +69,17 @@ inbox via `revenuecat.reconcile_revenuecat(...)`.
   the RevenueCat dashboard webhook. **Required** for `shadow`/`authoritative` or
   the webhook 503s. Compared in constant time against the incoming `Authorization`
   header.
+- `TONO_REVENUECAT_WEBHOOK_HMAC_SECRET` — *optional today, mandatory-once-set*
+  signing secret for the `X-RevenueCat-Webhook-Signature` header. When present,
+  every webhook must carry a valid signature: `HMAC-SHA256(secret,
+  "{timestamp}.{raw_body}")` over the EXACT raw bytes, constant-time compared,
+  within a **5-minute** replay window; missing/malformed/stale/wrong fails closed
+  (401). It is **defence in depth** — `TONO_REVENUECAT_WEBHOOK_AUTH` is still
+  enforced. Leave unset until RevenueCat provider-side signing is enabled
+  (human-only), then set the same secret here. Readiness surfaces presence only
+  as `webhook_hmac_configured` (never the value). The signature header accepts the
+  compound `t=<unix>,v1=<hex>` form (rotation: multiple `v1`) or a bare hex value
+  plus an `X-RevenueCat-Webhook-Timestamp` header.
 - `TONO_REVENUECAT_ENTITLEMENT_ID` — the RevenueCat entitlement identifier mapped
   to the canonical `pro` (default `pro`).
 - `TONO_REVENUECAT_SECRET_API_KEY` — *optional* RevenueCat REST secret for the
