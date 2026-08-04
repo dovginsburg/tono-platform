@@ -1,9 +1,10 @@
-// /about — Tono story, who we are, what we believe
+// /about — Tono story: why it exists, what it is, and what it isn't.
 //
-// Spec: marketing stub (Quinn, 2026-07-08). One-page canonical
-// placeholder while the full About narrative is being written.
 // Lives at /about (no basePath prefix in the source — Next.js
 // applies basePath: '/app' so the live URL is /app/about).
+//
+// Contact identity comes from src/lib/contact.ts — the single source of the
+// official tonoit.com aliases — never a hand-typed operator mailbox.
 //
 // Token reference: tailwind.config.ts (tono-bg, tono-text, tono-accent,
 // tono-border, tono-text-soft). No new colors. Brand voice: lowercase,
@@ -11,10 +12,11 @@
 
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import { TONO_CONTACT, tonoMailto } from '../../lib/contact'
 
 export const metadata: Metadata = {
   title: 'about — tono',
-  description: 'why tono exists, who is building it, and what it isn\'t.',
+  description: 'why tono exists, who builds it, and what it isn\'t.',
 }
 
 export default function AboutPage() {
@@ -35,21 +37,26 @@ export default function AboutPage() {
           say what you mean. without the dread.
         </h1>
         <p className="text-tono-text-soft text-base md:text-lg leading-[1.65] mt-5">
-          tono is a pre-send rewrite tool for the messages that matter. built
-          by people who write to be read every day, and who got tired of
-          drafting the same paragraph six ways.
+          tono is a pre-send rewrite tool for the messages that matter. paste a
+          draft, and you get four rewrites — warmer, clearer, funnier, safer —
+          each one labeled, each one yours to keep, edit, or ignore. nothing is
+          sent for you.
         </p>
 
         <section className="mt-12 space-y-8 text-[15px] leading-relaxed">
           <div>
             <h2 className="text-2xl font-semibold mb-3 text-tono-text">
-              what tono is
+              why tono exists
             </h2>
             <p className="text-tono-text-soft">
-              a tool you paste a draft into. it returns four rewrites —
-              warmer, clearer, funnier, safer — each one labeled, each one
-              yours to edit, copy, or ignore. Tono starts with a real 14-day free
-              trial. After the trial, Pro is $3.99/month or $39.99/year unless cancelled.
+              the message that matters is the one you rewrite six times before
+              sending — the apology, the ask, the boundary, the reply you don't
+              want to get wrong. tono gives you those alternatives in seconds, so
+              the words you send are the ones you meant. your draft stays private
+              and is used only to produce your rewrites; it is never stored to
+              train a model. read the specifics on our{' '}
+              <Link href="/privacy" className="underline hover:text-tono-text">privacy</Link>{' '}
+              page.
             </p>
           </div>
 
@@ -59,19 +66,20 @@ export default function AboutPage() {
             </h2>
             <ul className="list-disc pl-6 space-y-2 text-tono-text-soft">
               <li>an autoresponder — tono never sends on your behalf</li>
-              <li>a therapy bot — see our <Link href="/privacy" className="underline hover:text-tono-text">privacy</Link> page</li>
-              <li>a training data pipeline — nothing you write is used to train anything</li>
+              <li>therapeutic or mental-health advice — see our <Link href="/terms" className="underline hover:text-tono-text">terms</Link></li>
+              <li>a training-data pipeline — nothing you write is used to train anything</li>
             </ul>
           </div>
 
           <div>
             <h2 className="text-2xl font-semibold mb-3 text-tono-text">
-              who we are
+              how it works
             </h2>
             <p className="text-tono-text-soft">
-              two builders, one designer, and a small but loud group of
-              beta testers. we're based in brooklyn and shipping on the ios
-              keyboard next. for press or partnerships, see <a href="mailto:ezra-orchestrator@agentmail.to" className="underline hover:text-tono-text">ezra-orchestrator@agentmail.to</a>.
+              tono pro starts with a real 14-day free trial. after the trial, it
+              is $3.99/month or $39.99/year unless cancelled — cancel anytime from
+              your account page. see full{' '}
+              <Link href="/pricing" className="underline hover:text-tono-text">pricing</Link>.
             </p>
           </div>
 
@@ -80,8 +88,13 @@ export default function AboutPage() {
               contact
             </h2>
             <p className="text-tono-text-soft">
-              general: <a href="mailto:ezra-orchestrator@agentmail.to" className="underline hover:text-tono-text">ezra-orchestrator@agentmail.to</a>.
-              support: open a ticket from inside the app after you sign in.
+              general, press, and partnerships:{' '}
+              <a href={tonoMailto('hello')} className="underline hover:text-tono-text">{TONO_CONTACT.hello}</a>.
+              account help and product feedback:{' '}
+              <a href={tonoMailto('support')} className="underline hover:text-tono-text">{TONO_CONTACT.support}</a>.
+              more channels on our{' '}
+              <Link href="/contact" className="underline hover:text-tono-text">contact</Link>{' '}
+              page.
             </p>
           </div>
         </section>

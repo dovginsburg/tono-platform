@@ -14,6 +14,7 @@
 
 import Link from 'next/link'
 import ProCheckoutButton from '../ProCheckoutButton'
+import { tonoMailto } from '../../lib/contact'
 
 function CheckIcon() {
   return (
@@ -155,7 +156,7 @@ export default function PricingPage() {
         <p className="text-center text-[14px] text-tono-text-softer mt-8">
           <span className="font-semibold text-tono-text">Family — waitlist only.</span>{' '}
           <a
-            href="mailto:ezra-orchestrator@agentmail.to"
+            href={tonoMailto('support')}
             className="text-tono-accent-light hover:text-tono-text underline-offset-2 hover:underline"
           >
             get notified
