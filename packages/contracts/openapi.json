@@ -4497,6 +4497,53 @@
         "summary": "Register"
       }
     },
+    "/v1/revenuecat/notifications": {
+      "post": {
+        "operationId": "revenuecat_notifications_v1_revenuecat_notifications_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Revenuecat Notifications V1 Revenuecat Notifications Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Revenuecat Notifications",
+        "tags": [
+          "revenuecat"
+        ]
+      }
+    },
+    "/v1/revenuecat/readiness": {
+      "get": {
+        "description": "Non-secret readiness probe. Reveals ONLY booleans, already-public\nidentifiers, and aggregate COUNTS so an operator/monitor can see which config\nis wired and whether the shadow canary is clean, without exposing any secret\nvalue or account identifier (contract \u00a75/\u00a79). Never raises on mode=off.",
+        "operationId": "revenuecat_readiness_v1_revenuecat_readiness_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Revenuecat Readiness V1 Revenuecat Readiness Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Revenuecat Readiness",
+        "tags": [
+          "revenuecat"
+        ]
+      }
+    },
     "/v1/stripe/webhook": {
       "post": {
         "operationId": "stripe_webhook_v1_stripe_webhook_post",
