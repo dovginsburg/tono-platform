@@ -41,9 +41,14 @@ trap cleanup EXIT
 
 # ---------------------------------------------------------------------------
 log "1/8 build image"
+# Canonical image: repo-root context + the .canonical Dockerfile (via -f) so the
+# image packages the committed commercial catalog at
+# /packages/contracts/commercial-catalog.v1.json, which lives outside apps/backend.
+# This is the image Render runs; see apps/backend/Dockerfile.canonical.
 docker build \
   --build-arg TONO_CANONICAL_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)" \
-  -t "$IMAGE" "$BACKEND_DIR"
+  -f "$BACKEND_DIR/Dockerfile.canonical" \
+  -t "$IMAGE" "$REPO_ROOT"
 
 # ---------------------------------------------------------------------------
 log "2/8 create a fresh ROOT-OWNED empty volume (no pre-chown)"

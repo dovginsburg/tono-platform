@@ -49,11 +49,16 @@ jobs:
       - name: Build backend image with immutable labels
         run: |
           contract_sha="$(python3 -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("packages/contracts/openapi.json").read_bytes()).hexdigest())')"
+          # Canonical image: repo-root context + apps/backend/Dockerfile.canonical
+          # so the catalog (packages/contracts/...) is packaged (its COPY sources
+          # are repo-root-relative). apps/backend/Dockerfile is the backend-context
+          # image Railway staging builds and is intentionally NOT used here.
           docker build \
             --build-arg TONO_CANONICAL_SHA="$GITHUB_SHA" \
             --build-arg TONO_SCHEMA_REVISION="$(cat schema/revision.txt)" \
             --build-arg TONO_CONTRACT_SHA256="$contract_sha" \
-            -t tono-backend:"$GITHUB_SHA" apps/backend
+            -f apps/backend/Dockerfile.canonical \
+            -t tono-backend:"$GITHUB_SHA" .
 
   web:
     runs-on: ubuntu-latest

@@ -99,12 +99,19 @@ jobs:
           schema_revision="$(jq -r .schema_revision build/provenance.json)"
           test -n "$contract_sha" && test "$contract_sha" != "null"
           test -n "$schema_revision" && test "$schema_revision" != "null"
+          # Build from the REPOSITORY ROOT context with the CANONICAL Dockerfile so
+          # the image can package the committed commercial catalog
+          # (packages/contracts/commercial-catalog.v1.json), which lives outside
+          # apps/backend. Its COPY sources are repo-root-relative; see
+          # apps/backend/Dockerfile.canonical. (apps/backend/Dockerfile is the
+          # backend-context image Railway staging builds — deliberately not this.)
           docker build \
             --build-arg TONO_CANONICAL_SHA="${{ inputs.sha }}" \
             --build-arg TONO_SCHEMA_REVISION="$schema_revision" \
             --build-arg TONO_CONTRACT_SHA256="$contract_sha" \
             --tag "$IMAGE:${{ inputs.sha }}" \
-            apps/backend
+            --file apps/backend/Dockerfile.canonical \
+            .
           echo "contract_sha=$contract_sha" >> "$GITHUB_OUTPUT"
           echo "schema_revision=$schema_revision" >> "$GITHUB_OUTPUT"
 
