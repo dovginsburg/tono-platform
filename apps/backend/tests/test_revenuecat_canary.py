@@ -844,6 +844,57 @@ def test_real_store_disagreement_remains_flip_blocking(rc, store_val):
     assert body["shadow_excluded_promotional"] == 0
     assert body["shadow_unclassified"] == 0
     assert body["shadow_clean"] is False
+    # The blocking disagreement is attributed to its exact store (counts only,
+    # no identifiers) so the operator can triage which store holds the gate red.
+    assert body["shadow_eligible_disagreements_by_store"] == {store_val: 1}
+
+
+def test_eligible_disagreements_by_store_names_the_blocking_store(rc):
+    """When multiple stores are in the ledger, the readiness breakdown lists ONLY
+    the eligible stores that are DISAGREEING (with per-store counts) — never an
+    agreeing store, never promotional, never an account identifier. This lets an
+    operator distinguish a stale TEST_STORE dev artifact from a real APP_STORE
+    parity failure without production DB access."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+
+    # Two TEST_STORE disagreements (dev artifacts) + one APP_STORE disagreement
+    # (a real parity failure) + a PROMOTIONAL grant that is excluded entirely.
+    _post(client, rc_event(event_id="t1", app_user_id=aid, store="TEST_STORE",
+                           original_transaction_id="otx-t1"))
+    _post(client, rc_event(event_id="t2", app_user_id=aid, store="TEST_STORE",
+                           original_transaction_id="otx-t2"))
+    _post(client, rc_event(event_id="a1", app_user_id=aid, store="APP_STORE",
+                           original_transaction_id="otx-a1"))
+    _post(client, rc_event(event_id="p1", app_user_id=aid, store="PROMOTIONAL",
+                           original_transaction_id="otx-p1"))
+
+    body = client.get("/v1/revenuecat/readiness").json()
+    assert body["shadow_eligible_disagreements_by_store"] == {"TEST_STORE": 2, "APP_STORE": 1}
+    assert body["shadow_excluded_promotional"] == 1
+    assert body["shadow_clean"] is False
+
+
+def test_eligible_disagreements_by_store_is_empty_when_gate_is_clean(rc):
+    """A clean gate (only agreeing eligible stores and/or excluded promotional
+    rows) reports an EMPTY breakdown — the field never fabricates a blocker."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+
+    # An expired real-store event: RevenueCat inactive AND legacy inactive -> the
+    # eligible observation AGREES, so the gate is clean and nothing is blocking.
+    _post(client, rc_event(event_id="agree1", etype="EXPIRATION", app_user_id=aid,
+                           store="APP_STORE", expiration_ms=_past_ms(),
+                           original_transaction_id="otx-agree"))
+
+    body = client.get("/v1/revenuecat/readiness").json()
+    assert body["shadow_flip_eligible"]["disagreements"] == 0
+    assert body["shadow_eligible_disagreements_by_store"] == {}
+    assert body["shadow_clean"] is True
 
 
 @pytest.mark.parametrize("store_val", ["TOTALLY_MADE_UP", "", None, 123])
@@ -1016,10 +1067,14 @@ def test_readiness_flip_fields_are_counts_only_no_identifiers(rc):
     assert set(body["shadow_flip_eligible"]) == {"total", "agreements", "disagreements"}
     for value in body["shadow_flip_eligible"].values():
         assert isinstance(value, int) and not isinstance(value, bool)
-    for key in ("shadow_flip_eligible", "shadow_excluded_promotional", "shadow_unclassified"):
+    for key in ("shadow_flip_eligible", "shadow_excluded_promotional",
+                "shadow_unclassified", "shadow_eligible_disagreements_by_store"):
         blob = str(body[key])
         assert aid not in blob
         assert "rc-promo" not in blob and "otx-a" not in blob
+    # The per-store breakdown keys on the store token only (the disagreeing
+    # APP_STORE event), never an account/event identifier.
+    assert body["shadow_eligible_disagreements_by_store"] == {"APP_STORE": 1}
 
 
 def test_authoritative_grant_behavior_is_unchanged(rc):
