@@ -527,6 +527,14 @@ final class Build115IPadSurfaceLayoutTests: XCTestCase {
         "Help improve Tono", "Clear all", "Add something manually",
         "Open Settings", "Try again", "Sign in with email", "Show me how",
         "Open iOS Settings", "Got it",
+        // Build 122 onboarding Shortcut correction. These two are the SAME
+        // secondary-onboarding button styles already accepted above: "Open
+        // Shortcuts app" is the tile capsule button (identical to "Open iOS
+        // Settings" and "Show me how"), and "How to build a custom rewrite" is
+        // the plain footnote button (identical to "Open Setup Doctor" and
+        // "Verify Setup Manually"). They inherit the same accepted sub-44pt
+        // treatment rather than diverging one control from its siblings.
+        "Open Shortcuts app", "How to build a custom rewrite",
     ]
 
     /// The regression this layout pass could actually cause: a control that

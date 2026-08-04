@@ -18,6 +18,7 @@
 		A1220000000000000000B014 /* PurchaseCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1220000000000000000F001 /* PurchaseCapability.swift */; };
 		A1220000000000000000B015 /* PurchaseCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1220000000000000000F001 /* PurchaseCapability.swift */; };
 		A1220000000000000000B066 /* Build122PurchaseGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1220000000000000000F006 /* Build122PurchaseGateTests.swift */; };
+		A1220000000000000000B0A2 /* Build122ShortcutsOnboardingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1220000000000000000F0A2 /* Build122ShortcutsOnboardingTests.swift */; };
 		A1180000000000000000B021 /* PrivateCloudCompute.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F002 /* PrivateCloudCompute.swift */; };
 		A1180000000000000000B022 /* PrivateCloudCompute.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F002 /* PrivateCloudCompute.swift */; };
 		A1180000000000000000B023 /* PrivateCloudCompute.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1180000000000000000F002 /* PrivateCloudCompute.swift */; };
@@ -85,6 +86,7 @@
 		2F986D1C30D60DF7044A1827 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FCE9DA4E023C12BADC4BC12 /* HomeView.swift */; };
 		B115ADA7000000000000F011 /* AdaptiveLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115ADA7000000000000F001 /* AdaptiveLayout.swift */; };
 		3445E8532232C012E7274043 /* CoachDraftIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3861F3AF2390477CF4D567E /* CoachDraftIntent.swift */; };
+		A1220000000000000000B0A1 /* ShortcutsAppLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1220000000000000000F0A1 /* ShortcutsAppLink.swift */; };
 		3636B8D05701682C16720B5A /* SharedUserDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 772DD67FA1CD9CF09D426AF5 /* SharedUserDefaults.swift */; };
 		3781BE8282934F1F04FC4365 /* ContactsSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E33B6F18B213E414885CCCA /* ContactsSync.swift */; };
 		3B22A7CF6C642D6B952693E9 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1590C6120760B6DE05CC4AB9 /* Foundation.framework */; };
@@ -300,6 +302,7 @@
 		A1180000000000000000F005 /* AppleIntelligenceIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleIntelligenceIntents.swift; sourceTree = "<group>"; };
 		A1180000000000000000F006 /* Build118AppleIntelligenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build118AppleIntelligenceTests.swift; sourceTree = "<group>"; };
 		A1220000000000000000F006 /* Build122PurchaseGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build122PurchaseGateTests.swift; sourceTree = "<group>"; };
+		A1220000000000000000F0A2 /* Build122ShortcutsOnboardingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build122ShortcutsOnboardingTests.swift; sourceTree = "<group>"; };
 		B115C0FFEE0000000000F002 /* Build115LocalCoachTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build115LocalCoachTests.swift; sourceTree = "<group>"; };
 		B116C0FFEE0000000000F002 /* Build116SelectedFirstTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build116SelectedFirstTests.swift; sourceTree = "<group>"; };
 		B116A11B0E0000000000F002 /* Build116AirplaneModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build116AirplaneModeTests.swift; sourceTree = "<group>"; };
@@ -407,6 +410,7 @@
 		920000000000000000000050 /* Build101RevenueTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Build101RevenueTests.swift; sourceTree = "<group>"; };
 		940000000000000000000004 /* CoachVariantSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachVariantSettings.swift; sourceTree = "<group>"; };
 		B3861F3AF2390477CF4D567E /* CoachDraftIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachDraftIntent.swift; sourceTree = "<group>"; };
+		A1220000000000000000F0A1 /* ShortcutsAppLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutsAppLink.swift; sourceTree = "<group>"; };
 		B44BF0A224058437A1D2B6CB /* OnboardingEntryPointsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = OnboardingEntryPointsView.swift; sourceTree = "<group>"; };
 		B88FDB62F52944069CC31478 /* CoachView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachView.swift; sourceTree = "<group>"; };
 		B116C0BE1600000000000001 /* TonoConnectivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonoConnectivity.swift; sourceTree = "<group>"; };
@@ -504,6 +508,7 @@
 				A1180000000000000000F006 /* Build118AppleIntelligenceTests.swift */,
 				A1220000000000000000F006 /* Build122PurchaseGateTests.swift */,
 				A1240000000000000000F0A0 /* Build124AuthProvidersTests.swift */,
+				A1220000000000000000F0A2 /* Build122ShortcutsOnboardingTests.swift */,
 				B115ADA7000000000000F002 /* Build115AdaptiveLayoutTests.swift */,
 				B115ADA7000000000000F004 /* Build115IPadSurfaceLayoutTests.swift */,
 				B115C0FFEE0000000000F002 /* Build115LocalCoachTests.swift */,
@@ -633,6 +638,7 @@
 				B117REA0000000000000002 /* ReadTheAskView.swift */,
 				B115ADA7000000000000F001 /* AdaptiveLayout.swift */,
 				B3861F3AF2390477CF4D567E /* CoachDraftIntent.swift */,
+				A1220000000000000000F0A1 /* ShortcutsAppLink.swift */,
 				A1180000000000000000F004 /* ToneVariantEntity.swift */,
 				A1180000000000000000F005 /* AppleIntelligenceIntents.swift */,
 				B88FDB62F52944069CC31478 /* CoachView.swift */,
@@ -1014,6 +1020,7 @@
 				A1180000000000000000B065 /* Build118AppleIntelligenceTests.swift in Sources */,
 				A1220000000000000000B066 /* Build122PurchaseGateTests.swift in Sources */,
 				A1240000000000000000B0A0 /* Build124AuthProvidersTests.swift in Sources */,
+				A1220000000000000000B0A2 /* Build122ShortcutsOnboardingTests.swift in Sources */,
 				B115ADA7000000000000F022 /* Build115AdaptiveLayoutTests.swift in Sources */,
 				B115ADA7000000000000F044 /* Build115IPadSurfaceLayoutTests.swift in Sources */,
 				B115C0FFEE0000000000F021 /* Build115LocalCoachTests.swift in Sources */,
@@ -1140,6 +1147,7 @@
 				940000000000000000000003 /* CoachVariantSettings.swift in Sources */,
 				2F8A6B0E514C1D2F6A7B8C9D /* AppleRewriteBridge.swift in Sources */,
 				3445E8532232C012E7274043 /* CoachDraftIntent.swift in Sources */,
+				A1220000000000000000B0A1 /* ShortcutsAppLink.swift in Sources */,
 				F6EFD46D618CC03F0EF55311 /* ContactsSync.swift in Sources */,
 				F9F9FEC515BC480346923B7B /* CrashReporter.swift in Sources */,
 				DE7FE19B2535A1D6751A7E8D /* DigestView.swift in Sources */,

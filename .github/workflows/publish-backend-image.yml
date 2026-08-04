@@ -1,0 +1,162 @@
+name: Publish canonical backend image by SHA
+
+# Why this workflow exists
+# ------------------------
+# Production Render service `srv-d9gg8ngk1i2s738lngd0` must run a REAL prebuilt
+# image whose Python dependencies are installed at BUILD time (see
+# `apps/backend/Dockerfile`). The historical production config instead pulled a
+# vanilla `python:3.11-slim` base and did `pip install` at container START via a
+# runtime-bootstrap Docker Command. As the dependency tree grew, that runtime
+# install began to exceed Render's startup deadline, so every fresh deploy
+# `earlyExit`-ed before the app could bind — freezing production on a stale
+# process and blocking the env/code (e.g. APPLE_CLIENT_ID) a fresh deploy needs.
+#
+# This job builds the backend image from the committed Dockerfile — deps baked
+# in, one uvicorn worker, `/data` persistent-disk assumptions, and the
+# predeploy backup/integrity gate carried in the entrypoint — and PUBLISHES it
+# to GHCR pinned by immutable tag AND digest. Render then pulls that image by
+# digest with NO runtime install, so startup is just: pull -> chown /data ->
+# predeploy backup -> uvicorn. This is the durable replacement for the runtime
+# bootstrap and matches `docs/operations/render-persistent-disk-and-blueprint.md`
+# ("Runtime: the backend Docker image (apps/backend/Dockerfile), one worker").
+#
+# Governance mirrors `deploy-staging.yml`: a canonical deploy must resolve to a
+# full 40-char commit that is reachable from `origin/main` and passes source
+# hygiene. The image carries the same immutable OCI labels every other artifact
+# does (canonical SHA + schema revision + contract sha256), preserving the
+# pinned source/release boundary — the pin simply moves from "bootstrap this SHA
+# at runtime" to "run this build-time image, addressed by digest".
+#
+# Operator note (no secrets in this file): pushing uses the built-in
+# GITHUB_TOKEN (packages: write). If the published package is private, grant
+# Render a read-only pull credential (a token with read:packages) — never a
+# write token. The exact Render cutover is documented in the PR / handoff, not
+# here.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full 40-character canonical commit SHA (on origin/main) to publish
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: tono-backend-image
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/tono-backend
+
+jobs:
+  publish-backend-image:
+    runs-on: ubuntu-latest
+    # Gate the publish behind the `production` GitHub Environment so its
+    # protection rules (required reviewers) apply to a production image cut.
+    # If the environment is unconfigured it is a transparent no-op.
+    environment: production
+    steps:
+      - name: Validate immutable SHA input
+        shell: bash
+        run: |
+          [[ "${{ inputs.sha }}" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "sha must be a full lowercase 40-character commit SHA" >&2
+            exit 2
+          }
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+
+      - name: Prove exact reviewed checkout reachable from main
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ inputs.sha }}"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "${{ inputs.sha }}" origin/main
+          python3 scripts/ci/verify_source.py
+          test -z "$(git status --porcelain)"
+
+      - name: Generate immutable provenance
+        run: python3 scripts/ci/prepare_provenance.py --sha "${{ inputs.sha }}"
+
+      - name: Log in to GitHub Container Registry
+        shell: bash
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build backend image with immutable labels
+        id: build
+        shell: bash
+        run: |
+          contract_sha="$(jq -r .contract_sha256 build/provenance.json)"
+          schema_revision="$(jq -r .schema_revision build/provenance.json)"
+          test -n "$contract_sha" && test "$contract_sha" != "null"
+          test -n "$schema_revision" && test "$schema_revision" != "null"
+          docker build \
+            --build-arg TONO_CANONICAL_SHA="${{ inputs.sha }}" \
+            --build-arg TONO_SCHEMA_REVISION="$schema_revision" \
+            --build-arg TONO_CONTRACT_SHA256="$contract_sha" \
+            --tag "$IMAGE:${{ inputs.sha }}" \
+            apps/backend
+          echo "contract_sha=$contract_sha" >> "$GITHUB_OUTPUT"
+          echo "schema_revision=$schema_revision" >> "$GITHUB_OUTPUT"
+
+      - name: Verify built image labels match provenance
+        shell: bash
+        run: |
+          got_sha="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE:${{ inputs.sha }}")"
+          got_contract="$(docker inspect --format '{{ index .Config.Labels "com.tonoit.contract-sha256" }}' "$IMAGE:${{ inputs.sha }}")"
+          [ "$got_sha" = "${{ inputs.sha }}" ] || { echo "image revision label $got_sha != ${{ inputs.sha }}" >&2; exit 1; }
+          [ "$got_contract" = "${{ steps.build.outputs.contract_sha }}" ] || { echo "image contract label mismatch" >&2; exit 1; }
+
+      - name: Push image and capture immutable digest
+        id: push
+        shell: bash
+        run: |
+          docker push "$IMAGE:${{ inputs.sha }}"
+          digest="$(docker inspect --format '{{ index .RepoDigests 0 }}' "$IMAGE:${{ inputs.sha }}")"
+          # RepoDigests is `repo@sha256:...`; require the pinnable digest form.
+          case "$digest" in
+            "$IMAGE"@sha256:*) ;;
+            *) echo "could not resolve a pinnable digest for $IMAGE ($digest)" >&2; exit 1 ;;
+          esac
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Write image reference record
+        shell: bash
+        run: |
+          jq -n \
+            --arg canonical_sha "${{ inputs.sha }}" \
+            --arg image "$IMAGE" \
+            --arg tag "$IMAGE:${{ inputs.sha }}" \
+            --arg digest "${{ steps.push.outputs.digest }}" \
+            --arg contract_sha256 "${{ steps.build.outputs.contract_sha }}" \
+            --arg schema_revision "${{ steps.build.outputs.schema_revision }}" \
+            '{canonical_sha:$canonical_sha,image:$image,tag:$tag,digest:$digest,contract_sha256:$contract_sha256,schema_revision:$schema_revision}' \
+            > build/backend-image-ref.json
+          {
+            echo "## Canonical backend image published"
+            echo ""
+            echo "Point Render \`srv-d9gg8ngk1i2s738lngd0\` at this **digest** (not the tag) and clear the runtime-bootstrap Docker Command:"
+            echo ""
+            echo '```'
+            echo "${{ steps.push.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          jq . build/backend-image-ref.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tono-backend-image-ref-${{ inputs.sha }}
+          if-no-files-found: error
+          retention-days: 90
+          path: |
+            build/provenance.json
+            build/backend-image-ref.json

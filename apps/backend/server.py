@@ -404,12 +404,17 @@ async def _lifespan(_: "FastAPI"):
         # available" — truthful, but the first place anyone would notice was a
         # real signup. Saying it at boot makes the misconfiguration visible
         # before it costs a registration. It logs the WORD "configured", never
-        # the key.
-        "tono backend ready: provider=%s stripe=%s slack=%s apple=%s google=%s email=%s",
+        # the key. `apple=` is the App Store receipt root CA
+        # (TONO_APPLE_ROOT_CA_PEM); `apple_signin=` is the distinct native
+        # Sign in with Apple audience (APPLE_CLIENT_ID) — the gate whose absence
+        # returns 503 from /v1/auth/apple — so a fresh deploy's log shows at a
+        # glance whether the sign-in audience actually loaded.
+        "tono backend ready: provider=%s stripe=%s slack=%s apple=%s apple_signin=%s google=%s email=%s",
         os.environ.get("TONO_PROVIDER", "mock"),
         "configured" if os.environ.get("STRIPE_SECRET_KEY") else "off",
         "configured" if os.environ.get("SLACK_CLIENT_ID") else "off",
         "configured" if os.environ.get("TONO_APPLE_ROOT_CA_PEM") else "off",
+        "configured" if os.environ.get("APPLE_CLIENT_ID") else "off",
         "configured" if os.environ.get("TONO_GOOGLE_SERVICE_ACCOUNT_JSON") else "off",
         "configured" if email_auth.config_is_valid() else "off",
     )
@@ -569,6 +574,15 @@ async def health() -> dict[str, Any]:
         "stripe_configured": bool(os.environ.get("STRIPE_SECRET_KEY")),
         "slack_configured": bool(os.environ.get("SLACK_CLIENT_ID")),
         "apple_configured": bool(os.environ.get("TONO_APPLE_ROOT_CA_PEM")),
+        # Native Sign in with Apple has a SEPARATE gate from the App Store
+        # receipt root CA above: `verify_apple_identity_token` 503s ("Apple
+        # sign-in not configured") when APPLE_CLIENT_ID is unset, independent of
+        # TONO_APPLE_ROOT_CA_PEM. Surfacing it here (presence only — never the
+        # value, which is a public bundle id anyway) lets a post-deploy canary
+        # confirm the sign-in audience actually loaded, so an env var that was
+        # added after a process started but never picked up is visible without
+        # forging a real Apple token.
+        "apple_signin_configured": bool(os.environ.get("APPLE_CLIENT_ID")),
         "google_play_configured": bool(os.environ.get("TONO_GOOGLE_SERVICE_ACCOUNT_JSON")),
         # RevenueCat canary kill switch: off (default) | shadow | authoritative.
         # Presence only — the webhook secret value is never surfaced.
