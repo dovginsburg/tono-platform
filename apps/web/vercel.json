@@ -9,6 +9,7 @@
     { "source": "/checkout/success", "destination": "/app/checkout/success" },
     { "source": "/about", "destination": "/app/about" },
     { "source": "/contact", "destination": "/app/contact" },
+    { "source": "/support", "destination": "/app/support" },
     { "source": "/features", "destination": "/app/features" },
     { "source": "/blog", "destination": "/app/blog" },
     { "source": "/privacy", "destination": "/app/privacy" },

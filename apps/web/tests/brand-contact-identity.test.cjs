@@ -95,6 +95,7 @@ test('every customer-facing mailto routes through the contact module', () => {
   const surfaces = [
     'app/about/page.tsx',
     'app/contact/page.tsx',
+    'app/support/page.tsx',
     'app/privacy/page.tsx',
     'app/terms/page.tsx',
     'app/pricing/page.tsx',
@@ -122,6 +123,7 @@ test('the customer marketing surfaces expose no Supabase/provider branding', () 
   const marketing = [
     'app/about/page.tsx',
     'app/contact/page.tsx',
+    'app/support/page.tsx',
     'app/pricing/page.tsx',
     'app/TonoFooter.tsx',
   ];
