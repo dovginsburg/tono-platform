@@ -612,12 +612,16 @@ def revenuecat_readiness(store: StoreDep) -> dict[str, Any]:
       * ``shadow`` — lifetime cumulative counts over EVERY observation, including
         RevenueCat PROMOTIONAL admin grants. Diagnostics only; NOT the flip gate.
       * ``shadow_flip_eligible`` — real store-parity canaries only (App Store /
-        Play / Stripe / RC Billing / Test Store / ...). This is the ONLY input to
+        Play / Stripe / RC Billing / ...). This is the ONLY input to
         ``shadow_clean``.
       * ``shadow_excluded_promotional`` — count of PROMOTIONAL observations kept
         in lifetime diagnostics but excluded from the flip decision, because a
         promotional grant makes RevenueCat active with no store purchase and so
         legitimately disagrees with the free legacy projection in shadow mode.
+      * ``shadow_excluded_synthetic`` — count of self-issued/TEST_STORE
+        integration canaries: durably auditable transport probes that likewise
+        make RevenueCat active with no real purchase, so they are excluded from
+        the flip decision and never counted as real store evidence.
     ``shadow_unclassified`` counts observations whose store could not be
     classified; they FAIL CLOSED (block the flip) and are never assumed
     promotional or clean. ``shadow_clean`` is true only when there are zero
@@ -640,12 +644,14 @@ def revenuecat_readiness(store: StoreDep) -> dict[str, Any]:
         flip = store.revenuecat_shadow_flip_summary()
         flip_eligible = flip["eligible"]
         excluded_promotional = flip["excluded_promotional"]
+        excluded_synthetic = flip["excluded_synthetic"]
         unclassified = flip["unclassified"]
         shadow_clean = flip_eligible["disagreements"] == 0 and unclassified == 0
     except Exception:  # noqa: BLE001 — readiness never raises; fail closed
         shadow = {"total": None, "agreements": None, "disagreements": None, "last_observed_at": None}
         flip_eligible = {"total": None, "agreements": None, "disagreements": None}
         excluded_promotional = None
+        excluded_synthetic = None
         unclassified = None
         shadow_clean = None
     return {
@@ -667,6 +673,7 @@ def revenuecat_readiness(store: StoreDep) -> dict[str, Any]:
         "shadow": shadow,
         "shadow_flip_eligible": flip_eligible,
         "shadow_excluded_promotional": excluded_promotional,
+        "shadow_excluded_synthetic": excluded_synthetic,
         "shadow_unclassified": unclassified,
         "shadow_clean": shadow_clean,
     }

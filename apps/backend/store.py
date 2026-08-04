@@ -561,22 +561,37 @@ _TERMINAL_STATES = frozenset({"refunded", "revoked", "expired"})
 # canary. Promotional observations are therefore EXCLUDED from the flip gate
 # while still retained in lifetime diagnostics.
 _RC_STORE_PROMOTIONAL = frozenset({"PROMOTIONAL"})
+# RevenueCat's `store` for a synthetic/self-issued canary event: a signed
+# integration probe (our own test webhook, or a RevenueCat "TEST_STORE" event)
+# that proves the transport/idempotency/authentication path end-to-end but stands
+# for NO real customer purchase. Like PROMOTIONAL it makes RevenueCat "active"
+# with no underlying store, so in shadow mode it legitimately disagrees with the
+# (correct) free legacy projection — counting it as store-parity evidence pins
+# `shadow_clean` false forever. It is therefore EXCLUDED from the flip decision,
+# but bucketed SEPARATELY from promotional (its own `excluded_synthetic`) so the
+# ledger stays honest about which exclusions are admin grants vs. test canaries.
+# The observation is retained in the append-only ledger and lifetime diagnostics
+# — durably auditable — it simply never qualifies as real store evidence.
+_RC_STORE_SYNTHETIC = frozenset({"TEST_STORE"})
 # Real customer stores whose events ARE store-parity canaries and stay
 # flip-eligible: a disagreement on any of these still BLOCKS the flip. Kept as an
-# explicit allowlist (not "anything that isn't promotional") so a new/unknown
-# store fails closed rather than silently counting as clean.
+# explicit allowlist (not "anything that isn't promotional/synthetic") so a
+# new/unknown store fails closed rather than silently counting as clean.
 _RC_STORE_ELIGIBLE = frozenset({
     "APP_STORE", "MAC_APP_STORE", "PLAY_STORE", "AMAZON",
-    "STRIPE", "RC_BILLING", "WEB_BILLING", "PADDLE", "TEST_STORE",
+    "STRIPE", "RC_BILLING", "WEB_BILLING", "PADDLE",
 })
 
 
 def _classify_rc_store(store_source: Optional[str]) -> str:
     """Classify a RevenueCat `store` for the shadow flip gate:
       'promotional' – admin/dashboard grant, excluded from the flip decision;
+      'synthetic'   – a self-issued/TEST_STORE integration canary: durably
+                      auditable but excluded from the flip decision and never
+                      counted as real store evidence (its own bucket);
       'eligible'    – a real store-parity canary that counts toward the flip;
       'unknown'     – empty or unrecognized, which FAILS CLOSED (blocks the flip
-                      and is never treated as promotional or clean).
+                      and is never treated as promotional, synthetic or clean).
     Case- and whitespace-insensitive; a non-string/None store coerces to
     'unknown' (fail closed) rather than raising."""
     token = str(store_source or "").strip().upper()
@@ -584,6 +599,8 @@ def _classify_rc_store(store_source: Optional[str]) -> str:
         return "unknown"
     if token in _RC_STORE_PROMOTIONAL:
         return "promotional"
+    if token in _RC_STORE_SYNTHETIC:
+        return "synthetic"
     if token in _RC_STORE_ELIGIBLE:
         return "eligible"
     return "unknown"
@@ -4425,11 +4442,14 @@ class Store:
         """Flip-eligibility breakdown of the shadow ledger — the population the
         shadow->authoritative cutover decision is ACTUALLY allowed to be computed
         from. It separates real store-parity canaries (App Store/Play/Stripe/RC
-        Billing/Test Store/... — 'eligible') from RevenueCat PROMOTIONAL admin
-        grants ('excluded_promotional', retained in lifetime diagnostics but
-        never a flip signal, because a promotional grant makes RevenueCat active
-        with no store purchase and thus legitimately disagrees with the free
-        legacy projection in shadow mode).
+        Billing/... — 'eligible') from two kinds of non-store observation that are
+        retained in lifetime diagnostics but are NEVER a flip signal:
+        RevenueCat PROMOTIONAL admin grants ('excluded_promotional') and
+        self-issued/TEST_STORE integration canaries ('excluded_synthetic'). Both
+        make RevenueCat active with no store purchase and thus legitimately
+        disagree with the free legacy projection in shadow mode; a synthetic
+        canary is kept in its own bucket so a signed transport probe stays durably
+        auditable without ever qualifying as real store evidence.
 
         The store class is derived per observation from its own `store_source`,
         falling back to the durable revenuecat_events row for pre-migration rows
@@ -4451,12 +4471,15 @@ class Store:
             )
             eligible_total = eligible_agree = eligible_disagree = 0
             excluded_promotional = 0
+            excluded_synthetic = 0
             unclassified = 0
             for row in cur.fetchall():
                 klass = _classify_rc_store(row["eff_store"])
                 n = int(row["n"] or 0)
                 if klass == "promotional":
                     excluded_promotional += n
+                elif klass == "synthetic":
+                    excluded_synthetic += n
                 elif klass == "eligible":
                     eligible_total += n
                     if int(row["agree"] or 0) == 1:
@@ -4472,6 +4495,7 @@ class Store:
                     "disagreements": eligible_disagree,
                 },
                 "excluded_promotional": excluded_promotional,
+                "excluded_synthetic": excluded_synthetic,
                 "unclassified": unclassified,
             }
         return self._run(_do).result()

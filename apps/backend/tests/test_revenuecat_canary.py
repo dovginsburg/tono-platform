@@ -825,10 +825,11 @@ def test_promotional_grant_and_revoke_observations_are_all_retained(rc):
     assert client.get("/v1/revenuecat/readiness").json()["shadow_clean"] is True
 
 
-@pytest.mark.parametrize("store_val", ["APP_STORE", "PLAY_STORE", "TEST_STORE", "STRIPE", "RC_BILLING"])
+@pytest.mark.parametrize("store_val", ["APP_STORE", "PLAY_STORE", "STRIPE", "RC_BILLING"])
 def test_real_store_disagreement_remains_flip_blocking(rc, store_val):
     """A disagreement from any real customer store is a genuine store-parity
-    failure and MUST still block the flip — the fix excludes promotional only."""
+    failure and MUST still block the flip — the fix excludes promotional and
+    self-issued/TEST_STORE canaries only, never a real store."""
     rc.state["mode"] = "shadow"
     client = rc.client
     tok = _register(client)["api_token"]
@@ -842,8 +843,146 @@ def test_real_store_disagreement_remains_flip_blocking(rc, store_val):
     assert body["shadow_flip_eligible"]["total"] == 1
     assert body["shadow_flip_eligible"]["disagreements"] == 1
     assert body["shadow_excluded_promotional"] == 0
+    assert body["shadow_excluded_synthetic"] == 0
     assert body["shadow_unclassified"] == 0
     assert body["shadow_clean"] is False
+
+
+# ---------------------------------------------------------------------------
+# Synthetic / TEST_STORE canary correction: a signed self-issued integration
+# probe proves the transport/auth/idempotency path end-to-end but stands for NO
+# real customer purchase. It must stay durably auditable in the append-only
+# ledger yet NEVER qualify as real store evidence — otherwise a single signed
+# canary pins `shadow_clean` false forever and blocks the authoritative cutover
+# (the exact live-production state: shadow_flip_eligible disagreements=1). It is
+# excluded from the flip like promotional, but bucketed separately.
+# ---------------------------------------------------------------------------
+
+
+def test_classify_rc_store_buckets_synthetic_separately():
+    """Store-level classifier: TEST_STORE is 'synthetic' (case/space-insensitive),
+    distinct from promotional and from real stores; unknown still fails closed."""
+    from backend.store import _classify_rc_store
+    assert _classify_rc_store("TEST_STORE") == "synthetic"
+    assert _classify_rc_store("  test_store ") == "synthetic"
+    assert _classify_rc_store("PROMOTIONAL") == "promotional"
+    assert _classify_rc_store("APP_STORE") == "eligible"
+    assert _classify_rc_store("STRIPE") == "eligible"
+    assert _classify_rc_store("WHATEVER_NEW") == "unknown"
+    assert _classify_rc_store("") == "unknown"
+    assert _classify_rc_store(None) == "unknown"
+
+
+def test_synthetic_test_store_disagreement_excluded_from_flip_but_durably_retained(rc):
+    """The live blocker: a signed TEST_STORE canary makes RevenueCat active while
+    the legacy projection correctly stays free in shadow -> a disagreement, but a
+    synthetic one. It must be EXCLUDED from the flip (its own bucket), leave the
+    gate clean, and STILL be physically retained in the append-only ledger."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+
+    r = _post(client, rc_event(event_id="synth-1", app_user_id=aid, store="TEST_STORE",
+                               original_transaction_id="otx-synth"))
+    assert r.status_code == 200, r.text
+    assert _me(client, tok)["is_pro"] is False  # shadow never grants
+
+    from backend.store import get_store
+    store = get_store()
+    life = store.revenuecat_shadow_summary()
+    flip = store.revenuecat_shadow_flip_summary()
+    # Lifetime STILL records the disagreement — evidence is never rewritten.
+    assert life["total"] == 1 and life["disagreements"] == 1 and life["agreements"] == 0
+    # ...but it is excluded from the flip decision, in the SYNTHETIC bucket.
+    assert flip["eligible"] == {"total": 0, "agreements": 0, "disagreements": 0}
+    assert flip["excluded_synthetic"] == 1
+    assert flip["excluded_promotional"] == 0
+    assert flip["unclassified"] == 0
+    # The observation row is physically retained (durably auditable).
+    rows = _shadow_rows(store)
+    assert any(row["event_id"] == "synth-1" and (row["store_source"] or "").upper() == "TEST_STORE"
+               for row in rows)
+
+    body = client.get("/v1/revenuecat/readiness").json()
+    assert body["shadow"]["disagreements"] == 1                 # lifetime diagnostics
+    assert body["shadow_excluded_synthetic"] == 1
+    assert body["shadow_excluded_promotional"] == 0
+    assert body["shadow_flip_eligible"]["disagreements"] == 0
+    assert body["shadow_unclassified"] == 0
+    assert body["shadow_clean"] is True                         # the corrected gate
+
+
+def test_synthetic_canary_never_masks_a_real_store_disagreement(rc):
+    """A synthetic canary is excluded, but a REAL store disagreement alongside it
+    must still block the flip — the correction must not smuggle a green gate."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+
+    _post(client, rc_event(event_id="synth-a", app_user_id=aid, store="TEST_STORE",
+                           original_transaction_id="otx-synth-a"))
+    _post(client, rc_event(event_id="real-a", app_user_id=aid, store="APP_STORE",
+                           original_transaction_id="otx-real-a"))
+
+    body = client.get("/v1/revenuecat/readiness").json()
+    assert body["shadow_excluded_synthetic"] == 1
+    assert body["shadow_flip_eligible"]["total"] == 1
+    assert body["shadow_flip_eligible"]["disagreements"] == 1
+    assert body["shadow_clean"] is False                        # real store still blocks
+
+
+def test_duplicate_synthetic_event_is_idempotent_single_observation(rc):
+    """Re-delivering the SAME signed TEST_STORE event (RevenueCat retries) must
+    not double-count: one observation, one synthetic exclusion — the shadow
+    ledger keys on event_id."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+
+    body_evt = rc_event(event_id="synth-dup", app_user_id=aid, store="TEST_STORE",
+                        original_transaction_id="otx-synth-dup")
+    assert _post(client, body_evt).status_code == 200
+    assert _post(client, body_evt).status_code == 200          # replay
+
+    from backend.store import get_store
+    store = get_store()
+    flip = store.revenuecat_shadow_flip_summary()
+    assert flip["excluded_synthetic"] == 1                      # not 2
+    assert store.revenuecat_shadow_summary()["total"] == 1
+    assert len([r for r in _shadow_rows(store) if r["event_id"] == "synth-dup"]) == 1
+
+
+def test_deployed_test_store_row_reclassifies_to_synthetic_without_deletion(rc):
+    """Upgrade/migration behavior: a TEST_STORE observation already written to a
+    DEPLOYED shadow ledger (the live production row) reclassifies to the synthetic
+    bucket at read time with NO row deleted or rewritten — the append-only ledger
+    is preserved and the previously-pinned gate reads clean."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    _register(client)  # force app + store init
+    from backend.store import get_store, _now_iso
+    store = get_store()
+
+    def _seed():
+        cur = store._conn.cursor()
+        cur.execute(
+            "INSERT INTO revenuecat_shadow_observations (event_id,account_id,store_source,"
+            "revenuecat_active,legacy_active,agree,mode,detail,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            ("deployed-test-store", "acct", "TEST_STORE", 1, 0, 0, "shadow", "canary", _now_iso()),
+        )
+    store._run(_seed).result()
+
+    flip = store.revenuecat_shadow_flip_summary()
+    assert flip["excluded_synthetic"] == 1
+    assert flip["eligible"]["disagreements"] == 0
+    assert flip["unclassified"] == 0
+    # Not deleted — the exact seeded row is still physically present.
+    assert any(r["event_id"] == "deployed-test-store" for r in _shadow_rows(store))
+    assert client.get("/v1/revenuecat/readiness").json()["shadow_clean"] is True
 
 
 @pytest.mark.parametrize("store_val", ["TOTALLY_MADE_UP", "", None, 123])
