@@ -333,6 +333,9 @@ class CreateCouponRequest(BaseModel):
     duration_days: int
     max_uses: int = 0
     expires_at: Optional[str] = None
+    # Build 117 app-review compatibility: opt this one code into redemption by
+    # an unidentified account. Default False keeps all coupons identity-gated.
+    anonymous_eligible: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -2985,14 +2988,29 @@ def redeem_coupon(
     user: CurrentUser,
     store: StoreDep,
 ) -> RedeemCouponResponse:
-    """Redeem for the identified canonical account proven by this bearer."""
-    if not user.account_id or not user.account or not user.account.is_identified:
+    """Redeem for the canonical account proven by this bearer.
+
+    Normal codes require a verified (identified) account. A code explicitly
+    flagged ``anonymous_eligible`` (Build 117 app-review compatibility) may also
+    be redeemed by an unidentified account — this is the ONLY relaxation, gated
+    per coupon, and the grant still binds to this canonical account UUID alone.
+    """
+    code = body.code.strip().upper()
+    if not user.account_id or not user.account:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="sign in to a verified account before redeeming a code",
+        )
+    if not user.account.is_identified and not store.coupon_allows_anonymous(code):
+        # General ownership is unchanged: an unidentified account is refused for
+        # every code except an explicitly anonymous-eligible one. The store
+        # transaction enforces the same rule (defense in depth).
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="sign in to a verified account before redeeming a code",
         )
     try:
-        exp = store.redeem_coupon(user.account_id, body.code.strip().upper())
+        exp = store.redeem_coupon(user.account_id, code, device_id=user.device_id)
         return RedeemCouponResponse(
             coupon_pro_expires_at=exp,
             message="Pro access activated!",
@@ -3014,6 +3032,7 @@ def admin_create_coupon(
         body.duration_days,
         body.max_uses,
         body.expires_at,
+        anonymous_eligible=body.anonymous_eligible,
     )
     if not ok:
         raise HTTPException(status_code=409, detail="code already exists")
