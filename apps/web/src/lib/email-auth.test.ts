@@ -274,8 +274,11 @@ test('web email calls are tagged to the web surface and build', () => {
 
 test('OAuth, passkey and magic link all survive', () => {
   // Adding password auth must not remove a way in that people already use.
+  // Google sign-in survives as the DIRECT Tono GIS flow (POSTing the credential
+  // to our own route), NOT Supabase's provider OAuth — which is removed.
   const login = readFileSync(join(srcRoot, 'app', 'login', 'page.tsx'), 'utf8');
-  assert.match(login, /signInWithOAuth/);
+  assert.match(login, /\/api\/auth\/google\/credential/);
+  assert.doesNotMatch(login, /signInWithOAuth/);
   assert.match(login, /signInWithOtp/);
   assert.match(login, /PasskeyLoginButton/);
 });

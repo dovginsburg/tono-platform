@@ -52,18 +52,9 @@ function classifyAuthFailure(error: unknown): EmailAuthOutcome {
   return 'unknown_failure';
 }
 
+// Shown in the diagnostic footer only. Google no longer uses Supabase at all
+// (direct GIS, see below); the old Supabase OAuth capability gate is gone.
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-
-// Capability gate for the Google OAuth button.
-//
-// The OAuth buttons can only complete a sign-in through a configured Supabase
-// project. When either public value is absent at build time, the provider
-// client cannot start an OAuth flow, so rendering a button would give a person
-// a control that fails the instant they click it. We fail closed and omit it —
-// mirroring how passkeys surface an honest "not configured here yet" state
-// rather than a dead button. Email/password + passkeys remain.
-const OAUTH_CONFIGURED = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
 // SEPARATE gate for the Apple button — and deliberately INDEPENDENT of the
 // Supabase gate above.
@@ -86,21 +77,21 @@ const APPLE_OAUTH_ENABLED = appleWebSignInEnabled(
   process.env.NEXT_PUBLIC_APPLE_WEB_EXPECTED_SERVICES_ID,
 );
 
-// SEPARATE gate for the DIRECT, Tono-owned Google button — independent of the
-// Supabase gate. Google sign-in via Supabase sends the user to a consent screen
-// that reads "continue to <shared-project>.supabase.co" under a shared client
-// id — not Tono. The direct flow (`/api/auth/google/start` → Google →
-// `/api/auth/google/callback`) uses Tono's OWN Web OAuth client from the
-// Tono-owned Google Cloud project whose consent screen App name is "Tono", so
-// Google shows "Tono". The public `NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID` value is
-// the operator's attestation that the server-side boundary (Web client id +
-// secret) is configured on this deployment; the start route independently fails
-// closed if the secret is missing. We only take the direct path when that public
-// id has the Google Web-client shape — so a stray value can't drive it. Until
-// then we fall back to the existing Supabase Google button (no regression).
+// Google sign-in is a DIRECT, Tono-owned Google Identity Services (GIS) flow —
+// it NEVER runs through Supabase. Supabase's Google provider is bound to a
+// shared project, so it sends users to a consent screen reading "continue to
+// <shared-project>.supabase.co" under a shared client id; there is deliberately
+// NO fallback to it. GIS runs under Tono's OWN Web OAuth client id (consent
+// screen App name "Tono"), so Google shows "Tono". The button is gated at build
+// time on the public `NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID` having the Google
+// Web-client shape (a stray value can't drive it); when absent, Google is hidden
+// behind an honest unavailable state (email / Apple / passkeys remain) — a Tono
+// user is never sent to the shared project's screen.
 const GOOGLE_DIRECT_ENABLED = /^[0-9]+-[a-z0-9_]+\.apps\.googleusercontent\.com$/.test(
   (process.env.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '').trim(),
 );
+const GOOGLE_UNAVAILABLE_COPY =
+  'google sign-in isn’t available here yet. use email, Apple, or a passkey below.';
 
 // build a basePath-aware redirect URI:
 //   on tonoit.com, callback URL is https://tonoit.com/app/auth/callback
@@ -160,23 +151,6 @@ export default function LoginPage() {
     const code = sanitizeAuthErrorCode(new URLSearchParams(window.location.search).get('error'));
     if (code) setOutcome(CALLBACK_CODE_TO_OUTCOME[code]);
   }, []);
-
-  // GOOGLE only. Apple no longer runs through Supabase — see `startApple`. This
-  // function is deliberately narrowed to `'google'` so no Apple sign-in can ever
-  // be started via Supabase's OAuth from this page.
-  const oauth = async (provider: 'google') => {
-    setOutcome(null);
-    const supabase = createClient();
-    const { error: err } = await supabase.auth.signInWithOAuth({
-      provider,
-      options: {
-        redirectTo: buildRedirectTo(),
-        // Supabase dashboard needs these URLs whitelisted (operator-owned config).
-        scopes: 'email profile',
-      },
-    });
-    if (err) setOutcome(classifyAuthFailure(err));
-  };
 
   // Apple sign-in is a direct, Tono-owned OAuth flow. Clicking the button is a
   // top-level navigation to our own start route, which mints state+nonce, sets
@@ -406,17 +380,16 @@ export default function LoginPage() {
           <div className="space-y-2.5">
             {GOOGLE_DIRECT_ENABLED ? (
               // GIS renders the Tono-branded Google button into this container.
+              // There is NO Supabase fallback — Google is direct-Tono or hidden.
               <div ref={googleButtonRef} className="w-full flex justify-center min-h-[48px]" />
-            ) : OAUTH_CONFIGURED ? (
-              <button
-                type="button"
-                onClick={() => oauth('google')}
-                className="w-full inline-flex items-center justify-center gap-3 px-5 py-3 rounded-[12px] bg-tono-bg-elev hover:bg-tono-bg-card text-tono-text border border-tono-border hover:border-tono-border-strong font-semibold text-[14px] transition min-h-[48px]"
-                aria-label="Continue with Google"
+            ) : (
+              <p
+                role="note"
+                className="text-[12px] text-tono-muted leading-[1.5] px-1 py-1"
               >
-                <GoogleIcon /> continue with google
-              </button>
-            ) : null}
+                {GOOGLE_UNAVAILABLE_COPY}
+              </p>
+            )}
             {APPLE_OAUTH_ENABLED ? (
               <button
                 type="button"

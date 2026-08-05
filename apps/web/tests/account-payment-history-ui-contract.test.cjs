@@ -37,18 +37,21 @@ test('reset password form uses PasswordField for new + confirm fields', () => {
   assert.doesNotMatch(src, /type="password"/);
 });
 
-test('Google OAuth button is gated on a fail-closed capability flag', () => {
+test('Google sign-in is DIRECT Tono GIS only — no Supabase fallback anywhere', () => {
   const src = read('app/login/page.tsx');
-  assert.match(src, /OAUTH_CONFIGURED = Boolean\(SUPABASE_URL && SUPABASE_ANON_KEY\)/);
-  // Google is now a DIRECT, Tono-owned GIS flow (consent screen "Tono"), gated on
-  // the public Tono Web client id having the Google Web-client shape. It falls
-  // back to the Supabase button only when the direct boundary is not attested —
-  // so the fail-closed capability gate is preserved on BOTH branches.
+  // Gated (fail closed) on the public Tono Web client id having the Google
+  // Web-client shape.
   assert.match(src, /GOOGLE_DIRECT_ENABLED = \/\^\[0-9\]\+-/);
+  assert.match(src, /NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID/);
   assert.match(src, /\{GOOGLE_DIRECT_ENABLED \? \(/);
-  assert.match(src, /\) : OAUTH_CONFIGURED \? \(/);
-  // The direct flow POSTs the GIS credential to our own route — never Supabase.
+  // The direct flow POSTs the GIS credential to our OWN route — never Supabase.
   assert.match(src, /\/api\/auth\/google\/credential/);
+  // When the direct boundary is unavailable, Google is HIDDEN behind an honest
+  // unavailable state — there is NO Supabase fallback branch.
+  assert.match(src, /GOOGLE_UNAVAILABLE_COPY/);
+  assert.doesNotMatch(src, /OAUTH_CONFIGURED/);
+  // The Supabase Google OAuth path must be entirely gone (no provider:'google').
+  assert.doesNotMatch(src, /signInWithOAuth/);
 });
 
 test('Apple OAuth button has a SEPARATE fail-closed gate, independent of Supabase', () => {
@@ -73,11 +76,10 @@ test('Apple sign-in never runs through Supabase OAuth (direct Tono boundary only
   // Supabase's provider OAuth.
   assert.match(src, /onClick=\{startApple\}/);
   assert.match(src, /\/api\/auth\/apple\/start/);
-  // Supabase signInWithOAuth is never invoked for Apple, in any spelling.
+  // Supabase signInWithOAuth is never invoked — for Apple OR Google. Both are
+  // now direct, Tono-owned flows; the Supabase provider-OAuth helper is gone.
   assert.doesNotMatch(src, /oauth\('apple'\)/);
-  assert.doesNotMatch(src, /signInWithOAuth\([^)]*apple/i);
-  // The Supabase oauth helper is narrowed to google so 'apple' cannot be passed.
-  assert.match(src, /const oauth = async \(provider: 'google'\)/);
+  assert.doesNotMatch(src, /signInWithOAuth/);
 });
 
 test('no compiled web source embeds a foreign (sibling-product) Apple client id', () => {
