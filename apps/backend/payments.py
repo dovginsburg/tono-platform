@@ -266,6 +266,27 @@ def create_checkout_session(
     if user.account is None:
         raise HTTPException(409, "canonical account missing")
     account_id = user.account.id
+
+    # Cross-platform double-charge guard. Entitlement is keyed on the canonical
+    # account UUID, and every rail projects into the SAME entitlement_grants
+    # ledger: iOS StoreKit and Android Play Billing land there via RevenueCat,
+    # Apple ASSN direct, or Google RTDN; Stripe lands there via the web webhook.
+    # So a person who paid on iOS and then signs in on the web is ALREADY Pro on
+    # this account — starting a Stripe subscription would bill them a second time
+    # for service they already have. Refuse before any Stripe object or trial
+    # reservation is created. An EXPIRED grant does not count (the helper filters
+    # to active+unexpired), so a lapsed subscriber can still resubscribe, and a
+    # Stripe subscriber changing plans/cancelling uses the billing portal.
+    if store.account_entitlement_active(account_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This account already has an active Tono Pro subscription. "
+                "Manage it where you purchased it (the App Store, Google Play, "
+                "or your Tono billing portal)."
+            ),
+        )
+
     customer_id = _resolve_stripe_customer(store, user)
     include_trial = store.reserve_stripe_trial(
         account_id=account_id,
@@ -294,7 +315,13 @@ def create_checkout_session(
         "tono_source": "app",
         "tono_account_id": account_id,
     }
-    client_reference_id = user.device_id
+    # client_reference_id carries the canonical Tono ACCOUNT uuid — the single
+    # entitlement principal — NOT the device id (Ezra correction #2). The device
+    # id is retained only as non-authorizing `tono_device_id` metadata. The
+    # webhook resolves the account from `tono_account_id` metadata (set on every
+    # session, old and new), so legacy sessions that put the device id in
+    # client_reference_id still bind correctly.
+    client_reference_id = account_id
 
     # PUBLIC_BASE_URL wins over the request host so deployments behind
     # Railway's proxy don't surface ``*.up.railway.app`` in the user's
@@ -486,7 +513,16 @@ def _handle_subscription_event(store: Store, etype: str, obj: dict) -> None:
     currency: Optional[str] = None
 
     if etype == "checkout.session.completed":
-        device_id = obj.get("client_reference_id") or _meta(obj, "tono_device_id")
+        # Account resolution is driven by tono_account_id metadata (top of fn).
+        # device_id is a non-authorizing hint from metadata; client_reference_id
+        # now carries the canonical ACCOUNT uuid (this build), but LEGACY
+        # sessions put the DEVICE id there — treat it as a device id only when it
+        # is not the account uuid we already resolved (Ezra correction #2).
+        device_id = _meta(obj, "tono_device_id")
+        if not device_id:
+            ref = obj.get("client_reference_id")
+            if ref and ref != account_id:
+                device_id = ref
         customer_id = obj.get("customer")
         subscription_id = obj.get("subscription")
         if subscription_id:
@@ -540,6 +576,28 @@ def _handle_subscription_event(store: Store, etype: str, obj: dict) -> None:
     is_deleted = status_str == "canceled" or etype == "customer.subscription.deleted"
     effective_status = "canceled" if is_deleted else status_str
     renews_at = _iso(period_end)
+
+    # Price authority gate (Ezra correction #3). A subscription may GRANT Tono
+    # Pro only when it bills EXACTLY one line item whose Price ID is a configured
+    # canonical Tono plan price (STRIPE_PRICE_PRO_MONTHLY / _YEARLY). A wrong,
+    # missing, multi-line, or foreign price grants nothing and MUST NOT mutate
+    # plan — we bail before trial reservation, provider projection, and the
+    # mutable-column update. The raw event stays durably recorded in
+    # stripe_events as evidence. Terminal states (canceled/unpaid/…) are not in
+    # the granting set, so revocation/cancellation is unaffected by this gate.
+    observed_subscription = locals().get("sub", obj)
+    if (
+        status_str in _GRANTING_STRIPE_STATUSES
+        and not is_deleted
+        and _matched_canonical_price_id(observed_subscription) is None
+    ):
+        logger.warning(
+            "Stripe webhook: subscription=%s price is not a canonical Tono plan "
+            "(missing/wrong/multi-line/foreign); refusing grant, plan untouched "
+            "(type=%s).",
+            subscription_id, etype,
+        )
+        return
 
     # Customer ownership and trial history are independent of mutable
     # entitlement ordering. Apply them before the subscription projection so a
@@ -905,6 +963,48 @@ def _price_from_sub(sub: dict) -> tuple[Optional[int], Optional[str]]:
         if isinstance(unit_amount, int) and isinstance(currency, str) and currency:
             return unit_amount, currency.lower()
     return None, None
+
+
+_GRANTING_STRIPE_STATUSES = frozenset(
+    {"active", "trialing", "past_due", "incomplete"}
+)
+
+
+def _canonical_price_ids() -> set[str]:
+    """The exact Stripe Price IDs allowed to grant Tono Pro: the configured
+    monthly + yearly plan prices (env-var NAMES declared by the versioned
+    commercial catalog). A Price ID absent from this set — wrong, foreign, or a
+    sibling product's — grants nothing. Empty when unconfigured, which together
+    with the fail-closed webhook 503 means no grant is possible."""
+    ids: set[str] = set()
+    for interval in ("month", "year"):
+        pid = _price_for("pro", interval)
+        if pid:
+            ids.add(pid)
+    return ids
+
+
+def _matched_canonical_price_id(sub: dict) -> Optional[str]:
+    """Return the canonical Tono Pro Price ID iff the subscription bills EXACTLY
+    ONE line item whose Price ID is in the configured allowlist.
+
+    Refuses (returns None) on a missing price id, a foreign/wrong Price ID, or a
+    multi-line subscription — a multi-line sub could otherwise smuggle a foreign
+    price alongside a Tono one. This is the sole price gate on granting: a
+    subscription whose money does not correspond EXACTLY to one canonical Tono
+    plan grants nothing.
+    """
+    allow = _canonical_price_ids()
+    if not allow:
+        return None
+    items = (sub.get("items") or {}).get("data") or []
+    if len(items) != 1:
+        return None
+    price = items[0].get("price") or {}
+    pid = price.get("id")
+    if isinstance(pid, str) and pid in allow:
+        return pid
+    return None
 
 
 def _payment_method_fingerprint(sub: dict) -> Optional[str]:

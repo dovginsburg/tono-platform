@@ -206,7 +206,11 @@ def test_wallet_purchase_binds_to_the_authenticated_account(
 
     assert stripe_capture["metadata"]["tono_account_id"] == reg["account_id"]
     assert stripe_capture["subscription_data"]["metadata"]["tono_account_id"] == reg["account_id"]
-    assert stripe_capture["client_reference_id"] == reg["device_id"]
+    # client_reference_id is the canonical ACCOUNT uuid (the entitlement
+    # principal), not the device id (Ezra correction #2). The device id is
+    # retained only as non-authorizing tono_device_id metadata.
+    assert stripe_capture["client_reference_id"] == reg["account_id"]
+    assert stripe_capture["metadata"]["tono_device_id"] == reg["device_id"]
 
 
 def test_anonymous_web_checkout_is_refused_for_every_method(client, monkeypatch):
@@ -248,7 +252,7 @@ def test_wallet_subscription_grants_the_same_entitlement_as_a_card(client, monke
                 "current_period_end": 4102444800,
                 # Wallet payments arrive as a card payment method — this is what
                 # an Apple Pay / Google Pay subscription actually looks like.
-                "items": {"data": [{"price": {"product": "prod_pro"}}]},
+                "items": {"data": [{"price": {"id": "price_fake_month", "product": "prod_pro"}}]},
             }
         },
     }
@@ -290,7 +294,7 @@ def test_wallet_subscription_revocation_removes_entitlement(client, monkeypatch)
                 "data": {"object": {
                     "id": "sub_wallet_rev", "status": status,
                     "customer": "cus_wallet_rev", "current_period_end": 4102444800,
-                    "items": {"data": [{"price": {"product": "prod_pro"}}]},
+                    "items": {"data": [{"price": {"id": "price_fake_month", "product": "prod_pro"}}]},
                 }},
             }),
             headers={"stripe-signature": "ok", "content-type": "application/json"},

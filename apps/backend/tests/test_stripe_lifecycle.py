@@ -70,6 +70,13 @@ def _configure_stripe(monkeypatch) -> None:
     monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_fake")
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_fake")
     monkeypatch.setenv("STRIPE_PRICE_PRO_MONTHLY", "price_fake_month")
+    monkeypatch.setenv("STRIPE_PRICE_PRO_YEARLY", "price_fake_year")
+
+
+# The canonical monthly price id these fixtures bill by default. The price
+# authority gate (payments._matched_canonical_price_id) only grants Pro when the
+# subscription's single line item carries exactly this (or the yearly) id.
+_CANONICAL_PRICE_ID = "price_fake_month"
 
 
 def _sign_in_apple(client, app, token: str, sub: str) -> str:
@@ -112,6 +119,14 @@ _FUTURE_PERIOD_END = 4102444800   # 2100-01-01 unix timestamp
 _PAST_PERIOD_END = 1000000000     # 2001-09-09 (already expired)
 
 
+def _price_item(price_id=_CANONICAL_PRICE_ID):
+    """One Stripe line item carrying a Price ID (default: the canonical Tono
+    monthly price the gate accepts). Pass price_id=None or a foreign id to build
+    a hostile subscription the gate must refuse."""
+    return {"price": {"id": price_id, "product": "prod_stripe_pro",
+                       "unit_amount": 399, "currency": "usd"}}
+
+
 def _sub_obj(
     sub_id="sub_test_1",
     customer_id="cus_test_1",
@@ -119,6 +134,8 @@ def _sub_obj(
     period_end=_FUTURE_PERIOD_END,
     account_id: Optional[str] = None,
     device_id: Optional[str] = None,
+    price_id: Optional[str] = _CANONICAL_PRICE_ID,
+    items=None,
 ) -> dict:
     metadata = {}
     if account_id:
@@ -131,16 +148,17 @@ def _sub_obj(
         "status": status,
         "current_period_end": period_end,
         "metadata": metadata,
-        "items": {"data": [{"price": {"product": "prod_stripe_pro"}}]},
+        "items": {"data": items if items is not None else [_price_item(price_id)]},
     }
 
 
-def _fake_sub_retrieve(status="active", period_end=_FUTURE_PERIOD_END):
+def _fake_sub_retrieve(status="active", period_end=_FUTURE_PERIOD_END,
+                       price_id=_CANONICAL_PRICE_ID, items=None):
     def _retrieve(_id):
         return {
             "status": status,
             "current_period_end": period_end,
-            "items": {"data": [{"price": {"product": "prod_stripe_pro"}}]},
+            "items": {"data": items if items is not None else [_price_item(price_id)]},
         }
     return _retrieve
 
@@ -261,7 +279,7 @@ def test_handler_failure_returns_5xx_then_retry_succeeds(client, monkeypatch):
         return {
             "status": "active",
             "current_period_end": _FUTURE_PERIOD_END,
-            "items": {"data": []},
+            "items": {"data": [_price_item()]},
         }
 
     # First POST — handler raises → 500
