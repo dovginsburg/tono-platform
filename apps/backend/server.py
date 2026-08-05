@@ -1818,6 +1818,56 @@ async def auth_email_resend(
 
 
 @app.post(
+    "/v1/auth/email/magic-link",
+    response_model=EmailAcceptedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def auth_email_magic_link(
+    body: EmailAddressRequest,
+    request: Request,
+    user: OptionalCurrentUser,
+    store: StoreDep,
+    client: Annotated[
+        email_auth.SupabaseEmailAuthClient, Depends(email_auth.get_email_auth_client)
+    ],
+) -> EmailAcceptedResponse:
+    """Send a Tono-branded magic-link sign-in — for EXISTING Tono users only.
+
+    Replaces the former browser-direct ``supabase.auth.signInWithOtp`` call,
+    which (a) leaked the shared tenant's ParentScript sender/branding and (b) had
+    ``shouldCreateUser: true``, minting unledgered provider accounts — the exact
+    "second, unledgered path" the canonical-backend design forbids.
+
+    Existing-users-only is enforced against Tono's OWN ledger
+    (``has_verified_email_account``): an unknown address sends nothing and
+    creates nothing. Anti-enumerating — the accepted response is identical
+    whether or not the address is known, and the per-address rate gate is applied
+    before the ledger is consulted so timing cannot answer the question either.
+    """
+    normalized = _require_email(body.email)
+    _email_auth_rate_gate(request, "magic_link", normalized)
+    if not store.has_verified_email_account(normalized):
+        # No verified Tono account: create nothing, send nothing, disclose
+        # nothing. Recorded as a request for the account's own history only if
+        # one later appears — here there is no account to attach it to.
+        return EmailAcceptedResponse()
+    try:
+        await client.send_magic_link(email=normalized)
+    except email_auth.EmailAuthError as exc:
+        if exc.outcome is email_auth.EmailAuthOutcome.INVALID_CREDENTIALS:
+            return EmailAcceptedResponse()
+        if exc.outcome in _OUTAGE_OUTCOMES:
+            _record_email_audit(
+                store, normalized, email_identity.EVENT_PROVIDER_UNAVAILABLE, body, caller=user
+            )
+        raise _email_auth_failure(exc.outcome) from None
+    _record_email_audit(
+        store, normalized, email_identity.EVENT_MAGIC_LINK_REQUESTED, body, caller=user
+    )
+    return EmailAcceptedResponse()
+
+
+@app.post(
     "/v1/auth/email/reset",
     response_model=EmailAcceptedResponse,
     status_code=status.HTTP_202_ACCEPTED,

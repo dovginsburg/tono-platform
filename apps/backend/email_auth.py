@@ -194,6 +194,18 @@ def _verification_email(link: str) -> tuple[str, str]:
     return subject, html
 
 
+def _magic_link_email(link: str) -> tuple[str, str]:
+    subject = "Sign in to Tono"
+    html = (
+        "<h2>Sign in to Tono</h2>"
+        "<p>Follow the link below to sign in to your Tono account. It can be "
+        "used once and expires shortly.</p>"
+        f'<p><a href="{link}">Sign in to Tono</a></p>'
+        "<p>If you didn’t request this, you can safely ignore this email.</p>"
+    )
+    return subject, html
+
+
 def _recovery_email(link: str) -> tuple[str, str]:
     subject = "Reset your Tono password"
     html = (
@@ -591,6 +603,44 @@ class SupabaseEmailAuthClient:
             "/auth/v1/recover",
             json_body={"email": email},
             params={"redirect_to": _recovery_redirect()},
+        )
+        outcome = self._classify(response)
+        if outcome is not EmailAuthOutcome.OK:
+            raise EmailAuthError(outcome)
+
+    async def send_magic_link(self, *, email: str) -> None:
+        """Deliver a Tono-branded magic-link sign-in for an EXISTING account.
+
+        The caller (server) has already confirmed a verified Tono account exists
+        for this address, so this only mints + sends; it never creates a provider
+        user (shouldCreateUser=false). The email is a Tono-owned, Tono-branded
+        message — no shared-tenant/ParentScript sender can leak. A provider that
+        nonetheless 4xxs an unknown address is folded into a silent success so
+        the response cannot enumerate.
+        """
+        if self.tono_send_enabled:
+            try:
+                link, _ = await self._admin_generate_link(
+                    link_type="magiclink", email=email, redirect_to=_redirect_base(),
+                )
+            except EmailAuthError as exc:
+                if exc.outcome in (
+                    EmailAuthOutcome.INVALID_CREDENTIALS,
+                    EmailAuthOutcome.INVALID_EMAIL,
+                ):
+                    return
+                raise
+            subject, html = _magic_link_email(link)
+            await self._send_tono_email(to=email, subject=subject, html=html)
+            return
+        # Unbranded fallback (no service-role + ESP): GoTrue OTP with
+        # create_user=false so no unledgered account is ever created. GoTrue
+        # sends its own email here; this branch only runs when Tono-owned sending
+        # is unconfigured (a misconfiguration the startup diagnostics surface).
+        response = await self._post(
+            "/auth/v1/otp",
+            json_body={"email": email, "create_user": False},
+            params={"redirect_to": _redirect_base()},
         )
         outcome = self._classify(response)
         if outcome is not EmailAuthOutcome.OK:
