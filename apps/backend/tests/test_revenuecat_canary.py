@@ -1412,3 +1412,81 @@ def test_readiness_reports_hmac_configured_without_leaking_secret(client, monkey
 def test_readiness_hmac_unconfigured_by_default(client):
     body = client.get("/v1/revenuecat/readiness").json()
     assert body["webhook_hmac_configured"] is False
+
+
+# ---------------------------------------------------------------------------
+# Objective end-to-end: one Tono person, one account, portable across devices;
+# Tono isolated from other products (TandemPaws / TandemSkills).
+# ---------------------------------------------------------------------------
+
+
+def test_revenuecat_grant_is_portable_across_devices_one_identity(rc):
+    """The literal objective: one Tono person -> one account -> entitlement
+    granted via RevenueCat on device A is read as Pro on a brand-new device B
+    that signs in with the SAME identity and never made a purchase of its own.
+
+    The RevenueCat App User ID is the immutable Tono ``accounts.id`` UUID, and
+    ``/v1/me``.``is_pro`` reads the account-level grant provider-agnostically, so
+    the entitlement is portable across every device that authenticates to the
+    account. This composes the two halves proved separately elsewhere (RC writer
+    -> account grant; two device sessions -> one account) into the one claim the
+    critical path exists to guarantee."""
+    import backend.social_auth as social_auth
+
+    client = rc.client
+    app = rc.app
+
+    async def _fake_apple(_token):
+        return social_auth.IdentityClaims(sub="apple-portable-uid", email="p@example.com")
+
+    app.dependency_overrides[social_auth.get_apple_verifier] = lambda: _fake_apple
+    try:
+        # Device A: register + sign in with Apple -> canonical Tono account UUID.
+        dev_a = _register(client)["api_token"]
+        signin_a = client.post(
+            "/v1/auth/apple", json={"identity_token": "tA"}, headers=_auth(dev_a)
+        ).json()
+        account_id = signin_a["account_id"]
+        assert account_id
+        assert _me(client, dev_a)["is_pro"] is False
+
+        # RevenueCat delivers an INITIAL_PURCHASE keyed on that account UUID.
+        r = _post(client, rc_event(event_id="rc-portable", app_user_id=account_id))
+        assert r.status_code == 200, r.text
+        assert r.json()["outcome"].startswith("authoritative:")
+        assert _me(client, dev_a)["is_pro"] is True
+
+        # Device B: a brand-new device/session signs in with the SAME identity.
+        dev_b = _register(client)["api_token"]
+        assert dev_b != dev_a
+        signin_b = client.post(
+            "/v1/auth/apple", json={"identity_token": "tB"}, headers=_auth(dev_b)
+        ).json()
+        # Same person -> same account, Pro inherited with no purchase of its own.
+        assert signin_b["account_id"] == account_id
+        assert signin_b["is_pro"] is True
+        me_b = _me(client, dev_b)
+        assert me_b["is_pro"] is True
+        assert me_b["account_id"] == account_id
+    finally:
+        app.dependency_overrides.pop(social_auth.get_apple_verifier, None)
+
+
+def test_foreign_product_app_user_id_grants_no_tono_account(rc):
+    """Tono runs an ISOLATED RevenueCat project and binds the App User ID to a
+    Tono ``accounts.id`` UUID. An event whose ``app_user_id`` names no Tono
+    account -- e.g. a TandemPaws/TandemSkills subject delivered by
+    misconfiguration -- is recorded as a durable fact but grants nobody (fail
+    closed). No Tono account can ever be entitled by another product's subject."""
+    client = rc.client
+    # A syntactically valid UUID that is NOT any Tono account.
+    foreign = "00000000-0000-4000-8000-00000000dead"
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+    assert aid != foreign
+    assert _me(client, tok)["is_pro"] is False
+
+    r = _post(client, rc_event(event_id="rc-foreign", app_user_id=foreign))
+    # Ingested (persist-then-2xx), but no grant is written for anyone.
+    assert r.status_code == 200, r.text
+    assert _me(client, tok)["is_pro"] is False
