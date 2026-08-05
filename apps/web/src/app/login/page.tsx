@@ -2,11 +2,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { createClient } from '@/lib/supabase-client';
 import {
   apiPath,
   APP_ENTRY_PATH,
-  buildAuthCallbackUrl,
   sanitizeAuthErrorCode,
   type AuthErrorCode,
 } from '@/lib/auth-redirects';
@@ -37,20 +35,6 @@ const CALLBACK_CODE_TO_OUTCOME: Record<AuthErrorCode, EmailAuthOutcome> = {
   rate_limited: 'rate_limited',
   unavailable: 'unavailable',
 };
-
-/**
- * Classify a client-side auth failure by SHAPE.
- *
- * Reads only the status the provider client exposes. Sending a link is
- * deliberately answered the same way whether or not the address is registered,
- * so a failure here can never be the thing that reveals it.
- */
-function classifyAuthFailure(error: unknown): EmailAuthOutcome {
-  const status = (error as { status?: number } | null)?.status;
-  if (status === 429) return 'rate_limited';
-  if (typeof status === 'number' && status >= 500) return 'unavailable';
-  return 'unknown_failure';
-}
 
 // Shown in the diagnostic footer only. Google no longer uses Supabase at all
 // (direct GIS, see below); the old Supabase OAuth capability gate is gone.
@@ -92,30 +76,6 @@ const GOOGLE_DIRECT_ENABLED = /^[0-9]+-[a-z0-9_]+\.apps\.googleusercontent\.com$
 );
 const GOOGLE_UNAVAILABLE_COPY =
   'google sign-in isn’t available here yet. use email, Apple, or a passkey below.';
-
-// build a basePath-aware redirect URI:
-//   on tonoit.com, callback URL is https://tonoit.com/app/auth/callback
-//   on localhost, callback URL is http://localhost:3000/app/auth/callback
-function buildRedirectTo(): string {
-  if (typeof window === 'undefined') return '';
-  const base = buildAuthCallbackUrl(window.location.origin, {
-    NODE_ENV: process.env.NODE_ENV,
-    NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL,
-  });
-  // Preserve where the visitor was headed (e.g. /app/pricing to finish
-  // checkout). Supabase appends its own ?code=… to redirect_to, so the
-  // callback receives both params; it re-validates `next` with sanitizeNextPath
-  // before ever redirecting, so a hostile value can't become an open redirect.
-  const next = new URLSearchParams(window.location.search).get('next');
-  if (!next) return base;
-  try {
-    const url = new URL(base);
-    url.searchParams.set('next', next);
-    return url.toString();
-  } catch {
-    return base;
-  }
-}
 
 type Mode = 'signin' | 'create';
 
@@ -309,37 +269,15 @@ export default function LoginPage() {
     }
   };
 
-  const sendMagic = async () => {
-    if (!looksLikeEmail(email)) {
-      setOutcome('invalid_input');
-      return;
-    }
-    setOutcome(null);
-    setBusy(true);
-    try {
-      const supabase = createClient();
-      const { error: err } = await supabase.auth.signInWithOtp({
-        email,
-        options: {
-          emailRedirectTo: buildRedirectTo(),
-          shouldCreateUser: true,
-        },
-      });
-      // Anti-enumerating: a rejected send shows the confirmation anyway unless
-      // the failure is one an outsider can already observe (throttling, outage).
-      // Otherwise "we couldn't send that" for an unregistered address and
-      // "check your inbox" for a registered one would answer the only question
-      // an attacker has.
-      if (err) {
-        const reason = classifyAuthFailure(err);
-        setOutcome(reason === 'unknown_failure' ? 'check_your_email' : reason);
-      } else {
-        setOutcome('check_your_email');
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
+  // Magic-link sign-in now goes through the canonical backend
+  // (/api/auth/email/magic-link → /v1/auth/email/magic-link), which sends a
+  // Tono-branded link and, enforcing existing-users-only against Tono's ledger,
+  // creates nothing for an unknown address. The former browser-direct Supabase
+  // one-time-password path is removed: it leaked the shared tenant's
+  // ParentScript sender and minted unledgered accounts. It reuses the same
+  // anti-enumerating requestMail helper as reset/resend, so no browser code
+  // branches on whether the address exists.
+  const sendMagic = () => requestMail('/api/auth/email/magic-link');
 
   return (
     <div className="min-h-screen bg-tono-bg text-tono-text font-sans antialiased">

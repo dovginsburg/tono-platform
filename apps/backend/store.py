@@ -2244,6 +2244,28 @@ class Store:
 
         return self._run(_do).result()
 
+    def has_verified_email_account(self, email: str) -> bool:
+        """True iff a non-tombstoned canonical account exists whose copy of this
+        address is VERIFIED. This is the definition of an *existing Tono user*
+        for magic-link login: the check runs against Tono's OWN ledger, so a
+        magic-link request for an unknown address creates nothing on the shared
+        provider (shouldCreateUser=false semantics) and the caller can answer the
+        same anti-enumerating shape either way."""
+        normalized = normalize_email(email)
+        if not normalized:
+            return False
+
+        def _do() -> bool:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT 1 FROM accounts WHERE email_normalized = ? "
+                "AND email_verified_at IS NOT NULL AND deleted_at IS NULL LIMIT 1",
+                (normalized,),
+            )
+            return cur.fetchone() is not None
+
+        return self._run(_do).result()
+
     def find_verified_email_account(
         self, provider: str, sub: str, email: Optional[str]
     ) -> Optional[str]:
