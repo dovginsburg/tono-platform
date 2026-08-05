@@ -140,6 +140,73 @@ def _config() -> dict[str, Optional[str]]:
     return {"base": base or None, "key": key or None}
 
 
+# ---------------------------------------------------------------------------
+# Tono-owned transactional email (product isolation on a SHARED Supabase tenant)
+# ---------------------------------------------------------------------------
+#
+# Tono's production Supabase project is SHARED with a sibling product, so its
+# GoTrue SMTP sender + templates are project-global and cannot be rebranded
+# without changing the sibling's mail. To send Tono-branded verification /
+# recovery mail from a Tono-owned sender WITHOUT touching the shared tenant, this
+# module can (when configured) mint the action link with the Supabase Admin
+# ``generate_link`` API — which does NOT send any email — and deliver a
+# Tono-branded message through a Tono-owned email provider (Resend on the
+# tonoit.com-verified domain).
+#
+# It is OFF unless BOTH a service-role key and a Tono email-provider key are
+# present, so the default/deployed behaviour is byte-for-byte the existing
+# GoTrue-sent path (no regression, and never a "link minted but no mail sent"
+# gap). Fails CLOSED like the rest of the module: a provider error never leaks
+# text and never degrades to an unverified path.
+_RESEND_ENDPOINT = "https://api.resend.com/emails"
+_DEFAULT_EMAIL_FROM = "Tono <noreply@tonoit.com>"
+
+
+def _tono_email_config() -> dict[str, Optional[str]]:
+    return {
+        "service_key": (os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or "") or None,
+        "resend_key": (os.environ.get("TONO_RESEND_API_KEY") or "") or None,
+        "from_addr": (os.environ.get("TONO_EMAIL_FROM") or _DEFAULT_EMAIL_FROM),
+    }
+
+
+def tono_managed_email_enabled() -> bool:
+    """True when Tono can mint links + send its own branded mail (service-role +
+    Tono ESP key + a configured Supabase base). Used by startup diagnostics and
+    the readiness probe (presence only, never the secret)."""
+    cfg = _config()
+    tcfg = _tono_email_config()
+    return bool(cfg["base"] and tcfg["service_key"] and tcfg["resend_key"])
+
+
+# Tono-branded message bodies. Deliberately plain, link-based, and product-named
+# so the rendered sender/subject/body all read as Tono (never the shared tenant).
+def _verification_email(link: str) -> tuple[str, str]:
+    subject = "Confirm your Tono email address"
+    html = (
+        "<h2>Confirm your Tono email address</h2>"
+        "<p>Welcome to Tono. Follow the link below to confirm this address and "
+        "finish signing in.</p>"
+        f'<p><a href="{link}">Confirm email address</a></p>'
+        "<p>If you didn’t create a Tono account, you can safely ignore this "
+        "email.</p>"
+    )
+    return subject, html
+
+
+def _recovery_email(link: str) -> tuple[str, str]:
+    subject = "Reset your Tono password"
+    html = (
+        "<h2>Reset your Tono password</h2>"
+        "<p>We received a request to reset the password for your Tono account. "
+        "Follow the link below to choose a new one.</p>"
+        f'<p><a href="{link}">Reset password</a></p>'
+        "<p>If you didn’t request this, you can safely ignore this email; your "
+        "password will not change.</p>"
+    )
+    return subject, html
+
+
 def config_is_valid() -> bool:
     """True when email auth can actually run. Used by startup diagnostics so a
     missing key is visible at boot rather than at a person's first signup."""
@@ -186,9 +253,27 @@ def _recovery_redirect() -> str:
 class SupabaseEmailAuthClient:
     """Thin, fail-closed wrapper over the Supabase Auth REST endpoints."""
 
-    def __init__(self, base: str, key: str):
+    def __init__(
+        self,
+        base: str,
+        key: str,
+        *,
+        service_key: Optional[str] = None,
+        resend_key: Optional[str] = None,
+        from_addr: str = _DEFAULT_EMAIL_FROM,
+    ):
         self._base = base
         self._key = key
+        self._service_key = service_key or None
+        self._resend_key = resend_key or None
+        self._from_addr = from_addr
+
+    @property
+    def tono_send_enabled(self) -> bool:
+        """Tono mints links + sends its own branded mail only when BOTH a
+        service-role key (to call admin generate_link without a GoTrue send) and
+        a Tono ESP key (to deliver the branded message) are present."""
+        return bool(self._service_key and self._resend_key)
 
     # -- helpers ---------------------------------------------------------
 
@@ -198,6 +283,84 @@ class SupabaseEmailAuthClient:
             "Authorization": f"Bearer {bearer or self._key}",
             "Content-Type": "application/json",
         }
+
+    def _service_headers(self) -> dict[str, str]:
+        # Service-role headers for the Admin API (generate_link). Never logged.
+        return {
+            "apikey": self._service_key or "",
+            "Authorization": f"Bearer {self._service_key or ''}",
+            "Content-Type": "application/json",
+        }
+
+    async def _admin_generate_link(
+        self, *, link_type: str, email: str, redirect_to: str,
+        password: Optional[str] = None,
+    ) -> tuple[str, Optional[str]]:
+        """Mint a Supabase action link via the Admin API. This does NOT send any
+        email (the whole point on a shared tenant). Returns (action_link,
+        provider_user_id). ``redirect_to`` is a TOP-LEVEL field (GoTrue ignores a
+        nested one and falls back to the project site_url — the shared tenant's).
+
+        The error mapping preserves the caller's anti-enumeration: a recovery for
+        a non-existent address, or a signup for an already-registered one, maps to
+        a 4xx the caller folds into the same accepted shape."""
+        body: dict[str, Any] = {"type": link_type, "email": email,
+                                "redirect_to": redirect_to}
+        if password is not None:
+            body["password"] = password
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as http:
+                response = await http.post(
+                    f"{self._base}/auth/v1/admin/generate_link",
+                    json=body, headers=self._service_headers(),
+                )
+        except httpx.HTTPError:
+            raise EmailAuthError(EmailAuthOutcome.PROVIDER_UNAVAILABLE)
+        outcome = self._classify(response)
+        if outcome is not EmailAuthOutcome.OK:
+            raise EmailAuthError(outcome)
+        try:
+            payload = response.json()
+        except ValueError:
+            raise EmailAuthError(EmailAuthOutcome.PROVIDER_UNAVAILABLE)
+        link = None
+        if isinstance(payload, dict):
+            props = payload.get("properties")
+            if isinstance(props, dict):
+                link = props.get("action_link")
+            link = link or payload.get("action_link")
+        if not isinstance(link, str) or not link:
+            raise EmailAuthError(EmailAuthOutcome.PROVIDER_UNAVAILABLE)
+        return link, self._provider_user_id_from_link_payload(payload)
+
+    @staticmethod
+    def _provider_user_id_from_link_payload(payload: Any) -> Optional[str]:
+        if not isinstance(payload, dict):
+            return None
+        user = payload.get("user")
+        candidate = user.get("id") if isinstance(user, dict) else payload.get("id")
+        if not candidate:
+            return None
+        subject = str(candidate).strip()
+        return subject if 0 < len(subject) <= 128 else None
+
+    async def _send_tono_email(self, *, to: str, subject: str, html: str) -> None:
+        """Deliver a Tono-branded message through the Tono ESP (Resend). Fails
+        closed — a non-2xx or transport error raises PROVIDER_UNAVAILABLE and
+        never leaks provider text."""
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as http:
+                response = await http.post(
+                    _RESEND_ENDPOINT,
+                    json={"from": self._from_addr, "to": [to],
+                          "subject": subject, "html": html},
+                    headers={"Authorization": f"Bearer {self._resend_key}",
+                             "Content-Type": "application/json"},
+                )
+        except httpx.HTTPError:
+            raise EmailAuthError(EmailAuthOutcome.PROVIDER_UNAVAILABLE)
+        if response.status_code >= 300:
+            raise EmailAuthError(EmailAuthOutcome.PROVIDER_UNAVAILABLE)
 
     @staticmethod
     def _classify(response: httpx.Response) -> EmailAuthOutcome:
@@ -331,6 +494,22 @@ class SupabaseEmailAuthClient:
         We never mint or store the verification token; it exists only inside
         the provider and the person's inbox.
         """
+        if self.tono_send_enabled:
+            # Tono-owned path: mint the confirmation link without a GoTrue send,
+            # then deliver a Tono-branded message from the Tono sender. An
+            # already-registered address returns a 4xx here (mapped to
+            # INVALID_CREDENTIALS) and the caller answers the anti-enumerating
+            # accepted shape — no mail, no disclosure.
+            link, provider_user_id = await self._admin_generate_link(
+                link_type="signup", email=email, redirect_to=_redirect_base(),
+                password=password,
+            )
+            subject, html = _verification_email(link)
+            await self._send_tono_email(to=email, subject=subject, html=html)
+            return EmailSignUpResult(
+                verification_required=True, session=None,
+                provider_user_id=provider_user_id,
+            )
         response = await self._post(
             "/auth/v1/signup",
             json_body={
@@ -368,6 +547,15 @@ class SupabaseEmailAuthClient:
         return session
 
     async def resend_verification(self, *, email: str) -> None:
+        if self.tono_send_enabled:
+            # Re-mint + re-send from Tono. A confirmed/absent address 4xxs; the
+            # caller keeps the anti-enumerating shape.
+            link, _ = await self._admin_generate_link(
+                link_type="signup", email=email, redirect_to=_redirect_base(),
+            )
+            subject, html = _verification_email(link)
+            await self._send_tono_email(to=email, subject=subject, html=html)
+            return
         response = await self._post(
             "/auth/v1/resend",
             json_body={"type": "signup", "email": email},
@@ -378,6 +566,27 @@ class SupabaseEmailAuthClient:
             raise EmailAuthError(outcome)
 
     async def request_password_reset(self, *, email: str) -> None:
+        if self.tono_send_enabled:
+            # Mint a recovery link (flagged for the recovery screen) and send it
+            # from Tono. A recovery for an ADDRESS THAT DOES NOT EXIST must not
+            # enumerate: GoTrue 4xxs, and we swallow it into a silent success so
+            # the response is identical to a real send (mirrors the GoTrue
+            # /recover path, which also 200s for unknown addresses).
+            try:
+                link, _ = await self._admin_generate_link(
+                    link_type="recovery", email=email,
+                    redirect_to=_recovery_redirect(),
+                )
+            except EmailAuthError as exc:
+                if exc.outcome in (
+                    EmailAuthOutcome.INVALID_CREDENTIALS,
+                    EmailAuthOutcome.INVALID_EMAIL,
+                ):
+                    return
+                raise
+            subject, html = _recovery_email(link)
+            await self._send_tono_email(to=email, subject=subject, html=html)
+            return
         response = await self._post(
             "/auth/v1/recover",
             json_body={"email": email},
@@ -432,4 +641,10 @@ def get_email_auth_client() -> SupabaseEmailAuthClient:
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "email sign-in is not configured",
         )
-    return SupabaseEmailAuthClient(cfg["base"], cfg["key"])
+    tcfg = _tono_email_config()
+    return SupabaseEmailAuthClient(
+        cfg["base"], cfg["key"],
+        service_key=tcfg["service_key"],
+        resend_key=tcfg["resend_key"],
+        from_addr=tcfg["from_addr"] or _DEFAULT_EMAIL_FROM,
+    )
