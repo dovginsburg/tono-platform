@@ -824,6 +824,28 @@ def revenuecat_readiness(store: StoreDep) -> dict[str, Any]:
     }
 
 
+@router.get("/v1/revenuecat/disagreements")
+def revenuecat_disagreements(
+    request: Request,
+    store: StoreDep,
+    authenticator: RevenueCatAuthDep,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Operator-only diagnostic: the exact flip-eligible (real store-parity)
+    disagreements that hold ``shadow_clean`` false and block the shadow->
+    authoritative cutover. Authenticated with the SAME shared Authorization
+    secret the webhook uses (constant-time compared) — an unauthenticated caller
+    gets 401 before any row is read. Returns diagnostic fields only (no secret,
+    token, email, password, or raw payload); the identifiers are the ones the
+    operator already administers in RevenueCat."""
+    try:
+        authenticator.verify(request)
+    except RevenueCatAuthError as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"webhook authentication failed: {exc}")
+    rows = store.revenuecat_shadow_flip_disagreements(limit=limit)
+    return {"count": len(rows), "disagreements": rows}
+
+
 def _safe_catalog_version() -> str:
     try:
         return catalog.catalog_version()

@@ -4500,6 +4500,51 @@ class Store:
             }
         return self._run(_do).result()
 
+    def revenuecat_shadow_flip_disagreements(self, limit: int = 50) -> list[dict]:
+        """Per-observation detail for the flip-eligible (real store-parity)
+        DISAGREEMENTS only — the exact rows that hold `shadow_clean` false and
+        block the shadow->authoritative cutover. Returned to an AUTHENTICATED
+        operator (the endpoint gates on the webhook Authorization secret) so the
+        cause of a stuck flip can be diagnosed without prod DB access.
+
+        Fields are diagnostic, not a data export: the RevenueCat/account
+        identifiers here are the SAME ones the operator already administers in the
+        RevenueCat dashboard. No password, token, email, or raw payload is
+        included. Only rows whose effective store classifies as 'eligible' (a real
+        store) and whose `agree` is 0 are returned; promotional/synthetic/unknown
+        are excluded exactly as they are from the flip decision."""
+        def _do() -> list[dict]:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT o.event_id AS event_id, o.account_id AS account_id, "
+                "       COALESCE(o.store_source, e.store_source) AS eff_store, "
+                "       e.event_type AS event_type, "
+                "       o.revenuecat_active AS rc_active, o.legacy_active AS legacy_active, "
+                "       o.detail AS detail, o.created_at AS created_at "
+                "  FROM revenuecat_shadow_observations o "
+                "  LEFT JOIN revenuecat_events e ON e.event_id = o.event_id "
+                " WHERE o.agree = 0 "
+                " ORDER BY o.id DESC"
+            )
+            out: list[dict] = []
+            for row in cur.fetchall():
+                if _classify_rc_store(row["eff_store"]) != "eligible":
+                    continue  # only real store-parity disagreements block the flip
+                out.append({
+                    "event_id": row["event_id"],
+                    "account_id": row["account_id"],
+                    "store_source": row["eff_store"],
+                    "event_type": row["event_type"],
+                    "revenuecat_active": bool(row["rc_active"]),
+                    "legacy_active": bool(row["legacy_active"]),
+                    "detail": row["detail"],
+                    "created_at": row["created_at"],
+                })
+                if len(out) >= max(1, min(int(limit), 500)):
+                    break
+            return out
+        return self._run(_do).result()
+
     def apply_apple_notification(
         self,
         *,
