@@ -40,8 +40,15 @@ test('reset password form uses PasswordField for new + confirm fields', () => {
 test('Google OAuth button is gated on a fail-closed capability flag', () => {
   const src = read('app/login/page.tsx');
   assert.match(src, /OAUTH_CONFIGURED = Boolean\(SUPABASE_URL && SUPABASE_ANON_KEY\)/);
-  // The Google button renders only when the provider is configured.
-  assert.match(src, /\{OAUTH_CONFIGURED \?/);
+  // Google is now a DIRECT, Tono-owned GIS flow (consent screen "Tono"), gated on
+  // the public Tono Web client id having the Google Web-client shape. It falls
+  // back to the Supabase button only when the direct boundary is not attested —
+  // so the fail-closed capability gate is preserved on BOTH branches.
+  assert.match(src, /GOOGLE_DIRECT_ENABLED = \/\^\[0-9\]\+-/);
+  assert.match(src, /\{GOOGLE_DIRECT_ENABLED \? \(/);
+  assert.match(src, /\) : OAUTH_CONFIGURED \? \(/);
+  // The direct flow POSTs the GIS credential to our own route — never Supabase.
+  assert.match(src, /\/api\/auth\/google\/credential/);
 });
 
 test('Apple OAuth button has a SEPARATE fail-closed gate, independent of Supabase', () => {

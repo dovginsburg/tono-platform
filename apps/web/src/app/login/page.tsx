@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase-client';
 import {
@@ -20,6 +20,7 @@ import {
 import PasskeyLoginButton from '../PasskeyLoginButton';
 import PasswordField from '../PasswordField';
 import { appleWebSignInEnabled, APPLE_WEB_UNAVAILABLE_COPY } from '@/lib/apple-oauth-binding';
+import { GIS_CLIENT_SRC } from '@/lib/google-web-auth';
 
 // Build 114 remediation — one vocabulary for this page.
 //
@@ -85,6 +86,22 @@ const APPLE_OAUTH_ENABLED = appleWebSignInEnabled(
   process.env.NEXT_PUBLIC_APPLE_WEB_EXPECTED_SERVICES_ID,
 );
 
+// SEPARATE gate for the DIRECT, Tono-owned Google button — independent of the
+// Supabase gate. Google sign-in via Supabase sends the user to a consent screen
+// that reads "continue to <shared-project>.supabase.co" under a shared client
+// id — not Tono. The direct flow (`/api/auth/google/start` → Google →
+// `/api/auth/google/callback`) uses Tono's OWN Web OAuth client from the
+// Tono-owned Google Cloud project whose consent screen App name is "Tono", so
+// Google shows "Tono". The public `NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID` value is
+// the operator's attestation that the server-side boundary (Web client id +
+// secret) is configured on this deployment; the start route independently fails
+// closed if the secret is missing. We only take the direct path when that public
+// id has the Google Web-client shape — so a stray value can't drive it. Until
+// then we fall back to the existing Supabase Google button (no regression).
+const GOOGLE_DIRECT_ENABLED = /^[0-9]+-[a-z0-9_]+\.apps\.googleusercontent\.com$/.test(
+  (process.env.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '').trim(),
+);
+
 // build a basePath-aware redirect URI:
 //   on tonoit.com, callback URL is https://tonoit.com/app/auth/callback
 //   on localhost, callback URL is http://localhost:3000/app/auth/callback
@@ -120,6 +137,8 @@ export default function LoginPage() {
   // A reviewed CODE, never a message. There is no state on this page that can
   // hold provider text, so none can be rendered.
   const [outcome, setOutcome] = useState<EmailAuthOutcome | null>(null);
+  // Container GIS renders its Tono-branded Google button into (direct flow only).
+  const googleButtonRef = useRef<HTMLDivElement | null>(null);
 
   // `check_your_email` and `password_updated` are good news and must not be
   // shown in the failure banner. Splitting on the code rather than on a
@@ -169,6 +188,86 @@ export default function LoginPage() {
     const base = apiPath('/api/auth/apple/start');
     window.location.assign(next ? `${base}?next=${encodeURIComponent(next)}` : base);
   };
+
+  // Direct, Tono-owned Google sign-in via Google Identity Services (GIS). GIS
+  // runs in the browser under Tono's OWN Web client id (consent screen "Tono")
+  // and returns a signed id token to this callback. We POST it to our server
+  // credential route, which forwards it to the backend (authoritative
+  // verification) and sets the session cookie. No Supabase, no OAuth redirect.
+  const handleGoogleCredential = async (credential: string) => {
+    setOutcome(null);
+    try {
+      const res = await fetch(apiPath('/api/auth/google/credential'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credential }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { outcome?: string };
+      if (data.outcome === 'signed_in') {
+        // Full navigation, not a router push — the signed-in surface reads the
+        // httpOnly session cookie this route just set.
+        window.location.assign(APP_ENTRY_PATH);
+        return;
+      }
+      const code = sanitizeAuthErrorCode(data.outcome ?? 'sign_in_failed') ?? 'sign_in_failed';
+      setOutcome(CALLBACK_CODE_TO_OUTCOME[code]);
+    } catch {
+      setOutcome('unavailable');
+    }
+  };
+
+  // Load GIS once and render the Tono-branded Google button, ONLY when the
+  // direct boundary is attested (public Tono Web client id present). Fail closed:
+  // if GIS cannot load or the id is absent, no button appears (email/Apple/
+  // passkeys remain) — a Tono user is never sent to the shared project's screen.
+  useEffect(() => {
+    if (!GOOGLE_DIRECT_ENABLED || typeof window === 'undefined') return;
+    const clientId = (process.env.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '').trim();
+
+    let cancelled = false;
+    const render = () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const gis = (window as any).google?.accounts?.id;
+      if (cancelled || !gis || !googleButtonRef.current) return;
+      gis.initialize({
+        client_id: clientId,
+        callback: (resp: { credential?: string }) => {
+          if (resp?.credential) void handleGoogleCredential(resp.credential);
+        },
+      });
+      googleButtonRef.current.replaceChildren();
+      gis.renderButton(googleButtonRef.current, {
+        type: 'standard',
+        theme: 'outline',
+        size: 'large',
+        text: 'continue_with',
+        shape: 'rectangular',
+        width: 320,
+      });
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if ((window as any).google?.accounts?.id) {
+      render();
+      return () => {
+        cancelled = true;
+      };
+    }
+    const existing = document.querySelector<HTMLScriptElement>(`script[src="${GIS_CLIENT_SRC}"]`);
+    const script = existing ?? document.createElement('script');
+    if (!existing) {
+      script.src = GIS_CLIENT_SRC;
+      script.async = true;
+      script.defer = true;
+      document.head.appendChild(script);
+    }
+    script.addEventListener('load', render);
+    return () => {
+      cancelled = true;
+      script.removeEventListener('load', render);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /**
    * POST one of this site's email-account routes and adopt its reviewed code.
@@ -305,7 +404,10 @@ export default function LoginPage() {
               explains why, so no one is sent into a sibling product's consent
               screen. Passkeys always render with their own honest state. */}
           <div className="space-y-2.5">
-            {OAUTH_CONFIGURED ? (
+            {GOOGLE_DIRECT_ENABLED ? (
+              // GIS renders the Tono-branded Google button into this container.
+              <div ref={googleButtonRef} className="w-full flex justify-center min-h-[48px]" />
+            ) : OAUTH_CONFIGURED ? (
               <button
                 type="button"
                 onClick={() => oauth('google')}
