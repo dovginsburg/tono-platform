@@ -1022,6 +1022,99 @@ def test_disagreements_diagnostic_lists_only_eligible_disagreements_and_requires
     assert set(row).isdisjoint({"payload", "webhook_auth", "password", "token"})
 
 
+class _FakeAccessChecker:
+    """Stand-in for the RevenueCat V2 access checker. current_access returns the
+    preset value (True/False = RC's current answer; None = RC unreachable)."""
+    def __init__(self, access):
+        self._access = access
+    def current_access(self, _app_user_id):
+        return self._access
+
+
+def _override_access_checker(app, access):
+    from backend import revenuecat
+    app.dependency_overrides[revenuecat.get_revenuecat_access_checker] = (
+        lambda: _FakeAccessChecker(access)
+    )
+
+
+def _make_real_store_disagreement(client):
+    """A flip-eligible (APP_STORE) INITIAL_PURCHASE disagreement: RC active,
+    legacy inactive -> blocks shadow_clean until reconciled or resolved."""
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+    _post(client, rc_event(event_id="recon-dis", app_user_id=aid, store="APP_STORE",
+                           original_transaction_id="otx-recon"))
+    assert client.get("/v1/revenuecat/readiness").json()["shadow_clean"] is False
+    return aid
+
+
+def test_reconcile_clears_stale_disagreement_when_rc_now_agrees(rc):
+    """The live blocker's shape: RC's INITIAL_PURCHASE observation disagrees, but
+    RC's CURRENT truth now says no access (the purchase expired). Re-query
+    reconciliation marks it reconciled -> shadow_clean flips true; the append-only
+    facts are untouched (the diagnostic simply stops listing it)."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    from backend.server import app
+    _make_real_store_disagreement(client)
+    try:
+        _override_access_checker(app, False)  # RC now grants NO access == legacy(false)
+        r = client.post("/v1/revenuecat/reconcile-disagreements", headers={"Authorization": SECRET})
+        assert r.status_code == 200, r.text
+        assert r.json()["reconciled_run"] == {"checked": 1, "reconciled": 1, "still_disagree": 0, "unknown": 0}
+        assert client.get("/v1/revenuecat/readiness").json()["shadow_clean"] is True
+        assert client.get("/v1/revenuecat/disagreements", headers={"Authorization": SECRET}).json()["count"] == 0
+    finally:
+        from backend import revenuecat
+        app.dependency_overrides.pop(revenuecat.get_revenuecat_access_checker, None)
+
+
+def test_reconcile_keeps_a_real_standing_disagreement(rc):
+    """Safety: if RC STILL grants access while legacy does not, the disagreement
+    is REAL and must never be reconciled away — the cutover stays blocked."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    from backend.server import app
+    _make_real_store_disagreement(client)
+    try:
+        _override_access_checker(app, True)  # RC still active -> genuine disagreement
+        r = client.post("/v1/revenuecat/reconcile-disagreements", headers={"Authorization": SECRET})
+        assert r.json()["reconciled_run"] == {"checked": 1, "reconciled": 0, "still_disagree": 1, "unknown": 0}
+        assert client.get("/v1/revenuecat/readiness").json()["shadow_clean"] is False
+    finally:
+        from backend import revenuecat
+        app.dependency_overrides.pop(revenuecat.get_revenuecat_access_checker, None)
+
+
+def test_reconcile_fails_closed_when_rc_unreachable(rc):
+    """If RC cannot be reached (None), nothing is reconciled — a transient RC
+    outage can never green a stuck gate."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    from backend.server import app
+    _make_real_store_disagreement(client)
+    try:
+        _override_access_checker(app, None)  # RC unreachable
+        r = client.post("/v1/revenuecat/reconcile-disagreements", headers={"Authorization": SECRET})
+        assert r.json()["reconciled_run"] == {"checked": 1, "reconciled": 0, "still_disagree": 0, "unknown": 1}
+        assert client.get("/v1/revenuecat/readiness").json()["shadow_clean"] is False
+    finally:
+        from backend import revenuecat
+        app.dependency_overrides.pop(revenuecat.get_revenuecat_access_checker, None)
+
+
+def test_reconcile_requires_auth_and_config(rc):
+    """Unauthenticated -> 401. Configured-but-no-RC-key -> 503 (nothing to query
+    with). The default fixture sets no secret_api_key/project_id."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    assert client.post("/v1/revenuecat/reconcile-disagreements").status_code == 401
+    # Authenticated but the RC re-query is not configured -> 503.
+    assert client.post("/v1/revenuecat/reconcile-disagreements",
+                       headers={"Authorization": SECRET}).status_code == 503
+
+
 @pytest.mark.parametrize("store_val", ["TOTALLY_MADE_UP", "", None, 123])
 def test_unknown_or_malformed_store_fails_closed(rc, store_val):
     """An observation whose store cannot be classified must NOT be silently

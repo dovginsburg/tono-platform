@@ -56,6 +56,19 @@ and harmless). Do NOT flip `TONO_REVENUECAT_MODE=authoritative` until the new
 application is live in production AND a correctly-signed synthetic event is
 proven durably stored, idempotent, and entitlement-changing.
 
+`20260805_revenuecat_reconcile_requery` adds a nullable `reconciled_at` column to
+`revenuecat_shadow_observations` (additive; the live SQLite app also adds it
+idempotently at startup). It powers re-query reconciliation: a stale flip-eligible
+disagreement (e.g. an INITIAL_PURCHASE that has since expired, so RevenueCat's
+current access now agrees with the free legacy projection) is annotated
+reconciled after `POST /v1/revenuecat/reconcile-disagreements` (operator-auth
+gated) confirms RC's current truth via the RC V2 API — requires
+`TONO_REVENUECAT_SECRET_API_KEY` + `TONO_REVENUECAT_PROJECT_ID`. The flip summary
+then counts a reconciled row as an agreement. A REAL standing disagreement (RC
+still active while legacy is not) is never reconciled, and an unreachable RC
+reconciles nothing (fail closed), so the cutover can never be greened falsely.
+Rollback is code-only: the extra column is harmless to prior code.
+
 Rollback is code-only: deploy the prior application while retaining both
 ledger rows and bindings. Deleting or rewriting consumed rows reopens
 free-trial eligibility and is unsafe.

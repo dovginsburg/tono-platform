@@ -994,6 +994,16 @@ class Store:
             # recovered from the durable revenuecat_events payload by
             # _backfill_revenuecat_shadow_store_source below.
             "ALTER TABLE revenuecat_shadow_observations ADD COLUMN store_source TEXT",
+            # Re-query reconciliation annotation: when set, a later check of
+            # RevenueCat's CURRENT truth confirmed this historical disagreement is
+            # stale (RC no longer supports it — its current access now agrees with
+            # the legacy projection). Additive provenance only; the observation's
+            # original facts (revenuecat_active/legacy_active/agree) are never
+            # rewritten. The flip summary then counts a reconciled row as an
+            # agreement, so a purchase that has since expired stops blocking the
+            # cutover while a REAL standing disagreement (RC still active) keeps
+            # blocking because it is never reconciled.
+            "ALTER TABLE revenuecat_shadow_observations ADD COLUMN reconciled_at TEXT",
         ):
             with contextlib.suppress(sqlite3.OperationalError):
                 self._conn.execute(stmt)
@@ -4462,12 +4472,17 @@ class Store:
         """
         def _do() -> dict:
             cur = self._conn.cursor()
+            # A row counts as an AGREEMENT when it originally agreed OR when a
+            # later re-query of RevenueCat's current truth reconciled it (the
+            # historical disagreement is stale — RC no longer supports it). A real
+            # standing disagreement is never reconciled, so it stays counted here.
             cur.execute(
                 "SELECT COALESCE(o.store_source, e.store_source) AS eff_store, "
-                "       o.agree AS agree, COUNT(*) AS n "
+                "       CASE WHEN o.agree = 1 OR o.reconciled_at IS NOT NULL "
+                "            THEN 1 ELSE 0 END AS eff_agree, COUNT(*) AS n "
                 "  FROM revenuecat_shadow_observations o "
                 "  LEFT JOIN revenuecat_events e ON e.event_id = o.event_id "
-                " GROUP BY eff_store, agree"
+                " GROUP BY eff_store, eff_agree"
             )
             eligible_total = eligible_agree = eligible_disagree = 0
             excluded_promotional = 0
@@ -4482,7 +4497,7 @@ class Store:
                     excluded_synthetic += n
                 elif klass == "eligible":
                     eligible_total += n
-                    if int(row["agree"] or 0) == 1:
+                    if int(row["eff_agree"] or 0) == 1:
                         eligible_agree += n
                     else:
                         eligible_disagree += n
@@ -4523,7 +4538,7 @@ class Store:
                 "       o.detail AS detail, o.created_at AS created_at "
                 "  FROM revenuecat_shadow_observations o "
                 "  LEFT JOIN revenuecat_events e ON e.event_id = o.event_id "
-                " WHERE o.agree = 0 "
+                " WHERE o.agree = 0 AND o.reconciled_at IS NULL "
                 " ORDER BY o.id DESC"
             )
             out: list[dict] = []
@@ -4544,6 +4559,51 @@ class Store:
                     break
             return out
         return self._run(_do).result()
+
+    def list_flip_eligible_disagreements_for_reconcile(self) -> list[dict]:
+        """The UNRECONCILED flip-eligible disagreements the re-query reconciler
+        must check against RevenueCat's current truth. Returns (event_id,
+        account_id, legacy_active) for each — the reconciler asks RevenueCat
+        whether the account currently has access and, only if RC now AGREES with
+        the recorded legacy state, marks the row reconciled. Real standing
+        disagreements (RC still active) are returned here but never reconciled."""
+        def _do() -> list[dict]:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT o.event_id AS event_id, o.account_id AS account_id, "
+                "       o.legacy_active AS legacy_active, "
+                "       COALESCE(o.store_source, e.store_source) AS eff_store "
+                "  FROM revenuecat_shadow_observations o "
+                "  LEFT JOIN revenuecat_events e ON e.event_id = o.event_id "
+                " WHERE o.agree = 0 AND o.reconciled_at IS NULL"
+            )
+            out = []
+            for row in cur.fetchall():
+                if _classify_rc_store(row["eff_store"]) != "eligible":
+                    continue
+                if not row["account_id"]:
+                    continue  # no account to re-query -> leave it blocking (fail closed)
+                out.append({
+                    "event_id": row["event_id"],
+                    "account_id": row["account_id"],
+                    "legacy_active": bool(row["legacy_active"]),
+                })
+            return out
+        return self._run(_do).result()
+
+    def mark_shadow_observation_reconciled(self, event_id: str, when_iso: str) -> None:
+        """Record that RevenueCat's current truth confirmed this historical
+        disagreement is stale. Additive annotation only — the observation's
+        original facts are left intact; only the previously-NULL reconciled_at is
+        set, and only when still NULL (idempotent)."""
+        def _do() -> None:
+            self._conn.execute(
+                "UPDATE revenuecat_shadow_observations SET reconciled_at = ? "
+                " WHERE event_id = ? AND reconciled_at IS NULL",
+                (when_iso, event_id),
+            )
+            self._conn.commit()
+        self._run(_do).result()
 
     def apply_apple_notification(
         self,
