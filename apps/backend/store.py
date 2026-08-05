@@ -296,7 +296,14 @@ CREATE TABLE IF NOT EXISTS coupons (
     max_uses       INTEGER NOT NULL DEFAULT 0,
     use_count      INTEGER NOT NULL DEFAULT 0,
     created_at     TEXT NOT NULL,
-    expires_at     TEXT
+    expires_at     TEXT,
+    -- App-review compatibility (Build 117). A coupon with anonymous_eligible=1
+    -- may be redeemed by an UNIDENTIFIED canonical account (a reviewer who
+    -- skipped onboarding and cannot sign in). DEFAULT 0 keeps every existing
+    -- and future coupon identity-gated — this is an opt-in, per-coupon bypass,
+    -- never a universal anonymous promo. Bound its blast radius at creation
+    -- with a small max_uses and a near expires_at.
+    anonymous_eligible INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS coupon_redemptions (
@@ -913,6 +920,8 @@ class Store:
         with contextlib.closing(self._conn.cursor()) as c:
             c.executescript(SCHEMA)
         for stmt in (
+            # Build 117 app-review compatibility: per-coupon anonymous bypass.
+            "ALTER TABLE coupons ADD COLUMN anonymous_eligible INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE users ADD COLUMN stripe_customer_id TEXT",
             "ALTER TABLE users ADD COLUMN stripe_subscription_id TEXT",
             "ALTER TABLE users ADD COLUMN subscription_status TEXT",
@@ -3299,16 +3308,25 @@ class Store:
     # ---- coupons ----
 
     def _redeem_coupon_tx(
-        self, cur: sqlite3.Cursor, account_id: str, code: str, now: str
+        self, cur: sqlite3.Cursor, account_id: str, code: str, now: str,
+        device_id: Optional[str] = None,
     ) -> str:
         cur.execute("SELECT * FROM accounts WHERE id = ?", (account_id,))
         account = cur.fetchone()
-        if not account or not _row_to_account(account).is_identified:
+        if not account:
             raise ValueError("Sign in to a verified account before redeeming a code.")
         cur.execute("SELECT * FROM coupons WHERE code = ?", (code,))
         row = cur.fetchone()
         if not row:
             raise ValueError("Invalid code.")
+        # Identity gate. Normal coupons require an identified account (unchanged
+        # ownership). A coupon explicitly flagged ``anonymous_eligible`` (Build
+        # 117 app-review compatibility) may also be redeemed by an UNIDENTIFIED
+        # canonical account. This is opt-in per coupon — never a universal
+        # anonymous promo — and the grant still binds to THIS account UUID only.
+        is_identified = _row_to_account(account).is_identified
+        if not is_identified and not row["anonymous_eligible"]:
+            raise ValueError("Sign in to a verified account before redeeming a code.")
         if row["expires_at"] and row["expires_at"] < now:
             raise ValueError("This code has expired.")
         cur.execute(
@@ -3344,9 +3362,21 @@ class Store:
             "UPDATE accounts SET coupon_pro_expires_at = ?, updated_at = ? WHERE id = ?",
             (expires_at, now, account_id),
         )
+        # Anonymous redemption only: project the grant onto the redeeming device
+        # row so the anonymous User.is_pro path — which reads the device's own
+        # coupon field, not the account's — resolves to Pro. An identified
+        # account reads entitlement from the account, so this device projection
+        # is applied ONLY when the account is not identified and stays scoped to
+        # the exact (device_id, account_id) pair (no cross-device leakage).
+        if not is_identified and device_id:
+            cur.execute(
+                "UPDATE users SET coupon_pro_expires_at = ? "
+                "WHERE device_id = ? AND account_id = ?",
+                (expires_at, device_id, account_id),
+            )
         return expires_at
 
-    def redeem_coupon(self, account_id: str, code: str) -> str:
+    def redeem_coupon(self, account_id: str, code: str, device_id: Optional[str] = None) -> str:
         """Redeem a coupon code for the canonical account. Returns the new
         coupon_pro_expires_at ISO string on success.
         Raises ValueError with a user-visible message on failure."""
@@ -3355,12 +3385,28 @@ class Store:
             cur = self._conn.cursor()
             cur.execute("BEGIN IMMEDIATE")
             try:
-                expires_at = self._redeem_coupon_tx(cur, account_id, code, now)
+                expires_at = self._redeem_coupon_tx(cur, account_id, code, now, device_id)
                 cur.execute("COMMIT")
             except Exception:
                 cur.execute("ROLLBACK")
                 raise
             return expires_at
+
+        return self._run(_do).result()
+
+    def coupon_allows_anonymous(self, code: str) -> bool:
+        """True iff a coupon with this code EXISTS and is flagged
+        anonymous_eligible. Used by the redeem endpoint to decide whether an
+        unidentified account may proceed (defense in depth with the redemption
+        transaction, which enforces the same rule). A non-existent code is False
+        — an anonymous caller never learns a code exists by probing."""
+        def _do() -> bool:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT anonymous_eligible FROM coupons WHERE code = ?", (code,)
+            )
+            row = cur.fetchone()
+            return bool(row and row["anonymous_eligible"])
 
         return self._run(_do).result()
 
@@ -3370,17 +3416,23 @@ class Store:
         duration_days: int,
         max_uses: int = 0,
         expires_at: Optional[str] = None,
+        anonymous_eligible: bool = False,
     ) -> bool:
-        """Insert a new coupon. Returns False if the code already exists."""
+        """Insert a new coupon. Returns False if the code already exists.
+
+        ``anonymous_eligible`` (default False) opts a single code into
+        redemption by an unidentified account (Build 117 app review). Pair it
+        with a small ``max_uses`` and a near ``expires_at`` to bound exposure."""
         def _do() -> bool:
             cur = self._conn.cursor()
             try:
                 cur.execute(
                     """
-                    INSERT INTO coupons (code, duration_days, max_uses, use_count, created_at, expires_at)
-                    VALUES (?, ?, ?, 0, ?, ?)
+                    INSERT INTO coupons (code, duration_days, max_uses, use_count, created_at, expires_at, anonymous_eligible)
+                    VALUES (?, ?, ?, 0, ?, ?, ?)
                     """,
-                    (code, duration_days, max_uses, _now_iso(), expires_at),
+                    (code, duration_days, max_uses, _now_iso(), expires_at,
+                     1 if anonymous_eligible else 0),
                 )
                 return True
             except sqlite3.IntegrityError:
