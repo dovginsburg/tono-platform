@@ -4575,6 +4575,52 @@
         "summary": "Register"
       }
     },
+    "/v1/revenuecat/disagreements": {
+      "get": {
+        "description": "Operator-only diagnostic: the exact flip-eligible (real store-parity)\ndisagreements that hold ``shadow_clean`` false and block the shadow->\nauthoritative cutover. Authenticated with the SAME shared Authorization\nsecret the webhook uses (constant-time compared) \u2014 an unauthenticated caller\ngets 401 before any row is read. Returns diagnostic fields only (no secret,\ntoken, email, password, or raw payload); the identifiers are the ones the\noperator already administers in RevenueCat.",
+        "operationId": "revenuecat_disagreements_v1_revenuecat_disagreements_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Revenuecat Disagreements V1 Revenuecat Disagreements Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revenuecat Disagreements",
+        "tags": [
+          "revenuecat"
+        ]
+      }
+    },
     "/v1/revenuecat/notifications": {
       "post": {
         "operationId": "revenuecat_notifications_v1_revenuecat_notifications_post",

@@ -987,6 +987,41 @@ def test_deployed_test_store_row_reclassifies_to_synthetic_without_deletion(rc):
     assert client.get("/v1/revenuecat/readiness").json()["shadow_clean"] is True
 
 
+def test_disagreements_diagnostic_lists_only_eligible_disagreements_and_requires_auth(rc):
+    """The operator diagnostic surfaces the exact flip-eligible disagreements that
+    block the cutover, gated behind the webhook Authorization secret."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+
+    # One REAL-store disagreement (blocks the flip) ...
+    _post(client, rc_event(event_id="real-dis", app_user_id=aid, store="APP_STORE",
+                           original_transaction_id="otx-real"))
+    # ... plus a PROMOTIONAL disagreement (excluded) and a SYNTHETIC one (excluded):
+    _post(client, rc_event(event_id="promo-dis", app_user_id=aid, store="PROMOTIONAL",
+                           original_transaction_id="otx-promo"))
+    _post(client, rc_event(event_id="synth-dis", app_user_id=aid, store="TEST_STORE",
+                           original_transaction_id="otx-synth"))
+
+    # Unauthenticated -> 401 before any row is read.
+    assert client.get("/v1/revenuecat/disagreements").status_code == 401
+    assert client.get("/v1/revenuecat/disagreements",
+                      headers={"Authorization": "Bearer wrong"}).status_code == 401
+
+    r = client.get("/v1/revenuecat/disagreements", headers={"Authorization": SECRET})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # ONLY the real-store disagreement is listed (promotional + synthetic excluded).
+    assert body["count"] == 1
+    row = body["disagreements"][0]
+    assert row["event_id"] == "real-dis"
+    assert row["store_source"] == "APP_STORE"
+    assert row["revenuecat_active"] is True and row["legacy_active"] is False
+    # No secret/payload leaks into the diagnostic.
+    assert set(row).isdisjoint({"payload", "webhook_auth", "password", "token"})
+
+
 @pytest.mark.parametrize("store_val", ["TOTALLY_MADE_UP", "", None, 123])
 def test_unknown_or_malformed_store_fails_closed(rc, store_val):
     """An observation whose store cannot be classified must NOT be silently
