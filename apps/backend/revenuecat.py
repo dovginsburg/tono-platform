@@ -70,9 +70,11 @@ import hmac
 import json
 import os
 import time
+import urllib.parse
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Callable, Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
@@ -844,6 +846,126 @@ def revenuecat_disagreements(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"webhook authentication failed: {exc}")
     rows = store.revenuecat_shadow_flip_disagreements(limit=limit)
     return {"count": len(rows), "disagreements": rows}
+
+
+# ---------------------------------------------------------------------------
+# Re-query reconciliation — the dormant `reconcile_requery` hook made real.
+#
+# A shadow observation is a POINT-IN-TIME record: an INITIAL_PURCHASE that later
+# expired stays on the append-only ledger as a disagreement even though RC's
+# CURRENT truth now agrees with the free legacy projection. This reconciler asks
+# RevenueCat what it believes NOW and, only when RC's current access AGREES with
+# the recorded legacy state, marks that historical row reconciled (an additive
+# annotation; the original facts are never rewritten). A REAL standing
+# disagreement — RC currently grants access while legacy does not — is never
+# reconciled, so it keeps blocking the cutover. Fails CLOSED: if RC can't be
+# reached or isn't configured, nothing is reconciled.
+# ---------------------------------------------------------------------------
+
+_RC_V2_BASE = "https://api.revenuecat.com/v2"
+
+
+class RevenueCatAccessChecker:
+    """Queries RevenueCat's V2 API for a customer's CURRENT access to our
+    entitlement. Returns True/False when RC answers, or None on any error /
+    unconfigured state (the caller then leaves the disagreement standing)."""
+
+    def __init__(self, *, secret_api_key: str, project_id: str, entitlement_id: str):
+        self._key = secret_api_key
+        self._project = project_id
+        self._entitlement = entitlement_id
+
+    def current_access(self, app_user_id: str) -> Optional[bool]:
+        if not (self._key and self._project and app_user_id):
+            return None
+        cust = urllib.parse.quote(app_user_id, safe="")
+        url = f"{_RC_V2_BASE}/projects/{self._project}/customers/{cust}/subscriptions"
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                resp = client.get(url, headers={"Authorization": f"Bearer {self._key}"})
+        except httpx.HTTPError:
+            return None
+        if resp.status_code == 404:
+            # RC has no record of this customer -> it grants no access.
+            return False
+        if resp.status_code >= 300:
+            return None  # unknown -> fail closed, do not reconcile
+        try:
+            items = resp.json().get("items", [])
+        except ValueError:
+            return None
+        # Current access = any subscription RC currently says grants access. RC's
+        # own `gives_access` already accounts for expiry/refund/grace.
+        return any(bool(it.get("gives_access")) for it in items if isinstance(it, dict))
+
+
+def get_revenuecat_access_checker(
+    config: RevenueCatConfigDep,
+) -> Optional[RevenueCatAccessChecker]:
+    """A checker when the RC secret key + project id are configured, else None
+    (reconciliation is a no-op). Overridable in tests via dependency_overrides."""
+    _require_enabled(config)
+    if not (config.secret_api_key and config.project_id):
+        return None
+    return RevenueCatAccessChecker(
+        secret_api_key=config.secret_api_key,
+        project_id=config.project_id,
+        entitlement_id=config.entitlement_id,
+    )
+
+
+RevenueCatAccessCheckerDep = Annotated[
+    Optional[RevenueCatAccessChecker], Depends(get_revenuecat_access_checker)
+]
+
+
+def reconcile_shadow_disagreements(store: Store, checker: RevenueCatAccessChecker) -> dict[str, int]:
+    """Reconcile stale flip-eligible disagreements against RC's current truth.
+    Returns a non-secret tally. A row is reconciled ONLY when RC's current access
+    equals the recorded legacy state (they now agree); a real disagreement (RC
+    still active, legacy not) or an unreachable RC leaves the row standing."""
+    checked = reconciled = still_disagree = unknown = 0
+    now_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+    for row in store.list_flip_eligible_disagreements_for_reconcile():
+        checked += 1
+        rc_now = checker.current_access(row["account_id"])
+        if rc_now is None:
+            unknown += 1
+            continue  # fail closed — leave it blocking
+        if rc_now == bool(row["legacy_active"]):
+            # RC's current truth now agrees with legacy -> the historical
+            # disagreement is stale. Annotate it reconciled (facts untouched).
+            store.mark_shadow_observation_reconciled(row["event_id"], now_iso)
+            reconciled += 1
+        else:
+            still_disagree += 1  # genuine standing disagreement — keeps blocking
+    return {"checked": checked, "reconciled": reconciled,
+            "still_disagree": still_disagree, "unknown": unknown}
+
+
+@router.post("/v1/revenuecat/reconcile-disagreements")
+def revenuecat_reconcile_disagreements(
+    request: Request,
+    store: StoreDep,
+    authenticator: RevenueCatAuthDep,
+    checker: RevenueCatAccessCheckerDep,
+) -> dict[str, Any]:
+    """Operator-triggered re-query reconciliation (auth = the shared webhook
+    Authorization secret). 503 if the RC secret key / project id is not
+    configured (nothing to query with). Idempotent and safe: only stale
+    disagreements RC's current truth no longer supports are annotated."""
+    try:
+        authenticator.verify(request)
+    except RevenueCatAuthError as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"webhook authentication failed: {exc}")
+    if checker is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "RevenueCat re-query is not configured (set TONO_REVENUECAT_SECRET_API_KEY "
+            "and TONO_REVENUECAT_PROJECT_ID).",
+        )
+    tally = reconcile_shadow_disagreements(store, checker)
+    return {"reconciled_run": tally}
 
 
 def _safe_catalog_version() -> str:

@@ -4668,6 +4668,30 @@
         ]
       }
     },
+    "/v1/revenuecat/reconcile-disagreements": {
+      "post": {
+        "description": "Operator-triggered re-query reconciliation (auth = the shared webhook\nAuthorization secret). 503 if the RC secret key / project id is not\nconfigured (nothing to query with). Idempotent and safe: only stale\ndisagreements RC's current truth no longer supports are annotated.",
+        "operationId": "revenuecat_reconcile_disagreements_v1_revenuecat_reconcile_disagreements_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Revenuecat Reconcile Disagreements V1 Revenuecat Reconcile Disagreements Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Revenuecat Reconcile Disagreements",
+        "tags": [
+          "revenuecat"
+        ]
+      }
+    },
     "/v1/stripe/webhook": {
       "post": {
         "operationId": "stripe_webhook_v1_stripe_webhook_post",
