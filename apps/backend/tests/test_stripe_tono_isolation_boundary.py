@@ -207,3 +207,130 @@ def test_checkout_binds_canonical_tono_account_metadata(client, monkeypatch):
     cust_md = captured.get("_customer_metadata")
     if cust_md is not None:
         assert cust_md.get("tono_account_id") == device["account_id"]
+
+
+# ---------------------------------------------------------------------------
+# Ezra correction #1: an already-entitled account (from ANY provider) is
+# refused BEFORE any Stripe SDK call, reservation, or session — no double charge.
+# ---------------------------------------------------------------------------
+
+
+_FAR_FUTURE_MS = 4102444800000  # 2100-01-01 in ms
+
+
+def test_checkout_refused_when_already_entitled_and_stripe_sdk_untouched(client, monkeypatch):
+    """If the canonical account already holds an active entitlement — e.g. it
+    paid on iOS (StoreKit→RevenueCat) and then signed in on the web, all landing
+    in the shared entitlement_grants ledger — /v1/checkout returns a stable 409
+    and NEVER calls Stripe (no Customer.create, no Session.create, no trial
+    reservation). Entitlement is keyed on the account UUID, so charging again
+    would double-bill.
+    """
+    from backend.store import get_store
+    import backend.payments as payments_mod
+
+    _configure_stripe(monkeypatch)
+    device = _register(client)
+    account_id = device["account_id"]
+    store = get_store()
+
+    # Seed an active entitlement grant on the account. apply_stripe_subscription_fact
+    # writes the same append-only entitlement_grants row that the Apple/RevenueCat
+    # rails write — the guard reads that ledger, so this stands in for an iOS buy.
+    store.apply_stripe_subscription_fact(
+        account_id=account_id, subscription_id="sub_ios_like",
+        stripe_status="active", period_end_ms=_FAR_FUTURE_MS, product_id="stripe_pro",
+    )
+    assert store.account_entitlement_active(account_id) is True
+
+    sdk_calls = []
+    monkeypatch.setattr(payments_mod.stripe.checkout.Session, "create",
+                        lambda **k: sdk_calls.append(("session", k)) or {"id": "x", "url": "u"})
+    monkeypatch.setattr(payments_mod.stripe.Customer, "create",
+                        lambda **k: sdk_calls.append(("customer", k)) or {"id": "cus_x"})
+
+    r = client.post("/v1/checkout", json={"interval": "month"}, headers=_auth(device["api_token"]))
+    assert r.status_code == 409, r.text
+    assert "already" in r.text.lower()
+    assert sdk_calls == [], f"Stripe SDK was called for an already-entitled account: {sdk_calls}"
+
+
+# ---------------------------------------------------------------------------
+# Ezra correction #3: only an exact canonical Price ID may grant. Wrong /
+# missing / multi-line / foreign Price grants nothing and never mutates plan.
+# ---------------------------------------------------------------------------
+
+
+def _grant_via_webhook(client, monkeypatch, payments_mod, account_id, price_id=None, items=None):
+    obj = {
+        "id": "sub_price_gate",
+        "customer": "cus_price_gate",
+        "status": "active",
+        "current_period_end": 4102444800,
+        "metadata": {"tono_account_id": account_id},
+        "items": {"data": items if items is not None
+                  else [{"price": {"id": price_id, "product": "prod_x",
+                                   "unit_amount": 399, "currency": "usd"}}]},
+    }
+    return _post_webhook(client, monkeypatch, payments_mod,
+                         "evt_price_gate", "customer.subscription.created", obj)
+
+
+@pytest.mark.parametrize("price_id", ["price_foreign_sibling", None, "price_tandempaws_pro"])
+def test_webhook_wrong_or_missing_price_grants_nothing(client, monkeypatch, price_id):
+    """A subscription whose single line item is a FOREIGN or MISSING Price ID
+    grants no Tono Pro and does not mutate plan."""
+    from backend.store import get_store
+    _configure_stripe(monkeypatch)
+    import backend.payments as payments_mod
+
+    device = _register(client)
+    account_id = device["account_id"]
+    store = get_store()
+
+    resp = _grant_via_webhook(client, monkeypatch, payments_mod, account_id, price_id=price_id)
+    assert resp.status_code == 200, resp.text  # ACK so Stripe does not retry forever
+    assert store.account_entitlement_active(account_id) is False
+    assert store.get_account(account_id).is_pro is False
+
+
+def test_webhook_multiline_subscription_grants_nothing(client, monkeypatch):
+    """A multi-line subscription — even one that SMUGGLES the canonical Tono
+    price alongside a foreign one — grants nothing. Money must correspond to
+    exactly one canonical Tono plan."""
+    from backend.store import get_store
+    _configure_stripe(monkeypatch)
+    import backend.payments as payments_mod
+
+    device = _register(client)
+    account_id = device["account_id"]
+    store = get_store()
+
+    items = [
+        # The canonical Tono price for THIS file's config (see _configure_stripe)...
+        {"price": {"id": "price_fake_tono_month", "product": "p", "unit_amount": 399, "currency": "usd"}},
+        # ...smuggled alongside a foreign price. Multi-line ⇒ still refused.
+        {"price": {"id": "price_foreign", "product": "p2", "unit_amount": 100, "currency": "usd"}},
+    ]
+    resp = _grant_via_webhook(client, monkeypatch, payments_mod, account_id, items=items)
+    assert resp.status_code == 200, resp.text
+    assert store.account_entitlement_active(account_id) is False
+    assert store.get_account(account_id).is_pro is False
+
+
+def test_webhook_exact_canonical_price_grants_pro(client, monkeypatch):
+    """Positive control: the exact canonical monthly Price ID DOES grant Pro —
+    the gate refuses foreign prices without also refusing legitimate ones."""
+    from backend.store import get_store
+    _configure_stripe(monkeypatch)
+    import backend.payments as payments_mod
+
+    device = _register(client)
+    account_id = device["account_id"]
+    store = get_store()
+
+    resp = _grant_via_webhook(client, monkeypatch, payments_mod, account_id,
+                              price_id="price_fake_tono_month")
+    assert resp.status_code == 200, resp.text
+    assert store.account_entitlement_active(account_id) is True
+    assert store.get_account(account_id).is_pro is True
