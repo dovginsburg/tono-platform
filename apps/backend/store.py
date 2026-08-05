@@ -4473,6 +4473,13 @@ class Store:
             excluded_promotional = 0
             excluded_synthetic = 0
             unclassified = 0
+            # Per-store tally of the eligible DISAGREEMENTS only — the exact
+            # population blocking the flip. COUNTS keyed by the RevenueCat `store`
+            # token (never an account identifier), so an operator can see *which*
+            # store is holding the gate red (e.g. a real APP_STORE parity failure
+            # vs. a lingering dev artifact) without production DB access. Never
+            # lists agreeing stores, excluded classes, or any identifier.
+            eligible_disagree_by_store: dict = {}
             for row in cur.fetchall():
                 klass = _classify_rc_store(row["eff_store"])
                 n = int(row["n"] or 0)
@@ -4486,6 +4493,10 @@ class Store:
                         eligible_agree += n
                     else:
                         eligible_disagree += n
+                        key = str(row["eff_store"] or "").strip().upper()
+                        eligible_disagree_by_store[key] = (
+                            eligible_disagree_by_store.get(key, 0) + n
+                        )
                 else:  # 'unknown' -> fail closed; never promotional, never clean
                     unclassified += n
             return {
@@ -4494,6 +4505,7 @@ class Store:
                     "agreements": eligible_agree,
                     "disagreements": eligible_disagree,
                 },
+                "eligible_disagreements_by_store": eligible_disagree_by_store,
                 "excluded_promotional": excluded_promotional,
                 "excluded_synthetic": excluded_synthetic,
                 "unclassified": unclassified,

@@ -765,9 +765,13 @@ def revenuecat_readiness(store: StoreDep) -> dict[str, Any]:
         the flip decision and never counted as real store evidence.
     ``shadow_unclassified`` counts observations whose store could not be
     classified; they FAIL CLOSED (block the flip) and are never assumed
-    promotional or clean. ``shadow_clean`` is true only when there are zero
-    flip-eligible disagreements AND zero unclassified observations; it degrades
-    to null (never true) on any read error."""
+    promotional or clean. ``shadow_eligible_disagreements_by_store`` breaks the
+    flip-blocking disagreements down per RevenueCat ``store`` token (COUNTS only,
+    no identifiers) so an operator can see which store is holding the gate red
+    without production DB access; ``{}`` when the gate is clean. ``shadow_clean``
+    is true only when there are zero flip-eligible disagreements AND zero
+    unclassified observations; it degrades to null (never true) on any read
+    error."""
     mode = (os.environ.get("TONO_REVENUECAT_MODE", "off") or "off").strip().lower()
     webhook_configured = bool((os.environ.get("TONO_REVENUECAT_WEBHOOK_AUTH", "") or "").strip())
     secret_configured = bool((os.environ.get("TONO_REVENUECAT_SECRET_API_KEY", "") or "").strip())
@@ -785,6 +789,7 @@ def revenuecat_readiness(store: StoreDep) -> dict[str, Any]:
         shadow = store.revenuecat_shadow_summary()
         flip = store.revenuecat_shadow_flip_summary()
         flip_eligible = flip["eligible"]
+        eligible_disagreements_by_store = flip["eligible_disagreements_by_store"]
         excluded_promotional = flip["excluded_promotional"]
         excluded_synthetic = flip["excluded_synthetic"]
         unclassified = flip["unclassified"]
@@ -792,6 +797,7 @@ def revenuecat_readiness(store: StoreDep) -> dict[str, Any]:
     except Exception:  # noqa: BLE001 — readiness never raises; fail closed
         shadow = {"total": None, "agreements": None, "disagreements": None, "last_observed_at": None}
         flip_eligible = {"total": None, "agreements": None, "disagreements": None}
+        eligible_disagreements_by_store = None
         excluded_promotional = None
         excluded_synthetic = None
         unclassified = None
@@ -817,6 +823,12 @@ def revenuecat_readiness(store: StoreDep) -> dict[str, Any]:
         # eligible summary only, with unclassified stores failing closed.
         "shadow": shadow,
         "shadow_flip_eligible": flip_eligible,
+        # Per-store COUNTS of the flip-blocking eligible disagreements (store
+        # token -> count; no identifiers). Empty {} when the gate is clean; names
+        # the store holding the gate red so the operator can triage a real
+        # store-parity failure vs. a stale dev artifact without DB access.
+        # Degrades to null (never a fabricated blocker) on any read error.
+        "shadow_eligible_disagreements_by_store": eligible_disagreements_by_store,
         "shadow_excluded_promotional": excluded_promotional,
         "shadow_excluded_synthetic": excluded_synthetic,
         "shadow_unclassified": unclassified,

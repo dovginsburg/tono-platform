@@ -935,6 +935,75 @@ def test_synthetic_canary_never_masks_a_real_store_disagreement(rc):
     assert body["shadow_clean"] is False                        # real store still blocks
 
 
+# ---------------------------------------------------------------------------
+# Per-store attribution of the flip-blocking disagreements: names WHICH store is
+# holding the gate red (COUNTS only, no identifiers) so an operator can triage
+# the exact live-production blocker from readiness without production DB access.
+# ---------------------------------------------------------------------------
+
+
+def test_readiness_attributes_flip_blocking_disagreement_to_its_store(rc):
+    """A single real-store disagreement is reported per-store so the operator can
+    see which store is red — the exact prod case (one eligible disagreement)."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+
+    r = _post(client, rc_event(event_id="e1", app_user_id=aid, store="APP_STORE",
+                               original_transaction_id="otx-real"))
+    assert r.status_code == 200, r.text
+
+    body = client.get("/v1/revenuecat/readiness").json()
+    assert body["shadow_clean"] is False
+    assert body["shadow_flip_eligible"]["disagreements"] == 1
+    assert body["shadow_eligible_disagreements_by_store"] == {"APP_STORE": 1}
+
+
+def test_readiness_by_store_triages_multiple_stores_and_ignores_excluded(rc):
+    """The map counts ONLY eligible disagreements, keyed by store: two real
+    stores disagree (counted, per store), while a promotional and a synthetic
+    canary disagree too but never appear in the flip-blocking map."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+
+    _post(client, rc_event(event_id="apple", app_user_id=aid, store="APP_STORE",
+                           original_transaction_id="otx-apple"))
+    _post(client, rc_event(event_id="play", app_user_id=aid, store="PLAY_STORE",
+                           original_transaction_id="otx-play"))
+    _post(client, rc_event(event_id="promo", app_user_id=aid, store="PROMOTIONAL",
+                           original_transaction_id="rc-promo"))
+    _post(client, rc_event(event_id="synth", app_user_id=aid, store="TEST_STORE",
+                           original_transaction_id="otx-synth"))
+
+    body = client.get("/v1/revenuecat/readiness").json()
+    assert body["shadow_clean"] is False
+    assert body["shadow_flip_eligible"]["disagreements"] == 2
+    assert body["shadow_eligible_disagreements_by_store"] == {"APP_STORE": 1, "PLAY_STORE": 1}
+    # Excluded classes are counted in their own buckets, never in the map.
+    assert body["shadow_excluded_promotional"] == 1
+    assert body["shadow_excluded_synthetic"] == 1
+
+
+def test_readiness_by_store_is_empty_when_gate_is_clean(rc):
+    """When nothing flip-eligible disagrees, the map is an empty {} — never a
+    fabricated blocker, and no agreeing store is ever listed."""
+    rc.state["mode"] = "shadow"
+    client = rc.client
+    tok = _register(client)["api_token"]
+    aid = _account_id(client, tok)
+    # A real-store AGREEMENT (RC inactive, legacy free): no disagreement.
+    _post(client, rc_event(event_id="apple-ok", etype="EXPIRATION", app_user_id=aid,
+                           store="APP_STORE", expiration_ms=_past_ms(),
+                           original_transaction_id="otx-apple"))
+
+    body = client.get("/v1/revenuecat/readiness").json()
+    assert body["shadow_clean"] is True
+    assert body["shadow_eligible_disagreements_by_store"] == {}
+
+
 def test_duplicate_synthetic_event_is_idempotent_single_observation(rc):
     """Re-delivering the SAME signed TEST_STORE event (RevenueCat retries) must
     not double-count: one observation, one synthetic exclusion — the shadow
@@ -1157,7 +1226,12 @@ def test_readiness_flip_fields_are_counts_only_no_identifiers(rc):
     assert set(body["shadow_flip_eligible"]) == {"total", "agreements", "disagreements"}
     for value in body["shadow_flip_eligible"].values():
         assert isinstance(value, int) and not isinstance(value, bool)
-    for key in ("shadow_flip_eligible", "shadow_excluded_promotional", "shadow_unclassified"):
+    # The per-store map is keyed by store token with integer counts only.
+    for store_key, count in body["shadow_eligible_disagreements_by_store"].items():
+        assert isinstance(store_key, str) and store_key == store_key.upper()
+        assert isinstance(count, int) and not isinstance(count, bool)
+    for key in ("shadow_flip_eligible", "shadow_eligible_disagreements_by_store",
+                "shadow_excluded_promotional", "shadow_unclassified"):
         blob = str(body[key])
         assert aid not in blob
         assert "rc-promo" not in blob and "otx-a" not in blob
