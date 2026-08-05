@@ -187,6 +187,42 @@ async def verify_google_id_token(id_token: str) -> IdentityClaims:
     )
 
 
+async def verify_google_web_id_token(id_token: str) -> IdentityClaims:
+    """Verify a Google ID token from the WEB "Sign in with Google" flow that the
+    website OWNS (Tono-owned Web OAuth client), replacing the Supabase-brokered
+    path whose consent screen showed the shared project.
+
+    Identical cryptography to the native path — same Google JWKS, same RS256/ES256,
+    same issuer — but the audience is the Tono **Web** client id
+    (``GOOGLE_WEB_CLIENT_ID``) rather than the native app's client id
+    (``GOOGLE_CLIENT_ID``). Two audiences on two verifiers means a native-audience
+    token can never satisfy the web endpoint and vice versa, while both resolve to
+    the SAME stable Google ``sub`` — so native and web Google sign-ins converge on
+    one canonical account (see ``server._resolve_provider_signin``).
+
+    Captures ``nonce`` (the web flow sends one) for the caller's defense-in-depth
+    check. Fails closed: unconfigured audience ⇒ 503; any signature/issuer/
+    audience/expiry failure ⇒ 401, before any account state is touched.
+    """
+    client_id = os.environ.get("GOOGLE_WEB_CLIENT_ID")
+    if not client_id:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Google web sign-in not configured"
+        )
+    try:
+        header = jwt.get_unverified_header(id_token)
+        jwk = await _google_jwks.get_key(header["kid"])
+        claims = _decode_with_jwk(id_token, jwk, audience=client_id, issuer=list(GOOGLE_ISSUERS))
+    except jwt.PyJWTError as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"invalid Google ID token: {exc}")
+    return IdentityClaims(
+        sub=claims["sub"],
+        email=claims.get("email"),
+        nonce=claims.get("nonce"),
+        email_verified=_claim_email_verified(claims),
+    )
+
+
 # ---------------------------------------------------------------------------
 # FastAPI dependency indirection — override these (not the verify_* functions
 # above) in tests via app.dependency_overrides.
@@ -203,3 +239,7 @@ def get_apple_web_verifier() -> IdentityVerifier:
 
 def get_google_verifier() -> IdentityVerifier:
     return verify_google_id_token
+
+
+def get_google_web_verifier() -> IdentityVerifier:
+    return verify_google_web_id_token

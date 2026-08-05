@@ -1171,6 +1171,98 @@ async def auth_apple_web(
 
 
 # ---------------------------------------------------------------------------
+# Direct "Sign in with Google" (web) — the browser runs a Tono-OWNED Google
+# OAuth flow (Tono Web client id, consent screen = "Tono", callback on
+# tonoit.com), NOT the Supabase-brokered path whose consent screen showed the
+# shared project. The website verifies the code exchange + id token, then
+# forwards the id token here. Like /v1/auth/apple/web (and unlike
+# /v1/auth/google), a fresh browser holds no device bearer, so we register a
+# per-browser device and return its bearer. The Google `sub` converges onto the
+# SAME canonical account the native Google sign-in resolves (both key on
+# `google_sub`), so no ParentScript / shared-tenant identity is involved.
+# ---------------------------------------------------------------------------
+
+
+class GoogleWebSignInRequest(BaseModel):
+    id_token: str
+    # The web flow's nonce, echoed by Google inside the id token. Optional
+    # defense-in-depth: the website already checked it against its HttpOnly
+    # transaction cookie before calling here.
+    nonce: Optional[str] = None
+    app_version: Optional[str] = None
+
+
+@app.post("/v1/auth/google/web", response_model=WebSignInResponse)
+async def auth_google_web(
+    body: GoogleWebSignInRequest,
+    user: OptionalCurrentUser,
+    store: StoreDep,
+    verifier: Annotated[
+        social_auth.IdentityVerifier, Depends(social_auth.get_google_web_verifier)
+    ],
+) -> WebSignInResponse:
+    # Fail closed: an invalid/expired/wrong-audience token raises 401 (or 503 if
+    # the web client-id audience is unconfigured) before any account state moves.
+    claims = await verifier(body.id_token)
+
+    # Defense in depth: re-check the raw nonce against the token's claim when the
+    # website forwards it.
+    if body.nonce is not None:
+        if not claims.nonce or not hmac.compare_digest(claims.nonce, body.nonce):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid Google sign-in nonce")
+
+    # NEVER persist/merge on an unverified email — resolution keys on the
+    # immutable Google ``sub``; an unverified address never drives convergence.
+    email = claims.email if claims.email_verified else None
+
+    # A fresh browser carries no device bearer — mint a random per-browser device
+    # with a durable credential. A returning browser reuses its device so its
+    # anonymous account upgrades in place instead of orphaning.
+    device_credential: Optional[str] = None
+    if user is None:
+        registration = store.register_device()
+        user = registration.user
+        device_credential = registration.device_credential
+
+    # Same provider-linking primitive Apple/Google(native)/web/email use, with
+    # provider="google": same-subject convergence with the NATIVE Google identity,
+    # pending-registration claim redemption, verified-email continuity, anonymous
+    # upgrade-in-place, and 409-on-collision all come for free (link=False).
+    account = _resolve_provider_signin(
+        store, user, "google", claims.sub, email, link=False,
+        email_verified=claims.email_verified,
+    )
+
+    if email:
+        with contextlib.suppress(AccountConflictError):
+            store.mark_email_verified(
+                account_id=account.id,
+                email=email,
+                source_surface=email_identity.SURFACE_WEB,
+                app_version=body.app_version,
+            )
+    store.record_registration_event(
+        account_id=account.id,
+        event_type=email_identity.EVENT_SIGN_IN,
+        source_surface=email_identity.SURFACE_WEB,
+        app_version=body.app_version,
+    )
+
+    refreshed = store.get_by_device(user.device_id) or user
+    projection = compute_me_fields(refreshed, store)
+
+    return WebSignInResponse(
+        device_id=user.device_id,
+        api_token=user.api_token,
+        device_credential=device_credential,
+        account_id=account.id,
+        plan=projection["plan"],
+        is_pro=projection["is_pro"],
+        email=account.email,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Build 114 — email registration, verification, login, reset, logout.
 #
 # One architecture, not a second login silo. Supabase keeps owning auth.users,

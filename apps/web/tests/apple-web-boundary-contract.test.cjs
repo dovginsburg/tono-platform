@@ -42,8 +42,8 @@ test('no boundary source contains the sibling product id', () => {
 
 test('the login page never calls Supabase OAuth for apple', () => {
   const code = stripComments(loginPage);
-  // The only signInWithOAuth call may be for google; apple must not appear as a
-  // provider argument to it.
+  // signInWithOAuth is gone from this page entirely (Apple AND Google are direct
+  // Tono flows now); defensively assert apple is never a provider argument to it.
   assert.doesNotMatch(
     code,
     /signInWithOAuth\(\s*\{[^}]*provider:\s*['"]apple['"]/,
