@@ -47,7 +47,16 @@ android {
         // both.
         //
         // One-way door: Google Play requires versionCode to increase strictly.
-        versionCode = 120
+        //
+        // 121 (Ari blank-letters blocker): versionCode 120 is ALREADY CONSUMED on
+        // Google Play (bundle present on the package; internal track shipped it).
+        // The QWERTY letter-key keyboard landed on 2026-08-02 (2358de9) — three
+        // days AFTER 120 was set (2026-07-30, 0cba6da) — and did not bump the
+        // code, so the artifact testers can install as 120 predates letter keys
+        // and Play refuses to accept a replacement under the same code. Shipping
+        // the keyboard to a device therefore REQUIRES a new code; this is that
+        // code. Do not lower it back to 120: that would silently re-block the fix.
+        versionCode = 121
         versionName = "1.1"
     }
 
