@@ -263,7 +263,14 @@ export default function LoginPage() {
     setOutcome(null);
     setBusy(true);
     try {
-      setOutcome(await post(route, { email }));
+      // A rejected send is collapsed to the same confirmation a successful one
+      // shows: surfacing `unknown_failure` distinctly would let this page
+      // distinguish a registered address from an unknown one — the enumeration
+      // oracle the 200-always backend contract is built to avoid. Only the
+      // failures an outsider can already observe (throttling, an outage) stay
+      // distinct.
+      const reason = await post(route, { email });
+      setOutcome(reason === 'unknown_failure' ? 'check_your_email' : reason);
     } finally {
       setBusy(false);
     }
@@ -274,7 +281,7 @@ export default function LoginPage() {
   // Tono-branded link and, enforcing existing-users-only against Tono's ledger,
   // creates nothing for an unknown address. The former browser-direct Supabase
   // one-time-password path is removed: it leaked the shared tenant's
-  // ParentScript sender and minted unledgered accounts. It reuses the same
+  // (non-Tono) branded sender and minted unledgered accounts. It reuses the same
   // anti-enumerating requestMail helper as reset/resend, so no browser code
   // branches on whether the address exists.
   const sendMagic = () => requestMail('/api/auth/email/magic-link');
