@@ -172,6 +172,96 @@ def _is_configured() -> bool:
     return bool(_secret())
 
 
+# ---------------------------------------------------------------------------
+# Dedicated-account isolation (owner directive, 2026-08-05)
+#
+# Tono bills on its OWN dedicated Stripe account. Sibling products
+# (TandemSkills, TandemPaws) and the legacy personal account
+# (`Dov Ginsburg MD PLLC`, a DIFFERENT LEGAL ENTITY) each have their own — and
+# must never be reused here. Nothing previously checked WHICH account a
+# configured key belonged to, so a pasted sibling/legacy key would have silently
+# created customers and charged real money on the wrong entity. That is not a
+# hypothetical: a key sharing the legacy account's identifier fragment was
+# offered to this lane earlier and rejected only because it happened to be
+# malformed.
+#
+# `TONO_STRIPE_ACCOUNT_ID` (non-secret, `acct_…`) declares the account Tono is
+# allowed to bill on. When it is set, the live account behind the configured key
+# is read back ONCE and cached per key; a mismatch — or an inability to verify —
+# fails closed. Leaving it unset preserves the previous behaviour, so this is
+# additive and reversible.
+# ---------------------------------------------------------------------------
+
+_ISOLATION_CACHE: dict[str, str] = {}
+
+
+def _safe_catalog_version() -> str:
+    """Catalog version for the readiness probe; never raises (a readiness
+    endpoint that 500s is useless exactly when it is needed)."""
+    try:
+        return catalog.catalog_version()
+    except Exception:
+        return "unknown"
+
+
+def _expected_account_id() -> str:
+    return os.environ.get("TONO_STRIPE_ACCOUNT_ID", "").strip()
+
+
+def _live_account_id() -> Optional[str]:
+    """The account id behind the configured key, read back once per key.
+
+    Returns None when it cannot be determined (unconfigured, or the provider is
+    unreachable). Never raises — callers decide how to fail.
+    """
+    secret = _secret()
+    if not secret:
+        return None
+    cached = _ISOLATION_CACHE.get(secret)
+    if cached:
+        return cached
+    try:
+        stripe.api_key = secret
+        account = stripe.Account.retrieve()
+    except Exception:  # transport, auth, or permission failure
+        return None
+    account_id = (
+        account.get("id") if isinstance(account, dict) else getattr(account, "id", None)
+    )
+    if isinstance(account_id, str) and account_id:
+        _ISOLATION_CACHE[secret] = account_id
+        return account_id
+    return None
+
+
+def _require_tono_stripe_account() -> None:
+    """Fail closed unless the configured key bills Tono's dedicated account.
+
+    No-op when no expected account is declared (unchanged legacy behaviour).
+    """
+    expected = _expected_account_id()
+    if not expected:
+        return
+    actual = _live_account_id()
+    if actual is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Stripe account identity could not be verified.",
+        )
+    if actual != expected:
+        # The identifiers are non-secret, but naming the wrong account back to a
+        # caller leaks which product/entity the misconfiguration points at.
+        logger.error(
+            "Stripe account isolation violation: configured key bills %s, "
+            "but Tono is restricted to %s. Refusing.",
+            actual, expected,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Stripe is not configured for this product.",
+        )
+
+
 router = APIRouter(prefix="/v1", tags=["payments"])
 
 
@@ -237,6 +327,10 @@ def create_checkout_session(
         )
     if body.interval not in ("month", "year"):
         raise HTTPException(400, "interval must be 'month' or 'year'")
+
+    # Dedicated-account isolation, before ANY Stripe object is created and
+    # before the trial reservation: money must land on Tono's own account.
+    _require_tono_stripe_account()
 
     # Money must bind to an account. A checkout with no bearer would create a
     # Stripe session with no client_reference_id and no account metadata, so
@@ -405,6 +499,56 @@ def create_portal_session(
         return_url=_portal_return_url(request, body.return_url if body else None),
     )
     return PortalResponse(url=session["url"])
+
+
+@router.get("/stripe/readiness")
+def stripe_readiness() -> dict:
+    """Non-secret readiness probe for Tono's DEDICATED Stripe account.
+
+    Mirrors the app_store / google_play / revenuecat readiness contracts so an
+    operator can confirm which pieces are wired without exposing a secret. It
+    answers 200 with booleans plus already-public identifiers only: no key,
+    price id, webhook secret, or provider text is ever returned.
+
+    Deliberately reports account ACTIVATION separately from configuration:
+    activating the dedicated account on the Stripe dashboard proves none of the
+    catalog, keys, webhook, or purchase journey. ``ready`` therefore requires the
+    key, the webhook secret, BOTH canonical prices, and — when an expected
+    account is declared — a verified account-identity match.
+    """
+    expected = _expected_account_id()
+    actual = _live_account_id() if _is_configured() else None
+    isolation_verified = bool(expected) and actual is not None and actual == expected
+
+    month = _price_for("pro", "month")
+    year = _price_for("pro", "year")
+
+    secret_configured = bool(_secret())
+    webhook_configured = bool(_webhook_secret())
+
+    ready = bool(
+        secret_configured
+        and webhook_configured
+        and month
+        and year
+        and (isolation_verified if expected else True)
+    )
+
+    return {
+        "provider": "stripe",
+        "secret_key_configured": secret_configured,
+        "webhook_secret_configured": webhook_configured,
+        "price_monthly_configured": bool(month),
+        "price_yearly_configured": bool(year),
+        # Non-secret account identifiers. `expected` is declared config; the
+        # live id is reported only when it MATCHES, so a misconfiguration never
+        # discloses which foreign account a key belongs to.
+        "expected_account_id": expected or None,
+        "account_identity_verified": isolation_verified,
+        "account_id": actual if isolation_verified else None,
+        "catalog_version": _safe_catalog_version(),
+        "ready": ready,
+    }
 
 
 @router.post("/stripe/webhook")
