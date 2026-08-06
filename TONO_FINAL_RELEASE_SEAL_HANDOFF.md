@@ -20,7 +20,7 @@ and invents nothing. Source is **SOURCE SEALED**, not released/live/store-ready.
 | parent (unchanged, prior lane) | `02a8ee36d2172e62375022ff11d7b94ac3b09295` (Stripe dedicated-account isolation) |
 | grandparent | `73e9337` (Android versionCode 120→121 blank-letters fix) |
 | Branch | `claude/tono-controllable-completion-opus48-20260804` |
-| Origin tip | `425e356` — **HEAD is 3 commits ahead, all UNPUSHED** (`73e9337`, `02a8ee3`, `17427ee`) |
+| Origin tip | `c95d18a` — **branch PUSHED through HEAD** (updated 2026-08-06; was `425e356` when first sealed). Working tree matches origin except the preserved `.gitignore` line. |
 
 **Working tree:** clean except `.gitignore` (`+.gstack/`) — a pre-existing,
 benign tooling-ignore line present at lane start; **preserved, deliberately
@@ -170,21 +170,47 @@ answer either). This lane hardened the **web** end of that same property (§2.1)
 ## 7. Remaining release spine (operator / provider / device — NONE done here)
 
 All require owner-only irreversible action; **do not** infer any as complete:
-1. **Push** the 3 unpushed commits (`73e9337`, `02a8ee3`, `17427ee`) after
-   independent review (Ezra owns release mutations).
-2. **Stripe live activation (Tono account only):** set `TONO_STRIPE_ACCOUNT_ID`,
-   live secret, webhook signing secret, and both canonical price ids on Render;
-   then confirm `GET /v1/stripe/readiness` → `ready:true` +
-   `account_identity_verified:true`, and that `details_submitted` /
-   `charges_enabled` / `payouts_enabled` / `livemode` are true on Tono's
-   dashboard. Linked bank ≠ any of these.
+1. ~~Push~~ **DONE** — branch pushed through HEAD `c95d18a` (2026-08-06).
+   Remaining here: independent review + merge to `main` (Ezra owns release
+   mutations); `main` iOS is still stuck at Build 101, so the merge is
+   non-trivial (see the main-vs-AI-branch divergence).
+2. **Stripe live activation (Tono account only):** a **dedicated Tono account now
+   exists** — `acct_1U1CzyLZbknfauDy` (US; `details_submitted`/`charges_enabled`/
+   `payouts_enabled` all **true**) but with **0 products / 0 prices / 0 webhooks**.
+   Execute **`docs/operations/tono-stripe-operator-manifest.md`** (this lane's
+   canonical-source manifest): create 1 Product + 2 Prices ($3.99/mo, $39.99/yr,
+   trial-less), the webhook at `…/v1/stripe/webhook` (11 named events), set
+   `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` / `STRIPE_PRICE_PRO_MONTHLY` /
+   `STRIPE_PRICE_PRO_YEARLY` / `TONO_STRIPE_ACCOUNT_ID=acct_1U1CzyLZbknfauDy` on
+   Render, activate the Customer Portal, then confirm `/v1/stripe/readiness` →
+   `ready:true` + `account_identity_verified:true`. Never use the legacy
+   `acct_1TRJaBQ93BpfjtrE`.
 3. **Store rails:** iOS 1.1/build 117 stays in Apple review (owner's call, do
-   not swap to 126); Android production track still empty; RevenueCat store keys
-   + real-device sandbox purchase proof.
-4. **Native re-verification** on CI/capable hardware (iOS archive, Android
-   build/lint) — not runnable here.
+   not swap to 126); Android production track still empty (see §4a below);
+   RevenueCat store keys + real-device sandbox purchase proof.
+4. **Native re-verification:** **Android now BUILDS on this host** — signed
+   release APK + AAB produced foreground (versionCode 121 verified from the
+   artifact; `:app` tests 88/0). See §7a. iOS archive still CI/hardware-owned.
 5. OAuth/passkey interactive human sign-in journeys (server halves fail-closed,
    already proven).
 
-**Status: SOURCE SEALED at `17427ee`.** Every safely executable local
-verification gate is green; every remaining gate is external/human/device.
+## 7a. Android versionCode-121 artifact gate — BUILT & VERIFIED (2026-08-06)
+
+Foreground build from HEAD `c95d18a` (contains `73e9337`): **BUILD SUCCESSFUL**
+for both `:app:assembleRelease` and `:app:bundleRelease` (JDK 17, AGP 8.2.2,
+build-tools 35, `-Xmx4096m`).
+- APK `apps/android/app/build/outputs/apk/release/app-release.apk` — sha256
+  `3d59fbb2…928a7`; AAB `…/bundle/release/app-release.aab` — sha256 `6df759e3…8680`.
+- From the artifact: applicationId `com.tono.myapp`, **versionCode 121**,
+  versionName 1.1; merged manifest declares IME `com.tono.ime.TonoImeService`;
+  keyboard `letterRows` compiled via `:app → :ime`. Unit tests `:app` 88/0
+  (incl. `KeyboardLetterVisibilityTest` 9/0).
+- **Signing = throwaway local keystore** (`CN=…LOCAL VERIFICATION ONLY`), gitignored;
+  the real `tono-release.keystore` is absent from this host. **NOT a Play upload
+  artifact** — adequate only for sideload keyboard-behavior testing.
+- Remaining: **DEVICE_VERIFIED (Ari, physical, ≥ vc121)** and a **real-keystore**
+  signed AAB rollout. Full checklist + receipt:
+  `docs/operations/android-keyboard-device-acceptance.md`.
+
+**Status: SOURCE SEALED at `17427ee`; branch pushed to `c95d18a`.** Every safely
+executable local gate is green; every remaining gate is external/human/device.
