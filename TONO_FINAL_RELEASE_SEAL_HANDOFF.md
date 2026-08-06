@@ -174,17 +174,19 @@ All require owner-only irreversible action; **do not** infer any as complete:
    Remaining here: independent review + merge to `main` (Ezra owns release
    mutations); `main` iOS is still stuck at Build 101, so the merge is
    non-trivial (see the main-vs-AI-branch divergence).
-2. **Stripe live activation (Tono account only):** a **dedicated Tono account now
-   exists** — `acct_1U1CzyLZbknfauDy` (US; `details_submitted`/`charges_enabled`/
-   `payouts_enabled` all **true**) but with **0 products / 0 prices / 0 webhooks**.
-   Execute **`docs/operations/tono-stripe-operator-manifest.md`** (this lane's
-   canonical-source manifest): create 1 Product + 2 Prices ($3.99/mo, $39.99/yr,
-   trial-less), the webhook at `…/v1/stripe/webhook` (11 named events), set
-   `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` / `STRIPE_PRICE_PRO_MONTHLY` /
-   `STRIPE_PRICE_PRO_YEARLY` / `TONO_STRIPE_ACCOUNT_ID=acct_1U1CzyLZbknfauDy` on
-   Render, activate the Customer Portal, then confirm `/v1/stripe/readiness` →
-   `ready:true` + `account_identity_verified:true`. Never use the legacy
-   `acct_1TRJaBQ93BpfjtrE`.
+2. **Stripe — catalog/runtime/webhook EXECUTED; one deploy gate open.** The
+   dedicated account `acct_1U1CzyLZbknfauDy` is activated **and** now has the live
+   catalog: Product `prod_V1VR4KF7SXeu7Z`, Prices `price_1U1SQhLZbknfauDyOQn0OWxV`
+   ($3.99/mo) + `price_1U1SQhLZbknfauDyCxNTW15g` ($39.99/yr, both trial-less),
+   webhook `we_1U1STvLZbknfauDyTVGo4aPJ` (11 events, invalid-sig→400), all env
+   vars bound on Render, `/health` `stripe_configured=true`. **OPEN:** prod still
+   serves build `canonical_sha=185dc7b1` where **`/v1/stripe/readiness` 404s** —
+   deploy an accepted backend build containing `02a8ee3` (readiness endpoint +
+   identity guard) and confirm `/v1/stripe/readiness` → `ready:true` +
+   `account_identity_verified:true` on prod. Safe to deploy (guard passes;
+   `TONO_STRIPE_ACCOUNT_ID` matches the key's account). Also activate the Customer
+   Portal. Never use legacy `acct_1TRJaBQ93BpfjtrE`. Full detail +
+   readback/rollback: `docs/operations/tono-stripe-operator-manifest.md`.
 3. **Store rails:** iOS 1.1/build 117 stays in Apple review (owner's call, do
    not swap to 126); Android production track still empty (see §4a below);
    RevenueCat store keys + real-device sandbox purchase proof.

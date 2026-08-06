@@ -14,6 +14,35 @@ secret, did not call Stripe, and did not change any Stripe object.**
 
 ---
 
+## ✅ STATUS — EXECUTED by operator (2026-08-06); ONE deploy gate remains
+
+The catalog/runtime/webhook below were **created and bound live** on
+`acct_1U1CzyLZbknfauDy` (receipt: `tono-live-stripe-runtime-webhook-20260806.md`).
+The "to create / 0 products / empty" framing in §1–§2 is the **pre-execution
+plan** — retained for provenance; the live objects now exist:
+
+| Object | Live id / value | Matches manifest |
+|---|---|---|
+| Product | `prod_V1VR4KF7SXeu7Z` (Tono Pro, active, marker=stripe_pro) | ✓ |
+| Monthly Price → `STRIPE_PRICE_PRO_MONTHLY` | `price_1U1SQhLZbknfauDyOQn0OWxV` (USD 399/mo, `lookup_key=tono_pro_monthly`, trial-less) | ✓ |
+| Yearly Price → `STRIPE_PRICE_PRO_YEARLY` | `price_1U1SQhLZbknfauDyCxNTW15g` (USD 3999/yr, `lookup_key=tono_pro_yearly`, trial-less) | ✓ |
+| Webhook | `we_1U1STvLZbknfauDyTVGo4aPJ` @ `https://api.tonoit.com/v1/stripe/webhook`, livemode, all 11 events; invalid-sig → 400 | ✓ |
+| Render env | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, both price vars, `TONO_STRIPE_ACCOUNT_ID=acct_1U1CzyLZbknfauDy` installed; deploy `dep-d9q9q37avr4c73b3010g` live; `/health` `stripe_configured=true` | ✓ |
+
+**⛔ OPEN GATE — backend build divergence.** Production still serves an **older
+build**: `/health` `canonical_sha=185dc7b1…` and **`/v1/stripe/readiness` → HTTP
+404** (independently re-probed 2026-08-06). That build predates the readiness
+endpoint **and** the dedicated-account identity guard (both added in branch
+commit `02a8ee3`, on origin through `c95d18a`). Live Checkout/webhook already
+function on the isolated key (limited blast radius), but **runtime acceptance is
+NOT complete** until an accepted backend build containing `02a8ee3` is deployed
+(GHCR image by canonical SHA → Render repoint) and §5 passes on production.
+Deploying is **safe**: Render's `TONO_STRIPE_ACCOUNT_ID` equals the key's account,
+so `_require_tono_stripe_account()` passes (does not 503). This is an
+operator/deploy action — not done or pushed by this lane.
+
+---
+
 ## 0. Account identity & custody (pin this first)
 
 | Field | Value |
