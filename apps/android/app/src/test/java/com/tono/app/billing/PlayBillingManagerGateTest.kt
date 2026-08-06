@@ -3,6 +3,7 @@ package com.tono.app.billing
 import com.tono.shared.storage.AccountIdentity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -163,11 +164,21 @@ class PlayBillingManagerGateTest {
     // ── Release identity ───────────────────────────────────────────────────
 
     @Test
-    fun androidShipsBuild120() {
+    fun androidVersionCodeExceedsEveryCodeConsumedOnPlay() {
+        // Was `androidShipsBuild120`, which pinned the code to exactly 120. That
+        // pin became the Ari blank-letters blocker: 120 is already consumed on
+        // Google Play and predates the QWERTY letter-key keyboard (2358de9,
+        // 2026-08-02 — after 120 was set on 2026-07-30), so a build carrying the
+        // letter keys can never reach a tester under code 120. Play requires a
+        // STRICTLY greater code, so that is what this asserts now.
         val gradle = source("app/build.gradle.kts")
+        val code = Regex("""versionCode\s*=\s*(\d+)""")
+            .find(gradle)?.groupValues?.get(1)?.toInt()
+        assertNotNull("app/build.gradle.kts must declare a versionCode", code)
         assertTrue(
-            "Android must declare versionCode 120 for account coupon redemption",
-            Regex("""versionCode\s*=\s*120""").containsMatchIn(gradle),
+            "versionCode $code must strictly exceed 120, which is already consumed " +
+                "on Google Play and predates the letter-key keyboard",
+            code!! > 120,
         )
         assertTrue(
             "the marketing version must stay 1.1",
@@ -176,10 +187,10 @@ class PlayBillingManagerGateTest {
     }
 
     @Test
-    fun android120PreservesItsCodeWhileIosAdvancesToReviewedBuild126() {
-        // Google Play Build 120 remains immutable. The reviewed convergence
-        // changes shipping iOS auth and StoreKit behavior, so iOS advances to
-        // the next cross-platform release identifier without changing Android.
+    fun androidCodeAdvancesWhileIosUsesReviewedBuild126() {
+        // Android now advances past the consumed 120 (see above). The reviewed
+        // convergence changes shipping iOS auth and StoreKit behavior, so iOS
+        // tracks its own release identifier independently.
         // The reviewed authority is now Build 126 (coordinated auth-providers
         // and RevenueCat candidate); bump-build.sh is the single source of
         // truth it must equal.
