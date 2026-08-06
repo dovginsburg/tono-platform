@@ -115,6 +115,35 @@ catalog_version=1.0.0  ready=false
   StoreKit IAP; Android = Play Billing; RevenueCat reconciles each rail onto the
   canonical account (cross-platform double-charge guard, `cac1008`).
 
+### 4a. Contaminated local credential — BLOCKER (receipt 2026-08-06)
+
+`/private/tmp/stripe-contaminated-local-credential-blocker-20260806.txt`: Ezra's
+read-only probe found the local Keychain label **`tandempaws-stripe-live`
+resolves to account `acct_1TRJaBQ93BpfjtrE`** ("Dov Ginsburg MD PLLC"), whose
+live catalog mixes **TandemPaws + ParentScript + Tono** products. It is a
+**mislabeled/legacy contaminated account — NOT a dedicated Tono (or TandemPaws)
+account** and must never be bound, used, deployed, mutated, or cleaned.
+
+- **This lane never touched that credential.** Only env-var *presence* was
+  probed (all `false`) and the in-process readiness ran with no network. No
+  Keychain read, no binding.
+- **Corroboration — the code already refuses it.** `acct_1TRJaBQ93BpfjtrE`
+  appears in the entire tree **exactly once**, as the forbidden `LEGACY_ACCOUNT`
+  fixture in `test_stripe_dedicated_account_isolation.py`; the checkout guard is
+  tested to refuse it (503, without disclosing it) **before** any Stripe object
+  is created. It is never an allowed/expected/env-bound value anywhere.
+- **Live-secret sweep clean:** no `sk_live`/`rk_live`/`pk_live`/`whsec`/real
+  `acct_1…` material embedded in shipped source — only the forbidden fixture and
+  synthetic leak-detection probes (`ZQXsk_live_…`, asserting `/health` never
+  leaks).
+- **EXACT GATE:** the new product-dedicated Stripe accounts may exist in the
+  Dashboard, but **product-specific reusable live runtime keys / account IDs are
+  NOT yet present in this execution lane.** Each product (Tono included) stays
+  **fail-closed** until its OWN dedicated account identity + credential are
+  securely installed and read back. No Stripe readiness/binding claim may be
+  made on the strength of the `tandempaws-stripe-live` credential or a linked
+  bank.
+
 ---
 
 ## 5. Existing-user-only branded magic-link (gate 1) — preserved & verified
