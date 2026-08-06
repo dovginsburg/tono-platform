@@ -333,6 +333,9 @@ class CreateCouponRequest(BaseModel):
     duration_days: int
     max_uses: int = 0
     expires_at: Optional[str] = None
+    # Build 117 app-review compatibility: opt this one code into redemption by
+    # an unidentified account. Default False keeps all coupons identity-gated.
+    anonymous_eligible: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -1815,6 +1818,56 @@ async def auth_email_resend(
 
 
 @app.post(
+    "/v1/auth/email/magic-link",
+    response_model=EmailAcceptedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def auth_email_magic_link(
+    body: EmailAddressRequest,
+    request: Request,
+    user: OptionalCurrentUser,
+    store: StoreDep,
+    client: Annotated[
+        email_auth.SupabaseEmailAuthClient, Depends(email_auth.get_email_auth_client)
+    ],
+) -> EmailAcceptedResponse:
+    """Send a Tono-branded magic-link sign-in — for EXISTING Tono users only.
+
+    Replaces the former browser-direct ``supabase.auth.signInWithOtp`` call,
+    which (a) leaked the shared tenant's ParentScript sender/branding and (b) had
+    ``shouldCreateUser: true``, minting unledgered provider accounts — the exact
+    "second, unledgered path" the canonical-backend design forbids.
+
+    Existing-users-only is enforced against Tono's OWN ledger
+    (``has_verified_email_account``): an unknown address sends nothing and
+    creates nothing. Anti-enumerating — the accepted response is identical
+    whether or not the address is known, and the per-address rate gate is applied
+    before the ledger is consulted so timing cannot answer the question either.
+    """
+    normalized = _require_email(body.email)
+    _email_auth_rate_gate(request, "magic_link", normalized)
+    if not store.has_verified_email_account(normalized):
+        # No verified Tono account: create nothing, send nothing, disclose
+        # nothing. Recorded as a request for the account's own history only if
+        # one later appears — here there is no account to attach it to.
+        return EmailAcceptedResponse()
+    try:
+        await client.send_magic_link(email=normalized)
+    except email_auth.EmailAuthError as exc:
+        if exc.outcome is email_auth.EmailAuthOutcome.INVALID_CREDENTIALS:
+            return EmailAcceptedResponse()
+        if exc.outcome in _OUTAGE_OUTCOMES:
+            _record_email_audit(
+                store, normalized, email_identity.EVENT_PROVIDER_UNAVAILABLE, body, caller=user
+            )
+        raise _email_auth_failure(exc.outcome) from None
+    _record_email_audit(
+        store, normalized, email_identity.EVENT_MAGIC_LINK_REQUESTED, body, caller=user
+    )
+    return EmailAcceptedResponse()
+
+
+@app.post(
     "/v1/auth/email/reset",
     response_model=EmailAcceptedResponse,
     status_code=status.HTTP_202_ACCEPTED,
@@ -2985,14 +3038,29 @@ def redeem_coupon(
     user: CurrentUser,
     store: StoreDep,
 ) -> RedeemCouponResponse:
-    """Redeem for the identified canonical account proven by this bearer."""
-    if not user.account_id or not user.account or not user.account.is_identified:
+    """Redeem for the canonical account proven by this bearer.
+
+    Normal codes require a verified (identified) account. A code explicitly
+    flagged ``anonymous_eligible`` (Build 117 app-review compatibility) may also
+    be redeemed by an unidentified account — this is the ONLY relaxation, gated
+    per coupon, and the grant still binds to this canonical account UUID alone.
+    """
+    code = body.code.strip().upper()
+    if not user.account_id or not user.account:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="sign in to a verified account before redeeming a code",
+        )
+    if not user.account.is_identified and not store.coupon_allows_anonymous(code):
+        # General ownership is unchanged: an unidentified account is refused for
+        # every code except an explicitly anonymous-eligible one. The store
+        # transaction enforces the same rule (defense in depth).
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="sign in to a verified account before redeeming a code",
         )
     try:
-        exp = store.redeem_coupon(user.account_id, body.code.strip().upper())
+        exp = store.redeem_coupon(user.account_id, code, device_id=user.device_id)
         return RedeemCouponResponse(
             coupon_pro_expires_at=exp,
             message="Pro access activated!",
@@ -3014,6 +3082,7 @@ def admin_create_coupon(
         body.duration_days,
         body.max_uses,
         body.expires_at,
+        anonymous_eligible=body.anonymous_eligible,
     )
     if not ok:
         raise HTTPException(status_code=409, detail="code already exists")

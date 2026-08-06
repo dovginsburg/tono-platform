@@ -260,9 +260,17 @@ test('the email lifecycle goes through the canonical backend, not straight to th
   assert.match(joined, /v1\/auth\/email\/login/);
   assert.match(joined, /v1\/auth\/email\/resend/);
   assert.match(joined, /v1\/auth\/email\/reset/);
+  // Magic-link now routes through the canonical backend too (was a browser-
+  // direct provider call). Existing-users-only + Tono-branded is enforced there.
+  assert.match(joined, /v1\/auth\/email\/magic-link/);
 
   const login = readFileSync(join(srcRoot, 'app', 'login', 'page.tsx'), 'utf8');
   assert.ok(!/signUp\(/.test(login), 'the page registers against the provider directly');
+  // No browser-direct one-time-password path: it leaked the shared tenant's
+  // sender and created unledgered accounts (shouldCreateUser). Magic-link must
+  // go through the backend like register/login/reset/resend.
+  assert.ok(!/signInWithOtp/.test(login), 'the page requests a magic link from the provider directly');
+  assert.ok(!/shouldCreateUser/.test(login), 'the page can still create an unledgered provider account');
 });
 
 test('web email calls are tagged to the web surface and build', () => {
@@ -279,7 +287,10 @@ test('OAuth, passkey and magic link all survive', () => {
   const login = readFileSync(join(srcRoot, 'app', 'login', 'page.tsx'), 'utf8');
   assert.match(login, /\/api\/auth\/google\/credential/);
   assert.doesNotMatch(login, /signInWithOAuth/);
-  assert.match(login, /signInWithOtp/);
+  // Magic link SURVIVES as a way in — but now via the canonical backend route,
+  // not a browser-direct provider call.
+  assert.match(login, /\/api\/auth\/email\/magic-link/);
+  assert.doesNotMatch(login, /signInWithOtp/);
   assert.match(login, /PasskeyLoginButton/);
 });
 

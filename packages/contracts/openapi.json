@@ -552,6 +552,11 @@
       },
       "CreateCouponRequest": {
         "properties": {
+          "anonymous_eligible": {
+            "default": false,
+            "title": "Anonymous Eligible",
+            "type": "boolean"
+          },
           "code": {
             "title": "Code",
             "type": "string"
@@ -3566,6 +3571,50 @@
         "summary": "Auth Email Logout"
       }
     },
+    "/v1/auth/email/magic-link": {
+      "post": {
+        "description": "Send a Tono-branded magic-link sign-in \u2014 for EXISTING Tono users only.\n\nReplaces the former browser-direct ``supabase.auth.signInWithOtp`` call,\nwhich (a) leaked the shared tenant's ParentScript sender/branding and (b) had\n``shouldCreateUser: true``, minting unledgered provider accounts \u2014 the exact\n\"second, unledgered path\" the canonical-backend design forbids.\n\nExisting-users-only is enforced against Tono's OWN ledger\n(``has_verified_email_account``): an unknown address sends nothing and\ncreates nothing. Anti-enumerating \u2014 the accepted response is identical\nwhether or not the address is known, and the per-address rate gate is applied\nbefore the ledger is consulted so timing cannot answer the question either.",
+        "operationId": "auth_email_magic_link_v1_auth_email_magic_link_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailAddressRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailAcceptedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Auth Email Magic Link"
+      }
+    },
     "/v1/auth/email/register": {
       "post": {
         "description": "Start an email registration.\n\nAnswers `verification_pending` for every outcome that depends on whether\nthe address is already registered \u2014 which is the whole anti-enumeration\nproperty. It does NOT answer that way when the provider refused the\nsubmitted address or password on its own validation rules: that is a fact\nabout the input, and reporting it is the difference between a person\nfixing their password and a person waiting forever for mail that was\nnever sent.\n\nThe canonical account is bound here, BEFORE verification, so that an\nanonymous device that has been coaching drafts for weeks upgrades in place\n\u2014 its account UUID, history, usage and any purchase ownership all survive\nthe registration. The account stays in the `pending` lifecycle state and\nunidentified until the person proves the address, so binding early costs\nno access.",
@@ -4081,7 +4130,7 @@
     },
     "/v1/coupon/redeem": {
       "post": {
-        "description": "Redeem for the identified canonical account proven by this bearer.",
+        "description": "Redeem for the canonical account proven by this bearer.\n\nNormal codes require a verified (identified) account. A code explicitly\nflagged ``anonymous_eligible`` (Build 117 app-review compatibility) may also\nbe redeemed by an unidentified account \u2014 this is the ONLY relaxation, gated\nper coupon, and the grant still binds to this canonical account UUID alone.",
         "operationId": "redeem_coupon_v1_coupon_redeem_post",
         "requestBody": {
           "content": {
@@ -4689,6 +4738,30 @@
         "summary": "Revenuecat Reconcile Disagreements",
         "tags": [
           "revenuecat"
+        ]
+      }
+    },
+    "/v1/stripe/readiness": {
+      "get": {
+        "description": "Non-secret readiness probe for Tono's DEDICATED Stripe account.\n\nMirrors the app_store / google_play / revenuecat readiness contracts so an\noperator can confirm which pieces are wired without exposing a secret. It\nanswers 200 with booleans plus already-public identifiers only: no key,\nprice id, webhook secret, or provider text is ever returned.\n\nDeliberately reports account ACTIVATION separately from configuration:\nactivating the dedicated account on the Stripe dashboard proves none of the\ncatalog, keys, webhook, or purchase journey. ``ready`` therefore requires the\nkey, the webhook secret, BOTH canonical prices, and \u2014 when an expected\naccount is declared \u2014 a verified account-identity match.",
+        "operationId": "stripe_readiness_v1_stripe_readiness_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Stripe Readiness V1 Stripe Readiness Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Stripe Readiness",
+        "tags": [
+          "payments"
         ]
       }
     },

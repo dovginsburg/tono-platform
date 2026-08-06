@@ -87,7 +87,10 @@ def test_checkout_uses_account_customer_when_signed_in(client, monkeypatch):
     # ...and the checkout session's metadata carries the account id too, so
     # the webhook can route the resulting subscription to the account.
     assert captured_session_kwargs["metadata"]["tono_account_id"] == account_id
-    assert captured_session_kwargs["client_reference_id"] == device["device_id"]
+    # client_reference_id carries the canonical ACCOUNT uuid (Ezra correction #2),
+    # with the device id kept only as non-authorizing tono_device_id metadata.
+    assert captured_session_kwargs["client_reference_id"] == account_id
+    assert captured_session_kwargs["metadata"]["tono_device_id"] == device["device_id"]
 
     # The customer id landed on the ACCOUNT, not the device row.
     store = get_store()
@@ -453,6 +456,9 @@ def test_fingerprint_reuse_records_conflict_and_ends_duplicate_trial(client, mon
         {"id": "sub_second", "customer": "cus_second", "status": "trialing",
          "current_period_end": 4102444800, "trial_end": 4102444800,
          "default_payment_method": {"card": {"fingerprint": "fp_shared"}},
+         "items": {"data": [{"price": {"id": "price_fake_month",
+                                       "product": "prod_pro",
+                                       "unit_amount": 399, "currency": "usd"}}]},
          "metadata": {"tono_account_id": second_account}},
     )
     assert modified == [("sub_second", {"trial_end": "now"})]
@@ -568,7 +574,11 @@ def test_webhook_checkout_completed_updates_account_and_all_its_devices(client, 
     monkeypatch.setattr(
         payments_mod.stripe.Subscription,
         "retrieve",
-        lambda _id: {"status": "active", "current_period_end": 4102444800},  # 2100-01-01
+        lambda _id: {"status": "active", "current_period_end": 4102444800,  # 2100-01-01
+                     "items": {"data": [{"price": {"id": "price_fake_month",
+                                                   "product": "prod_pro",
+                                                   "unit_amount": 399,
+                                                   "currency": "usd"}}]}},
     )
 
     r = client.post(
