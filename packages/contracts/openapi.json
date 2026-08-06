@@ -4741,6 +4741,30 @@
         ]
       }
     },
+    "/v1/stripe/readiness": {
+      "get": {
+        "description": "Non-secret readiness probe for Tono's DEDICATED Stripe account.\n\nMirrors the app_store / google_play / revenuecat readiness contracts so an\noperator can confirm which pieces are wired without exposing a secret. It\nanswers 200 with booleans plus already-public identifiers only: no key,\nprice id, webhook secret, or provider text is ever returned.\n\nDeliberately reports account ACTIVATION separately from configuration:\nactivating the dedicated account on the Stripe dashboard proves none of the\ncatalog, keys, webhook, or purchase journey. ``ready`` therefore requires the\nkey, the webhook secret, BOTH canonical prices, and \u2014 when an expected\naccount is declared \u2014 a verified account-identity match.",
+        "operationId": "stripe_readiness_v1_stripe_readiness_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Stripe Readiness V1 Stripe Readiness Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Stripe Readiness",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
     "/v1/stripe/webhook": {
       "post": {
         "operationId": "stripe_webhook_v1_stripe_webhook_post",
