@@ -62,10 +62,6 @@ struct SettingsView: View {
     @State private var usage:             TonoUsage?
     @State private var recipients:        [Recipient] = []
     @State private var contactsAccess:    ContactsAccessSummary = .notDetermined
-    @State private var promoCode:         String     = ""
-    @State private var promoError:        String?
-    @State private var promoSuccess:      String?
-    @State private var isRedeemingCode:   Bool       = false
     @State private var featureToggles:    [FeatureFlag: Bool] = [:]
     @State private var liveToneEnabled:   Bool       = true
     // build 115 — on-device rewriting. `localRewriteAvailability` is what the
@@ -827,29 +823,10 @@ struct SettingsView: View {
                 }
                 .foregroundColor(.accentColor)
             }
-            if !isPro {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) {
-                        TextField("Promo code", text: $promoCode)
-                            .textInputAutocapitalization(.characters)
-                            .disableAutocorrection(true)
-                        Button(isRedeemingCode ? "…" : "Apply") {
-                            Task { await redeemPromoCode() }
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(
-                            promoCode.trimmingCharacters(in: .whitespaces).isEmpty
-                            || isRedeemingCode
-                        )
-                    }
-                    if let err = promoError {
-                        Text(err).font(.caption).foregroundColor(.red)
-                    }
-                    if let ok = promoSuccess {
-                        Text(ok).font(.caption).foregroundColor(.green)
-                    }
-                }
-            }
+            // Reviewer/complimentary access is NOT granted via customer-visible
+            // custom promo codes (App Review 3.1.1). Free/discounted access is
+            // delivered through App Store Offer Codes redeemed in the system
+            // subscription sheet; reviewer access uses the dedicated demo account.
             NavigationLink(destination: PaymentHistoryView()) {
                 Text("Payment history")
             }
@@ -1037,26 +1014,6 @@ struct SettingsView: View {
         }
     }
 
-    private func redeemPromoCode() async {
-        let code = promoCode.trimmingCharacters(in: .whitespaces)
-        guard !code.isEmpty else { return }
-        isRedeemingCode = true
-        promoError = nil
-        promoSuccess = nil
-        do {
-            _ = try await TonoBackend.shared.redeemCoupon(code: code)
-            promoSuccess = "Pro access activated!"
-            promoCode = ""
-            await store.refreshEntitlements()
-            await refreshUsage()
-        } catch let e as TonoBackendError {
-            promoError = consumerMessage(for: e)
-        } catch {
-            promoError = "That code couldn't be applied. Check it and try again."
-        }
-        isRedeemingCode = false
-    }
-
     @MainActor
     private func openManageSubscriptions() async {
         guard let windowScene = UIApplication.shared.connectedScenes
@@ -1114,7 +1071,18 @@ Payment will be charged to your Apple ID account at confirmation of purchase. Th
                     .foregroundColor(.white.opacity(0.4))
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)
-                    .padding(.bottom, 32)
+                    .padding(.bottom, 8)
+
+                // App Store 3.1.2 requires Terms of Use and Privacy Policy links
+                // on the same screen as the buy action. Destinations come from
+                // `TonoLegalLinks` (no URL literal on this consumer surface).
+                HStack(spacing: 20) {
+                    Link("Terms of Use", destination: TonoLegalLinks.termsOfUse)
+                    Link("Privacy Policy", destination: TonoLegalLinks.privacyPolicy)
+                }
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.6))
+                .padding(.bottom, 32)
             }
             // Build 115 — iPad. LAYOUT ONLY. Measured at 984pt of a 1,032pt
             // window before this line. A paywall is a decision surface, not a
@@ -1447,25 +1415,19 @@ private struct ProductRow: View {
                 if isLoading {
                     ProgressView().tint(.white)
                 } else {
-                    // Big price on the right. When intro offer is present,
-                    // show the trial "$0.00" up top and the regular price below.
-                    // introOffer is only available on iOS 17.2+; older OS
-                    // versions just see the regular price.
+                    // App Store 3.1.2(c): the regular localized billed amount is
+                    // ALWAYS the largest / most prominent price element — never the
+                    // trial "$0.00". The free-trial terms (when the StoreKit account
+                    // is actually eligible) are disclosed subordinately in
+                    // `introOfferLine` on the leading side. No hardcoded currency:
+                    // `product.displayPrice` is provider-localized.
                     VStack(alignment: .trailing, spacing: 0) {
-                        if let intro = product.subscription?.introductoryOffer,
-                           intro.paymentMode == .freeTrial,
-                           isEligibleForFreeTrial {
-                            Text(intro.displayPrice)
-                                .tonoFont(size: 16, weight: .bold, relativeTo: .callout)
-                                .foregroundColor(.white)
-                            Text("then \(product.displayPrice)")
-                                .tonoFont(size: 10, relativeTo: .caption2)
-                                .foregroundColor(.white.opacity(0.7))
-                        } else {
-                            Text(product.displayPrice)
-                                .tonoFont(size: 16, weight: .bold, relativeTo: .callout)
-                                .foregroundColor(.white)
-                        }
+                        Text(product.displayPrice)
+                            .tonoFont(size: 20, weight: .bold, relativeTo: .title3)
+                            .foregroundColor(.white)
+                        Text(isYearly ? "per year" : "per month")
+                            .tonoFont(size: 10, relativeTo: .caption2)
+                            .foregroundColor(.white.opacity(0.7))
                     }
                 }
             }

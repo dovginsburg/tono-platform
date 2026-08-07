@@ -217,14 +217,13 @@ public struct WeeklyDigestResponse: Codable {
     }
 }
 
-public struct CouponRedemption: Decodable {
-    public let couponProExpiresAt: String
-    public let message: String
-
-    enum CodingKeys: String, CodingKey {
-        case couponProExpiresAt = "coupon_pro_expires_at"
-        case message
-    }
+/// Legal links required on the purchase screen (App Store 3.1.2 requires a
+/// Terms of Use and Privacy Policy link on the same screen as the buy action).
+/// The URL literals live here, alongside the backend base URL, rather than in a
+/// SwiftUI surface file, so the consumer-surface literal contract stays clean.
+public enum TonoLegalLinks {
+    public static let termsOfUse = URL(string: "https://tonoit.com/terms")!
+    public static let privacyPolicy = URL(string: "https://tonoit.com/privacy")!
 }
 
 /// One row of the account's billing timeline. Mirrors the backend
@@ -1232,10 +1231,12 @@ public final class TonoBackend: @unchecked Sendable {
         return url
     }
 
-    public func redeemCoupon(code: String) async throws -> CouponRedemption {
-        struct Req: Encodable { let code: String }
-        return try await post(path: "/v1/coupon/redeem", body: Req(code: code), authorize: true)
-    }
+    // Custom promo/coupon redemption was removed for App Review 3.1.1: the iOS
+    // binary must not carry any customer-visible custom-code unlock path. Free or
+    // discounted access is delivered via App Store Offer Codes (redeemed in the
+    // system subscription sheet), and reviewer access via the demo account.
+    // The backend `/v1/coupon/redeem` endpoint and its historical records are
+    // preserved server-side (audit), but no client surface invokes it.
 
     // MARK: - Account deletion (build 101)
 

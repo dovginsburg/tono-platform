@@ -191,6 +191,7 @@
 		A71090000000000000000002 /* Build109StripRoleAndDocumentIntegrityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71090000000000000000001 /* Build109StripRoleAndDocumentIntegrityTests.swift */; };
 		A71110000000000000000002 /* Build111CursorSensitivityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71110000000000000000001 /* Build111CursorSensitivityTests.swift */; };
 		B112C0FFEE0000000000A112 /* Build112UISurfaceContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B112C0FFEE0000000000B112 /* Build112UISurfaceContractTests.swift */; };
+		A11EC0DE0000000000000A01 /* AppReviewComplianceGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11EC0DE0000000000000B01 /* AppReviewComplianceGuardTests.swift */; };
 		B113C0FFEE0000000000A113 /* Build113FailureCopyRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B113C0FFEE0000000000B113 /* Build113FailureCopyRuntimeTests.swift */; };
 		B114C0FFEE0000000000A114 /* Build114RewriteAlternativesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B114C0FFEE0000000000B114 /* Build114RewriteAlternativesTests.swift */; };
 		B114E0FFEE0000000000A115 /* Build114EmailAccountTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B114E0FFEE0000000000B115 /* Build114EmailAccountTests.swift */; };
@@ -388,6 +389,7 @@
 		A71090000000000000000001 /* Build109StripRoleAndDocumentIntegrityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build109StripRoleAndDocumentIntegrityTests.swift; sourceTree = "<group>"; };
 		A71110000000000000000001 /* Build111CursorSensitivityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build111CursorSensitivityTests.swift; sourceTree = "<group>"; };
 		B112C0FFEE0000000000B112 /* Build112UISurfaceContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build112UISurfaceContractTests.swift; sourceTree = "<group>"; };
+		A11EC0DE0000000000000B01 /* AppReviewComplianceGuardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppReviewComplianceGuardTests.swift; sourceTree = "<group>"; };
 		B113C0FFEE0000000000B113 /* Build113FailureCopyRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build113FailureCopyRuntimeTests.swift; sourceTree = "<group>"; };
 		B114C0FFEE0000000000B114 /* Build114RewriteAlternativesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build114RewriteAlternativesTests.swift; sourceTree = "<group>"; };
 		B114E0FFEE0000000000B115 /* Build114EmailAccountTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build114EmailAccountTests.swift; sourceTree = "<group>"; };
@@ -539,6 +541,7 @@
 				A71090000000000000000001 /* Build109StripRoleAndDocumentIntegrityTests.swift */,
 				A71110000000000000000001 /* Build111CursorSensitivityTests.swift */,
 				B112C0FFEE0000000000B112 /* Build112UISurfaceContractTests.swift */,
+				A11EC0DE0000000000000B01 /* AppReviewComplianceGuardTests.swift */,
 				B113C0FFEE0000000000B113 /* Build113FailureCopyRuntimeTests.swift */,
 				B114C0FFEE0000000000B114 /* Build114RewriteAlternativesTests.swift */,
 				B114E0FFEE0000000000B115 /* Build114EmailAccountTests.swift */,
@@ -1034,6 +1037,7 @@
 				A71090000000000000000002 /* Build109StripRoleAndDocumentIntegrityTests.swift in Sources */,
 				A71110000000000000000002 /* Build111CursorSensitivityTests.swift in Sources */,
 				B112C0FFEE0000000000A112 /* Build112UISurfaceContractTests.swift in Sources */,
+				A11EC0DE0000000000000A01 /* AppReviewComplianceGuardTests.swift in Sources */,
 				B113C0FFEE0000000000A113 /* Build113FailureCopyRuntimeTests.swift in Sources */,
 				B114C0FFEE0000000000A114 /* Build114RewriteAlternativesTests.swift in Sources */,
 				B114E0FFEE0000000000A115 /* Build114EmailAccountTests.swift in Sources */,
