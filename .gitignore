@@ -42,3 +42,4 @@ artifacts/supabase-auth-migration/
 .vscode/
 xcuserdata/
 *.xcuserstate
+.gstack/
