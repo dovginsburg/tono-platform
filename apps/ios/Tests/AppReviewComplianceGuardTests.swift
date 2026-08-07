@@ -61,6 +61,90 @@ final class AppReviewComplianceGuardTests: XCTestCase {
         )
     }
 
+    // MARK: - App Intents: aggregate metadata preflight + prohibited-brand guard
+
+    /// The App Intent / Shortcuts / Spotlight surfaces that the successor (Build
+    /// 127) must preserve from the Build-122+ lineage — no regression to the
+    /// Build-117 feature scope.
+    private static let requiredAppIntentSymbols = [
+        "CoachDraftIntent",
+        "TonoShortcutsProvider",
+        "OpenKeyboardSetupIntent",
+        "SetToneVariantEnabledIntent",
+        "ToneVariantEntity",
+        "AppIntentRouting",
+    ]
+
+    /// Brands that must never appear in Tono's shipped App Intent metadata — the
+    /// consent/Shortcuts strings a user or the system surfaces. Includes the
+    /// cross-branded "Potato App" OAuth client identity and the sibling apps.
+    private static let prohibitedBrands = [
+        "Potato", "parentscript", "tandempaws", "tandemskills",
+    ]
+
+    /// Shared detector — used by BOTH the real scan and the red negative control
+    /// below, so a passing scan can never be vacuous.
+    static func prohibitedBrandHits(in text: String) -> [String] {
+        prohibitedBrands.filter { text.range(of: $0, options: .caseInsensitive) != nil }
+    }
+
+    /// Aggregate metadata preflight: every required App Intent symbol is present
+    /// in the shipped source. Fails if the successor silently drops an intent.
+    func testAppIntentAggregateMetadataIsPresent() throws {
+        let root = Self.sourceRoot()
+        var corpus = ""
+        for dir in ["App", "Shared"] {
+            for file in Self.swiftFiles(under: root.appendingPathComponent(dir)) {
+                corpus += (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+            }
+        }
+        let missing = Self.requiredAppIntentSymbols.filter { !corpus.contains($0) }
+        XCTAssertTrue(
+            missing.isEmpty,
+            "App Intent aggregate metadata regressed — missing required intent surfaces: \(missing.joined(separator: ", "))"
+        )
+    }
+
+    /// The shipped App Intent surfaces carry no prohibited (cross-brand) name.
+    func testAppIntentSurfacesCarryNoProhibitedBrand() throws {
+        let root = Self.sourceRoot()
+        let intentFiles = [
+            "Shared/AppIntentRouting.swift",
+            "App/ToneVariantEntity.swift",
+            "App/ShortcutsAppLink.swift",
+            "App/CoachDraftIntent.swift",
+            "App/AppleIntelligenceIntents.swift",
+        ]
+        var offenders: [String] = []
+        for relative in intentFiles {
+            let url = root.appendingPathComponent(relative)
+            guard let raw = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            let hits = Self.prohibitedBrandHits(in: SwiftSource.stripComments(raw))
+            if !hits.isEmpty { offenders.append("\(relative): \(hits.joined(separator: ","))") }
+        }
+        XCTAssertTrue(
+            offenders.isEmpty,
+            "prohibited brand in App Intent metadata: \(offenders.joined(separator: " | "))"
+        )
+    }
+
+    /// RED NEGATIVE CONTROL — proves the prohibited-brand guard actually fires.
+    /// If this ever passes with the detector broken, the scan above is vacuous.
+    func testProhibitedBrandGuardIsNotVacuous() {
+        // A synthetic App Intent title carrying the cross-branded identity must
+        // be caught…
+        XCTAssertEqual(
+            Self.prohibitedBrandHits(in: "AppShortcut title: Open Potato App"),
+            ["Potato"],
+            "the prohibited-brand detector failed to catch a known violation"
+        )
+        // …and a clean Tono title must not trip it.
+        XCTAssertTrue(
+            Self.prohibitedBrandHits(in: "Coach this draft with Tono").isEmpty,
+            "the prohibited-brand detector produced a false positive on clean metadata"
+        )
+    }
+
     // MARK: - Helpers (self-contained; mirrors the Build112 contract's walker)
 
     /// `#filePath` is `<srcroot>/Tests/…`; SRCROOT is two directories up.
