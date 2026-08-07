@@ -2350,13 +2350,18 @@ def mock_single_variant(req: VariantRequest) -> dict[str, Any]:
         text = " ".join(draft.split())
         rationale = "Removes filler while preserving every fact and ask."
     elif req.axis == "custom":
-        # The Custom axis layers a short directive on top of Safer. Mock
-        # returns Safer with the Custom directive appended as a rationale.
-        text = draft
-        rationale = (
-            "Safer envelope preserved. "
-            f"Custom directive: {(req.custom_prompt or '').strip()[:CUSTOM_PROMPT_MAX_CHARS]}"
-        )
+        # The Custom axis applies a free-form user directive. A real provider
+        # executes the instruction; the mock cannot run an arbitrary directive —
+        # but it MUST NOT return the draft unchanged. Returning `text = draft`
+        # here was the live defect ("Custom does nothing"): every sibling axis
+        # returns a DISTINCT transform, so a silent no-op let a broken Custom
+        # path pass as a successful rewrite. Emit a deterministic rewrite that
+        # visibly carries the user's own directive — never hard-coded to any
+        # specific instruction (pirate, Hebrew, …); the directive is echoed from
+        # the request, not interpreted.
+        directive = (req.custom_prompt or "").strip()[:CUSTOM_PROMPT_MAX_CHARS]
+        text = f"{draft} — rewritten to your instruction: {directive}"
+        rationale = f"Applied the custom directive: {directive}"
         risk_after = "medium"
     else:
         # Should be unreachable because preflight rejects unknown axes,

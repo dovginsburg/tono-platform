@@ -1051,19 +1051,51 @@ def test_mock_single_variant_canonicalizes_each_axis(axis):
     assert result["text"]
 
 
-def test_mock_single_variant_for_custom_includes_user_directive():
-    """Custom surfaces the user prompt in the rationale so the user can
-    audit it on the client. The variant text equals the draft.
+def test_mock_single_variant_for_custom_is_a_distinct_directive_carrying_rewrite():
+    """Custom is a real free-form directive, never a silent no-op.
+
+    REGRESSION for the live "Custom does nothing" defect: the mock returned
+    ``text == draft`` for axis=custom while every sibling axis returned a
+    distinct transform, so a Custom tap produced no visible change. The mock
+    must now return a DISTINCT rewrite that carries the user's own directive
+    (echoed, not interpreted, and not hard-coded to any instruction).
     """
-    req = VariantRequest(
-        text="Could you help me with something?",
-        axis="custom",
-        custom_prompt="Make it punchy",
-    )
+    draft = "Could you help me with something?"
+    req = VariantRequest(text=draft, axis="custom", custom_prompt="Make it punchy")
     result = mock_single_variant(req)
     assert result["axis"] == "custom"
-    assert result["text"] == "Could you help me with something?"
-    assert "Make it punchy" in result["rationale"]
+    # The invariant: Custom transforms the draft; it is never a no-op.
+    assert result["text"] != draft
+    # And it reflects the user's own directive.
+    assert "Make it punchy" in result["text"] or "Make it punchy" in result["rationale"]
+
+
+def test_mock_single_variant_custom_varies_with_the_directive_not_hardcoded():
+    """A different Custom directive must yield a correspondingly different
+    output — proving the mock echoes the request rather than a fixed persona
+    or language (no hard-coded pirate/Hebrew)."""
+    draft = "Let's meet tomorrow."
+    hebrew = mock_single_variant(
+        VariantRequest(text=draft, axis="custom", custom_prompt="Translate to Hebrew")
+    )
+    formal = mock_single_variant(
+        VariantRequest(text=draft, axis="custom", custom_prompt="Make it very formal")
+    )
+    assert hebrew["text"] != draft and formal["text"] != draft
+    assert hebrew["text"] != formal["text"]
+    assert "Hebrew" in hebrew["text"] or "Hebrew" in hebrew["rationale"]
+
+
+def test_real_single_variant_system_prompt_injects_the_custom_directive():
+    """Connected-route contract: the real provider system prompt carries the
+    free-form Custom directive, so Custom is a real rewrite instruction
+    end-to-end (the mock is a test double; production uses this path when a
+    provider is configured)."""
+    req = VariantRequest(
+        text="Let's meet tomorrow.", axis="custom", custom_prompt="Act like a pirate"
+    )
+    system = build_single_variant_system_prompt(req)
+    assert "Act like a pirate" in system
 
 
 def test_mock_single_variant_rejects_unknown_axis():
